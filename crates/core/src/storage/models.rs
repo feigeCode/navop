@@ -42,7 +42,7 @@ impl ActiveConnections {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConnectionType {
     All,
     Database,
@@ -893,6 +893,59 @@ impl DbConnectionConfig {
     }
 }
 
+/// Hierarchical folder for organizing connections within a protocol category.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionFolder {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    pub name: String,
+    /// Protocol category this folder belongs to. Never `ConnectionType::All`.
+    pub connection_type: ConnectionType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+}
+
+impl Entity for ConnectionFolder {
+    fn id(&self) -> Option<i64> {
+        self.id
+    }
+
+    fn created_at(&self) -> i64 {
+        self.created_at
+            .expect("created_at 在从数据库读取后应该存在")
+    }
+
+    fn updated_at(&self) -> i64 {
+        self.updated_at
+            .expect("updated_at 在从数据库读取后应该存在")
+    }
+}
+
+impl ConnectionFolder {
+    pub fn new(name: String, connection_type: ConnectionType) -> Self {
+        Self {
+            id: None,
+            name,
+            connection_type,
+            parent_id: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    pub fn with_parent(mut self, parent_id: Option<i64>) -> Self {
+        self.parent_id = parent_id;
+        self
+    }
+}
+
 /// Workspace for organizing connections
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
@@ -990,6 +1043,9 @@ pub struct StoredConnection {
     pub params: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<i64>,
+    /// Sidebar folder within the connection's protocol category.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<i64>,
     /// 已选中的数据库ID列表（JSON数组），None表示全选
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_databases: Option<String>,
@@ -1167,6 +1223,7 @@ impl StoredConnection {
             connection_type: ConnectionType::Database,
             params: serde_json::to_string(&params).expect("DbConnectionConfig 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: if let Some(database) = &params.database {
                 Some(format!("[\"{}\"]", database))
             } else {
@@ -1193,6 +1250,7 @@ impl StoredConnection {
             connection_type: ConnectionType::SshSftp,
             params: serde_json::to_string(&params).expect("SshParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1219,6 +1277,7 @@ impl StoredConnection {
             connection_type: params.protocol.connection_type(),
             params: serde_json::to_string(&params).expect("RemoteDesktopParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1241,6 +1300,7 @@ impl StoredConnection {
             connection_type: ConnectionType::Redis,
             params: serde_json::to_string(&params).expect("RedisParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1263,6 +1323,7 @@ impl StoredConnection {
             connection_type: ConnectionType::MongoDB,
             params: serde_json::to_string(&params).expect("MongoDBParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1301,6 +1362,7 @@ impl StoredConnection {
             connection_type: ConnectionType::Serial,
             params: serde_json::to_string(&params).expect("SerialParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1327,6 +1389,7 @@ impl StoredConnection {
             connection_type: ConnectionType::PortForwarding,
             params: serde_json::to_string(&params).expect("PortForwardingParams 序列化不应失败"),
             workspace_id,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,
@@ -1443,6 +1506,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: Some(7),
+            folder_id: None,
             proxy: None,
             extra_params,
         }
@@ -1555,6 +1619,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            folder_id: None,
             proxy: None,
             extra_params: HashMap::new(),
         };

@@ -18,7 +18,9 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
+    menu::{ContextMenuExt, PopupMenuItem},
     popover::Popover,
+    scroll::ScrollableElement,
     tooltip::Tooltip,
     v_flex,
 };
@@ -39,10 +41,10 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::settings::{AppSettings, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
-    PendingCloudDeletionRepository, RedisMode, RemoteDesktopParams,
-    RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, TeamMembershipState,
-    Workspace, WorkspaceRepository,
+    ActiveConnections, ConnectionFolder, ConnectionFolderRepository, ConnectionRepository,
+    ConnectionType, DatabaseType, GlobalStorageState, PendingCloudDeletionRepository, RedisMode,
+    RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection,
+    TeamMembershipState, Workspace, WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
 use port_forwarding::PortForwardingRuntime;
@@ -58,6 +60,9 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::external_driver_display::external_driver_icon_for_config_with_registry;
 use crate::home::connection_import_window::show_connection_import_window;
+use crate::home::home_connection_folder::{
+    DragConnectionFolder, DragSidebarConnection, confirm_delete_folder, show_folder_dialog,
+};
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
@@ -81,6 +86,8 @@ actions!(
 
 const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
 const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
+/// 与 TabContainer::render_tab_bar 的高度保持一致，避免左右顶栏错位。
+const HOME_SIDEBAR_HEADER_HEIGHT: gpui::Pixels = px(40.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
 const OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS: &str = "cmd-alt-t";
 const OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER: &str = "alt-t";
@@ -236,9 +243,14 @@ impl ConnectionLayout {
 pub struct HomePage {
     focus_handle: FocusHandle,
     selected_filter: ConnectionType,
+    /// 侧栏选中的文件夹；有值时右侧仅显示该文件夹及其子孙下的连接。
+    selected_folder_id: Option<i64>,
     connection_layout: ConnectionLayout,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
+    pub(crate) connection_folders: Vec<ConnectionFolder>,
+    expanded_categories: HashSet<ConnectionType>,
+    expanded_folders: HashSet<i64>,
     pub(crate) tab_container: Entity<TabContainer>,
     search_input: Entity<InputState>,
     search_query: Entity<String>,
@@ -811,9 +823,13 @@ impl HomePage {
         let mut page = Self {
             focus_handle: cx.focus_handle(),
             selected_filter: ConnectionType::All,
+            selected_folder_id: None,
             connection_layout: ConnectionLayout::Card,
             workspaces: Vec::new(),
             connections: Vec::new(),
+            connection_folders: Vec::new(),
+            expanded_categories: HashSet::new(),
+            expanded_folders: HashSet::new(),
             tab_container,
             search_input,
             search_query,
@@ -843,8 +859,9 @@ impl HomePage {
             external_driver_registry: IpcDriverRegistry::empty(),
         };
 
-        // 异步加载工作区
+        // 异步加载工作区与文件夹
         page.load_workspaces(cx);
+        page.load_connection_folders(cx);
 
         // 尝试从存储后端恢复主密钥
         let key_restored = crypto::try_restore_master_key();
@@ -998,6 +1015,295 @@ impl HomePage {
             }
         })
         .detach();
+    }
+
+    fn load_connection_folders(&mut self, cx: &mut Context<Self>) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let load_task = cx.background_spawn(async move {
+            (|| {
+                let repo = storage
+                    .get::<ConnectionFolderRepository>()
+                    .ok_or_else(|| anyhow::anyhow!("ConnectionFolderRepository not found"))?;
+                Ok::<_, anyhow::Error>(repo.list()?)
+            })()
+        });
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            match load_task.await {
+                Ok(folders) => {
+                    _ = this.update(cx, |this, cx| {
+                        this.connection_folders = folders;
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("加载连接文件夹失败: {}", e);
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn folder_descendant_ids(&self, folder_id: i64) -> HashSet<i64> {
+        let mut result = HashSet::from([folder_id]);
+        let mut queue = vec![folder_id];
+        while let Some(current) = queue.pop() {
+            for folder in &self.connection_folders {
+                if folder.parent_id == Some(current) {
+                    if let Some(id) = folder.id {
+                        if result.insert(id) {
+                            queue.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn toggle_category_expanded(&mut self, connection_type: ConnectionType, cx: &mut Context<Self>) {
+        if self.expanded_categories.contains(&connection_type) {
+            self.expanded_categories.remove(&connection_type);
+        } else {
+            self.expanded_categories.insert(connection_type);
+        }
+        cx.notify();
+    }
+
+    fn toggle_folder_expanded(&mut self, folder_id: i64, cx: &mut Context<Self>) {
+        if self.expanded_folders.contains(&folder_id) {
+            self.expanded_folders.remove(&folder_id);
+        } else {
+            self.expanded_folders.insert(folder_id);
+        }
+        cx.notify();
+    }
+
+    fn select_category_filter(
+        &mut self,
+        connection_type: ConnectionType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_filter = connection_type;
+        self.selected_folder_id = None;
+        self.expanded_categories.insert(connection_type);
+        self.activate_home_tab(window, cx);
+        cx.notify();
+    }
+
+    fn select_folder_filter(
+        &mut self,
+        connection_type: ConnectionType,
+        folder_id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_filter = connection_type;
+        self.selected_folder_id = Some(folder_id);
+        self.expanded_categories.insert(connection_type);
+        self.expanded_folders.insert(folder_id);
+        self.activate_home_tab(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn handle_save_folder(
+        &mut self,
+        folder_id: Option<i64>,
+        name: String,
+        connection_type: ConnectionType,
+        parent_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+
+        let result: anyhow::Result<()> = (|| {
+            let repo = storage
+                .get::<ConnectionFolderRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionFolderRepository not found"))?;
+            if let Some(id) = folder_id {
+                let mut folder = repo
+                    .get(id)?
+                    .ok_or_else(|| anyhow::anyhow!("folder not found"))?;
+                folder.name = name;
+                folder.connection_type = connection_type;
+                folder.parent_id = parent_id;
+                repo.update(&folder)?;
+            } else {
+                let mut folder =
+                    ConnectionFolder::new(name, connection_type).with_parent(parent_id);
+                repo.insert(&mut folder)?;
+            }
+            Ok(())
+        })();
+
+        if let Err(err) = result {
+            tracing::error!("保存连接文件夹失败: {err}");
+            return;
+        }
+        self.load_connection_folders(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn handle_delete_folder(&mut self, folder_id: i64, cx: &mut Context<Self>) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result: anyhow::Result<()> = (|| {
+            let repo = storage
+                .get::<ConnectionFolderRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionFolderRepository not found"))?;
+            repo.delete(folder_id)?;
+            Ok(())
+        })();
+
+        if let Err(err) = result {
+            tracing::error!("删除连接文件夹失败: {err}");
+            return;
+        }
+        if self.selected_folder_id == Some(folder_id) {
+            self.selected_folder_id = None;
+        }
+        self.expanded_folders.remove(&folder_id);
+        self.load_connection_folders(cx);
+        self.load_connections(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn reorder_folder_by_id(
+        &mut self,
+        source_id: i64,
+        target_id: i64,
+        cx: &mut Context<Self>,
+    ) {
+        if source_id == target_id {
+            return;
+        }
+        let Some(source) = self
+            .connection_folders
+            .iter()
+            .find(|f| f.id == Some(source_id))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(target) = self
+            .connection_folders
+            .iter()
+            .find(|f| f.id == Some(target_id))
+            .cloned()
+        else {
+            return;
+        };
+        // 仅允许同协议、同父级内排序
+        if source.connection_type != target.connection_type || source.parent_id != target.parent_id
+        {
+            return;
+        }
+
+        let mut siblings: Vec<_> = self
+            .connection_folders
+            .iter()
+            .filter(|f| {
+                f.connection_type == source.connection_type && f.parent_id == source.parent_id
+            })
+            .cloned()
+            .collect();
+        siblings.sort_by_key(|f| (f.sort_order.unwrap_or(0), f.id.unwrap_or(0)));
+
+        let Some(from_idx) = siblings.iter().position(|f| f.id == Some(source_id)) else {
+            return;
+        };
+        let Some(to_idx) = siblings.iter().position(|f| f.id == Some(target_id)) else {
+            return;
+        };
+        let item = siblings.remove(from_idx);
+        siblings.insert(to_idx, item);
+
+        let orders: Vec<(i64, i32)> = siblings
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, f)| f.id.map(|id| (id, idx as i32)))
+            .collect();
+
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result: anyhow::Result<()> = (|| {
+            let repo = storage
+                .get::<ConnectionFolderRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionFolderRepository not found"))?;
+            repo.update_sort_orders(&orders)?;
+            Ok(())
+        })();
+        if let Err(err) = result {
+            tracing::error!("文件夹排序失败: {err}");
+            return;
+        }
+        self.load_connection_folders(cx);
+    }
+
+    pub(crate) fn move_connection_to_folder(
+        &mut self,
+        connection_id: i64,
+        folder_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result: anyhow::Result<()> = (|| {
+            let repo = storage
+                .get::<ConnectionRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+            repo.update_folder_id(connection_id, folder_id)?;
+            Ok(())
+        })();
+        if let Err(err) = result {
+            tracing::error!("移动连接到文件夹失败: {err}");
+            return;
+        }
+        self.load_connections(cx);
+    }
+
+    pub(crate) fn move_folder_to_parent(
+        &mut self,
+        folder_id: i64,
+        new_parent_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        // 禁止把自己拖进子孙节点
+        if let Some(parent_id) = new_parent_id {
+            if self.folder_descendant_ids(folder_id).contains(&parent_id) {
+                return;
+            }
+        }
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result: anyhow::Result<()> = (|| {
+            let repo = storage
+                .get::<ConnectionFolderRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionFolderRepository not found"))?;
+            // 保持协议一致
+            if let Some(parent_id) = new_parent_id {
+                let parent = repo
+                    .get(parent_id)?
+                    .ok_or_else(|| anyhow::anyhow!("parent folder not found"))?;
+                let mut folder = repo
+                    .get(folder_id)?
+                    .ok_or_else(|| anyhow::anyhow!("folder not found"))?;
+                if folder.connection_type != parent.connection_type {
+                    return Ok(());
+                }
+                folder.parent_id = Some(parent_id);
+                repo.update(&folder)?;
+            } else {
+                repo.move_folder(folder_id, None)?;
+            }
+            Ok(())
+        })();
+        if let Err(err) = result {
+            tracing::error!("移动文件夹失败: {err}");
+            return;
+        }
+        self.load_connection_folders(cx);
     }
 
     fn load_team_options(&mut self, cx: &mut Context<Self>) {
@@ -1493,6 +1799,87 @@ impl HomePage {
             self.editing_connection_id = Some(conn_id);
             self.show_connection_form(db_type, window, cx);
         }
+    }
+
+    fn edit_connection_by_id(
+        &mut self,
+        conn_id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conn) = self.connections.iter().find(|c| c.id == Some(conn_id)).cloned() else {
+            return;
+        };
+        match conn.connection_type {
+            ConnectionType::SshSftp => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_ssh_form(window, cx);
+            }
+            ConnectionType::Database => {
+                let db_type = conn.to_db_connection().ok().map(|p| p.database_type);
+                self.confirm_edit_connection(conn_id, conn.name.clone(), db_type, window, cx);
+            }
+            ConnectionType::Redis => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_redis_form(window, cx);
+            }
+            ConnectionType::MongoDB => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_mongodb_form(window, cx);
+            }
+            ConnectionType::Serial => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_serial_form(window, cx);
+            }
+            ConnectionType::PortForwarding => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_port_forwarding_form(window, cx);
+            }
+            ConnectionType::Rdp => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_remote_desktop_form(StoredRemoteDesktopProtocol::Rdp, window, cx);
+            }
+            ConnectionType::Vnc => {
+                self.editing_connection_id = Some(conn_id);
+                self.show_remote_desktop_form(StoredRemoteDesktopProtocol::Vnc, window, cx);
+            }
+            ConnectionType::All => {}
+        }
+    }
+
+    fn start_new_connection_for_type(
+        &mut self,
+        connection_type: ConnectionType,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editing_connection_id = None;
+        match connection_type {
+            ConnectionType::All => self.show_new_connection_dialog(window, cx),
+            ConnectionType::Database => self.show_new_connection_dialog(window, cx),
+            ConnectionType::SshSftp => self.show_ssh_form(window, cx),
+            ConnectionType::Redis => self.show_redis_form(window, cx),
+            ConnectionType::MongoDB => self.show_mongodb_form(window, cx),
+            ConnectionType::Serial => self.show_serial_form(window, cx),
+            ConnectionType::PortForwarding => self.show_port_forwarding_form(window, cx),
+            ConnectionType::Rdp => {
+                self.show_remote_desktop_form(StoredRemoteDesktopProtocol::Rdp, window, cx)
+            }
+            ConnectionType::Vnc => {
+                self.show_remote_desktop_form(StoredRemoteDesktopProtocol::Vnc, window, cx)
+            }
+        }
+    }
+
+    fn activate_home_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // 延迟激活：当前可能正处于 HomePage update 中（侧栏点击），
+        // TabContainer 激活时会 read HomePage 的 focus_handle，同步调用会双重租约 panic。
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_pinned_tab_at(0, window, cx);
+            });
+        });
     }
 
     /// 复制连接，创建一个副本
@@ -3073,7 +3460,621 @@ impl HomePage {
         cx.notify();
     }
 
-    fn render_sidebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar_category(
+        &self,
+        filter_type: ConnectionType,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_selected =
+            self.selected_filter == filter_type && self.selected_folder_id.is_none();
+        let is_expanded = filter_type == ConnectionType::All
+            || self.expanded_categories.contains(&filter_type);
+        let can_expand = filter_type != ConnectionType::All;
+        let category_count = self
+            .connections
+            .iter()
+            .filter(|c| {
+                filter_type == ConnectionType::All || c.connection_type == filter_type
+            })
+            .count();
+
+        let view = cx.entity();
+        let drag_border_color = cx.theme().drag_border;
+        let header = div()
+            .id(SharedString::from(format!("sidebar-cat-{}", filter_type)))
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .when(collapsed, |this| this.justify_center().px_0())
+            .when(!collapsed, |this| this.px_2())
+            .py_1p5()
+            .cursor_pointer()
+            .rounded_lg()
+            .overflow_hidden()
+            .when(is_selected, |this| {
+                this.bg(cx.theme().list_active)
+                    .border_l_3()
+                    .border_color(cx.theme().list_active_border)
+            })
+            .when(!is_selected, |this| {
+                this.bg(cx.theme().sidebar)
+                    .hover(|style| style.bg(cx.theme().sidebar_accent))
+            })
+            // 拖到分类标题 = 移出文件夹，回到该分类根级
+            .drag_over::<DragSidebarConnection>(move |this, drag, _, _| {
+                if drag.connection_type == filter_type || filter_type == ConnectionType::All {
+                    this.border_1().border_color(drag_border_color)
+                } else {
+                    this
+                }
+            })
+            .on_drop(cx.listener(
+                move |this, drag: &DragSidebarConnection, _window, cx| {
+                    if drag.connection_type == filter_type || filter_type == ConnectionType::All {
+                        this.move_connection_to_folder(drag.connection_id, None, cx);
+                    }
+                },
+            ))
+            .on_click(cx.listener(move |this: &mut HomePage, _, window, cx| {
+                this.select_category_filter(filter_type, window, cx);
+                if can_expand && !this.expanded_categories.contains(&filter_type) {
+                    this.expanded_categories.insert(filter_type);
+                    cx.notify();
+                }
+            }))
+            .context_menu({
+                let view = view.clone();
+                move |menu, window, _cx| {
+                    let view_for_new_conn = view.clone();
+                    let view_for_new_folder = view.clone();
+                    let mut menu = menu.item(
+                        PopupMenuItem::new(t!("Home.new_connection").to_string()).on_click(
+                            window.listener_for(&view_for_new_conn, move |this, _, window, cx| {
+                                this.expanded_categories.insert(filter_type);
+                                this.start_new_connection_for_type(filter_type, window, cx);
+                            }),
+                        ),
+                    );
+                    if can_expand {
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("Home.new_folder").to_string()).on_click(
+                                window.listener_for(
+                                    &view_for_new_folder,
+                                    move |this, _, window, cx| {
+                                        this.select_category_filter(filter_type, window, cx);
+                                        this.expanded_categories.insert(filter_type);
+                                        show_folder_dialog(
+                                            cx.entity(),
+                                            None,
+                                            filter_type,
+                                            None,
+                                            String::new(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ),
+                            ),
+                        );
+                    }
+                    menu
+                }
+            })
+            .when(!collapsed && can_expand, |this| {
+                this.child(
+                    div()
+                        .id(SharedString::from(format!("sidebar-cat-toggle-{}", filter_type)))
+                        .on_click(cx.listener(move |this: &mut HomePage, _, _window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_category_expanded(filter_type, cx);
+                        }))
+                        .child(
+                            Icon::new(if is_expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .with_size(Size::Small)
+                            .text_color(cx.theme().muted_foreground),
+                        ),
+                )
+            })
+            .child(Icon::new(filter_type.icon()).color().with_size(Size::Large))
+            .when(!collapsed, |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .when(is_selected, |this| this.font_weight(FontWeight::MEDIUM))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(filter_type.label()),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{category_count}")),
+                )
+            });
+
+        let mut container = v_flex().w_full().gap_0p5().child(header);
+
+        if !collapsed && can_expand && is_expanded {
+            let mut root_folders: Vec<_> = self
+                .connection_folders
+                .iter()
+                .filter(|f| f.connection_type == filter_type && f.parent_id.is_none())
+                .cloned()
+                .collect();
+            root_folders.sort_by_key(|f| (f.sort_order.unwrap_or(0), f.id.unwrap_or(0)));
+            let root_connections: Vec<_> = self
+                .connections
+                .iter()
+                .filter(|c| c.connection_type == filter_type && c.folder_id.is_none())
+                .cloned()
+                .collect();
+
+            // 根级投放区：把连接拖到这里也会移出文件夹
+            let mut root_drop = v_flex()
+                .id(SharedString::from(format!("sidebar-cat-root-{}", filter_type)))
+                .w_full()
+                .min_h(px(8.0))
+                .gap_0p5()
+                .drag_over::<DragSidebarConnection>(move |this, drag, _, _| {
+                    if drag.connection_type == filter_type {
+                        this.rounded(px(6.0))
+                            .border_1()
+                            .border_color(drag_border_color)
+                    } else {
+                        this
+                    }
+                })
+                .on_drop(cx.listener(
+                    move |this, drag: &DragSidebarConnection, _window, cx| {
+                        if drag.connection_type == filter_type {
+                            this.move_connection_to_folder(drag.connection_id, None, cx);
+                        }
+                    },
+                ));
+
+            for folder in root_folders {
+                root_drop = root_drop.child(self.render_sidebar_folder(
+                    folder,
+                    filter_type,
+                    1,
+                    cx,
+                ));
+            }
+            for conn in root_connections {
+                root_drop =
+                    root_drop.child(self.render_sidebar_connection(conn, filter_type, 1, cx));
+            }
+            container = container.child(root_drop);
+        }
+
+        container.into_any_element()
+    }
+
+    fn render_sidebar_folder(
+        &self,
+        folder: one_core::storage::ConnectionFolder,
+        connection_type: ConnectionType,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let folder_id = folder.id.unwrap_or(0);
+        let is_selected = self.selected_folder_id == Some(folder_id);
+        let is_expanded = self.expanded_folders.contains(&folder_id);
+        let mut child_folders: Vec<_> = self
+            .connection_folders
+            .iter()
+            .filter(|f| f.parent_id == Some(folder_id))
+            .cloned()
+            .collect();
+        child_folders.sort_by_key(|f| (f.sort_order.unwrap_or(0), f.id.unwrap_or(0)));
+        let child_connections: Vec<_> = self
+            .connections
+            .iter()
+            .filter(|c| c.folder_id == Some(folder_id))
+            .cloned()
+            .collect();
+        let indent = px(8.0 + depth as f32 * 12.0);
+        let drag_border_color = cx.theme().drag_border;
+        let folder_name = folder.name.clone();
+        let folder_parent = folder.parent_id;
+
+        let view = cx.entity();
+        let rename_name = folder.name.clone();
+        let rename_parent = folder.parent_id;
+        let delete_name = folder.name.clone();
+        let header = h_flex()
+            .id(SharedString::from(format!("sidebar-folder-{folder_id}")))
+            .w_full()
+            .items_center()
+            .gap_1()
+            .pl(indent)
+            .pr_1()
+            .py_1()
+            .cursor_pointer()
+            .rounded(px(6.0))
+            .when(is_selected, |this| {
+                this.bg(cx.theme().list_active)
+                    .border_l_2()
+                    .border_color(cx.theme().list_active_border)
+            })
+            .when(!is_selected, |this| {
+                this.hover(|style| style.bg(cx.theme().sidebar_accent))
+            })
+            .drag_over::<DragConnectionFolder>(move |this, drag, _, _| {
+                if drag.source_id != folder_id {
+                    this.border_1().border_color(drag_border_color)
+                } else {
+                    this
+                }
+            })
+            .drag_over::<DragSidebarConnection>(move |this, _, _, _| {
+                this.border_1().border_color(drag_border_color)
+            })
+            .on_drop(cx.listener(
+                move |this, drag: &DragConnectionFolder, _window, cx| {
+                    if drag.source_id == folder_id {
+                        return;
+                    }
+                    if drag.connection_type != connection_type {
+                        return;
+                    }
+                    // 同父级：排序；否则移动为子文件夹
+                    if drag.parent_id == folder_parent {
+                        this.reorder_folder_by_id(drag.source_id, folder_id, cx);
+                    } else {
+                        this.move_folder_to_parent(drag.source_id, Some(folder_id), cx);
+                    }
+                },
+            ))
+            .on_drop(cx.listener(
+                move |this, drag: &DragSidebarConnection, _window, cx| {
+                    if drag.connection_type == connection_type {
+                        this.move_connection_to_folder(drag.connection_id, Some(folder_id), cx);
+                    }
+                },
+            ))
+            .on_click(cx.listener(move |this: &mut HomePage, _, window, cx| {
+                this.select_folder_filter(connection_type, folder_id, window, cx);
+            }))
+            .on_drag(
+                DragConnectionFolder {
+                    source_id: folder_id,
+                    name: folder_name.clone(),
+                    connection_type,
+                    parent_id: folder_parent,
+                },
+                |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .context_menu({
+                let view = view.clone();
+                move |menu, window, _cx| {
+                    let view_new_conn = view.clone();
+                    let view_new_folder = view.clone();
+                    let view_rename = view.clone();
+                    let view_delete = view.clone();
+                    let rename_name = rename_name.clone();
+                    let delete_name = delete_name.clone();
+                    menu.item(
+                        PopupMenuItem::new(t!("Home.new_connection").to_string()).on_click(
+                            window.listener_for(&view_new_conn, move |this, _, window, cx| {
+                                this.expanded_folders.insert(folder_id);
+                                this.start_new_connection_for_type(connection_type, window, cx);
+                            }),
+                        ),
+                    )
+                    .item(
+                        PopupMenuItem::new(t!("Home.new_subfolder").to_string()).on_click(
+                            window.listener_for(&view_new_folder, move |this, _, window, cx| {
+                                this.expanded_folders.insert(folder_id);
+                                show_folder_dialog(
+                                    cx.entity(),
+                                    None,
+                                    connection_type,
+                                    Some(folder_id),
+                                    String::new(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new(t!("Home.rename_folder").to_string()).on_click(
+                            window.listener_for(&view_rename, move |_this, _, window, cx| {
+                                show_folder_dialog(
+                                    cx.entity(),
+                                    Some(folder_id),
+                                    connection_type,
+                                    rename_parent,
+                                    rename_name.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                    )
+                    .item(
+                        PopupMenuItem::new(t!("Home.delete_folder").to_string()).on_click(
+                            window.listener_for(&view_delete, move |_this, _, window, cx| {
+                                confirm_delete_folder(
+                                    cx.entity(),
+                                    folder_id,
+                                    delete_name.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
+                    )
+                }
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!("sidebar-folder-toggle-{folder_id}")))
+                    .on_click(cx.listener(move |this: &mut HomePage, _, _window, cx| {
+                        cx.stop_propagation();
+                        this.toggle_folder_expanded(folder_id, cx);
+                    }))
+                    .child(
+                        Icon::new(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .with_size(Size::XSmall)
+                        .text_color(cx.theme().muted_foreground),
+                    ),
+            )
+            .child(
+                Icon::new(if is_expanded {
+                    IconName::FolderOpen
+                } else {
+                    IconName::Folder
+                })
+                .with_size(Size::Small)
+                .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .when(is_selected, |this| this.font_weight(FontWeight::MEDIUM))
+                    .child(folder.name.clone()),
+            );
+
+        let mut container = v_flex().w_full().gap_0p5().child(header);
+        if is_expanded {
+            for child in child_folders {
+                container = container.child(self.render_sidebar_folder(
+                    child,
+                    connection_type,
+                    depth + 1,
+                    cx,
+                ));
+            }
+            for conn in child_connections {
+                container = container.child(self.render_sidebar_connection(
+                    conn,
+                    connection_type,
+                    depth + 1,
+                    cx,
+                ));
+            }
+        }
+        container.into_any_element()
+    }
+
+    fn render_sidebar_connection(
+        &self,
+        conn: StoredConnection,
+        connection_type: ConnectionType,
+        depth: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let conn_id = conn.id.unwrap_or(0);
+        let is_selected = self.selected_connection_id == Some(conn_id);
+        let indent = px(8.0 + depth as f32 * 12.0);
+        let name = conn.name.clone();
+        let can_edit = can_edit_connection_with_cached_teams(
+            conn.team_id.as_deref(),
+            &self.team_options,
+            self.current_user.is_some(),
+        );
+        let is_ssh = matches!(connection_type, ConnectionType::SshSftp);
+        let view = cx.entity();
+        let delete_name = name.clone();
+
+        div()
+            .id(SharedString::from(format!("sidebar-conn-{conn_id}")))
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .pl(indent)
+            .pr_2()
+            .py_1()
+            .cursor_pointer()
+            .rounded(px(6.0))
+            .when(is_selected, |this| this.bg(cx.theme().list_active))
+            .when(!is_selected, |this| {
+                this.hover(|style| style.bg(cx.theme().sidebar_accent))
+            })
+            .on_drag(
+                DragSidebarConnection {
+                    connection_id: conn_id,
+                    name: name.clone(),
+                    connection_type,
+                },
+                |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .on_click(cx.listener(move |this: &mut HomePage, _, window, cx| {
+                if let Some(connection) = this.connections.iter().find(|c| c.id == Some(conn_id)) {
+                    let connection = connection.clone();
+                    this.selected_connection_id = Some(conn_id);
+                    this.open_connection_from_quick(&connection, window, cx);
+                }
+            }))
+            .context_menu({
+                let view = view.clone();
+                move |menu, window, _cx| {
+                    let view_open = view.clone();
+                    let view_sftp = view.clone();
+                    let view_edit = view.clone();
+                    let view_dup = view.clone();
+                    let view_del = view.clone();
+                    let delete_name = delete_name.clone();
+
+                    let mut menu = menu.item(
+                        PopupMenuItem::new(t!("Home.open_connection").to_string()).on_click(
+                            window.listener_for(&view_open, move |this, _, window, cx| {
+                                if let Some(connection) =
+                                    this.connections.iter().find(|c| c.id == Some(conn_id))
+                                {
+                                    let connection = connection.clone();
+                                    this.selected_connection_id = Some(conn_id);
+                                    this.open_connection_from_quick(&connection, window, cx);
+                                }
+                            }),
+                        ),
+                    );
+
+                    if is_ssh {
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("Home.open_sftp").to_string()).on_click(
+                                window.listener_for(&view_sftp, move |this, _, window, cx| {
+                                    if let Some(connection) =
+                                        this.connections.iter().find(|c| c.id == Some(conn_id))
+                                    {
+                                        let connection = connection.clone();
+                                        this.open_sftp_view(connection, window, cx);
+                                    }
+                                }),
+                            ),
+                        );
+                    }
+
+                    menu = menu
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(t!("Home.edit_connection").to_string())
+                                .disabled(!can_edit)
+                                .on_click(window.listener_for(
+                                    &view_edit,
+                                    move |this, _, window, cx| {
+                                        this.edit_connection_by_id(conn_id, window, cx);
+                                    },
+                                )),
+                        )
+                        .item(
+                            PopupMenuItem::new(t!("Home.duplicate_connection").to_string())
+                                .on_click(window.listener_for(
+                                    &view_dup,
+                                    move |this, _, window, cx| {
+                                        if let Some(connection) =
+                                            this.connections.iter().find(|c| c.id == Some(conn_id))
+                                        {
+                                            let connection = connection.clone();
+                                            this.duplicate_connection(connection, window, cx);
+                                        }
+                                    },
+                                )),
+                        )
+                        .item(
+                            PopupMenuItem::new(t!("Home.delete_connection").to_string())
+                                .disabled(!can_edit)
+                                .on_click(window.listener_for(
+                                    &view_del,
+                                    move |this, _, window, cx| {
+                                        this.confirm_delete_connection(
+                                            conn_id,
+                                            delete_name.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                        );
+
+                    menu
+                }
+            })
+            .child(self.sidebar_connection_icon(&conn, connection_type, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(name),
+            )
+            .into_any_element()
+    }
+
+    /// 侧栏连接图标：数据库用驱动彩色图标，SSH 用线框终端 prompt，其它类型与列表一致走 `.color()`。
+    fn sidebar_connection_icon(
+        &self,
+        conn: &StoredConnection,
+        connection_type: ConnectionType,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match connection_type {
+            ConnectionType::Database => conn
+                .to_db_connection()
+                .map(|config| {
+                    external_driver_icon_for_config_with_registry(
+                        &config,
+                        Size::Small,
+                        &self.external_driver_registry,
+                    )
+                    .unwrap_or_else(|| config.database_type.as_icon())
+                })
+                .unwrap_or_else(|_| Icon::new(ConnectionType::Database.icon()).color())
+                .with_size(Size::Small)
+                .flex_shrink_0()
+                .into_any_element(),
+            // 线框终端 + `>`，对齐用户期望的 prompt 风格
+            ConnectionType::SshSftp => Icon::new(IconName::SquareTerminal)
+                .text_color(gpui::rgb(0x8b5cf6))
+                .with_size(Size::Small)
+                .flex_shrink_0()
+                .into_any_element(),
+            _ => Icon::new(connection_type.icon())
+                .color()
+                .with_size(Size::Small)
+                .flex_shrink_0()
+                .into_any_element(),
+        }
+    }
+
+    pub(crate) fn render_sidebar(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // 同步全局用户状态：如果设置页面执行了登出，同步清空本地状态
         let global_user = GlobalCurrentUser::get_user(cx);
         if global_user.is_none() && self.current_user.is_some() {
@@ -3097,68 +4098,66 @@ impl HomePage {
             .h_full()
             .flex_shrink_0()
             .bg(cx.theme().sidebar)
-            .border_r_1()
-            .border_color(cx.theme().border)
             .child(
-                // 侧边栏过滤选项
+                // 顶部品牌栏：与右侧 tab 栏同色，右侧不画浅色边，避免白缝
+                h_flex()
+                    .id("sidebar-brand-header")
+                    .w_full()
+                    .h(HOME_SIDEBAR_HEADER_HEIGHT)
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::rgb(0x2b2b2b))
+                    .border_b_1()
+                    .border_color(gpui::rgb(0x1e1e1e))
+                    .when(collapsed, |this| {
+                        this.child(
+                            Icon::new(IconName::LayoutDashboard)
+                                .with_size(Size::Small)
+                                .text_color(gpui::white()),
+                        )
+                    })
+                    .when(!collapsed, |this| {
+                        this.child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(gpui::white())
+                                .child("Navop"),
+                        )
+                    }),
+            )
+            .child(
+                // 内容区（分类树 + 底部操作）保留右侧分隔线
                 v_flex()
                     .flex_1()
                     .w_full()
-                    .p_2()
-                    .gap_2()
-                    .when(collapsed, |this| this.items_center())
-                    .children(filter_types.into_iter().map(|filter_type| {
-                        let is_selected = self.selected_filter == filter_type;
-                        let filter_type_clone = filter_type;
-
-                        div()
-                            .id(filter_type.label())
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .w_full()
-                            .when(collapsed, |this| this.justify_center().px_0())
-                            .when(!collapsed, |this| this.px_3())
-                            .py_2()
-                            .cursor_pointer()
-                            .rounded_lg()
-                            .overflow_hidden()
-                            .when(is_selected, |this| {
-                                this.bg(cx.theme().list_active)
-                                    .border_l_3()
-                                    .border_color(cx.theme().list_active_border)
-                            })
-                            .when(!is_selected, |this| {
-                                this.bg(cx.theme().sidebar)
-                                    .hover(|style| style.bg(cx.theme().sidebar_accent))
-                            })
-                            .on_click(cx.listener(move |this: &mut HomePage, _, _window, cx| {
-                                this.selected_filter = filter_type_clone;
-                                cx.notify();
-                            }))
-                            .child(Icon::new(filter_type.icon()).color().with_size(Size::Large))
-                            .when(!collapsed, |this| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().foreground)
-                                        .when(is_selected, |this| {
-                                            this.font_weight(FontWeight::MEDIUM)
-                                        })
-                                        .child(filter_type.label()),
-                                )
-                            })
-                    })),
-            )
-            .child(
-                // 底部区域：主题切换、设置和用户头像
-                v_flex()
-                    .w_full()
-                    .when(collapsed, |this| this.items_center().p_2())
-                    .when(!collapsed, |this| this.p_4())
-                    .gap_3()
-                    .border_t_1()
+                    .min_h_0()
+                    .border_r_1()
                     .border_color(cx.theme().border)
+                    .child(
+                        // 侧边栏：协议分类 + 文件夹树
+                        v_flex()
+                            .flex_1()
+                            .w_full()
+                            .min_h_0()
+                            .p_2()
+                            .gap_1()
+                            .overflow_y_scrollbar()
+                            .when(collapsed, |this| this.items_center())
+                            .children(filter_types.into_iter().map(|filter_type| {
+                                self.render_sidebar_category(filter_type, collapsed, cx)
+                            })),
+                    )
+                    .child(
+                        // 底部区域：主题切换、设置和用户头像
+                        v_flex()
+                            .w_full()
+                            .when(collapsed, |this| this.items_center().p_2())
+                            .when(!collapsed, |this| this.p_4())
+                            .gap_3()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
                     .when(show_team_management_entry, |this| {
                         this.child(
                             Button::new("open_team_management")
@@ -3259,32 +4258,24 @@ impl HomePage {
                                 ))
                             })
                     }),
+            ),
             )
             .child(
+                // 全高定位层仅用于垂直居中，点击事件只挂在按钮上
                 div()
                     .absolute()
                     .right_0()
                     .top_0()
                     .bottom_0()
-                    .w(px(24.0))
+                    .w(px(18.0))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .occlude()
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.toggle_sidebar(cx);
-                        }),
-                    )
                     .child(
                         div()
                             .id("home-sidebar-toggle")
                             .w(px(18.0))
-                            .h(px(52.0))
+                            .h(px(72.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -3293,7 +4284,17 @@ impl HomePage {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().background)
                             .shadow_sm()
+                            .cursor_pointer()
+                            .occlude()
                             .hover(|this| this.bg(cx.theme().muted))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                    this.toggle_sidebar(cx);
+                                }),
+                            )
                             .child(
                                 Icon::new(if collapsed {
                                     IconName::ChevronRight
@@ -3308,9 +4309,20 @@ impl HomePage {
     }
 
     fn match_connection_type(&self, conn: &StoredConnection) -> bool {
-        match self.selected_filter {
+        let type_matched = match self.selected_filter {
             ConnectionType::All => true,
             filter_type => conn.connection_type == filter_type,
+        };
+        if !type_matched {
+            return false;
+        }
+        if let Some(folder_id) = self.selected_folder_id {
+            let allowed = self.folder_descendant_ids(folder_id);
+            conn.folder_id
+                .map(|id| allowed.contains(&id))
+                .unwrap_or(false)
+        } else {
+            true
         }
     }
 
@@ -4884,34 +5896,21 @@ impl Render for HomePage {
             });
         }
 
-        div()
+        // 侧栏已提升到 OnetCliApp 层永驻；首页只渲染右侧内容区。
+        v_flex()
             .size_full()
             .min_w_0()
             .track_focus(&self.focus_handle)
+            .bg(cx.theme().background)
+            .child(self.render_toolbar(window, cx))
             .child(
-                h_flex()
-                    .size_full()
+                div()
+                    .flex_1()
+                    .w_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(self.render_sidebar(window, cx))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .child(self.render_toolbar(window, cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .bg(cx.theme().muted)
-                                    .child(self.render_content_area(cx)),
-                            ),
-                    ),
+                    .bg(cx.theme().muted)
+                    .child(self.render_content_area(cx)),
             )
     }
 }

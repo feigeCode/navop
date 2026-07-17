@@ -5,7 +5,9 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
     Styled, Window, actions, div,
 };
-use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
+use gpui_component::{
+    WindowExt, dialog::DialogButtonProps, h_flex, kbd::Kbd, notification::Notification,
+};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1336,11 +1338,35 @@ impl Render for OnetCliApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
+        // 左侧连接侧栏永驻：不随 Home tab 切换而消失。
+        let home_page = cx
+            .try_global::<GlobalHomePage>()
+            .map(|g| g.home_page.clone());
+        let permanent_sidebar = home_page.map(|home| {
+            home.update(cx, |home, cx| {
+                home.render_sidebar(window, cx).into_any_element()
+            })
+        });
+
         div()
             .size_full()
             .relative()
             .bg(cx.theme().background)
-            .child(div().size_full().child(self.tab_container.clone()))
+            .child(
+                h_flex()
+                    .size_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .children(permanent_sidebar)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .child(self.tab_container.clone()),
+                    ),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

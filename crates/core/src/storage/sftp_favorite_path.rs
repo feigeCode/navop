@@ -291,6 +291,7 @@ mod tests {
             connection_type: ConnectionType::SshSftp,
             params: "{}".to_string(),
             workspace_id: None,
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,

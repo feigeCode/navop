@@ -334,6 +334,44 @@ Home:
     en: "%{name} (Copy %{index})"
     zh-CN: "%{name} (副本 %{index})"
     zh-HK: "%{name} (副本 %{index})"
+  new_folder:
+    en: New Folder
+    zh-CN: 新建文件夹
+    zh-HK: 新建資料夾
+  new_subfolder:
+    en: New Subfolder
+    zh-CN: 新建子文件夹
+    zh-HK: 新建子資料夾
+  rename_folder:
+    en: Rename Folder
+    zh-CN: 重命名文件夹
+    zh-HK: 重新命名資料夾
+  delete_folder:
+    en: Delete Folder
+    zh-CN: 删除文件夹
+    zh-HK: 刪除資料夾
+  folder_name_placeholder:
+    en: Folder name
+    zh-CN: 文件夹名称
+    zh-HK: 資料夾名稱
+  delete_folder_confirm:
+    en: "Delete folder \"%{name}\"? Connections inside will become uncategorized."
+    zh-CN: "确定删除文件夹 \"%{name}\" 吗？其中的连接会变为未分类。"
+    zh-HK: "確定刪除資料夾 \"%{name}\" 嗎？其中的連線會變為未分類。"
+  uncategorized:
+    en: Uncategorized
+    zh-CN: 未分类
+    zh-HK: 未分類
+
+Folder:
+  new:
+    en: New Folder
+    zh-CN: 新建文件夹
+    zh-HK: 新建資料夾
+  edit:
+    en: Rename Folder
+    zh-CN: 重命名文件夹
+    zh-HK: 重新命名資料夾
 
 TeamManagement:
   title:

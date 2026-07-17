@@ -10,6 +10,7 @@ mod connection_import_model_tests;
 pub(crate) mod connection_import_window;
 #[cfg(test)]
 mod connection_import_window_tests;
+pub(crate) mod home_connection_folder;
 pub(crate) mod home_connection_quick_open;
 pub(crate) mod home_strategy;
 pub(crate) mod home_tabs;

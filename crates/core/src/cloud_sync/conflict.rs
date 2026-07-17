@@ -328,6 +328,7 @@ mod tests {
             name: "Test Connection".to_string(),
             connection_type: crate::storage::ConnectionType::Database,
             workspace_id: None,
+            folder_id: None,
             params: "{}".to_string(),
             selected_databases: None,
             remark: None,

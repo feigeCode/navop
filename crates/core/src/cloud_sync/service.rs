@@ -449,6 +449,7 @@ impl CloudSyncService {
                 name: plain_data.name,
                 connection_type,
                 workspace_id: None, // 由调用者根据 workspace_cloud_id 解析
+                folder_id: None,
                 params,
                 selected_databases: plain_data.selected_databases,
                 remark: plain_data.remark,
@@ -580,6 +581,7 @@ mod tests {
             connection_type: ConnectionType::Database,
             params: r#"{"host":"localhost","port":5432}"#.to_string(),
             workspace_id: Some(7),
+            folder_id: None,
             selected_databases: None,
             remark: None,
             sync_enabled: true,

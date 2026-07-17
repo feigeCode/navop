@@ -48,6 +48,10 @@ Thumbs.db
 
 # Local-only scripts
 /supabase.sql
+/build.bat
+
+# Local toolchain binaries (do not commit)
+.tools/
 
 # AI Coding 生成的提交文档
 commit-info.md

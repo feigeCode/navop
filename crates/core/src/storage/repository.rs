@@ -12,7 +12,7 @@ use crate::storage::team_key_cache::TeamKeyCacheRepository;
 use crate::storage::team_membership_cache::TeamMembershipCacheRepository;
 use crate::storage::terminal_command_history::TerminalCommandHistoryRepository;
 use crate::storage::traits::Repository;
-use crate::storage::{ConnectionType, StoredConnection, Workspace};
+use crate::storage::{ConnectionFolder, ConnectionType, StoredConnection, Workspace};
 
 struct ConnectionRow {
     id: i64,
@@ -20,6 +20,7 @@ struct ConnectionRow {
     connection_type: String,
     params: String,
     workspace_id: Option<i64>,
+    folder_id: Option<i64>,
     selected_databases: Option<String>,
     remark: Option<String>,
     sync_enabled: bool,
@@ -41,6 +42,7 @@ impl FromSqliteRow for ConnectionRow {
             connection_type: row.get("connection_type")?,
             params: row.get("params")?,
             workspace_id: row.get("workspace_id")?,
+            folder_id: row.get("folder_id").unwrap_or(None),
             selected_databases: row.get("selected_databases")?,
             remark: row.get("remark")?,
             sync_enabled: row
@@ -67,6 +69,7 @@ impl From<ConnectionRow> for StoredConnection {
             connection_type: ConnectionType::from_str(&row.connection_type),
             params: row.params,
             workspace_id: row.workspace_id,
+            folder_id: row.folder_id,
             selected_databases: row.selected_databases,
             remark: row.remark,
             sync_enabled: row.sync_enabled,
@@ -162,14 +165,14 @@ impl ConnectionRepository {
                 .optional()?;
             let id = if let Some(id) = existing_id {
                 tx.execute(
-                    "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12 WHERE id = ?13",
-                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, id],
+                    "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, folder_id = ?5, selected_databases = ?6, remark = ?7, sync_enabled = ?8, cloud_id = ?9, last_synced_at = ?10, team_id = ?11, owner_id = ?12, updated_at = ?13 WHERE id = ?14",
+                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.folder_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, id],
                 )?;
                 id
             } else {
                 tx.execute(
-                    "INSERT INTO connections (name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, ts],
+                    "INSERT INTO connections (name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.folder_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, ts],
                 )?;
                 tx.last_insert_rowid()
             };
@@ -195,6 +198,7 @@ impl Repository for ConnectionRepository {
         let connection_type = item.connection_type.to_string();
         let params_str = item.encrypt_params();
         let workspace_id = item.workspace_id;
+        let folder_id = item.folder_id;
         let selected_databases = item.selected_databases.clone();
         let remark = item.remark.clone();
         let sync_enabled = if item.sync_enabled { 1i64 } else { 0i64 };
@@ -206,9 +210,9 @@ impl Repository for ConnectionRepository {
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO connections (name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-                params![name, connection_type, params_str, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, ts],
+                "INSERT INTO connections (name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![name, connection_type, params_str, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, ts],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
@@ -228,6 +232,7 @@ impl Repository for ConnectionRepository {
         let connection_type = item.connection_type.to_string();
         let params_str = item.encrypt_params();
         let workspace_id = item.workspace_id;
+        let folder_id = item.folder_id;
         let selected_databases = item.selected_databases.clone();
         let remark = item.remark.clone();
         let sync_enabled = if item.sync_enabled { 1i64 } else { 0i64 };
@@ -239,8 +244,8 @@ impl Repository for ConnectionRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12 WHERE id = ?13",
-                params![name, connection_type, params_str, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, id],
+                "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, folder_id = ?5, selected_databases = ?6, remark = ?7, sync_enabled = ?8, cloud_id = ?9, last_synced_at = ?10, team_id = ?11, owner_id = ?12, updated_at = ?13 WHERE id = ?14",
+                params![name, connection_type, params_str, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, id],
             )?;
             Ok(())
         })
@@ -256,7 +261,7 @@ impl Repository for ConnectionRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -270,7 +275,7 @@ impl Repository for ConnectionRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -305,9 +310,9 @@ impl ConnectionRepository {
     pub fn list_by_workspace(&self, workspace_id: Option<i64>) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let sql = if workspace_id.is_some() {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             } else {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             };
             let mut stmt = conn.prepare(sql)?;
 
@@ -391,7 +396,7 @@ impl ConnectionRepository {
     pub fn list_pending_sync(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
                  FROM connections
                  WHERE sync_enabled = 1 AND (cloud_id IS NULL OR updated_at > COALESCE(last_synced_at, 0))
                  ORDER BY updated_at DESC",
@@ -409,7 +414,7 @@ impl ConnectionRepository {
     pub fn get_by_cloud_id(&self, cloud_id: &str) -> Result<Option<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
                  FROM connections WHERE cloud_id = ?1",
             )?;
             let mut rows = stmt.query(params![cloud_id])?;
@@ -451,7 +456,7 @@ impl ConnectionRepository {
     pub fn list_by_team(&self, team_id: &str) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map(params![team_id], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -466,7 +471,7 @@ impl ConnectionRepository {
     pub fn list_personal(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -474,6 +479,310 @@ impl ConnectionRepository {
                 results.push(row?.into());
             }
             Ok(results)
+        })
+    }
+
+    pub fn list_by_folder(&self, folder_id: Option<i64>) -> Result<Vec<StoredConnection>> {
+        self.conn.with_connection(|conn| {
+            let mut results = Vec::new();
+            if let Some(fid) = folder_id {
+                let mut stmt = conn.prepare(
+                    "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE folder_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                )?;
+                let rows = stmt.query_map(params![fid], |row| ConnectionRow::from_row(row))?;
+                for row in rows {
+                    results.push(row?.into());
+                }
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT id, name, connection_type, params, workspace_id, folder_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE folder_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                )?;
+                let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
+                for row in rows {
+                    results.push(row?.into());
+                }
+            }
+            Ok(results)
+        })
+    }
+
+    pub fn update_folder_id(&self, connection_id: i64, folder_id: Option<i64>) -> Result<()> {
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET folder_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![folder_id, ts, connection_id],
+            )?;
+            Ok(())
+        })
+    }
+
+}
+
+
+struct ConnectionFolderRow {
+    id: i64,
+    name: String,
+    connection_type: String,
+    parent_id: Option<i64>,
+    sort_order: Option<i32>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl FromSqliteRow for ConnectionFolderRow {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(ConnectionFolderRow {
+            id: row.get("id")?,
+            name: row.get("name")?,
+            connection_type: row.get("connection_type")?,
+            parent_id: row.get("parent_id")?,
+            sort_order: row.get("sort_order").unwrap_or(Some(0)),
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
+impl From<ConnectionFolderRow> for ConnectionFolder {
+    fn from(row: ConnectionFolderRow) -> Self {
+        ConnectionFolder {
+            id: Some(row.id),
+            name: row.name,
+            connection_type: ConnectionType::from_str(&row.connection_type),
+            parent_id: row.parent_id,
+            sort_order: row.sort_order,
+            created_at: Some(row.created_at),
+            updated_at: Some(row.updated_at),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConnectionFolderRepository {
+    conn: SqliteConnection,
+}
+
+impl ConnectionFolderRepository {
+    pub fn new(conn: SqliteConnection) -> Self {
+        Self { conn }
+    }
+
+    pub fn list_by_type(&self, connection_type: ConnectionType) -> Result<Vec<ConnectionFolder>> {
+        let type_str = connection_type.to_string();
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, connection_type, parent_id, sort_order, created_at, updated_at
+                 FROM connection_folders
+                 WHERE connection_type = ?1
+                 ORDER BY sort_order ASC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![type_str], |row| ConnectionFolderRow::from_row(row))?;
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?.into());
+            }
+            Ok(results)
+        })
+    }
+
+    pub fn list_children(&self, parent_id: Option<i64>) -> Result<Vec<ConnectionFolder>> {
+        self.conn.with_connection(|conn| {
+            let mut results = Vec::new();
+            if let Some(pid) = parent_id {
+                let mut stmt = conn.prepare(
+                    "SELECT id, name, connection_type, parent_id, sort_order, created_at, updated_at
+                     FROM connection_folders
+                     WHERE parent_id = ?1
+                     ORDER BY sort_order ASC, id ASC",
+                )?;
+                let rows = stmt.query_map(params![pid], |row| ConnectionFolderRow::from_row(row))?;
+                for row in rows {
+                    results.push(row?.into());
+                }
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT id, name, connection_type, parent_id, sort_order, created_at, updated_at
+                     FROM connection_folders
+                     WHERE parent_id IS NULL
+                     ORDER BY sort_order ASC, id ASC",
+                )?;
+                let rows = stmt.query_map([], |row| ConnectionFolderRow::from_row(row))?;
+                for row in rows {
+                    results.push(row?.into());
+                }
+            }
+            Ok(results)
+        })
+    }
+
+    pub fn update_sort_orders(&self, orders: &[(i64, i32)]) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let ts = now();
+            for (id, sort_order) in orders {
+                tx.execute(
+                    "UPDATE connection_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![sort_order, ts, id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    pub fn move_folder(&self, id: i64, new_parent_id: Option<i64>) -> Result<()> {
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connection_folders SET parent_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![new_parent_id, ts, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn next_sort_order(&self, connection_type: &str, parent_id: Option<i64>) -> Result<i32> {
+        self.conn.with_connection(|conn| {
+            let max_order: Option<i32> = if let Some(pid) = parent_id {
+                conn.query_row(
+                    "SELECT MAX(sort_order) FROM connection_folders WHERE connection_type = ?1 AND parent_id = ?2",
+                    params![connection_type, pid],
+                    |row| row.get(0),
+                )?
+            } else {
+                conn.query_row(
+                    "SELECT MAX(sort_order) FROM connection_folders WHERE connection_type = ?1 AND parent_id IS NULL",
+                    params![connection_type],
+                    |row| row.get(0),
+                )?
+            };
+            Ok(max_order.unwrap_or(-1) + 1)
+        })
+    }
+
+    /// Collect this folder and all descendant folder ids.
+    pub fn collect_descendant_ids(&self, folder_id: i64) -> Result<Vec<i64>> {
+        let all = self.list()?;
+        let mut result = vec![folder_id];
+        let mut queue = vec![folder_id];
+        while let Some(current) = queue.pop() {
+            for folder in &all {
+                if folder.parent_id == Some(current) {
+                    if let Some(id) = folder.id {
+                        result.push(id);
+                        queue.push(id);
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+impl Repository for ConnectionFolderRepository {
+    type Entity = ConnectionFolder;
+
+    fn entity_type(&self) -> SharedString {
+        SharedString::from("ConnectionFolder")
+    }
+
+    fn insert(&self, item: &mut Self::Entity) -> Result<i64> {
+        let name = item.name.clone();
+        let connection_type = item.connection_type.to_string();
+        let parent_id = item.parent_id;
+        let sort_order = item
+            .sort_order
+            .unwrap_or(self.next_sort_order(&connection_type, parent_id)?);
+        let ts = now();
+
+        let id = self.conn.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO connection_folders (name, connection_type, parent_id, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![name, connection_type, parent_id, sort_order, ts, ts],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })?;
+
+        item.id = Some(id);
+        item.sort_order = Some(sort_order);
+        item.created_at = Some(ts);
+        item.updated_at = Some(ts);
+        Ok(id)
+    }
+
+    fn update(&self, item: &Self::Entity) -> Result<()> {
+        let id = item
+            .id
+            .ok_or_else(|| anyhow::anyhow!("Cannot update without ID"))?;
+        let name = item.name.clone();
+        let connection_type = item.connection_type.to_string();
+        let parent_id = item.parent_id;
+        let sort_order = item.sort_order;
+        let ts = now();
+
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connection_folders SET name = ?1, connection_type = ?2, parent_id = ?3, sort_order = COALESCE(?4, sort_order), updated_at = ?5 WHERE id = ?6",
+                params![name, connection_type, parent_id, sort_order, ts, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn delete(&self, id: i64) -> Result<()> {
+        // ON DELETE CASCADE for child folders; connections.folder_id SET NULL via FK
+        self.conn.with_connection(|conn| {
+            conn.execute("DELETE FROM connection_folders WHERE id = ?1", params![id])?;
+            Ok(())
+        })
+    }
+
+    fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, connection_type, parent_id, sort_order, created_at, updated_at FROM connection_folders WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(ConnectionFolderRow::from_row(row)?.into()))
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
+    fn list(&self) -> Result<Vec<Self::Entity>> {
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, connection_type, parent_id, sort_order, created_at, updated_at FROM connection_folders ORDER BY sort_order ASC, id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| ConnectionFolderRow::from_row(row))?;
+            let mut results = Vec::new();
+            for row in rows {
+                results.push(row?.into());
+            }
+            Ok(results)
+        })
+    }
+
+    fn count(&self) -> Result<i64> {
+        self.conn.with_connection(|conn| {
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM connection_folders", [], |row| row.get(0))?;
+            Ok(count)
+        })
+    }
+
+    fn exists(&self, id: i64) -> Result<bool> {
+        self.conn.with_connection(|conn| {
+            let exists: i64 = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM connection_folders WHERE id = ?1)",
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(exists == 1)
         })
     }
 }
@@ -984,6 +1293,7 @@ pub fn init(cx: &mut App) {
 
     let conn = storage.connection();
     let conn_repo = ConnectionRepository::new(conn.clone());
+    let folder_repo = ConnectionFolderRepository::new(conn.clone());
     let workspace_repo = WorkspaceRepository::new(conn.clone());
     let quick_cmd_repo = QuickCommandRepository::new(conn.clone());
     let sftp_favorite_path_repo = SftpFavoritePathRepository::new(conn.clone());
@@ -998,6 +1308,7 @@ pub fn init(cx: &mut App) {
 
     storage.register(workspace_repo);
     storage.register(conn_repo);
+    storage.register(folder_repo);
     storage.register(quick_cmd_repo);
     storage.register(sftp_favorite_path_repo);
     storage.register(terminal_command_history_repo);
