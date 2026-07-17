@@ -37,12 +37,14 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use one_core::sidebar_contribution::SidebarPlacement;
+use rust_i18n::t;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
     AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome, AcpPermissionProvider,
     AcpRecoveryAction, AcpSessionState, acp_permission_channel, build_acp_agent_entries,
+    current_acp_tool_mode, set_current_acp_tool_mode,
 };
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
@@ -984,6 +986,7 @@ impl AgentChatView {
         }
         // ACP 后端:直接把文本交给外部 agent;流式更新经事件泵回灌转录。
         if self.backend == Backend::Acp {
+            self.sync_acp_tool_mode_from_provider(cx);
             if self.acp.is_none() {
                 self.transcript.push_system("ACP agent 未连接");
                 cx.notify();
@@ -1360,6 +1363,21 @@ impl AgentChatView {
             return;
         }
         if let Some(opt) = self.tool_options.iter().find(|o| o.id.as_ref() == id) {
+            let mode = tool_execution_mode_from_label(&opt.label);
+            if self.backend == Backend::Acp
+                && let Err(error) = set_current_acp_tool_mode(cx, mode)
+            {
+                let message = t!(
+                    "AgentChat.acp_tool_mode_update_failed",
+                    error = error.to_string()
+                )
+                .to_string();
+                tracing::warn!(%error, "Failed to update ACP Public MCP permission mode");
+                self.transcript.push_system(message);
+                self.request_scroll_to_bottom();
+                cx.notify();
+                return;
+            }
             self.selected_tool = opt.label.clone();
             self.sync_composer(cx);
             cx.notify();
@@ -3063,6 +3081,14 @@ fn tool_execution_mode_from_label(label: &SharedString) -> ToolExecutionMode {
     }
 }
 
+fn tool_execution_mode_label(mode: ToolExecutionMode) -> &'static str {
+    match mode {
+        ToolExecutionMode::Auto => "自动",
+        ToolExecutionMode::ReadOnly => "只读",
+        ToolExecutionMode::Manual => "手动确认",
+    }
+}
+
 fn default_tool_label() -> SharedString {
     SharedString::from("手动确认")
 }
@@ -3229,8 +3255,8 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
     use crate::agent_cards::{
-        ACP_PERMISSION_CARD, AcpPermissionCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
-        ToolConfirmCardData,
+        ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
+        TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
     };
     use crate::{AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest};
     use agent_runtime::RuntimeServices;
@@ -4327,6 +4353,97 @@ mod tests {
             },
             outcome_rx.try_recv().expect("ACP permission response")
         );
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_card_uses_full_width_details_and_compact_actions(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                ACP_PERMISSION_CARD,
+                AcpPermissionCardData {
+                    request_id: "session:call-layout".into(),
+                    session_id: "session".into(),
+                    tool_call_id: "call-layout".into(),
+                    tool_name: "ACP tool".into(),
+                    summary: "ACP Agent 请求执行工具：ACP tool".into(),
+                    details_json: r#"{
+  "tool": "terminal.exec",
+  "kind": "write",
+  "scope": "session"
+}"#
+                    .into(),
+                    options: vec![
+                        AcpPermissionOptionData {
+                            option_id: "allow".into(),
+                            name: "Allow".into(),
+                            kind: "allow_once".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "allow-session".into(),
+                            name: "Allow for This Session".into(),
+                            kind: "allow_for_session".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "allow-always".into(),
+                            name: "Allow and Don't Ask Again".into(),
+                            kind: "allow_always".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "decline".into(),
+                            name: "Decline".into(),
+                            kind: "reject_once".into(),
+                        },
+                    ],
+                    status: "pending".into(),
+                    selected_option_name: String::new(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let details = cx
+            .debug_bounds("acp-permission-details")
+            .expect("ACP details should render");
+        let frame = cx
+            .debug_bounds("agent-tool-json-frame")
+            .expect("ACP details frame should render");
+        let input = cx
+            .debug_bounds("agent-tool-json-input-slot")
+            .expect("ACP details input should render");
+        for (name, bounds) in [("details", details), ("frame", frame), ("input", input)] {
+            assert!(
+                bounds.size.width > column.size.width * 0.75,
+                "ACP {name} should use the available message width: column={column:?}, bounds={bounds:?}"
+            );
+        }
+
+        let actions = cx
+            .debug_bounds("acp-permission-actions")
+            .expect("ACP actions should render");
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("allow button should render");
+        let reject = cx
+            .debug_bounds("acp-permission-reject_once")
+            .expect("reject button should render");
+        let more = cx
+            .debug_bounds("acp-permission-more-options")
+            .expect("more-options trigger should render");
+        assert_eq!(allow.origin.y, reject.origin.y);
+        assert_eq!(allow.origin.y, more.origin.y);
+        assert!(actions.size.height <= allow.size.height + px(4.0));
     }
 
     #[gpui::test]

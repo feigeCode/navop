@@ -124,7 +124,7 @@ async fn call_runtime_tool(
             ask_then_run_runtime_tool(registry, descriptor, name, input, context).await
         }
         tool_runtime::PermissionDecision::Deny => Ok(permission_denied_result(
-            "tool runtime call denied by permission mode",
+            "tool runtime call denied by permission mode; set MCP Permission Profile to Confirm or Auto",
         )),
     }
 }

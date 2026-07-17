@@ -12,6 +12,8 @@ use agent_runtime::{
     Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, StepStatus, ToolCallId,
     ToolObservation, TurnId,
 };
+use rust_i18n::t;
+use serde_json::Value;
 
 const MAX_DELTA_CHARS: usize = 8;
 
@@ -55,6 +57,17 @@ pub(crate) fn session_update_to_events_for_agent(
         }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let delta = content_block_text(&chunk.content);
+            if chunk.message_id.is_none()
+                && let Some(model) = model_metadata_fallback_warning_model(&delta)
+            {
+                tracing::warn!(
+                    agent = agent_name,
+                    model,
+                    warning = %delta.trim(),
+                    "ACP agent model metadata fallback"
+                );
+                return Vec::new();
+            }
             assistant_delta_events(delta, session_id, turn_id)
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
@@ -146,6 +159,15 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
         chunks.push(current);
     }
     chunks
+}
+
+fn model_metadata_fallback_warning_model(text: &str) -> Option<&str> {
+    const PREFIX: &str = "Warning: Model metadata for ";
+    const SUFFIX: &str = " not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+
+    let body = text.trim().strip_prefix(PREFIX)?;
+    let model = body.strip_suffix(SUFFIX)?.trim();
+    (!model.is_empty()).then_some(model)
 }
 
 fn acp_update_kind(update: &SessionUpdate) -> &'static str {
@@ -259,15 +281,46 @@ fn build_observation(
     text: String,
     success: bool,
 ) -> ToolObservation {
-    if success {
+    let permission_denied = is_public_mcp_permission_denied(&text);
+    if success && !permission_denied {
         ToolObservation::success(call_id, tool_name, summary, ObservationData::Text(text))
     } else {
         let message = if text.is_empty() {
             summary.to_string()
+        } else if permission_denied {
+            t!("AgentChat.public_mcp_permission_denied").to_string()
         } else {
             text
         };
         ToolObservation::failure(call_id, tool_name, message)
+    }
+}
+
+fn is_public_mcp_permission_denied(text: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return false;
+    };
+    contains_structured_code(&value, "permission_denied")
+}
+
+fn contains_structured_code(value: &Value, expected: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            object
+                .get("code")
+                .and_then(Value::as_str)
+                .is_some_and(|code| code == expected)
+                || object
+                    .values()
+                    .any(|value| contains_structured_code(value, expected))
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| contains_structured_code(value, expected)),
+        Value::String(string) => serde_json::from_str::<Value>(string)
+            .ok()
+            .is_some_and(|value| contains_structured_code(&value, expected)),
+        _ => false,
     }
 }
 
@@ -362,6 +415,88 @@ mod tests {
             &events[0],
             RuntimeEvent::AssistantMessageDelta { delta, .. } if delta == "你好"
         ));
+    }
+
+    #[test]
+    fn model_metadata_fallback_warning_is_logged_instead_of_rendered() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new(
+                "Warning: Model metadata for gpt-5.6-sol not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+            ),
+        )));
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ordinary_warning_from_agent_remains_visible() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("Warning: production database is read-only."),
+        )));
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn model_metadata_words_inside_normal_answer_remain_visible() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new(
+                "The log said: Warning: Model metadata for gpt-x not found. Defaulting to fallback metadata; this can degrade performance and cause issues. Please update the config.",
+            ),
+        )));
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn metadata_warning_with_normal_message_id_remains_visible() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(
+                "Warning: Model metadata for gpt-x not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+            )))
+            .message_id("assistant-message"),
+        );
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn public_mcp_permission_error_is_recognized_from_nested_structured_output() {
+        let text = serde_json::json!({
+            "result": {
+                "structuredContent": {
+                    "code": "permission_denied",
+                    "message": "tool runtime call denied by permission mode"
+                }
+            }
+        })
+        .to_string();
+
+        assert!(is_public_mcp_permission_denied(&text));
+    }
+
+    #[test]
+    fn unrelated_structured_tool_error_is_not_treated_as_permission_denied() {
+        let text = serde_json::json!({
+            "structuredContent": {
+                "code": "connection_failed"
+            }
+        })
+        .to_string();
+
+        assert!(!is_public_mcp_permission_denied(&text));
     }
 
     #[test]

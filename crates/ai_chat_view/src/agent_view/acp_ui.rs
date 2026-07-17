@@ -39,6 +39,7 @@ impl AgentChatView {
         let Some(config) = self.ready_acp_config(&id) else {
             return;
         };
+        self.sync_acp_tool_mode_from_provider(cx);
         let config = config.with_skill_context(&self.skills.selected_context());
         let permission_provider = self.begin_acp_connect(&config, cx);
         cx.spawn(async move |this, cx| {
@@ -50,6 +51,14 @@ impl AgentChatView {
             });
         })
         .detach();
+    }
+
+    pub(super) fn sync_acp_tool_mode_from_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(mode) = current_acp_tool_mode(cx) else {
+            return;
+        };
+        self.selected_tool = tool_execution_mode_label(mode).into();
+        self.sync_composer(cx);
     }
 
     fn local_backend_is_idle(&self) -> bool {

@@ -13,14 +13,15 @@ use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
 use serde::{Deserialize, Serialize};
@@ -489,6 +490,7 @@ impl ChatCard for ToolConfirmCard {
         let mut card = v_flex()
             .w_full()
             .min_w_0()
+            .items_stretch()
             .gap_2()
             .p_3()
             .rounded_lg()
@@ -673,57 +675,24 @@ impl ChatCard for AcpPermissionCard {
             );
 
         if !data.details_json.is_empty() {
-            card = card.child(tool_card_json_block(
-                "请求详情",
-                SharedString::from(format!("acp-permission-details-{}", msg.id)),
-                data.details_json.clone(),
-                window,
-                cx,
-            ));
+            card = card.child(
+                div()
+                    .debug_selector(|| "acp-permission-details".to_string())
+                    .w_full()
+                    .min_w_0()
+                    .self_stretch()
+                    .child(tool_card_json_block(
+                        "请求详情",
+                        SharedString::from(format!("acp-permission-details-{}", msg.id)),
+                        data.details_json.clone(),
+                        window,
+                        cx,
+                    )),
+            );
         }
 
         if pending {
-            let buttons = data
-                .options
-                .iter()
-                .map(|option| {
-                    let request_id = data.request_id.clone();
-                    let option_id = option.option_id.clone();
-                    let mut button = Button::new(SharedString::from(format!(
-                        "acp-permission-option-{request_id}-{option_id}"
-                    )))
-                    .debug_selector({
-                        let kind = option.kind.clone();
-                        move || format!("acp-permission-{kind}")
-                    })
-                    .with_size(Size::Small)
-                    .label(option.name.clone());
-                    if option.kind.starts_with("reject") {
-                        button = button.danger();
-                    } else if option.kind.starts_with("allow") {
-                        button = button.success();
-                    }
-                    button
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(SelectAcpPermissionOption {
-                                    request_id: request_id.clone(),
-                                    option_id: option_id.clone(),
-                                }),
-                                cx,
-                            );
-                        })
-                        .into_any_element()
-                })
-                .collect::<Vec<_>>();
-            card = card.child(
-                h_flex()
-                    .w_full()
-                    .flex_wrap()
-                    .justify_end()
-                    .gap_2()
-                    .children(buttons),
-            );
+            card = card.child(render_acp_permission_actions(&data));
         } else {
             card = card.child(
                 h_flex().w_full().justify_end().child(
@@ -740,6 +709,101 @@ impl ChatCard for AcpPermissionCard {
 
         card.into_any_element()
     }
+}
+
+fn render_acp_permission_actions(data: &AcpPermissionCardData) -> AnyElement {
+    let allow = preferred_acp_permission_option(&data.options, "allow_once", "allow");
+    let reject = preferred_acp_permission_option(&data.options, "reject_once", "reject");
+    let primary_ids = [allow, reject]
+        .into_iter()
+        .flatten()
+        .map(|option| option.option_id.as_str())
+        .collect::<HashSet<_>>();
+    let additional = data
+        .options
+        .iter()
+        .filter(|option| !primary_ids.contains(option.option_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut actions = h_flex()
+        .debug_selector(|| "acp-permission-actions".to_string())
+        .w_full()
+        .min_w_0()
+        .justify_end()
+        .gap_2();
+
+    if let Some(option) = reject {
+        actions = actions.child(acp_permission_option_button(&data.request_id, option).danger());
+    }
+    if let Some(option) = allow {
+        actions = actions.child(acp_permission_option_button(&data.request_id, option).success());
+    }
+    if !additional.is_empty() {
+        let request_id = data.request_id.clone();
+        actions = actions.child(
+            Button::new(SharedString::from(format!(
+                "acp-permission-more-{}",
+                data.request_id
+            )))
+            .debug_selector(|| "acp-permission-more-options".to_string())
+            .with_size(Size::Small)
+            .compact()
+            .label("更多选项")
+            .dropdown_caret(true)
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                for option in &additional {
+                    menu = menu.item(PopupMenuItem::new(option.name.clone()).action(Box::new(
+                        SelectAcpPermissionOption {
+                            request_id: request_id.clone(),
+                            option_id: option.option_id.clone(),
+                        },
+                    )));
+                }
+                menu
+            }),
+        );
+    }
+
+    actions.into_any_element()
+}
+
+fn preferred_acp_permission_option<'a>(
+    options: &'a [AcpPermissionOptionData],
+    preferred_kind: &str,
+    kind_prefix: &str,
+) -> Option<&'a AcpPermissionOptionData> {
+    options
+        .iter()
+        .find(|option| option.kind == preferred_kind)
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| option.kind.starts_with(kind_prefix))
+        })
+}
+
+fn acp_permission_option_button(request_id: &str, option: &AcpPermissionOptionData) -> Button {
+    let action_request_id = request_id.to_string();
+    let option_id = option.option_id.clone();
+    Button::new(SharedString::from(format!(
+        "acp-permission-option-{request_id}-{option_id}"
+    )))
+    .debug_selector({
+        let kind = option.kind.clone();
+        move || format!("acp-permission-{kind}")
+    })
+    .with_size(Size::Small)
+    .compact()
+    .label(option.name.clone())
+    .on_click(move |_, window, cx| {
+        window.dispatch_action(
+            Box::new(SelectAcpPermissionOption {
+                request_id: action_request_id.clone(),
+                option_id: option_id.clone(),
+            }),
+            cx,
+        );
+    })
 }
 
 // ============================================================================
@@ -925,6 +989,8 @@ fn tool_card_json_block(
         .debug_selector(|| "agent-tool-json-block".to_string())
         .w_full()
         .min_w_0()
+        .self_stretch()
+        .items_stretch()
         .gap_1()
         .px_1()
         .child(
@@ -938,6 +1004,8 @@ fn tool_card_json_block(
                 .debug_selector(|| "agent-tool-json-frame".to_string())
                 .w_full()
                 .min_w_0()
+                .self_stretch()
+                .items_stretch()
                 .h(height)
                 .rounded(cx.theme().radius)
                 .border_1()
@@ -948,12 +1016,15 @@ fn tool_card_json_block(
                     div()
                         .debug_selector(|| "agent-tool-json-input-slot".to_string())
                         .flex_1()
+                        .w_full()
                         .min_w_0()
+                        .self_stretch()
                         .h_full()
                         .child(
                             Input::new(&input)
                                 .bare()
                                 .flex_1()
+                                .w_full()
                                 .min_w_0()
                                 .h_full()
                                 .appearance(false)

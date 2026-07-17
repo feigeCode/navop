@@ -65,7 +65,7 @@ fn tool_runtime_provider_denies_mutating_tools_in_deny_mode() {
     assert_eq!(
         Some(json!({
             "code": "permission_denied",
-            "message": "tool runtime call denied by permission mode"
+            "message": "tool runtime call denied by permission mode; set MCP Permission Profile to Confirm or Auto"
         })),
         result.structured_content
     );

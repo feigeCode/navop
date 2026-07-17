@@ -68,7 +68,8 @@ pub use acp::{
     AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
     AcpPendingConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
     AcpPermissionProvider, AcpPermissionRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
-    build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
+    build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
+    set_acp_agent_config_provider, set_acp_tool_mode_provider, set_current_acp_tool_mode,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};

@@ -1426,6 +1426,10 @@ Settings:
         en: Allow
         zh-CN: 允许
         zh-HK: 允許
+      acp_permission_env_override:
+        en: "ACP tool permission is overridden by ONETCLI_PUBLIC_MCP_PERMISSION=%{mode}"
+        zh-CN: "ACP 工具权限已被环境变量 ONETCLI_PUBLIC_MCP_PERMISSION=%{mode} 覆盖"
+        zh-HK: "ACP 工具權限已被環境變量 ONETCLI_PUBLIC_MCP_PERMISSION=%{mode} 覆蓋"
       status:
         en: Runtime Status
         zh-CN: 运行状态

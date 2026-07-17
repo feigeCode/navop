@@ -1,5 +1,15 @@
 _version: 2
 
+AgentChat:
+  acp_tool_mode_update_failed:
+    en: "Could not update ACP tool permission: %{error}"
+    zh-CN: "ACP 工具权限更新失败：%{error}"
+    zh-HK: "ACP 工具權限更新失敗：%{error}"
+  public_mcp_permission_denied:
+    en: "Public MCP denied this operation. Set MCP Permission Profile to Confirm or Auto."
+    zh-CN: "Public MCP 拒绝了此操作，请在“设置 → MCP → 权限档位”中选择确认模式或自动模式。"
+    zh-HK: "Public MCP 拒絕了此操作，請在「設定 → MCP → 權限檔位」中選擇確認模式或自動模式。"
+
 HtmlPreview:
   copy_html:
     en: Copy HTML
