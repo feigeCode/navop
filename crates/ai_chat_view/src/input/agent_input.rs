@@ -23,7 +23,6 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt as _, h_flex, v_flex,
 };
@@ -1069,52 +1068,6 @@ impl AgentInput {
         }
     }
 
-    fn show_add_resource_dialog(
-        view: Entity<AgentInput>,
-        items: Vec<ComposerResourcePoolItem>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let addable_items = items
-            .into_iter()
-            .filter(|item| !item.in_pool)
-            .collect::<Vec<_>>();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let mut list = v_flex().gap_2().max_h(px(360.0)).overflow_y_scrollbar();
-            for item in addable_items.clone() {
-                let id = item.id.clone();
-                let view = view.clone();
-                list = list.child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .child(div().text_sm().truncate().child(item.label.clone()))
-                                .child(div().text_xs().truncate().child(item.primary_meta.clone())),
-                        )
-                        .child(
-                            Button::new(format!("resource-add-dialog-{id}"))
-                                .icon(IconName::Plus)
-                                .small()
-                                .on_click(move |_, _window, cx| {
-                                    let id = id.clone();
-                                    view.update(cx, |this, cx| {
-                                        if this.is_running {
-                                            return;
-                                        }
-                                        cx.emit(AgentInputEvent::AddResourceToPool { id });
-                                        cx.notify();
-                                    });
-                                }),
-                        ),
-                );
-            }
-            dialog.title("添加资源").w(px(460.0)).child(list)
-        });
-    }
 }
 
 fn referenced_mentions_in_text(text: &str, mentions: &[MentionItem]) -> Vec<MentionItem> {
@@ -1672,14 +1625,6 @@ fn render_context_mode_content(
         ));
     }
 
-    if pool_items.iter().any(|item| !item.in_pool) {
-        col = col.child(render_add_resource_dialog_button(
-            view.clone(),
-            pool_items.clone(),
-            &theme,
-        ));
-    }
-
     // 搜索框:固定在列表上方,不参与滚动,避免长列表里输入框被滚出可视区。
     col = col.child(
         div()
@@ -1762,25 +1707,6 @@ fn render_context_mode_content(
 
     col = col.child(list);
     col.into_any_element()
-}
-
-fn render_add_resource_dialog_button(
-    view: Entity<AgentInput>,
-    items: Vec<ComposerResourcePoolItem>,
-    theme: &AgentChatTheme,
-) -> gpui::AnyElement {
-    Button::new("agent-add-resource-dialog")
-        .debug_selector(|| "agent-add-resource-dialog".to_string())
-        .icon(IconName::Plus)
-        .small()
-        .label("添加资源")
-        .bg(theme.panel)
-        .border_color(theme.border)
-        .text_color(theme.foreground)
-        .on_click(move |_, window, cx| {
-            AgentInput::show_add_resource_dialog(view.clone(), items.clone(), window, cx);
-        })
-        .into_any_element()
 }
 
 fn render_resource_source_options(
@@ -2778,7 +2704,7 @@ mod tests {
 
     #[test]
     fn resource_pool_action_labels_match_membership() {
-        let add = crate::input::context::ComposerResourcePoolItem::new(
+        let add = ComposerResourcePoolItem::new(
             "ssh-b",
             "prod-b",
             "SH",
@@ -2790,7 +2716,7 @@ mod tests {
             false,
             false,
         );
-        let remove = crate::input::context::ComposerResourcePoolItem::new(
+        let remove = ComposerResourcePoolItem::new(
             "ssh-a",
             "prod-a",
             "SH",
@@ -2802,7 +2728,7 @@ mod tests {
             true,
             false,
         );
-        let default = crate::input::context::ComposerResourcePoolItem::new(
+        let default = ComposerResourcePoolItem::new(
             "ssh-a",
             "prod-a",
             "SH",
@@ -2824,8 +2750,8 @@ mod tests {
     #[test]
     fn resource_source_option_label_includes_count_or_disabled_hint() {
         let enabled =
-            crate::input::context::ComposerResourceSourceOption::new("all", "全部", 3, true);
-        let disabled = crate::input::context::ComposerResourceSourceOption::new(
+            ComposerResourceSourceOption::new("all", "全部", 3, true);
+        let disabled = ComposerResourceSourceOption::new(
             "workspace",
             "工作区",
             0,
