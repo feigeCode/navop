@@ -34,9 +34,11 @@ pub use permission::{
     AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
     AcpPermissionRequest,
 };
+pub(crate) use provider::acquire_acp_permission_grant;
 pub use provider::{
-    build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
-    set_acp_agent_config_provider, set_acp_tool_mode_provider, set_current_acp_tool_mode,
+    AcpPermissionGrant, build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
+    set_acp_agent_config_provider, set_acp_permission_grant_provider, set_acp_tool_mode_provider,
+    set_current_acp_tool_mode,
 };
 pub use state::AcpConnectionPhase;
 pub(crate) use state::AcpSessionState;

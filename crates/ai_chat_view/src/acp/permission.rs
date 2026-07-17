@@ -34,6 +34,13 @@ impl AcpPermissionRequest {
             .or_else(|| self.options.first())
             .map(|option| option.option_id.clone())
     }
+
+    pub fn raw_input(&self) -> Option<&Value> {
+        self.details
+            .get("rawInput")
+            .or_else(|| self.details.get("raw_input"))
+            .filter(|arguments| arguments.is_object())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -230,6 +237,10 @@ mod tests {
         assert_eq!("session:call", request.request_id);
         assert_eq!("session", request.session_id);
         assert_eq!("call", request.tool_call_id);
+        assert_eq!(
+            Some(&serde_json::json!({"path": "/tmp/file"})),
+            request.raw_input()
+        );
     }
 
     #[tokio::test]
@@ -348,6 +359,7 @@ mod tests {
     fn permission_request() -> RequestPermissionRequest {
         let mut fields = ToolCallUpdateFields::default();
         fields.title = Some("Write file".to_string());
+        fields.raw_input = Some(serde_json::json!({"path": "/tmp/file"}));
         RequestPermissionRequest::new(
             "session",
             ToolCallUpdate::new("call", fields),

@@ -3,6 +3,7 @@ use super::{
     target_adapter::{mcp_target_schema, normalize_mcp_arguments},
 };
 use crate::approval::PublicMcpApprovalOutcome;
+use crate::approval_grants::redact_approval_arguments;
 use crate::permissions::{PublicMcpOperationKind, permission_policy_for_mode};
 use rmcp::{
     ErrorData as McpError,
@@ -81,7 +82,7 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         let raw_input = Value::Object(arguments.unwrap_or_default());
         let input = match normalize_mcp_arguments(
             &descriptor.input_schema,
-            raw_input,
+            raw_input.clone(),
             resource_pool.as_ref(),
             Some(&target_spec),
         ) {
@@ -92,7 +93,16 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
             let call_annotations = registry
                 .call_annotations(&name, ToolAdapter::Mcp, &input)
                 .unwrap_or_else(|| descriptor.annotations.clone());
-            call_runtime_tool(registry, descriptor, call_annotations, name, input, context).await
+            call_runtime_tool(
+                registry,
+                descriptor,
+                call_annotations,
+                name,
+                raw_input,
+                input,
+                context,
+            )
+            .await
         }))
     }
 }
@@ -114,6 +124,7 @@ async fn call_runtime_tool(
     descriptor: ToolDescriptor,
     call_annotations: RuntimeToolAnnotations,
     name: String,
+    request_input: Value,
     input: Value,
     context: PublicMcpToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -121,7 +132,8 @@ async fn call_runtime_tool(
     match policy.decide(&descriptor.tool_id(), None, &call_annotations) {
         tool_runtime::PermissionDecision::Allow => run_runtime_tool(registry, name, input).await,
         tool_runtime::PermissionDecision::Ask => {
-            ask_then_run_runtime_tool(registry, descriptor, name, input, context).await
+            ask_then_run_runtime_tool(registry, descriptor, name, request_input, input, context)
+                .await
         }
         tool_runtime::PermissionDecision::Deny => Ok(permission_denied_result(
             "tool runtime call denied by permission mode; set MCP Permission Profile to Confirm or Auto",
@@ -133,6 +145,7 @@ async fn ask_then_run_runtime_tool(
     registry: ToolRegistry,
     descriptor: ToolDescriptor,
     name: String,
+    request_input: Value,
     input: Value,
     context: PublicMcpToolContext,
 ) -> Result<CallToolResult, McpError> {
@@ -143,7 +156,8 @@ async fn ask_then_run_runtime_tool(
             format!("Call {}", descriptor.title),
             json!({
                 "tool": name,
-                "arguments": redact_secrets(input.clone()),
+                "requestArguments": redact_approval_arguments(request_input),
+                "arguments": redact_approval_arguments(input.clone()),
             }),
         )
         .await;
@@ -332,32 +346,4 @@ fn permission_denied_result(message: impl Into<String>) -> CallToolResult {
         "code": "permission_denied",
         "message": message.into()
     }))
-}
-
-fn redact_secrets(value: Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(key, value)| {
-                    if is_secret_key(&key) {
-                        (key, Value::String("<redacted>".to_string()))
-                    } else {
-                        (key, redact_secrets(value))
-                    }
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(redact_secrets).collect()),
-        value => value,
-    }
-}
-
-fn is_secret_key(key: &str) -> bool {
-    let normalized = key.to_ascii_lowercase();
-    normalized.contains("password")
-        || normalized.contains("passphrase")
-        || normalized.contains("secret")
-        || normalized.contains("token")
-        || normalized.contains("private_key")
 }

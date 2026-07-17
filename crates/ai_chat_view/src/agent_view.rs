@@ -43,8 +43,8 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
     AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome, AcpPermissionProvider,
-    AcpRecoveryAction, AcpSessionState, acp_permission_channel, build_acp_agent_entries,
-    current_acp_tool_mode, set_current_acp_tool_mode,
+    AcpRecoveryAction, AcpSessionState, acp_permission_channel, acquire_acp_permission_grant,
+    build_acp_agent_entries, current_acp_tool_mode, set_current_acp_tool_mode,
 };
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
@@ -850,10 +850,15 @@ impl AgentChatView {
             self.pending_acp_permissions.insert(request_id, envelope);
             return false;
         };
+        let request = envelope.request().clone();
+        let grant = acquire_acp_permission_grant(cx, &request, &option);
         let delivered = envelope.resolve(AcpPermissionOutcome::Selected {
             option_id: option.option_id.clone(),
         });
         if delivered {
+            if let Some(grant) = grant {
+                grant.commit();
+            }
             self.transcript.resolve_acp_permission(&request_id, &option);
         } else {
             self.transcript.cancel_acp_permission(&request_id);
@@ -4334,6 +4339,24 @@ mod tests {
     #[gpui::test]
     fn gpui_acp_permission_button_resolves_without_opening_dialog(cx: &mut TestAppContext) {
         init_test_ui(cx);
+        let granted = Arc::new(AtomicUsize::new(0));
+        let revoked = Arc::new(AtomicUsize::new(0));
+        cx.update({
+            let granted = granted.clone();
+            let revoked = revoked.clone();
+            move |cx| {
+                crate::set_acp_permission_grant_provider(cx, move |_request, option| {
+                    if !option.kind.starts_with("allow") {
+                        return None;
+                    }
+                    granted.fetch_add(1, Ordering::SeqCst);
+                    let revoked = revoked.clone();
+                    Some(crate::AcpPermissionGrant::new(move || {
+                        revoked.fetch_add(1, Ordering::SeqCst);
+                    }))
+                });
+            }
+        });
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
@@ -4353,6 +4376,43 @@ mod tests {
             },
             outcome_rx.try_recv().expect("ACP permission response")
         );
+        assert_eq!(1, granted.load(Ordering::SeqCst));
+        assert_eq!(0, revoked.load(Ordering::SeqCst));
+    }
+
+    #[gpui::test]
+    fn gpui_failed_acp_permission_delivery_revokes_public_mcp_grant(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let revoked = Arc::new(AtomicUsize::new(0));
+        cx.update({
+            let revoked = revoked.clone();
+            move |cx| {
+                crate::set_acp_permission_grant_provider(cx, move |_request, option| {
+                    if !option.kind.starts_with("allow") {
+                        return None;
+                    }
+                    let revoked = revoked.clone();
+                    Some(crate::AcpPermissionGrant::new(move || {
+                        revoked.fetch_add(1, Ordering::SeqCst);
+                    }))
+                });
+            }
+        });
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+        drop(outcome_rx);
+
+        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        cx.run_until_parked();
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("ACP allow button should render in the message list");
+        cx.simulate_click(allow.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(1, revoked.load(Ordering::SeqCst));
     }
 
     #[gpui::test]

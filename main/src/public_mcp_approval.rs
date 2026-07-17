@@ -14,12 +14,14 @@ use gpui_component::{
 use public_mcp::approval::{
     PublicMcpApprovalManager, PublicMcpApprovalOutcome, PublicMcpApprovalRequest,
 };
+use public_mcp::approval_grants::PublicMcpApprovalGrantStore;
 use rust_i18n::t;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+const ACP_APPROVAL_GRANT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct GlobalPublicMcpApprovalQueue {
     manager: PublicMcpApprovalManager,
@@ -32,10 +34,22 @@ pub fn init(cx: &mut App) {
         return;
     }
 
-    let (approver, mut receiver) = channel_approver(APPROVAL_TIMEOUT);
+    let grants = PublicMcpApprovalGrantStore::new(ACP_APPROVAL_GRANT_TIMEOUT);
+    let (approver, mut receiver) = channel_approver(APPROVAL_TIMEOUT, grants.clone());
     let manager = PublicMcpApprovalManager::new(Arc::new(approver));
     cx.set_global(GlobalPublicMcpApprovalQueue {
         manager: manager.clone(),
+    });
+    ai_chat_view::set_acp_permission_grant_provider(cx, move |request, option| {
+        if !option.kind.starts_with("allow") {
+            return None;
+        }
+        let arguments = request.raw_input()?.clone();
+        let grant_id = grants.register(arguments)?;
+        let grants = grants.clone();
+        Some(ai_chat_view::AcpPermissionGrant::new(move || {
+            grants.revoke(&grant_id);
+        }))
     });
     let queue = Arc::new(Mutex::new(ApprovalQueueState::default()));
 

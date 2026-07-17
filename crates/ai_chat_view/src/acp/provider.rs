@@ -1,4 +1,4 @@
-use crate::{AcpAgentConfig, AcpAgentEntry};
+use crate::{AcpAgentConfig, AcpAgentEntry, AcpPermissionOption, AcpPermissionRequest};
 use agent_runtime::ToolExecutionMode;
 use gpui::{App, Global};
 use std::sync::Arc;
@@ -24,6 +24,43 @@ struct GlobalAcpToolModeProvider {
 
 impl Global for GlobalAcpToolModeProvider {}
 
+pub struct AcpPermissionGrant {
+    revoke: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl AcpPermissionGrant {
+    pub fn new(revoke: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            revoke: Some(Box::new(revoke)),
+        }
+    }
+
+    pub fn commit(mut self) {
+        self.revoke = None;
+    }
+}
+
+impl Drop for AcpPermissionGrant {
+    fn drop(&mut self) {
+        if let Some(revoke) = self.revoke.take() {
+            revoke();
+        }
+    }
+}
+
+pub type AcpPermissionGrantProvider = Arc<
+    dyn Fn(&AcpPermissionRequest, &AcpPermissionOption) -> Option<AcpPermissionGrant>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+struct GlobalAcpPermissionGrantProvider {
+    provider: AcpPermissionGrantProvider,
+}
+
+impl Global for GlobalAcpPermissionGrantProvider {}
+
 pub fn set_acp_agent_config_provider(
     cx: &mut App,
     provider: impl Fn(&mut App) -> anyhow::Result<Vec<AcpAgentEntry>> + Send + Sync + 'static,
@@ -47,6 +84,29 @@ pub fn set_acp_tool_mode_provider(
         getter: Arc::new(getter),
         setter: Arc::new(setter),
     });
+}
+
+pub fn set_acp_permission_grant_provider(
+    cx: &mut App,
+    provider: impl Fn(&AcpPermissionRequest, &AcpPermissionOption) -> Option<AcpPermissionGrant>
+    + Send
+    + Sync
+    + 'static,
+) {
+    cx.set_global(GlobalAcpPermissionGrantProvider {
+        provider: Arc::new(provider),
+    });
+}
+
+pub(crate) fn acquire_acp_permission_grant(
+    cx: &App,
+    request: &AcpPermissionRequest,
+    option: &AcpPermissionOption,
+) -> Option<AcpPermissionGrant> {
+    let provider = cx
+        .try_global::<GlobalAcpPermissionGrantProvider>()
+        .map(|provider| provider.provider.clone())?;
+    provider(request, option)
 }
 
 pub fn current_acp_tool_mode(cx: &mut App) -> Option<ToolExecutionMode> {

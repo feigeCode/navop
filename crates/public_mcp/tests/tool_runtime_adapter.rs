@@ -100,6 +100,10 @@ fn tool_runtime_provider_requests_approval_for_mutating_tools_and_redacts_secret
     assert_eq!(
         json!({
             "tool": "example.write",
+            "requestArguments": {
+                "message": "ship",
+                "password": "<redacted>"
+            },
             "arguments": {
                 "message": "ship",
                 "password": "<redacted>"

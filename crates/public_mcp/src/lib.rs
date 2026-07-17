@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod approval_grants;
 pub mod client_config;
 pub mod command_store;
 pub mod discovery;
