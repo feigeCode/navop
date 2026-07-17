@@ -6,6 +6,7 @@ use std::{
     collections::HashMap,
     ops::Deref,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, LazyLock, Mutex},
 };
 
@@ -508,6 +509,7 @@ pub struct LanguageRegistry {
     languages: Mutex<HashMap<SharedString, LanguageConfig>>,
     file_extensions: Mutex<HashMap<SharedString, SharedString>>,
     wasm_extensions: Mutex<HashMap<SharedString, LazyWasmExtension>>,
+    revision: AtomicU64,
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +534,7 @@ impl LanguageRegistry {
             languages: Mutex::new(HashMap::new()),
             file_extensions: Mutex::new(HashMap::new()),
             wasm_extensions: Mutex::new(HashMap::new()),
+            revision: AtomicU64::new(0),
         }
     }
 
@@ -560,6 +563,7 @@ impl LanguageRegistry {
             .unwrap()
             .insert(lang.clone(), config.clone());
         self.register_file_extensions(&lang, file_extensions);
+        self.bump_revision();
     }
 
     /// Registers language extension metadata without loading the wasm parser yet.
@@ -570,6 +574,7 @@ impl LanguageRegistry {
             .lock()
             .unwrap()
             .insert(lang, LazyWasmExtension { source_path });
+        self.bump_revision();
     }
 
     /// 注册一个通过 wasm 加载的语言扩展。
@@ -604,6 +609,7 @@ impl LanguageRegistry {
             .unwrap()
             .remove(&SharedString::from(name.to_string()));
         self.register_file_extensions(&SharedString::from(name.to_string()), file_extensions);
+        self.bump_revision();
         Ok(())
     }
 
@@ -617,6 +623,11 @@ impl LanguageRegistry {
         languages.sort();
         languages.dedup();
         languages
+    }
+
+    /// Monotonic version for consumers caching language-dependent results.
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
     }
 
     /// Returns the language configuration for the given language name.
@@ -663,12 +674,14 @@ impl LanguageRegistry {
                 languages.remove(&key);
                 self.unregister_file_extensions(name);
                 self.wasm_extensions.lock().unwrap().remove(&key);
+                self.bump_revision();
                 true
             }
             None => {
                 let removed = self.wasm_extensions.lock().unwrap().remove(&key).is_some();
                 if removed {
                     self.unregister_file_extensions(name);
+                    self.bump_revision();
                 }
                 removed
             }
@@ -703,6 +716,10 @@ impl LanguageRegistry {
                 extensions.insert(extension.into(), lang.clone());
             }
         }
+    }
+
+    fn bump_revision(&self) {
+        self.revision.fetch_add(1, Ordering::AcqRel);
     }
 
     fn unregister_file_extensions(&self, lang: &str) {

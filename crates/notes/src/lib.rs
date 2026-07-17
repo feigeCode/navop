@@ -26,6 +26,7 @@ mod storage;
 mod storage_conversion;
 mod storage_location;
 mod storage_support;
+mod syntax_highlighting;
 mod tree_state;
 
 #[cfg(test)]

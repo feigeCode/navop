@@ -227,6 +227,11 @@ fn row_action_id(action: &str, row: &TreeRow) -> SharedString {
 
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.syntax_highlight_provider.refresh_theme(
+            cx.theme().highlight_theme.clone(),
+            cx.theme().background,
+            cx.theme().foreground,
+        );
         let content = match &self.load_state {
             NotesLoadState::NeedsLocation => self.render_location_setup(cx),
             NotesLoadState::Ready => self.render_ready(cx),

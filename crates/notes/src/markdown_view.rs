@@ -39,6 +39,7 @@ impl NotesView {
                     store: store.clone(),
                     ai_provider: self.ai_provider.clone(),
                     ai_model_id: ai_model_id.as_deref(),
+                    syntax_highlight_provider: self.syntax_highlight_provider.clone(),
                 },
                 cx,
             )?;

@@ -1644,7 +1644,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "async-channel",
  "serde",
@@ -1654,7 +1654,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1665,7 +1665,6 @@ dependencies = [
  "ding-board",
  "gpui",
  "image",
- "lumis",
  "mermaid_render",
  "serde",
  "serde_json",
@@ -1677,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1687,7 +1686,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1696,7 +1695,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1706,7 +1705,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -2821,16 +2820,6 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
-dependencies = [
- "darling_core 0.20.11",
- "darling_macro 0.20.11",
-]
-
-[[package]]
-name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
@@ -2869,20 +2858,6 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim 0.11.1",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "darling_core"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
@@ -2914,17 +2889,6 @@ dependencies = [
  "darling_core 0.14.4",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
-dependencies = [
- "darling_core 0.20.11",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -3169,16 +3133,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d67778784b508018359cbc8696edb3db78160bab2c2a28ba7f56ef6932997f8"
 dependencies = [
- "derive_builder_macro 0.12.0",
-]
-
-[[package]]
-name = "derive_builder"
-version = "0.20.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "507dfb09ea8b7fa618fcf76e953f4f5e192547945816d5358edffe39f6f94947"
-dependencies = [
- "derive_builder_macro 0.20.2",
+ "derive_builder_macro",
 ]
 
 [[package]]
@@ -3194,35 +3149,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive_builder_core"
-version = "0.20.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d5bcf7b024d6835cfb3d473887cd966994907effbe9227e8c8219824d06c4e8"
-dependencies = [
- "darling 0.20.11",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
 name = "derive_builder_macro"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebcda35c7a396850a55ffeac740804b40ffec779b98fffbb1738f4033f0ee79e"
 dependencies = [
- "derive_builder_core 0.12.0",
+ "derive_builder_core",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "derive_builder_macro"
-version = "0.20.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
-dependencies = [
- "derive_builder_core 0.20.2",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -3298,7 +3231,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?branch=main#ebeab50b0ac1368cb8ca43216ff184efb9fcf680"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=df10e307cdce366fb45fc2a7f7454b955cd0e6c5#df10e307cdce366fb45fc2a7f7454b955cd0e6c5"
 dependencies = [
  "gpui",
  "log",
@@ -5105,20 +5038,20 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-astro-next",
- "tree-sitter-bash 0.23.3",
+ "tree-sitter-bash",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
  "tree-sitter-cmake",
  "tree-sitter-cpp",
- "tree-sitter-css 0.23.2",
+ "tree-sitter-css",
  "tree-sitter-diff",
  "tree-sitter-elixir",
  "tree-sitter-embedded-template",
- "tree-sitter-go 0.23.4",
+ "tree-sitter-go",
  "tree-sitter-graphql",
  "tree-sitter-html",
  "tree-sitter-java",
- "tree-sitter-javascript 0.23.1",
+ "tree-sitter-javascript",
  "tree-sitter-jsdoc",
  "tree-sitter-json",
  "tree-sitter-kotlin-sg",
@@ -5127,7 +5060,7 @@ dependencies = [
  "tree-sitter-md",
  "tree-sitter-php",
  "tree-sitter-proto",
- "tree-sitter-python 0.23.6",
+ "tree-sitter-python",
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-scala",
@@ -7141,83 +7074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumis"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc523e370941fcff714f21a5fc629dc464b3a38c37b2568d7d4e61f1debcf44f"
-dependencies = [
- "anyhow",
- "cc",
- "derive_builder 0.20.2",
- "glob",
- "lumis-build",
- "lumis-core",
- "prettyplease",
- "proc-macro2",
- "quote",
- "rayon",
- "regex",
- "serde",
- "serde_json",
- "smol_str",
- "streaming-iterator",
- "syn 2.0.118",
- "termcolor",
- "thiserror 2.0.18",
- "toml 1.1.2+spec-1.1.0",
- "tree-sitter",
- "tree-sitter-bash 0.25.1",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-css 0.25.0",
- "tree-sitter-diff",
- "tree-sitter-go 0.25.0",
- "tree-sitter-highlight",
- "tree-sitter-html",
- "tree-sitter-java",
- "tree-sitter-javascript 0.25.0",
- "tree-sitter-json",
- "tree-sitter-language",
- "tree-sitter-md",
- "tree-sitter-python 0.25.0",
- "tree-sitter-rust",
- "tree-sitter-sequel",
- "tree-sitter-swift",
- "tree-sitter-toml-ng",
- "tree-sitter-typescript",
- "tree-sitter-yaml",
- "tree-sitter-zsh",
- "v_htmlescape",
- "xz2",
-]
-
-[[package]]
-name = "lumis-build"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b53f577698ec4ecb8d23b052ce0a6701ae4fc8cd315417bb77ec045c01f00caa"
-
-[[package]]
-name = "lumis-core"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524e8a66d6c1bbfb30b28d8c39c13883c91b1376b3c751fc2330f5da37646df2"
-dependencies = [
- "derive_builder 0.20.2",
- "glob",
- "prettyplease",
- "proc-macro2",
- "quote",
- "regex",
- "serde",
- "serde_json",
- "syn 2.0.118",
- "toml 1.1.2+spec-1.1.0",
- "v_htmlescape",
-]
-
-[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7283,17 +7139,6 @@ checksum = "c60a23ffb90d527e23192f1246b14746e2f7f071cb84476dd879071696c18a4a"
 dependencies = [
  "crc",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "lzma-sys"
-version = "0.1.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
-dependencies = [
- "cc",
- "libc",
- "pkg-config",
 ]
 
 [[package]]
@@ -8243,6 +8088,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "ropey",
  "rust-i18n",
  "serde",
  "serde_json",
@@ -10957,7 +10803,7 @@ name = "roughr-merman"
 version = "0.12.0"
 source = "git+https://github.com/zed-industries/merman?tag=v0.6.2-with-patches#9acc3960f04a7deeb08079d60fa8183f15e8bde1"
 dependencies = [
- "derive_builder 0.12.0",
+ "derive_builder",
  "euclid",
  "num-traits",
  "palette",
@@ -13716,16 +13562,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-bash"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e5ec769279cc91b561d3df0d8a5deb26b0ad40d183127f409494d6d8fc53062"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-c"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13776,16 +13612,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-css"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-diff"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13826,16 +13652,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-go"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-graphql"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13843,18 +13659,6 @@ checksum = "efedc4cac157161cc23a0adc4553a2cedc908e1cd754b6cd033a919bb81ce5d6"
 dependencies = [
  "cc",
  "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-highlight"
-version = "0.26.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4fbfa3f35520ff730da507e2c9a526a98156f417e0008c73de873741d7e4ecc"
-dependencies = [
- "regex",
- "streaming-iterator",
- "thiserror 2.0.18",
- "tree-sitter",
 ]
 
 [[package]]
@@ -13882,16 +13686,6 @@ name = "tree-sitter-javascript"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf40bf599e0416c16c125c3cec10ee5ddc7d1bb8b0c60fa5c4de249ad34dc1b1"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-javascript"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -13994,16 +13788,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-python"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-ruby"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14098,16 +13882,6 @@ name = "tree-sitter-zig"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab11fc124851b0db4dd5e55983bbd9631192e93238389dcd44521715e5d53e28"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-zsh"
-version = "0.63.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "907f7ea76070507d7a6b054b38f1475caa7db085437911352ca0f361f08f142e"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -14461,12 +14235,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "v_escape-base"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1212fce830b75af194b578e55b3db9049f2c8c45f58d397fb25602fdb50fb3d"
-
-[[package]]
 name = "v_frame"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14475,15 +14243,6 @@ dependencies = [
  "aligned-vec",
  "num-traits",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "v_htmlescape"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "befb3d53c9e3ec641417685896cbc8cc5bd264d6a2e190c56aaef1af24740d99"
-dependencies = [
- "v_escape-base",
 ]
 
 [[package]]
@@ -16627,15 +16386,6 @@ name = "xmlwriter"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
-
-[[package]]
-name = "xz2"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
-dependencies = [
- "lzma-sys",
-]
 
 [[package]]
 name = "y4m"

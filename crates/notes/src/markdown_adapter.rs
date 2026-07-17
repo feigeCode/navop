@@ -4,6 +4,7 @@ use anyhow::Result;
 use cditor_app::{
     AiProvider, Editor, EditorDocument, EditorEvent, EditorHandle, MarkdownApplyMode,
     MarkdownCompatibility, MarkdownDiagnostic, MarkdownExportMode, MarkdownImportResult,
+    SyntaxHighlightProvider,
 };
 use gpui::AppContext;
 use smol::channel::{Receiver, unbounded};
@@ -25,6 +26,7 @@ pub(crate) struct MarkdownProjectionConfig<'a> {
     pub store: MarkdownFileStore,
     pub ai_provider: Option<Arc<dyn AiProvider>>,
     pub ai_model_id: Option<&'a str>,
+    pub syntax_highlight_provider: Arc<dyn SyntaxHighlightProvider>,
 }
 
 pub(crate) fn build_markdown_projection<C: AppContext>(
@@ -47,6 +49,7 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
         Some(provider) => builder.ai_provider_arc(provider),
         None => builder.without_ai(),
     };
+    builder = builder.syntax_highlight_provider_arc(config.syntax_highlight_provider);
     let handle = builder.build(cx)?;
     if let Some(model_id) = config.ai_model_id {
         let _ = handle.select_ai_model(model_id, cx);

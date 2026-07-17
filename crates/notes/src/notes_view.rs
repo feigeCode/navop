@@ -1,4 +1,5 @@
 use crate::notes_notifications::notify_operation_error;
+use crate::syntax_highlighting::NavopSyntaxHighlightProvider;
 use crate::{
     DocumentDescriptor, DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow,
     TreeState,
@@ -9,6 +10,7 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Subscription, Window,
 };
+use gpui_component::ActiveTheme;
 use gpui_component::input::InputState;
 use one_core::settings::AppSettings;
 use one_core::tab_container::TabContentEvent;
@@ -43,6 +45,7 @@ pub struct NotesView {
     pub(crate) current_directory: PathBuf,
     pub(crate) notebook_name: SharedString,
     pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
+    pub(crate) syntax_highlight_provider: Arc<NavopSyntaxHighlightProvider>,
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
@@ -113,6 +116,11 @@ impl NotesView {
                 None
             }
         };
+        let syntax_highlight_provider = Arc::new(NavopSyntaxHighlightProvider::new(
+            cx.theme().highlight_theme.clone(),
+            cx.theme().background,
+            cx.theme().foreground,
+        ));
         Self {
             storage: None,
             load_state,
@@ -125,6 +133,7 @@ impl NotesView {
             current_directory: PathBuf::new(),
             notebook_name,
             ai_provider,
+            syntax_highlight_provider,
             setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
@@ -177,6 +186,7 @@ impl NotesView {
                 Some(provider) => builder.ai_provider_arc(provider),
                 None => builder.without_ai(),
             };
+            builder = builder.syntax_highlight_provider_arc(self.syntax_highlight_provider.clone());
             let handle = builder.build(cx)?;
             self.restore_ai_model(&handle, cx);
             self.observe_editor_events(events, window, cx);
