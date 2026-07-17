@@ -24,7 +24,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt as _, h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex,
 };
 
 use crate::input::attachment::ImageAttachment;
@@ -1026,41 +1026,6 @@ impl AgentInput {
             )
     }
 
-    fn render_resource_detail_dialog(item: ComposerResourcePoolItem) -> impl IntoElement {
-        v_flex()
-            .gap_3()
-            .child(div().text_sm().child(item.label.clone()))
-            .child(div().text_xs().child(format!("资源 ID: {}", item.id)))
-            .child(div().text_xs().child(format!("类型: {}", item.kind)))
-            .child(div().text_xs().child(format!("状态: {}", item.status)))
-            .child(
-                div()
-                    .text_xs()
-                    .child(format!("主要信息: {}", item.primary_meta)),
-            )
-            .when_some(item.default_reason.clone(), |this, reason| {
-                this.child(div().text_xs().child(format!("默认目标: {reason}")))
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .child(format!("能力数量: {}", item.capability_count)),
-            )
-    }
-
-    fn show_resource_detail_dialog(
-        item: ComposerResourcePoolItem,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            dialog
-                .title("资源详情")
-                .w(px(420.0))
-                .child(Self::render_resource_detail_dialog(item.clone()))
-        });
-    }
-
     fn close_resource_popover_for_dialog(&mut self, cx: &mut Context<Self>) {
         if self.open_menu == Some(ComposerMenuKind::Target) {
             self.open_menu = None;
@@ -1825,23 +1790,6 @@ fn resource_pool_item_row(
     let add_action_id = action_id.clone();
     let add_action_view = action_view.clone();
     let in_pool = item.in_pool;
-    let detail_item = item.clone();
-    let detail_view = view.clone();
-    let detail_button = Button::new(SharedString::from(format!("resource-detail-{}", item.id)))
-        .debug_selector({
-            let detail_selector = format!("resource-detail-{}", item.id);
-            move || detail_selector.clone()
-        })
-        .icon(IconName::Info)
-        .ghost()
-        .xsmall()
-        .tooltip("资源详情")
-        .on_click(move |_, window, cx| {
-            detail_view.update(cx, |this, cx| {
-                this.close_resource_popover_for_dialog(cx);
-            });
-            AgentInput::show_resource_detail_dialog(detail_item.clone(), window, cx);
-        });
     let action_button = Button::new(SharedString::from(format!(
         "resource-pool-action-{}",
         action_id
@@ -1952,7 +1900,6 @@ fn resource_pool_item_row(
                         .child(item.primary_meta),
                 ),
         )
-        .child(detail_button)
         .child(action_button)
         .into_any_element()
 }
