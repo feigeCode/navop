@@ -544,8 +544,13 @@ impl AgentChatView {
         model_options: Vec<ComposerModelOption>,
         selected_model_id: Option<SharedString>,
         runtime_factory: Option<AgentRuntimeFactory>,
+        tool_registry: agent_runtime::ToolRegistry,
         cx: &mut Context<Self>,
     ) {
+        self.runtime
+            .services()
+            .tools
+            .replace_registry(tool_registry);
         let previous_id = self.selected_model.as_ref().map(|model| model.id.clone());
         let (selected, retained) = refreshed_model_selection(
             previous_id.as_ref(),

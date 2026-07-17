@@ -23,7 +23,9 @@ use one_core::{
 
 use crate::{
     AcpAgentEntry, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
-    CodeBlockAction, MentionItem, build_acp_agent_entries, build_plan_tool_registry,
+    CodeBlockAction, MentionItem,
+    agent_tool_config::{AgentToolConfigEvent, get_notifier as get_agent_tool_config_notifier},
+    build_acp_agent_entries, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -88,6 +90,7 @@ pub struct DefaultAgentChatPanel {
     pending_code_block_actions: Vec<CodeBlockAction>,
     connection_subscription: Option<Subscription>,
     provider_subscription: Option<Subscription>,
+    agent_tool_config_subscription: Option<Subscription>,
     provider_refresh_generation: u64,
     window_handle: AnyWindowHandle,
     theme: Option<AgentChatTheme>,
@@ -232,6 +235,7 @@ impl DefaultAgentChatPanel {
             pending_code_block_actions: Vec::new(),
             connection_subscription: None,
             provider_subscription: None,
+            agent_tool_config_subscription: None,
             provider_refresh_generation: 0,
             window_handle: window.window_handle(),
             theme: None,
@@ -242,6 +246,7 @@ impl DefaultAgentChatPanel {
         };
         panel.subscribe_connection_events(cx);
         panel.subscribe_provider_events(cx);
+        panel.subscribe_agent_tool_config_events(cx);
         panel.spawn_build_view(cx);
         panel
     }
@@ -252,6 +257,17 @@ impl DefaultAgentChatPanel {
         };
         self.provider_subscription = Some(
             cx.subscribe(&notifier, |this, _, _: &ProviderConfigEvent, cx| {
+                this.refresh_provider_models(cx)
+            }),
+        );
+    }
+
+    fn subscribe_agent_tool_config_events(&mut self, cx: &mut Context<Self>) {
+        let Some(notifier) = get_agent_tool_config_notifier(cx) else {
+            return;
+        };
+        self.agent_tool_config_subscription = Some(
+            cx.subscribe(&notifier, |this, _, _: &AgentToolConfigEvent, cx| {
                 this.refresh_provider_models(cx)
             }),
         );
@@ -291,12 +307,16 @@ impl DefaultAgentChatPanel {
                 return;
             }
             let _ = view.update(cx, |view, cx| match result {
-                Ok(config) => view.refresh_models(
-                    config.model_options,
-                    config.selected_model_id,
-                    config.runtime_factory,
-                    cx,
-                ),
+                Ok(config) => {
+                    let tool_registry = config.runtime.services().tools.registry();
+                    view.refresh_models(
+                        config.model_options,
+                        config.selected_model_id,
+                        config.runtime_factory,
+                        tool_registry,
+                        cx,
+                    )
+                }
                 Err(error) => tracing::warn!(%error, "Failed to refresh provider models"),
             });
         })

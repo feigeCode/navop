@@ -10,6 +10,7 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::spec::{ToolName, ToolSpec};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 /// 一次待执行的工具调用(由 Planner / 模型产出)。
@@ -79,25 +80,45 @@ pub struct ToolDispatchContext {
 
 /// 工具路由器。
 pub struct ToolRouter {
-    registry: ToolRegistry,
+    registry: RwLock<ToolRegistry>,
 }
 
 impl ToolRouter {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry: RwLock::new(registry),
+        }
     }
 
-    pub fn registry(&self) -> &ToolRegistry {
-        &self.registry
+    pub fn registry(&self) -> ToolRegistry {
+        self.registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// 原子替换工具注册表。已有 [`Runtime`](crate::Runtime) 和会话会在后续工具规格
+    /// 查询与调用中使用新注册表，无需重建会话。
+    pub fn replace_registry(&self, registry: ToolRegistry) {
+        *self
+            .registry
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = registry;
     }
 
     /// 当前资源上下文下所有工具的规格。
     pub fn specs(&self, resources: &ResourceContext) -> Vec<ToolSpec> {
-        self.registry.specs(resources)
+        self.registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .specs(resources)
     }
 
     pub fn supports_parallel(&self, call: &ToolCall) -> bool {
-        self.registry.supports_parallel(&call.tool_name)
+        self.registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .supports_parallel(&call.tool_name)
     }
 
     /// 分发并执行一次工具调用。
@@ -115,7 +136,12 @@ impl ToolRouter {
         let tool_name = call.tool_name.clone();
         let resource_id = call.resource_id.clone();
 
-        let Some(tool) = self.registry.get(&tool_name) else {
+        let tool = self
+            .registry
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&tool_name);
+        let Some(tool) = tool else {
             let mut obs = ToolObservation::from_error(
                 call_id,
                 tool_name.clone(),
@@ -157,5 +183,29 @@ impl ToolRouter {
         obs.started_at = started_at;
         obs.finished_at = Utc::now();
         obs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::builtin::EchoTool;
+    use std::sync::Arc;
+
+    #[test]
+    fn replacing_registry_updates_existing_router_tool_specs() {
+        let router = ToolRouter::new(ToolRegistry::new());
+        assert!(router.specs(&ResourceContext::new()).is_empty());
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        router.replace_registry(registry);
+
+        let names = router
+            .specs(&ResourceContext::new())
+            .into_iter()
+            .map(|spec| spec.name.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(vec!["echo"], names);
     }
 }

@@ -24,6 +24,7 @@ mod acp;
 mod agent_cards;
 mod agent_skills;
 mod agent_tab;
+mod agent_tool_config;
 mod agent_tool_input;
 mod agent_transcript;
 mod agent_view;
@@ -74,6 +75,7 @@ pub use acp::{
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
+pub use agent_tool_config::emit_agent_tool_config_changed;
 pub use agent_transcript::AgentTranscript;
 pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
 pub use ask_ai::{
@@ -135,6 +137,7 @@ pub use theme::AgentChatTheme;
 /// 各业务模块可在自身 `init` 之后,通过 [`CardRegistry::register_global`] 把
 /// 自己的卡片注册进来。
 pub fn init(cx: &mut App) {
+    agent_tool_config::init(cx);
     CardRegistry::init_global(cx);
     cards::register_builtin_cards(cx);
     agent_cards::register_agent_cards(cx);

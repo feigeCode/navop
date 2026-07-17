@@ -13,6 +13,7 @@ pub fn mcp_setting_group(default_settings: &McpSettings) -> SettingGroup {
 
     SettingGroup::new()
         .title(t!("Settings.General.Mcp.group_title"))
+        .description(t!("Settings.General.Mcp.group_desc"))
         .items(items)
 }
 

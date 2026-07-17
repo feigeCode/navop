@@ -1297,10 +1297,18 @@ Settings:
         en: MCP Tool Exposure
         zh-CN: MCP 工具暴露
         zh-HK: MCP 工具暴露
+      mcp_group_desc:
+        en: Changes restart the MCP endpoint. Reconnect existing MCP or ACP sessions to use the new tool set.
+        zh-CN: 修改后会重启 MCP 端点；已连接的 MCP 或 ACP 会话需要重新连接后才能使用新的工具集合。
+        zh-HK: 修改後會重新啟動 MCP 端點；已連線的 MCP 或 ACP 工作階段需要重新連線後才能使用新的工具集合。
       agent_group_title:
         en: Agent Tool Exposure
         zh-CN: Agent 工具暴露
         zh-HK: Agent 工具暴露
+      agent_group_desc:
+        en: Changes apply to already-open built-in Agent sessions starting with the next turn.
+        zh-CN: 修改会从下一轮对话开始实时应用到已经打开的内置 Agent 会话。
+        zh-HK: 修改會從下一輪對話開始即時套用到已經開啟的內建 Agent 工作階段。
       terminal:
         en: Terminal Tools
         zh-CN: 终端工具
@@ -1370,6 +1378,10 @@ Settings:
         en: MCP
         zh-CN: MCP
         zh-HK: MCP
+      group_desc:
+        en: Server and tool-set changes may restart the MCP endpoint. Reconnect existing external MCP or ACP sessions afterward.
+        zh-CN: Server 或工具集合变更可能会重启 MCP 端点；已有的外部 MCP 或 ACP 会话需要随后重新连接。
+        zh-HK: Server 或工具集合變更可能會重新啟動 MCP 端點；現有的外部 MCP 或 ACP 工作階段需要隨後重新連線。
       server_enabled:
         en: Enable MCP Server
         zh-CN: 启用 MCP Server

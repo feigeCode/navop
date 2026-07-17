@@ -32,6 +32,13 @@ impl ToolExposureSurface {
         }
     }
 
+    fn description_key(self) -> &'static str {
+        match self {
+            Self::Mcp => "Settings.General.ToolExposure.mcp_group_desc",
+            Self::Agent => "Settings.General.ToolExposure.agent_group_desc",
+        }
+    }
+
     fn current<'a>(self, settings: &'a AppSettings) -> &'a ToolExposureToolsetSettings {
         match self {
             Self::Mcp => &settings.tool_exposure.mcp,
@@ -153,6 +160,7 @@ fn tool_exposure_group(
 ) -> SettingGroup {
     SettingGroup::new()
         .title(t!(surface.title_key()))
+        .description(t!(surface.description_key()))
         .items(tool_exposure_items(surface, default_settings))
 }
 
@@ -180,6 +188,9 @@ fn tool_exposure_item(
                 AppSettings::update_and_save(cx, |settings| {
                     item.set(surface.current_mut(settings), val);
                 });
+                if surface == ToolExposureSurface::Agent {
+                    ai_chat_view::emit_agent_tool_config_changed(cx);
+                }
             },
         )
         .default_value(item.get(default_settings)),
