@@ -8,6 +8,7 @@ mod ai_chat_acp;
 mod ai_chat_acp_approval;
 mod app_init;
 mod external_driver_display;
+mod file_open;
 mod home;
 mod home_tab;
 mod license;
@@ -134,9 +135,24 @@ fn main() {
         return;
     }
 
+    let (file_open_tx, file_open_rx) = smol::channel::unbounded();
+    for argument in std::env::args_os().skip(1) {
+        let _ = file_open_tx.try_send(file_open::FileOpenInput::Path(argument.into()));
+    }
+
     let app = gpui_platform::application()
         .with_assets(AppAssets::new())
         .with_quit_mode(QuitMode::LastWindowClosed);
+    app.on_open_urls({
+        let file_open_tx = file_open_tx.clone();
+        move |urls| {
+            for url in urls {
+                if let Err(error) = file_open_tx.try_send(file_open::FileOpenInput::Url(url)) {
+                    tracing::warn!(%error, "failed to enqueue platform file-open event");
+                }
+            }
+        }
+    });
 
     app.run(move |cx| {
         onetcli_app::init(cx);
@@ -168,13 +184,25 @@ fn main() {
         };
 
         cx.spawn(async move |cx| {
-            cx.open_window(options, |window, cx| {
+            let main_window = cx.open_window(options, |window, cx| {
                 window.activate_window();
                 app_init::init_window_systems(window, cx);
                 update::schedule_update_check(window, cx);
                 let view = cx.new(|cx| OnetCliApp::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             })?;
+            let main_window = main_window.into();
+
+            while let Ok(input) = file_open_rx.recv().await {
+                if cx
+                    .update_window(main_window, |_, window, cx| {
+                        file_open::open_input(input, window, cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
 
             Ok::<_, anyhow::Error>(())
         })
@@ -194,6 +222,16 @@ mod embedded_cli_removal_tests {
 
         assert!(!source.contains(&handler_name));
         assert!(source.contains("update::handle_update_command()"));
+    }
+
+    #[test]
+    fn associated_files_are_accepted_from_startup_and_platform_events() {
+        let source = include_str!("main.rs");
+
+        assert!(source.contains("std::env::args_os().skip(1)"));
+        assert!(source.contains("app.on_open_urls"));
+        assert!(source.contains("file_open_rx.recv().await"));
+        assert!(source.contains("file_open::open_input(input, window, cx)"));
     }
 
     #[test]

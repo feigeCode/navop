@@ -1,11 +1,11 @@
 [Desktop Entry]
 Name=Navop
 Comment=Navop - Database, SSH, Terminal, AI Tools
-Exec=navop
+Exec=navop %F
 Icon=navop
 Type=Application
 Categories=Development;Utility;Database;
 Terminal=false
 StartupWMClass=navop
-MimeType=
+MimeType=application/vnd.sqlite3;application/x-sqlite3;application/x-duckdb;application/vnd.duckdb;text/markdown;
 Keywords=database;ssh;sftp;terminal;redis;mongodb;postgresql;mysql;

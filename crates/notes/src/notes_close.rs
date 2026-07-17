@@ -20,7 +20,12 @@ impl TabContent for NotesView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::NotesColor.color().with_size(Size::Medium))
+        let icon = if self.standalone_markdown {
+            IconName::MarkdownColor
+        } else {
+            IconName::NotesColor
+        };
+        Some(icon.color().with_size(Size::Medium))
     }
 
     fn try_close(

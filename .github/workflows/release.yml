@@ -186,11 +186,13 @@ jobs:
         run: |
           mkdir -p package/usr/bin
           mkdir -p package/usr/share/applications
+          mkdir -p package/usr/share/mime/packages
           mkdir -p package/usr/share/icons/hicolor/128x128/apps
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
           mkdir -p package/usr/share/icons/hicolor/512x515/apps
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
           cp resources/linux/navop.desktop package/usr/share/applications/
+          cp resources/linux/navop.xml package/usr/share/mime/packages/
           cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
           cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
           cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
@@ -230,6 +232,27 @@ jobs:
           Homepage: https://github.com/feigeCode/navop
           Description: Navop - Database, SSH, Terminal, AI Tools
           EOF
+          cat > package-deb/DEBIAN/postinst <<'EOF'
+          #!/bin/sh
+          set -e
+          if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications
+          fi
+          EOF
+          cat > package-deb/DEBIAN/postrm <<'EOF'
+          #!/bin/sh
+          set -e
+          if command -v update-mime-database >/dev/null 2>&1; then
+            update-mime-database /usr/share/mime
+          fi
+          if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database /usr/share/applications
+          fi
+          EOF
+          chmod 0755 package-deb/DEBIAN/postinst package-deb/DEBIAN/postrm
           dpkg-deb --root-owner-group --build package-deb "${DEB_NAME}"
 
           RPM_ROOT="${PWD}/rpmbuild"
@@ -260,9 +283,18 @@ jobs:
           mkdir -p %{buildroot}
           cp -a %{_builddir}/%{name}-%{version}/* %{buildroot}/
 
+          %post
+          update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+          update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+
+          %postun
+          update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+          update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+
           %files
           /usr/bin/navop
           /usr/share/applications/navop.desktop
+          /usr/share/mime/packages/navop.xml
           /usr/share/icons/hicolor/128x128/apps/navop.png
           /usr/share/icons/hicolor/256x256/apps/navop.png
           /usr/share/icons/hicolor/512x515/apps/navop.png

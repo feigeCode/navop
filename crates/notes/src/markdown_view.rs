@@ -63,7 +63,9 @@ impl NotesView {
                     _subscription: subscription,
                 },
             );
-            self.storage()?.save_state(&self.tree.to_ui_state())?;
+            if let Some(storage) = self.storage.as_ref() {
+                storage.save_state(&self.tree.to_ui_state())?;
+            }
         }
         self.active_document_id = Some(document_id.clone());
         self.active_editor = None;
@@ -130,9 +132,8 @@ impl NotesView {
             self.markdown_source_changed(&document_id, source, window, cx);
         }
         self.tree.markdown_view_modes.insert(document_id, mode);
-        if let Err(error) = self
-            .storage()
-            .and_then(|storage| storage.save_state(&self.tree.to_ui_state()))
+        if let Some(storage) = self.storage.as_ref()
+            && let Err(error) = storage.save_state(&self.tree.to_ui_state())
         {
             notify_operation_error(window, cx, error);
         }

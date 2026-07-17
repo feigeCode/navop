@@ -15,6 +15,9 @@ use gpui_component::{
 
 impl NotesView {
     fn render_ready(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.standalone_markdown {
+            return self.render_editor(cx);
+        }
         v_flex()
             .size_full()
             .min_h_0()

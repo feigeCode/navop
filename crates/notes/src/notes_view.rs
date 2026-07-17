@@ -1,5 +1,9 @@
 use crate::notes_notifications::notify_operation_error;
-use crate::{DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow, TreeState};
+use crate::{
+    DocumentDescriptor, DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow,
+    TreeState,
+};
+use anyhow::{Context as _, bail};
 use cditor_app::{AiProvider, Editor, EditorHandle};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
@@ -42,10 +46,59 @@ pub struct NotesView {
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
+    pub(crate) standalone_markdown: bool,
 }
 
 impl NotesView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::base(
+            "Notes".into(),
+            NotesLoadState::NeedsLocation,
+            false,
+            window,
+            cx,
+        );
+        let should_prompt = match view.initialize_configured_notes(window, cx) {
+            Ok(configured) => !configured,
+            Err(error) => {
+                notify_operation_error(window, cx, error);
+                true
+            }
+        };
+        if should_prompt {
+            crate::notes_setup::defer_location_dialog(view.setup_path.clone(), window, cx);
+        }
+        view
+    }
+
+    /// Opens an arbitrary Markdown file in-place without copying it into the Notes notebook.
+    /// Both source-mode and WYSIWYG saves continue to target the supplied file path.
+    pub fn new_for_markdown_file(
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let mut view = Self::base(title.into(), NotesLoadState::Ready, true, window, cx);
+        match standalone_markdown_descriptor(&path)
+            .and_then(|descriptor| view.open_markdown_document(descriptor, window, cx))
+        {
+            Ok(()) => {}
+            Err(error) => notify_operation_error(window, cx, error),
+        }
+        view
+    }
+
+    fn base(
+        notebook_name: SharedString,
+        load_state: NotesLoadState,
+        standalone_markdown: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let default_root = NotesStorage::default_root().unwrap_or_default();
         let initial_root = NotesStorage::configured_root().unwrap_or(default_root);
         let setup_path = cx.new(|cx| {
@@ -60,9 +113,9 @@ impl NotesView {
                 None
             }
         };
-        let mut view = Self {
+        Self {
             storage: None,
-            load_state: NotesLoadState::NeedsLocation,
+            load_state,
             tree: TreeState::default(),
             rows: Vec::new(),
             editors: HashMap::new(),
@@ -70,23 +123,13 @@ impl NotesView {
             active_editor: None,
             active_document_id: None,
             current_directory: PathBuf::new(),
-            notebook_name: "Notes".into(),
+            notebook_name,
             ai_provider,
             setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
-        };
-        let should_prompt = match view.initialize_configured_notes(window, cx) {
-            Ok(configured) => !configured,
-            Err(error) => {
-                notify_operation_error(window, cx, error);
-                true
-            }
-        };
-        if should_prompt {
-            crate::notes_setup::defer_location_dialog(setup_path, window, cx);
+            standalone_markdown,
         }
-        view
     }
 
     pub(crate) fn refresh_tree(
@@ -191,10 +234,83 @@ impl NotesView {
     }
 }
 
+fn standalone_markdown_descriptor(path: &Path) -> anyhow::Result<DocumentDescriptor> {
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+    {
+        bail!("unsupported Markdown file extension: {}", path.display());
+    }
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("read Markdown metadata: {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("Markdown path is not a file: {}", path.display());
+    }
+    std::fs::read_to_string(path)
+        .with_context(|| format!("read Markdown file as UTF-8: {}", path.display()))?;
+    let file_name = path.file_name().context("Markdown file has no file name")?;
+    Ok(DocumentDescriptor {
+        document_id: uuid::Uuid::new_v4().to_string(),
+        format: DocumentFormat::Markdown,
+        relative_path: PathBuf::from(file_name),
+        absolute_path: path.to_path_buf(),
+    })
+}
+
 impl EventEmitter<TabContentEvent> for NotesView {}
 
 impl Focusable for NotesView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod external_markdown_tests {
+    use super::*;
+
+    #[test]
+    fn standalone_markdown_descriptor_preserves_the_external_file() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("Release Notes.md");
+        std::fs::write(&path, "# Release Notes")?;
+
+        let descriptor = standalone_markdown_descriptor(&path)?;
+
+        assert_eq!(DocumentFormat::Markdown, descriptor.format);
+        assert_eq!(PathBuf::from("Release Notes.md"), descriptor.relative_path);
+        assert_eq!(path, descriptor.absolute_path);
+        assert!(!descriptor.document_id.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_markdown_descriptor_rejects_other_files() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("notes.txt");
+        std::fs::write(&path, "notes")?;
+
+        assert!(standalone_markdown_descriptor(&path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_markdown_store_saves_back_to_the_opened_path() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("direct.md");
+        std::fs::write(&path, "before")?;
+        let descriptor = standalone_markdown_descriptor(&path)?;
+        let store = crate::markdown_file_store::MarkdownFileStore::new(descriptor.absolute_path);
+
+        assert_eq!("before", store.load()?.source);
+        let outcome = store.save("after")?;
+
+        assert!(matches!(
+            outcome,
+            crate::markdown_file_store::MarkdownSaveOutcome::Saved(_)
+        ));
+        assert_eq!("after", std::fs::read_to_string(path)?);
+        Ok(())
     }
 }
