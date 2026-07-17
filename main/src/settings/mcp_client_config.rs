@@ -260,6 +260,15 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
             "Settings.General.Mcp.client_config_status_not_installed"
         }
         ClientConfigHealth::NeedsRepair => "Settings.General.Mcp.client_config_status_needs_repair",
+        ClientConfigHealth::NeedsMigration => {
+            "Settings.General.Mcp.client_config_status_needs_repair"
+        }
+        ClientConfigHealth::PackageVersionOutdated => {
+            "Settings.General.Mcp.client_config_status_needs_repair"
+        }
+        ClientConfigHealth::NodeUnavailable | ClientConfigHealth::NpxUnavailable => {
+            "Settings.General.Mcp.client_config_status_missing_helper"
+        }
         ClientConfigHealth::MissingHelper => {
             "Settings.General.Mcp.client_config_status_missing_helper"
         }
@@ -272,7 +281,10 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
 fn client_config_action_enabled(health: ClientConfigHealth) -> bool {
     !matches!(
         health,
-        ClientConfigHealth::MissingHelper | ClientConfigHealth::UnusableHelper
+        ClientConfigHealth::MissingHelper
+            | ClientConfigHealth::UnusableHelper
+            | ClientConfigHealth::NodeUnavailable
+            | ClientConfigHealth::NpxUnavailable
     )
 }
 

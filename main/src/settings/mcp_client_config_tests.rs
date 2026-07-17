@@ -16,6 +16,14 @@ fn client_config_health_labels_match_config_states() {
         client_config_health_label_key(ClientConfigHealth::NeedsRepair)
     );
     assert_eq!(
+        "Settings.General.Mcp.client_config_status_needs_repair",
+        client_config_health_label_key(ClientConfigHealth::NeedsMigration)
+    );
+    assert_eq!(
+        "Settings.General.Mcp.client_config_status_needs_repair",
+        client_config_health_label_key(ClientConfigHealth::PackageVersionOutdated)
+    );
+    assert_eq!(
         "Settings.General.Mcp.client_config_status_missing_helper",
         client_config_health_label_key(ClientConfigHealth::MissingHelper)
     );

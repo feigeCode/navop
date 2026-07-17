@@ -65,6 +65,40 @@ fn mcp_helper_provider_install_from_dir_requires_existing_command() {
 }
 
 #[test]
+fn mcp_helper_provider_accepts_exact_version_npm_distribution() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let helper_dir = tmp.path().join("mcp_helpers/navop-mcp");
+    fs::create_dir_all(&helper_dir).unwrap();
+    fs::write(
+        helper_dir.join("mcp_helper.json"),
+        r#"{
+          "id":"navop-mcp","name":"Navop MCP","version":"1.2.3",
+          "entry":{"command":"npx","args":["-y","@navop/mcp@1.2.3","mcp"]},
+          "distribution":{"type":"npm","package":"@navop/mcp","version":"1.2.3"}
+        }"#,
+    ).unwrap();
+    assert!(McpHelperExtensionProvider.install_from_dir(&helper_dir).is_ok());
+}
+
+#[test]
+fn mcp_helper_provider_rejects_floating_npm_distribution_versions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    for version in ["latest", "*", "^1.2.3", "~1.2.3"] {
+        let helper_dir = tmp.path().join(version.replace(['*', '^', '~'], "x"));
+        fs::create_dir_all(&helper_dir).unwrap();
+        fs::write(
+            helper_dir.join("mcp_helper.json"),
+            format!(r#"{{
+              "id":"navop-mcp","name":"Navop MCP","version":"1.2.3",
+              "entry":{{"command":"npx","args":["-y","@navop/mcp@{version}","mcp"]}},
+              "distribution":{{"type":"npm","package":"@navop/mcp","version":"{version}"}}
+            }}"#),
+        ).unwrap();
+        assert!(McpHelperExtensionProvider.install_from_dir(&helper_dir).is_err());
+    }
+}
+
+#[test]
 fn mcp_helper_provider_install_from_dir_rejects_escaping_command() {
     let tmp = tempfile::TempDir::new().unwrap();
     let helper_dir = tmp.path().join("mcp_helpers").join("escaping-command");

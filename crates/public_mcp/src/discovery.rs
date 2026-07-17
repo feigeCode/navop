@@ -7,7 +7,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 const DISCOVERY_VERSION: u32 = 1;
-const APP_NAME: &str = "onetcli";
+const APP_NAME: &str = "navop";
+const LEGACY_APP_NAME: &str = "onetcli";
 const DISCOVERY_FILE_NAME: &str = "public-mcp.json";
 const TOKEN_HEX_LEN: usize = 64;
 
@@ -58,7 +59,7 @@ impl DiscoveryDocument {
                 DISCOVERY_VERSION
             );
         }
-        if self.app != APP_NAME {
+        if self.app != APP_NAME && self.app != LEGACY_APP_NAME {
             bail!("unexpected app `{}` in public MCP discovery", self.app);
         }
         let addr = self.socket_addr()?;
@@ -79,7 +80,15 @@ pub fn public_mcp_discovery_path() -> PathBuf {
     let base = dirs::config_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(std::env::temp_dir);
+    public_mcp_discovery_path_from(&base)
+}
+
+pub fn public_mcp_discovery_path_from(base: &Path) -> PathBuf {
     base.join(APP_NAME).join(DISCOVERY_FILE_NAME)
+}
+
+pub fn legacy_public_mcp_discovery_path_from(base: &Path) -> PathBuf {
+    base.join(LEGACY_APP_NAME).join(DISCOVERY_FILE_NAME)
 }
 
 pub fn read_discovery(path: &Path) -> Result<DiscoveryDocument> {
