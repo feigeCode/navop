@@ -33,17 +33,6 @@ fn submit(supervisor: &mut ExecSupervisor, id: u64, command: &str) {
     assert!(matches!(
         supervisor.start(id, request(command)).as_slice(),
         [ExecEffect::Write {
-            source: TerminalInputSource::AgentPreflight,
-            data,
-        }, ExecEffect::ArmTimeout {
-            id: timeout_id,
-            phase: ExecPhase::ClearingInput,
-            ..
-        }] if data == &[0x03] && *timeout_id == id
-    ));
-    assert!(matches!(
-        supervisor.on_osc(&OscEvent::InputStart).as_slice(),
-        [ExecEffect::Write {
             source: TerminalInputSource::AgentCommand,
             data,
         }, ExecEffect::ArmTimeout {
@@ -55,7 +44,7 @@ fn submit(supervisor: &mut ExecSupervisor, id: u64, command: &str) {
 }
 
 #[test]
-fn ready_exec_clears_then_submits_after_fresh_input_start() {
+fn ready_exec_submits_without_ctrl_c_when_prompt_is_empty() {
     let mut supervisor = ready_supervisor();
     submit(&mut supervisor, 11, "df -h");
     assert_eq!(
@@ -69,10 +58,8 @@ fn submitted_only_exec_becomes_busy_before_command_start_arrives() {
     let mut supervisor = ready_supervisor();
     let mut submitted_only = request("sleep 1");
     submitted_only.wait_for_output = false;
-    supervisor.start(34, submitted_only);
-
     assert!(matches!(
-        supervisor.on_osc(&OscEvent::InputStart).as_slice(),
+        supervisor.start(34, submitted_only).as_slice(),
         [
             ExecEffect::Write {
                 source: TerminalInputSource::AgentCommand,
@@ -149,8 +136,32 @@ fn partial_user_input_is_cleared_before_agent_command() {
 }
 
 #[test]
+fn unsubmitted_agent_input_is_cleared_before_next_command() {
+    let mut supervisor = ready_supervisor();
+    let mut insert_only = request("git status");
+    insert_only.submit = false;
+    insert_only.wait_for_output = false;
+
+    assert!(matches!(
+        supervisor.start(130, insert_only).as_slice(),
+        [ExecEffect::Write {
+            source: TerminalInputSource::AgentCommand,
+            data,
+        }, ExecEffect::Complete { id: 130, .. }] if data == b"git status"
+    ));
+    assert!(matches!(
+        supervisor.start(131, request("pwd")).first(),
+        Some(ExecEffect::Write {
+            source: TerminalInputSource::AgentPreflight,
+            data,
+        }) if data == &[0x03]
+    ));
+}
+
+#[test]
 fn concurrent_user_input_aborts_clear_without_submitting() {
     let mut supervisor = ready_supervisor();
+    supervisor.on_input(TerminalInputSource::User, b"partial");
     supervisor.start(14, request("pwd"));
 
     assert_eq!(
@@ -215,19 +226,27 @@ fn detached_observer_discards_late_output_instead_of_buffering_it() {
 #[test]
 fn command_finished_before_command_start_does_not_complete_new_operation() {
     let mut supervisor = ready_supervisor();
-    supervisor.start(23, request("pwd"));
+    let effects = supervisor.start(23, request("pwd"));
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Write { .. }, ExecEffect::ArmTimeout { .. }]
+    ));
 
     assert!(
         supervisor
             .on_osc(&OscEvent::CommandFinished { exit_code: 0 })
             .is_empty()
     );
+    assert_eq!(
+        ShellCommandReadiness::SubmissionPending { command_epoch: 23 },
+        supervisor.readiness()
+    );
+    supervisor.on_osc(&OscEvent::CommandStart);
     assert!(matches!(
-        supervisor.on_osc(&OscEvent::InputStart).first(),
-        Some(ExecEffect::Write {
-            source: TerminalInputSource::AgentCommand,
-            ..
-        })
+        supervisor
+            .on_osc(&OscEvent::CommandFinished { exit_code: 0 })
+            .as_slice(),
+        [ExecEffect::Complete { id: 23, .. }]
     ));
 }
 
@@ -348,6 +367,7 @@ fn disconnect_fails_pre_submit_and_finishes_detached_observer() {
 #[test]
 fn cancel_before_submit_never_writes_agent_command() {
     let mut supervisor = ready_supervisor();
+    supervisor.on_input(TerminalInputSource::User, b"partial");
     supervisor.start(29, request("pwd"));
 
     assert_eq!(

@@ -3,14 +3,15 @@ use public_mcp::command_store::{CommandEntry, RemoteCommandStore};
 use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
     TerminalControlCancellation, TerminalControlFuture, TerminalControlSessionHandle,
-    TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle, TerminalSessionHandle,
-    TerminalSessionSnapshot,
+    TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle,
+    TerminalReadSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::RemoteCommandStatus;
 use public_mcp::terminal_control::{
     TerminalControlAction, TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
+use public_mcp::terminal_read::{TerminalReadRequest, TerminalReadResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -20,7 +21,7 @@ use terminal::{
     TerminalControlReadiness as CoreTerminalControlReadiness,
     TerminalControlRequest as CoreTerminalControlRequest,
     TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle, TerminalExecObserver,
-    TerminalExecProgress, TerminalExecRequest as CoreTerminalExecRequest,
+    TerminalExecProgress, TerminalExecRequest as CoreTerminalExecRequest, TerminalScrollProxy,
 };
 use uuid::Uuid;
 
@@ -130,6 +131,7 @@ impl TerminalPublicMcpRegistration {
             registry.unregister(&self.session_id);
             registry.unregister_remote_ops(&self.session_id);
             registry.unregister_terminal_exec(&self.session_id);
+            registry.unregister_terminal_read(&self.session_id);
             registry.unregister_terminal_control(&self.session_id);
         }
     }
@@ -149,6 +151,10 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     let target_registry = registry(cx)?;
     target_registry.register(ThreadSafeTerminalHandle {
         state: state.clone(),
+    });
+    target_registry.register_terminal_read(ThreadSafeTerminalReadHandle {
+        state: state.clone(),
+        scroll: terminal.scroll_proxy(),
     });
     let exec = Arc::new(Mutex::new(terminal.external_exec_handle()));
     let control = Arc::new(Mutex::new(terminal.external_control_handle()));
@@ -197,6 +203,11 @@ struct ThreadSafeTerminalExecHandle {
     command_store: RemoteCommandStore,
 }
 
+struct ThreadSafeTerminalReadHandle {
+    state: Arc<Mutex<TerminalSessionSnapshot>>,
+    scroll: TerminalScrollProxy,
+}
+
 struct ThreadSafeTerminalControlHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     control: Arc<Mutex<Option<TerminalControlHandle>>>,
@@ -239,6 +250,30 @@ impl TerminalControlSessionHandle for ThreadSafeTerminalControlHandle {
                 sent: output.sent,
                 readiness_before: map_control_readiness(output.readiness_before),
             })
+        })
+    }
+}
+
+impl TerminalReadSessionHandle for ThreadSafeTerminalReadHandle {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        self.state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .clone()
+    }
+
+    fn read_terminal(&self, request: TerminalReadRequest) -> anyhow::Result<TerminalReadResult> {
+        let snapshot = self.scroll.recent_text(request.lines);
+        Ok(TerminalReadResult {
+            target: request.target,
+            text: snapshot.text,
+            requested_lines: snapshot.requested_lines,
+            returned_lines: snapshot.returned_lines,
+            available_lines: snapshot.available_lines,
+            history_size: snapshot.history_size,
+            screen_lines: snapshot.screen_lines,
+            columns: snapshot.columns,
+            truncated: false,
         })
     }
 }

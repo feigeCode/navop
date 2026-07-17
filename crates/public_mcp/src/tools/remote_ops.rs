@@ -255,7 +255,7 @@ fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.exec",
         title: "Execute remote command",
-        description: "Run a non-interactive shell command on an active SSH target. Output is available incrementally while it runs. If foreground wait times out, the command continues on its own SSH channel and the result includes command_id for ssh.command.poll/output/cancel. For remote file read/write, use sftp.read or sftp.write instead of shell commands.",
+        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It does not inherit the current visible terminal's cwd, activated virtual environment, shell aliases/functions, or temporary environment variables unless cwd/env/command setup is supplied explicitly. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel. Use sftp.read/write for file contents.",
         schema: exec_schema_value,
         read_only: false,
         open_world: true,

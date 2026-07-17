@@ -6,6 +6,7 @@ mod remote_ops;
 mod target_adapter;
 mod terminal_control;
 mod terminal_exec;
+mod terminal_read;
 mod tool_runtime_adapter;
 
 pub use agent_runtime_adapter::agent_runtime_tool_registry;
@@ -20,6 +21,7 @@ pub use registry::{PublicMcpToolRegistry, PublicMcpToolRegistryError};
 pub use remote_ops::remote_ops_tool_registry;
 pub use terminal_control::terminal_control_tool_registry;
 pub use terminal_exec::terminal_exec_tool_registry;
+pub use terminal_read::terminal_read_tool_registry;
 pub use tool_runtime_adapter::{ResourcePoolProvider, ToolRuntimeMcpProvider};
 
 use crate::approval::{PublicMcpApprovalManager, PublicMcpApprovalOutcome};

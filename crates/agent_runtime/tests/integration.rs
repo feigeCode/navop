@@ -1528,6 +1528,11 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
                     "terminal.control",
                     "Control a visible terminal.",
                     RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.read",
+                    "Read recent visible terminal output.",
+                    RiskLevel::Read,
                 ))),
         )),
     ));
@@ -1555,6 +1560,15 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     assert!(system.contains("submit=true"));
     assert!(system.contains("不要声称有 exit code"));
     assert!(system.contains("不要用 `ssh_exec` 替代"));
+    assert!(system.contains("默认优先"));
+    assert!(system.contains("当前工作目录"));
+    assert!(system.contains("虚拟环境"));
+    assert!(system.contains("alias"));
+    assert!(system.contains("独立 SSH channel"));
+    assert!(system.contains("terminal_read"));
+    assert!(system.contains("PTY 现场"));
+    assert!(system.contains("不要为了重新获得输出而重复执行命令"));
+    assert!(system.contains("最少行数"));
     assert!(system.contains("Ctrl+C"));
     assert!(system.contains("取消对话不会中断终端任务"));
     assert!(system.contains("\\u0003"));

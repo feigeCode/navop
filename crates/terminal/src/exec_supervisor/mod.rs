@@ -29,7 +29,7 @@ pub(crate) struct ExecSupervisor {
     readiness: ShellCommandReadiness,
     prompt_epoch: u64,
     command_epoch: u64,
-    input_seq: u64,
+    input_dirty: bool,
     active: Option<ActiveExec>,
 }
 
@@ -39,7 +39,7 @@ impl ExecSupervisor {
             readiness: ShellCommandReadiness::Initializing,
             prompt_epoch: 0,
             command_epoch: 0,
-            input_seq: 0,
+            input_dirty: false,
             active: None,
         }
     }
@@ -81,7 +81,11 @@ impl ExecSupervisor {
             return fail(id, TerminalExecError::Busy);
         }
         if matches!(self.readiness, ShellCommandReadiness::Ready { .. }) {
-            return self.start_clear(id, request);
+            return if self.input_dirty {
+                self.start_clear(id, request)
+            } else {
+                self.start_submit(id, request)
+            };
         }
         if self.readiness == ShellCommandReadiness::Disconnected {
             return fail(id, TerminalExecError::Disconnected);
@@ -96,7 +100,6 @@ impl ExecSupervisor {
     }
 
     pub(crate) fn on_input(&mut self, source: TerminalInputSource, data: &[u8]) -> Vec<ExecEffect> {
-        self.input_seq = self.input_seq.saturating_add(1);
         let pre_submit_phase = self.active.as_ref().map(|active| active.phase);
         if source == TerminalInputSource::User
             && matches!(
@@ -113,13 +116,21 @@ impl ExecSupervisor {
         if matches!(
             source,
             TerminalInputSource::User | TerminalInputSource::InitCommand
-        ) && data.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
-            && matches!(self.readiness, ShellCommandReadiness::Ready { .. })
+        ) && matches!(self.readiness, ShellCommandReadiness::Ready { .. })
         {
-            self.command_epoch = self.command_epoch.saturating_add(1);
-            self.readiness = ShellCommandReadiness::SubmissionPending {
-                command_epoch: self.command_epoch,
-            };
+            if data.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+                self.input_dirty = false;
+                self.command_epoch = self.command_epoch.saturating_add(1);
+                self.readiness = ShellCommandReadiness::SubmissionPending {
+                    command_epoch: self.command_epoch,
+                };
+            } else if !data.is_empty() {
+                // Conservatively remember any unsubmitted input. Backspace or
+                // shell editing may make the line empty again, but an extra
+                // Ctrl+C is safer than appending an Agent command to a line
+                // whose exact editing state is unknown.
+                self.input_dirty = true;
+            }
         }
         Vec::new()
     }

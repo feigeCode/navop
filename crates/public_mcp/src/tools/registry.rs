@@ -1,6 +1,6 @@
 use super::{
     PublicMcpToolContext, PublicMcpToolProvider, ToolRuntimeMcpProvider, remote_ops_tool_registry,
-    terminal_control_tool_registry, terminal_exec_tool_registry,
+    terminal_control_tool_registry, terminal_exec_tool_registry, terminal_read_tool_registry,
 };
 use crate::registry::PublicMcpRegistry;
 use rmcp::{
@@ -59,6 +59,7 @@ impl PublicMcpToolRegistry {
     pub fn terminal(registry: PublicMcpRegistry) -> Self {
         let runtime_registry = tool_runtime::ToolRegistry::merge(vec![
             remote_ops_tool_registry(registry.clone()),
+            terminal_read_tool_registry(registry.clone()),
             terminal_exec_tool_registry(registry.clone()),
             terminal_control_tool_registry(registry),
         ])

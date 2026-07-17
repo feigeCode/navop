@@ -7,6 +7,26 @@ use crate::{TerminalExecCompletion, TerminalExecOutput, TerminalExecRequest};
 use std::time::Instant;
 
 impl ExecSupervisor {
+    pub(super) fn start_submit(
+        &mut self,
+        id: u64,
+        request: TerminalExecRequest,
+    ) -> Vec<ExecEffect> {
+        let observer = request.observer.clone();
+        self.active = Some(ActiveExec {
+            id,
+            request,
+            phase: ExecPhase::ClearingInput,
+            started_at: Instant::now(),
+            raw: Vec::new(),
+            command_started: false,
+            detached: false,
+            timed_out: false,
+            observer,
+        });
+        self.submit_active()
+    }
+
     pub(super) fn start_ready_wait(
         &mut self,
         id: u64,
@@ -68,6 +88,7 @@ impl ExecSupervisor {
 
     pub(super) fn on_input_start(&mut self) -> Vec<ExecEffect> {
         self.prompt_epoch = self.prompt_epoch.saturating_add(1);
+        self.input_dirty = false;
         self.readiness = ShellCommandReadiness::Ready {
             prompt_epoch: self.prompt_epoch,
         };
@@ -76,7 +97,7 @@ impl ExecSupervisor {
         }
         if self.active_is_waiting() {
             let active = self.active.take().expect("waiting exec exists");
-            return self.start_clear(active.id, active.request);
+            return self.start_submit(active.id, active.request);
         }
         if self.active_is_started_observer() {
             let active = self.active.take().expect("started observer exists");
@@ -105,9 +126,12 @@ impl ExecSupervisor {
             data,
         };
         if active.request.submit {
+            self.input_dirty = false;
             self.readiness = ShellCommandReadiness::SubmissionPending {
                 command_epoch: active.id,
             };
+        } else if !active.request.command.is_empty() {
+            self.input_dirty = true;
         }
         if !active.request.submit || !active.request.wait_for_output {
             return vec![write, complete_submitted(&active)];
@@ -143,6 +167,15 @@ impl ExecSupervisor {
     }
 
     pub(super) fn on_command_finished(&mut self, exit_code: i32) -> Vec<ExecEffect> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.phase == ExecPhase::Observing && !active.command_started)
+        {
+            // A late finish marker from the command that produced the current
+            // prompt must not complete or rewind a newly submitted operation.
+            return Vec::new();
+        }
         let Some(active) = self
             .active
             .as_ref()

@@ -846,6 +846,17 @@ pub struct TerminalScrollSnapshot {
     pub columns: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalTextSnapshot {
+    pub text: String,
+    pub requested_lines: usize,
+    pub returned_lines: usize,
+    pub available_lines: usize,
+    pub history_size: usize,
+    pub screen_lines: usize,
+    pub columns: usize,
+}
+
 impl TerminalScrollProxy {
     /// Snapshot all scroll-related state in a single lock acquisition
     /// to avoid inconsistency from multiple separate locks.
@@ -877,6 +888,13 @@ impl TerminalScrollProxy {
 
     pub fn mode(&self) -> TermMode {
         *self.term.lock().mode()
+    }
+
+    /// Read the most recent physical PTY rows from scrollback and the current
+    /// screen. This ignores the user's viewport scroll offset and always tails
+    /// the live terminal buffer.
+    pub fn recent_text(&self, max_lines: usize) -> TerminalTextSnapshot {
+        recent_text_from_term(&self.term, max_lines)
     }
 
     pub fn scroll_display_delta(&self, delta: i32) {
@@ -914,6 +932,52 @@ fn visible_text_from_term(term: &Arc<FairMutex<Term<GpuiEventProxy>>>) -> String
     }
 
     lines.join("\n")
+}
+
+fn recent_text_from_term(
+    term: &Arc<FairMutex<Term<GpuiEventProxy>>>,
+    max_lines: usize,
+) -> TerminalTextSnapshot {
+    let term = term.lock();
+    let grid = term.grid();
+    let history_size = term.history_size();
+    let screen_lines = term.screen_lines();
+    let columns = term.columns();
+    let top_line = -(history_size as i32);
+    let bottom_line = screen_lines.saturating_sub(1) as i32;
+    let cursor_line = grid.cursor.point.line.0.clamp(top_line, bottom_line);
+    let line_text = |line: i32| {
+        let text: String = grid[Line(line)][..].iter().map(|cell| cell.c).collect();
+        text.trim_end_matches(|ch: char| ch == ' ' || ch == '\0')
+            .to_string()
+    };
+
+    let mut last_content_line = cursor_line;
+    for line in (cursor_line + 1)..=bottom_line {
+        if !line_text(line).is_empty() {
+            last_content_line = line;
+        }
+    }
+    let available_lines = (last_content_line - top_line + 1).max(0) as usize;
+    let take = max_lines.min(available_lines);
+    let start_line = last_content_line - take.saturating_sub(1) as i32;
+    let lines = if take == 0 {
+        Vec::new()
+    } else {
+        (start_line..=last_content_line)
+            .map(line_text)
+            .collect::<Vec<_>>()
+    };
+
+    TerminalTextSnapshot {
+        text: lines.join("\n"),
+        requested_lines: max_lines,
+        returned_lines: lines.len(),
+        available_lines,
+        history_size,
+        screen_lines,
+        columns,
+    }
 }
 
 fn merge_history_matches(primary: Vec<String>, fallback: Vec<String>, limit: usize) -> Vec<String> {
@@ -2225,7 +2289,7 @@ mod tests {
         TerminalMfaRequest, TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
         build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
         format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
-        normalize_history_matches, resolve_default_windows_shell_from_env,
+        normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, shell_escape_arg,
     };
     use crate::TerminalEvent;
@@ -2839,6 +2903,21 @@ mod tests {
         assert_eq!(terminal.title(), "");
         assert_eq!(terminal.current_working_dir(), None);
         assert_eq!(terminal.child_exited(), None);
+    }
+
+    #[test]
+    fn recent_text_reads_tail_from_scrollback_without_viewport_offset() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy, _colors) = Terminal::create_term(20, 3, event_tx);
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *term.lock(), b"one\r\ntwo\r\nthree\r\nfour");
+
+        let snapshot = recent_text_from_term(&term, 2);
+
+        assert_eq!("three\nfour", snapshot.text);
+        assert_eq!(2, snapshot.returned_lines);
+        assert!(snapshot.available_lines >= 4);
+        assert!(snapshot.history_size >= 1);
     }
 }
 
