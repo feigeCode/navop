@@ -620,7 +620,6 @@ pub fn init(cx: &mut App) {
     one_core::init(cx);
     ai_chat_view::init(cx);
     crate::public_mcp_approval::init(cx);
-    crate::ai_chat_acp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
     one_ui::init(cx);
     db_view::search_shortcut::init(cx);

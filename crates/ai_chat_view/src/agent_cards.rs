@@ -45,6 +45,8 @@ pub const TOOL_CARD: &str = "agent.tool";
 pub const SUBAGENT_CARD: &str = "agent.subagent";
 /// 工具确认卡片的 `kind`。
 pub const TOOL_CONFIRM_CARD: &str = "agent.confirm";
+/// ACP 协议权限请求卡片的 `kind`。
+pub const ACP_PERMISSION_CARD: &str = "acp.permission";
 
 // ============================================================================
 // 数据契约(reducer 写入 / 卡片读取共用)
@@ -147,6 +149,31 @@ pub struct ToolConfirmItemData {
     pub input_json: String,
 }
 
+/// ACP 权限请求卡片数据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AcpPermissionCardData {
+    pub request_id: String,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub summary: String,
+    #[serde(default)]
+    pub details_json: String,
+    pub options: Vec<AcpPermissionOptionData>,
+    #[serde(default = "default_tool_confirm_status")]
+    pub status: String,
+    #[serde(default)]
+    pub selected_option_name: String,
+}
+
+/// ACP 协议原样提供的权限选项。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AcpPermissionOptionData {
+    pub option_id: String,
+    pub name: String,
+    pub kind: String,
+}
+
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
 #[action(namespace = ai_chat_view, no_json)]
 pub struct ApproveToolCall {
@@ -157,6 +184,13 @@ pub struct ApproveToolCall {
 #[action(namespace = ai_chat_view, no_json)]
 pub struct RejectToolCall {
     pub call_id: String,
+}
+
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct SelectAcpPermissionOption {
+    pub request_id: String,
+    pub option_id: String,
 }
 
 impl PlanCardData {
@@ -201,6 +235,16 @@ impl ToolConfirmCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
+impl AcpPermissionCardData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
     pub fn from_json(s: &str) -> Option<Self> {
         serde_json::from_str(s).ok()
     }
@@ -565,6 +609,131 @@ impl ChatCard for ToolConfirmCard {
                         .with_size(Size::Small)
                         .disabled(true)
                         .label(confirm_status_label(&data.status)),
+                ),
+            );
+        }
+
+        card.into_any_element()
+    }
+}
+
+struct AcpPermissionCard;
+
+impl ChatCard for AcpPermissionCard {
+    fn kind(&self) -> &'static str {
+        ACP_PERMISSION_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
+        let Some(data) = AcpPermissionCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+        let pending = data.status == "pending";
+        let mut card = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().warning.opacity(0.35))
+            .bg(theme.panel)
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_lg().text_color(cx.theme().warning).child("?"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child("ACP 权限请求"),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(acp_permission_status_color(&data.status, cx))
+                            .child(acp_permission_status_label(&data)),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(data.summary.clone()),
+            );
+
+        if !data.details_json.is_empty() {
+            card = card.child(tool_card_json_block(
+                "请求详情",
+                SharedString::from(format!("acp-permission-details-{}", msg.id)),
+                data.details_json.clone(),
+                window,
+                cx,
+            ));
+        }
+
+        if pending {
+            let buttons = data
+                .options
+                .iter()
+                .map(|option| {
+                    let request_id = data.request_id.clone();
+                    let option_id = option.option_id.clone();
+                    let mut button = Button::new(SharedString::from(format!(
+                        "acp-permission-option-{request_id}-{option_id}"
+                    )))
+                    .debug_selector({
+                        let kind = option.kind.clone();
+                        move || format!("acp-permission-{kind}")
+                    })
+                    .with_size(Size::Small)
+                    .label(option.name.clone());
+                    if option.kind.starts_with("reject") {
+                        button = button.danger();
+                    } else if option.kind.starts_with("allow") {
+                        button = button.success();
+                    }
+                    button
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(SelectAcpPermissionOption {
+                                    request_id: request_id.clone(),
+                                    option_id: option_id.clone(),
+                                }),
+                                cx,
+                            );
+                        })
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+            card = card.child(
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap_2()
+                    .children(buttons),
+            );
+        } else {
+            card = card.child(
+                h_flex().w_full().justify_end().child(
+                    Button::new(SharedString::from(format!(
+                        "resolved-acp-permission-{}",
+                        data.request_id
+                    )))
+                    .with_size(Size::Small)
+                    .disabled(true)
+                    .label(acp_permission_status_label(&data)),
                 ),
             );
         }
@@ -967,6 +1136,26 @@ fn confirm_status_color(status: &str, cx: &App) -> gpui::Hsla {
     }
 }
 
+fn acp_permission_status_label(data: &AcpPermissionCardData) -> String {
+    match data.status.as_str() {
+        "approved" | "rejected" if !data.selected_option_name.is_empty() => {
+            format!("已选择：{}", data.selected_option_name)
+        }
+        "approved" => "已允许".to_string(),
+        "rejected" => "已拒绝".to_string(),
+        "cancelled" => "已取消".to_string(),
+        _ => "等待审批".to_string(),
+    }
+}
+
+fn acp_permission_status_color(status: &str, cx: &App) -> gpui::Hsla {
+    match status {
+        "approved" => cx.theme().success,
+        "rejected" | "cancelled" => cx.theme().danger,
+        _ => cx.theme().warning,
+    }
+}
+
 fn render_subagent_card(
     data: &SubAgentCardData,
     message_id: &str,
@@ -1156,6 +1345,7 @@ pub fn register_agent_cards(cx: &mut App) {
     CardRegistry::register_global(cx, Arc::new(ToolCard::new()));
     CardRegistry::register_global(cx, Arc::new(SubAgentCard::new()));
     CardRegistry::register_global(cx, Arc::new(ToolConfirmCard));
+    CardRegistry::register_global(cx, Arc::new(AcpPermissionCard));
 }
 
 #[cfg(test)]
@@ -1262,6 +1452,44 @@ mod tests {
         assert_eq!(back.input_json, "{\"sql\":\"show tables\"}");
         assert_eq!(back.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(back.status, "pending");
+    }
+
+    #[test]
+    fn acp_permission_card_data_roundtrips_all_protocol_options() {
+        let data = AcpPermissionCardData {
+            request_id: "session:call".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "Write file".into(),
+            summary: "ACP agent requests permission for Write file".into(),
+            details_json: "{\"path\":\"/tmp/a\"}".into(),
+            options: vec![
+                AcpPermissionOptionData {
+                    option_id: "reject".into(),
+                    name: "Reject".into(),
+                    kind: "reject_once".into(),
+                },
+                AcpPermissionOptionData {
+                    option_id: "allow-once".into(),
+                    name: "Allow once".into(),
+                    kind: "allow_once".into(),
+                },
+                AcpPermissionOptionData {
+                    option_id: "allow-always".into(),
+                    name: "Always allow".into(),
+                    kind: "allow_always".into(),
+                },
+            ],
+            status: "pending".into(),
+            selected_option_name: String::new(),
+        };
+
+        let back = AcpPermissionCardData::from_json(&data.to_json()).expect("parse");
+        assert_eq!(ACP_PERMISSION_CARD, "acp.permission");
+        assert_eq!("session:call", back.request_id);
+        assert_eq!(3, back.options.len());
+        assert_eq!("allow_always", back.options[2].kind);
+        assert_eq!("pending", back.status);
     }
 
     #[test]

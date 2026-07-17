@@ -2,11 +2,14 @@ use agent_client_protocol::schema::{
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome,
 };
-use gpui::{App, Global};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
+
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub type AcpPermissionFuture = Pin<Box<dyn Future<Output = AcpPermissionOutcome> + Send + 'static>>;
 pub type AcpPermissionProvider =
@@ -14,7 +17,9 @@ pub type AcpPermissionProvider =
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcpPermissionRequest {
+    pub request_id: String,
     pub session_id: String,
+    pub tool_call_id: String,
     pub tool_name: String,
     pub summary: String,
     pub details: Value,
@@ -44,24 +49,77 @@ pub enum AcpPermissionOutcome {
     Cancelled,
 }
 
-struct GlobalAcpPermissionProvider {
-    provider: AcpPermissionProvider,
+pub(crate) enum AcpPermissionMessage {
+    Requested(AcpPermissionEnvelope),
+    Expired { request_id: String },
 }
 
-impl Global for GlobalAcpPermissionProvider {}
+pub(crate) struct AcpPermissionEnvelope {
+    request: AcpPermissionRequest,
+    response_tx: oneshot::Sender<AcpPermissionOutcome>,
+}
 
-pub fn set_acp_permission_provider(
-    cx: &mut App,
-    provider: impl Fn(AcpPermissionRequest) -> AcpPermissionFuture + Send + Sync + 'static,
+impl AcpPermissionEnvelope {
+    pub(crate) fn new(
+        request: AcpPermissionRequest,
+    ) -> (Self, oneshot::Receiver<AcpPermissionOutcome>) {
+        let (response_tx, response_rx) = oneshot::channel();
+        (
+            Self {
+                request,
+                response_tx,
+            },
+            response_rx,
+        )
+    }
+
+    pub(crate) fn request(&self) -> &AcpPermissionRequest {
+        &self.request
+    }
+
+    pub(crate) fn resolve(self, outcome: AcpPermissionOutcome) -> bool {
+        self.response_tx.send(outcome).is_ok()
+    }
+}
+
+pub(crate) fn acp_permission_channel() -> (
+    AcpPermissionProvider,
+    mpsc::UnboundedReceiver<AcpPermissionMessage>,
 ) {
-    cx.set_global(GlobalAcpPermissionProvider {
-        provider: Arc::new(provider),
-    });
+    acp_permission_channel_with_timeout(APPROVAL_TIMEOUT)
 }
 
-pub(crate) fn acp_permission_provider(cx: &App) -> Option<AcpPermissionProvider> {
-    cx.try_global::<GlobalAcpPermissionProvider>()
-        .map(|global| global.provider.clone())
+fn acp_permission_channel_with_timeout(
+    timeout: Duration,
+) -> (
+    AcpPermissionProvider,
+    mpsc::UnboundedReceiver<AcpPermissionMessage>,
+) {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let channel_id = uuid::Uuid::new_v4().to_string();
+    let provider: AcpPermissionProvider = Arc::new(move |mut request| {
+        let sender = sender.clone();
+        request.request_id = format!("{channel_id}:{}", request.request_id);
+        Box::pin(async move {
+            let (envelope, response_rx) = AcpPermissionEnvelope::new(request);
+            let request_id = envelope.request().request_id.clone();
+            if sender
+                .send(AcpPermissionMessage::Requested(envelope))
+                .is_err()
+            {
+                return AcpPermissionOutcome::Cancelled;
+            }
+            match tokio::time::timeout(timeout, response_rx).await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(_)) => AcpPermissionOutcome::Cancelled,
+                Err(_) => {
+                    let _ = sender.send(AcpPermissionMessage::Expired { request_id });
+                    AcpPermissionOutcome::Cancelled
+                }
+            }
+        })
+    });
+    (provider, receiver)
 }
 
 pub(crate) async fn resolve_acp_permission_request(
@@ -92,6 +150,8 @@ fn cancelled_permission_response() -> RequestPermissionResponse {
 }
 
 fn acp_permission_request(request: RequestPermissionRequest) -> AcpPermissionRequest {
+    let session_id = request.session_id.0.to_string();
+    let tool_call_id = request.tool_call.tool_call_id.0.to_string();
     let tool_name = request
         .tool_call
         .fields
@@ -99,8 +159,10 @@ fn acp_permission_request(request: RequestPermissionRequest) -> AcpPermissionReq
         .clone()
         .unwrap_or_else(|| "ACP tool".to_string());
     AcpPermissionRequest {
-        session_id: request.session_id.0.to_string(),
-        summary: format!("ACP agent requests permission for {tool_name}"),
+        request_id: format!("{session_id}:{tool_call_id}"),
+        session_id,
+        tool_call_id,
+        summary: format!("ACP Agent 请求执行工具：{tool_name}"),
         tool_name,
         details: serde_json::to_value(&request.tool_call).unwrap_or_else(|_| serde_json::json!({})),
         options: request
@@ -121,19 +183,23 @@ fn acp_permission_request(request: RequestPermissionRequest) -> AcpPermissionReq
 #[cfg(test)]
 mod tests {
     use super::{
-        AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionRequest,
-        resolve_acp_permission_request,
+        AcpPermissionFuture, AcpPermissionMessage, AcpPermissionOption, AcpPermissionOutcome,
+        AcpPermissionRequest, acp_permission_channel, acp_permission_channel_with_timeout,
+        acp_permission_request, resolve_acp_permission_request,
     };
     use agent_client_protocol::schema::{
         PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
         ToolCallUpdate, ToolCallUpdateFields,
     };
     use std::sync::Arc;
+    use std::time::Duration;
 
     #[test]
     fn preferred_allow_option_uses_allow_before_reject() {
         let request = AcpPermissionRequest {
+            request_id: "s:call".to_string(),
             session_id: "s".to_string(),
+            tool_call_id: "call".to_string(),
             tool_name: "tool".to_string(),
             summary: "summary".to_string(),
             details: serde_json::json!({}),
@@ -154,6 +220,100 @@ mod tests {
         assert_eq!(
             Some("allow".to_string()),
             request.preferred_allow_option_id()
+        );
+    }
+
+    #[test]
+    fn protocol_permission_request_exposes_stable_request_and_tool_call_ids() {
+        let request = acp_permission_request(permission_request());
+
+        assert_eq!("session:call", request.request_id);
+        assert_eq!("session", request.session_id);
+        assert_eq!("call", request.tool_call_id);
+    }
+
+    #[tokio::test]
+    async fn permission_channel_delivers_request_and_returns_selected_option() {
+        let (provider, mut receiver) = acp_permission_channel();
+        let request = acp_permission_request(permission_request());
+        let outcome = tokio::spawn(provider(request.clone()));
+
+        let message = receiver.recv().await.expect("permission request");
+        let AcpPermissionMessage::Requested(envelope) = message else {
+            panic!("expected permission request");
+        };
+        assert!(
+            envelope
+                .request()
+                .request_id
+                .ends_with(&format!(":{}", request.request_id))
+        );
+        assert!(envelope.resolve(AcpPermissionOutcome::Selected {
+            option_id: "allow".to_string(),
+        }));
+
+        assert_eq!(
+            AcpPermissionOutcome::Selected {
+                option_id: "allow".to_string(),
+            },
+            outcome.await.expect("permission outcome")
+        );
+    }
+
+    #[tokio::test]
+    async fn separate_permission_channels_use_distinct_routing_ids() {
+        let (first_provider, mut first_receiver) = acp_permission_channel();
+        let (second_provider, mut second_receiver) = acp_permission_channel();
+        let request = acp_permission_request(permission_request());
+        let first_outcome = tokio::spawn(first_provider(request.clone()));
+        let second_outcome = tokio::spawn(second_provider(request));
+
+        let AcpPermissionMessage::Requested(first) =
+            first_receiver.recv().await.expect("first request")
+        else {
+            panic!("expected first request");
+        };
+        let AcpPermissionMessage::Requested(second) =
+            second_receiver.recv().await.expect("second request")
+        else {
+            panic!("expected second request");
+        };
+        assert_ne!(first.request().request_id, second.request().request_id);
+        first.resolve(AcpPermissionOutcome::Cancelled);
+        second.resolve(AcpPermissionOutcome::Cancelled);
+        assert_eq!(
+            AcpPermissionOutcome::Cancelled,
+            first_outcome.await.expect("first outcome")
+        );
+        assert_eq!(
+            AcpPermissionOutcome::Cancelled,
+            second_outcome.await.expect("second outcome")
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_timeout_notifies_view_and_returns_cancelled() {
+        let (provider, mut receiver) = acp_permission_channel_with_timeout(Duration::ZERO);
+        let outcome = tokio::spawn(provider(acp_permission_request(permission_request())));
+
+        let AcpPermissionMessage::Requested(envelope) =
+            receiver.recv().await.expect("permission request")
+        else {
+            panic!("expected permission request");
+        };
+        let request_id = envelope.request().request_id.clone();
+        let AcpPermissionMessage::Expired {
+            request_id: expired_id,
+        } = receiver.recv().await.expect("expiration notification")
+        else {
+            panic!("expected expiration notification");
+        };
+
+        assert_eq!(request_id, expired_id);
+        assert!(!envelope.resolve(AcpPermissionOutcome::Cancelled));
+        assert_eq!(
+            AcpPermissionOutcome::Cancelled,
+            outcome.await.expect("timeout outcome")
         );
     }
 

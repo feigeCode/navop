@@ -18,6 +18,7 @@ use gpui::AsyncApp;
 use tokio::sync::broadcast;
 
 use crate::acp::config::AcpAgentConfig;
+use crate::acp::permission::AcpPermissionProvider;
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
 
@@ -51,12 +52,30 @@ impl AcpConnection {
         runner::connect(config, cx).await
     }
 
+    pub async fn connect_with_permission_provider(
+        config: &AcpAgentConfig,
+        permission_provider: AcpPermissionProvider,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_permission_provider(config, permission_provider, cx).await
+    }
+
     #[doc(hidden)]
     pub async fn connect_with_runtime(
         config: &AcpAgentConfig,
         handle: tokio::runtime::Handle,
     ) -> anyhow::Result<AcpConnectOutcome> {
         runner::connect_with_runtime(config, handle).await
+    }
+
+    #[doc(hidden)]
+    pub async fn connect_with_runtime_and_permission_provider(
+        config: &AcpAgentConfig,
+        handle: tokio::runtime::Handle,
+        permission_provider: AcpPermissionProvider,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_runtime_and_permission_provider(config, handle, permission_provider)
+            .await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {

@@ -1,8 +1,10 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_runtime::RuntimeEvent;
 use ai_chat_view::{
-    AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpTimeoutConfig,
+    AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpPermissionFuture,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpTimeoutConfig,
 };
 
 #[derive(Clone, Copy)]
@@ -12,6 +14,7 @@ enum Mode {
     AuthRequired,
     PromptError,
     PromptHang,
+    Permission,
     ExitAfterInitialize,
 }
 
@@ -104,6 +107,51 @@ async fn process_exit_after_initialize_fails_connect() {
     );
 }
 
+#[tokio::test]
+async fn permission_request_reaches_connection_provider_and_returns_original_option() {
+    let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+    let provider: AcpPermissionProvider = Arc::new(move |request| {
+        request_tx.send(request).expect("permission observer");
+        Box::pin(async {
+            AcpPermissionOutcome::Selected {
+                option_id: "allow-once".to_string(),
+            }
+        }) as AcpPermissionFuture
+    });
+    let connection = match AcpConnection::connect_with_runtime_and_permission_provider(
+        &fake_config(Mode::Permission, Duration::from_secs(2)),
+        tokio::runtime::Handle::current(),
+        provider,
+    )
+    .await
+    .expect("fake permission agent should connect")
+    {
+        AcpConnectOutcome::Ready(connection) => *connection,
+        AcpConnectOutcome::AuthenticationRequired(_) => panic!("unexpected authentication"),
+    };
+
+    let events = prompt_until_terminal(&connection, "write file").await;
+    let request = request_rx.recv().await.expect("ACP permission request");
+
+    assert_eq!("fake-session", request.session_id);
+    assert_eq!("fake-call", request.tool_call_id);
+    assert_eq!("Write file", request.tool_name);
+    assert_eq!(2, request.options.len());
+    assert_eq!("allow-once", request.options[1].option_id);
+    let text = events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::AssistantMessageDelta { delta, .. } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(text.contains("allow-once"), "unexpected events: {events:?}");
+    assert!(matches!(
+        events.last(),
+        Some(RuntimeEvent::TurnCompleted { .. })
+    ));
+}
+
 async fn ready_connection(mode: Mode, prompt_timeout: Duration) -> AcpConnection {
     match connect_fake(mode, prompt_timeout)
         .await
@@ -167,6 +215,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::AuthRequired => "auth-required",
         Mode::PromptError => "prompt-error",
         Mode::PromptHang => "prompt-hang",
+        Mode::Permission => "permission",
         Mode::ExitAfterInitialize => "exit-after-initialize",
     }
 }

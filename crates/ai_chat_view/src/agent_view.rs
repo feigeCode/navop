@@ -41,9 +41,12 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
-    AcpRecoveryAction, AcpSessionState, build_acp_agent_entries,
+    AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome, AcpPermissionProvider,
+    AcpRecoveryAction, AcpSessionState, acp_permission_channel, build_acp_agent_entries,
 };
-use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
+use crate::agent_cards::{
+    ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
+};
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
@@ -507,6 +510,8 @@ pub struct AgentChatView {
     acp_connecting: bool,
     /// 正在连接的 ACP agent id,用于忽略已取消连接的异步回调。
     acp_connecting_id: Option<SharedString>,
+    /// 当前 ACP 连接尚未响应的权限请求。
+    pending_acp_permissions: HashMap<String, AcpPermissionEnvelope>,
     scroll_handle: ScrollHandle,
     auto_scroll: AutoScrollState,
     task_kind: TaskKind,
@@ -527,6 +532,8 @@ pub struct AgentChatView {
     /// 是否侧边栏模式。
     _subscriptions: Vec<Subscription>,
     _event_task: Task<()>,
+    /// 当前 ACP 连接的权限请求泵；切换连接时丢弃以隔离旧连接请求。
+    _acp_permission_task: Option<Task<()>>,
 }
 
 impl AgentChatView {
@@ -620,7 +627,7 @@ impl AgentChatView {
         let input = cx.new(|cx| {
             AgentInput::with_mentions(mentions, "描述目标，输入 @ 引用资源…", window, cx)
         });
-        Self::register_tool_approval_actions(cx);
+        Self::register_approval_actions(cx);
         if let Some(theme) = theme.clone() {
             input.update(cx, |input, cx| input.set_theme(Some(theme), cx));
         }
@@ -700,6 +707,7 @@ impl AgentChatView {
             current_acp_id: None,
             acp_connecting: false,
             acp_connecting_id: None,
+            pending_acp_permissions: HashMap::new(),
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
             task_kind,
@@ -714,10 +722,11 @@ impl AgentChatView {
             code_block_actions: CodeBlockActionRegistry::new(),
             _subscriptions: subscriptions,
             _event_task: event_task,
+            _acp_permission_task: None,
         }
     }
 
-    fn register_tool_approval_actions(cx: &mut Context<Self>) {
+    fn register_approval_actions(cx: &mut Context<Self>) {
         let view = cx.weak_entity();
         let app: &mut App = cx;
         app.on_action(move |action: &ApproveToolCall, cx: &mut App| {
@@ -745,6 +754,21 @@ impl AgentChatView {
                 cx.propagate();
             }
         });
+
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &SelectAcpPermissionOption, cx: &mut App| {
+            let request_id = action.request_id.clone();
+            let option_id = action.option_id.clone();
+            let handled = view
+                .update(cx, |this, cx| {
+                    this.resolve_pending_acp_permission(request_id, option_id, cx)
+                })
+                .unwrap_or(false);
+            if !handled {
+                cx.propagate();
+            }
+        });
     }
 
     fn resolve_pending_tool_action(
@@ -758,6 +782,104 @@ impl AgentChatView {
         }
         self.resolve_tool_call(call_id, approved, cx);
         true
+    }
+
+    fn start_acp_permission_session(&mut self, cx: &mut Context<Self>) -> AcpPermissionProvider {
+        self.reset_acp_permission_session(cx);
+        let (provider, receiver) = acp_permission_channel();
+        self._acp_permission_task = Some(Self::spawn_acp_permission_pump(receiver, cx));
+        provider
+    }
+
+    fn spawn_acp_permission_pump(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AcpPermissionMessage>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            while let Some(message) = receiver.recv().await {
+                let updated = this.update(cx, |this, cx| match message {
+                    AcpPermissionMessage::Requested(envelope) => {
+                        this.receive_acp_permission(envelope, cx)
+                    }
+                    AcpPermissionMessage::Expired { request_id } => {
+                        this.expire_acp_permission(&request_id, cx)
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    fn receive_acp_permission(&mut self, envelope: AcpPermissionEnvelope, cx: &mut Context<Self>) {
+        let request = envelope.request().clone();
+        if self
+            .pending_acp_permissions
+            .contains_key(&request.request_id)
+        {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            return;
+        }
+        self.transcript.push_acp_permission(&request);
+        self.pending_acp_permissions
+            .insert(request.request_id, envelope);
+        self.request_scroll_to_bottom();
+        self.auto_scroll.request_settle();
+        cx.notify();
+    }
+
+    fn resolve_pending_acp_permission(
+        &mut self,
+        request_id: String,
+        option_id: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(envelope) = self.pending_acp_permissions.remove(&request_id) else {
+            return false;
+        };
+        let Some(option) = envelope
+            .request()
+            .options
+            .iter()
+            .find(|option| option.option_id == option_id)
+            .cloned()
+        else {
+            self.pending_acp_permissions.insert(request_id, envelope);
+            return false;
+        };
+        let delivered = envelope.resolve(AcpPermissionOutcome::Selected {
+            option_id: option.option_id.clone(),
+        });
+        if delivered {
+            self.transcript.resolve_acp_permission(&request_id, &option);
+        } else {
+            self.transcript.cancel_acp_permission(&request_id);
+        }
+        cx.notify();
+        true
+    }
+
+    fn expire_acp_permission(&mut self, request_id: &str, cx: &mut Context<Self>) {
+        if let Some(envelope) = self.pending_acp_permissions.remove(request_id) {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            self.transcript.cancel_acp_permission(request_id);
+            cx.notify();
+        }
+    }
+
+    fn cancel_pending_acp_permissions(&mut self, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_acp_permissions);
+        for (request_id, envelope) in pending {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            self.transcript.cancel_acp_permission(&request_id);
+        }
+        cx.notify();
+    }
+
+    fn reset_acp_permission_session(&mut self, cx: &mut Context<Self>) {
+        self.cancel_pending_acp_permissions(cx);
+        self._acp_permission_task = None;
     }
 
     fn spawn_event_pump(
@@ -1034,6 +1156,9 @@ impl AgentChatView {
         // 跟随流式输出 / 新卡片自动滚到底。
         self.request_scroll_to_bottom();
         if terminal {
+            if self.backend == Backend::Acp {
+                self.cancel_pending_acp_permissions(cx);
+            }
             self.auto_scroll.request_settle();
             self.set_running(false, cx);
             // 一轮结束:把会话快照落库(仅自研后端;ACP 会话由外部 agent 管理)。
@@ -3103,8 +3228,11 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cards::{TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData};
-    use crate::{AcpAgentConfig, AcpConfigDiagnostic};
+    use crate::agent_cards::{
+        ACP_PERMISSION_CARD, AcpPermissionCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
+        ToolConfirmCardData,
+    };
+    use crate::{AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest};
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -3128,6 +3256,29 @@ mod tests {
 
     struct FixedSidebarHost {
         view: Entity<AgentChatView>,
+    }
+
+    fn test_acp_permission_request() -> AcpPermissionRequest {
+        AcpPermissionRequest {
+            request_id: "session:call".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "Write file".into(),
+            summary: "ACP Agent 请求执行工具：Write file".into(),
+            details: json!({"path": "/tmp/a"}),
+            options: vec![
+                AcpPermissionOption {
+                    option_id: "reject".into(),
+                    name: "拒绝".into(),
+                    kind: "reject_once".into(),
+                },
+                AcpPermissionOption {
+                    option_id: "allow".into(),
+                    name: "仅本次允许".into(),
+                    kind: "allow_once".into(),
+                },
+            ],
+        }
     }
 
     impl FixedSidebarHost {
@@ -4116,6 +4267,96 @@ mod tests {
         run_gpui_until(cx, || model.request_count() >= 2);
 
         assert_eq!(2, model.request_count());
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_action_resolves_message_card_with_original_option_id(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        cx.dispatch_action(SelectAcpPermissionOption {
+            request_id: "session:call".into(),
+            option_id: "allow".into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPermissionOutcome::Selected {
+                option_id: "allow".into(),
+            },
+            outcome_rx.try_recv().expect("ACP permission response")
+        );
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!("approved", data.status);
+        assert_eq!("仅本次允许", data.selected_option_name);
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_button_resolves_without_opening_dialog(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        cx.run_until_parked();
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("ACP allow button should render in the message list");
+        cx.simulate_click(allow.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPermissionOutcome::Selected {
+                option_id: "allow".into(),
+            },
+            outcome_rx.try_recv().expect("ACP permission response")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_resetting_acp_connection_cancels_pending_permission_card(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| {
+            view.receive_acp_permission(envelope, cx);
+            view.reset_acp_permission_session(cx);
+        });
+
+        assert_eq!(
+            AcpPermissionOutcome::Cancelled,
+            outcome_rx.try_recv().expect("cancelled ACP permission")
+        );
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!("cancelled", data.status);
+        assert!(data.selected_option_name.is_empty());
     }
 
     #[gpui::test]

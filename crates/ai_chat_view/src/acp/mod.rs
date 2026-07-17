@@ -29,9 +29,10 @@ pub use config::{
 };
 pub use connection::{AcpConnectOutcome, AcpConnection, AcpPendingConnection};
 pub use error::{AcpError, AcpErrorKind, AcpRecoveryAction};
+pub(crate) use permission::{AcpPermissionEnvelope, AcpPermissionMessage, acp_permission_channel};
 pub use permission::{
     AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
-    AcpPermissionRequest, set_acp_permission_provider,
+    AcpPermissionRequest,
 };
 pub use provider::{
     build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,

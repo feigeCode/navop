@@ -7,6 +7,7 @@ impl AgentChatView {
         if self.local_backend_is_idle() {
             return;
         }
+        self.reset_acp_permission_session(cx);
         self.acp = None;
         self.acp_pending = None;
         self.acp_auth_methods.clear();
@@ -39,9 +40,11 @@ impl AgentChatView {
             return;
         };
         let config = config.with_skill_context(&self.skills.selected_context());
-        self.begin_acp_connect(&config, cx);
+        let permission_provider = self.begin_acp_connect(&config, cx);
         cx.spawn(async move |this, cx| {
-            let outcome = AcpConnection::connect(&config, cx).await;
+            let outcome =
+                AcpConnection::connect_with_permission_provider(&config, permission_provider, cx)
+                    .await;
             let _ = this.update(cx, |this, cx| {
                 this.finish_acp_connect(&config, outcome, cx);
             });
@@ -63,7 +66,12 @@ impl AgentChatView {
             .and_then(|entry| entry.config.clone())
     }
 
-    fn begin_acp_connect(&mut self, config: &AcpAgentConfig, cx: &mut Context<Self>) {
+    fn begin_acp_connect(
+        &mut self,
+        config: &AcpAgentConfig,
+        cx: &mut Context<Self>,
+    ) -> AcpPermissionProvider {
+        let permission_provider = self.start_acp_permission_session(cx);
         self.acp_pending = None;
         self.acp_auth_methods.clear();
         self.acp_connecting = true;
@@ -76,6 +84,7 @@ impl AgentChatView {
             .update(cx, |input, cx| input.set_running(true, cx));
         self.sync_composer(cx);
         cx.notify();
+        permission_provider
     }
 
     fn finish_acp_connect(
@@ -134,6 +143,7 @@ impl AgentChatView {
         source: anyhow::Error,
         cx: &mut Context<Self>,
     ) {
+        self.reset_acp_permission_session(cx);
         self.acp_connecting = false;
         self.acp_connecting_id = None;
         self.current_acp_id = Some(config.id.clone());
@@ -202,6 +212,7 @@ impl AgentChatView {
         error: AcpError,
         cx: &mut Context<Self>,
     ) {
+        self.reset_acp_permission_session(cx);
         self.current_acp_id = Some(agent_id);
         self.transcript.set_acp_error(&error);
         self.sync_composer(cx);
@@ -227,6 +238,7 @@ impl AgentChatView {
     }
 
     pub(super) fn cancel_acp_auth(&mut self, cx: &mut Context<Self>) {
+        self.reset_acp_permission_session(cx);
         self.acp_pending = None;
         self.acp_auth_methods.clear();
         self.current_acp_id = None;

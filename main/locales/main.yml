@@ -89,17 +89,6 @@ McpApproval:
     zh-CN: "还有 %{count} 个请求等待审批"
     zh-HK: "還有 %{count} 個請求等待審批"
 
-# ACP 审批
-AcpApproval:
-  dialog_title:
-    en: ACP Permission
-    zh-CN: ACP 权限请求
-    zh-HK: ACP 權限請求
-  pending_count:
-    en: "%{count} more requests waiting"
-    zh-CN: "还有 %{count} 个请求等待处理"
-    zh-HK: "還有 %{count} 個請求等待處理"
-
 # 首页
 Home:
   title:
