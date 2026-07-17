@@ -13,7 +13,8 @@ futures-util.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 ai_chat_view.workspace = true
-mongodb.workspace = true
+mongodb-runtime.workspace = true
+bson = { version = "2.13", features = ["chrono-0_4"] }
 one-core.workspace = true
 one-ui.workspace = true
 connection-form.workspace = true
@@ -24,5 +25,9 @@ tracing.workspace = true
 rust-i18n.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
+
+[features]
+default = []
+builtin-mongodb = ["mongodb-runtime/builtin-mongodb"]
 [lints]
 workspace = true

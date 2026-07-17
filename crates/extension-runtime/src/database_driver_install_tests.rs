@@ -3,13 +3,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use extension_protocol::error::{ProtocolError, error_codes};
 use futures::FutureExt;
 use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 
 use crate::database_driver_install::{
-    DriverRequirement, find_database_driver_entry,
+    DriverRequirement, NativeDriverBackend, NativeDriverRequirement,
+    fallback_native_driver_for_error, find_database_driver_entry,
     install_database_driver_from_marketplace_with_registry, required_driver_for_config,
+    required_native_driver,
 };
 use crate::extension::{DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry};
 use crate::extension_downloader::MarketplaceEntry;
@@ -19,6 +22,59 @@ fn builtin_mysql_does_not_require_marketplace_driver() {
     assert_eq!(
         DriverRequirement::NotRequired,
         required_driver_for_config(&config(DatabaseType::MySQL))
+    );
+}
+
+#[test]
+fn legacy_fallback_requires_structured_server_incompatibility() {
+    let incompatible = ProtocolError::new(
+        error_codes::SERVER_INCOMPATIBLE,
+        "server wire version is too old",
+    );
+    assert_eq!(
+        Some(NativeDriverRequirement::Required {
+            api: "mongodb".to_string(),
+            driver_id: "mongodb-legacy".to_string(),
+        }),
+        fallback_native_driver_for_error("mongodb", "mongodb-legacy", &incompatible)
+    );
+
+    let auth = ProtocolError::new(error_codes::AUTH_FAILED, "bad password");
+    assert_eq!(
+        None,
+        fallback_native_driver_for_error("mongodb", "mongodb-legacy", &auth)
+    );
+}
+
+#[test]
+fn native_driver_requirement_is_shared_by_redis_and_mongodb() {
+    assert_eq!(
+        NativeDriverRequirement::NotRequired,
+        required_native_driver("redis", NativeDriverBackend::Builtin)
+    );
+    assert_eq!(
+        NativeDriverRequirement::Required {
+            api: "redis".to_string(),
+            driver_id: "redis".to_string(),
+        },
+        required_native_driver(
+            "redis",
+            NativeDriverBackend::Ipc {
+                driver_id: "redis".to_string(),
+            },
+        )
+    );
+    assert_eq!(
+        NativeDriverRequirement::Required {
+            api: "mongodb".to_string(),
+            driver_id: "mongodb-modern".to_string(),
+        },
+        required_native_driver(
+            "mongodb",
+            NativeDriverBackend::Ipc {
+                driver_id: "mongodb-modern".to_string(),
+            },
+        )
     );
 }
 

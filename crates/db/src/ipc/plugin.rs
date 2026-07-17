@@ -410,9 +410,11 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
     IpcDriverManifest {
         id: driver_id.to_string(),
         name: driver_id.to_string(),
+        api: "database".into(),
         category: None,
         description: String::new(),
         version: String::new(),
+        compatibility: serde_json::Value::Null,
         entry: crate::ipc::registry::IpcDriverEntry {
             command: String::new(),
             commands: Default::default(),

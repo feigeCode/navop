@@ -73,6 +73,10 @@ pub mod error_codes {
     pub const TLS_CERT_INVALID: ErrorCode = -33011;
     pub const SSH_TUNNEL_FAILED: ErrorCode = -33020;
     pub const SERVER_CLOSED_CONNECTION: ErrorCode = -33030;
+    /// Server protocol/wire version cannot be handled by this driver build.
+    /// Hosts may use this structured code to select an explicitly compatible
+    /// driver; authentication/network/query failures must never trigger it.
+    pub const SERVER_INCOMPATIBLE: ErrorCode = -33031;
 
     // -- SQL 错误 (-34001 ~ -34099) --
     pub const SQL_SYNTAX_ERROR: ErrorCode = -34001;

@@ -8,7 +8,9 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = { workspace = true }
 extension-protocol = { workspace = true }
+interprocess = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "rt", "sync", "macros"] }
 tracing = { workspace = true }

@@ -1,0 +1,22 @@
+{
+  "id": "mongodb-modern",
+  "name": "MongoDB Modern",
+  "api": "mongodb",
+  "protocol_version": "1.0",
+  "entry": { "command": "./onetcli-mongodb-modern-driver" },
+  "transport": { "name": "mongodb-modern.sock" },
+  "methods": [
+    "conn/open",
+    "conn/close",
+    "mongodb/command",
+    "mongodb/find",
+    "blob/read",
+    "blob/close"
+  ],
+  "compatibility": {
+    "variant": "modern",
+    "server": { "min": "4.0" },
+    "fallback": "mongodb-legacy"
+  },
+  "process": { "scope": "connection", "kill_on_drop": true }
+}

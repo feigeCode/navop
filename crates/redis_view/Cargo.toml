@@ -24,8 +24,11 @@ one-core.workspace = true
 rust-i18n.workspace = true
 dashmap.workspace = true
 futures.workspace = true
-redis_client.workspace = true
-ssh.workspace = true
+redis-runtime.workspace = true
+
+[features]
+default = []
+builtin-redis = ["redis-runtime/builtin-redis"]
 
 [lints]
 workspace = true

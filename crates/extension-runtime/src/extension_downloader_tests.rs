@@ -250,6 +250,8 @@ fn install_from_staging_generic_installs_database_driver() {
         )
         .with_description("Test database driver")
         .with_driver_id("fake_pg")
+        .with_driver_api("database")
+        .with_driver_compatibility(serde_json::Value::Null)
         .with_icon("Database")
         .with_default_port(15432),
         summary
@@ -456,14 +458,7 @@ fn install_from_staging_generic_preserves_existing_extension_when_reinstall_fail
     write_driver_manifest(&installed, "fake_pg", "Existing PostgreSQL");
     fs::write(installed.join("driver-bin"), b"old driver").unwrap();
     fs::write(installed.join("old-marker"), b"keep me").unwrap();
-    fs::write(
-        staging.join("driver.json"),
-        r#"{
-            "id": "fake_pg",
-            "name": "Broken Update"
-        }"#,
-    )
-    .unwrap();
+    write_driver_manifest(&staging, "fake_pg", "Broken Update");
 
     let mut registry = ExtensionRegistry::new(root.clone());
     registry.register_provider(Arc::new(DatabaseDriverExtensionProvider));
@@ -473,6 +468,7 @@ fn install_from_staging_generic_preserves_existing_extension_when_reinstall_fail
             .unwrap_err();
 
     assert!(err.to_string().contains("install DatabaseDriver"));
+    assert!(format!("{err:#}").contains("驱动入口不存在"));
     assert_eq!(
         b"keep me",
         fs::read(installed.join("old-marker")).unwrap().as_slice()

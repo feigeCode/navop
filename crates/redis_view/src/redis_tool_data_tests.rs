@@ -111,7 +111,7 @@ fn quote_command_arg_escapes_carriage_return() {
 
 #[test]
 fn parse_command_args_decodes_newline_escape_round_trip() {
-    use crate::connection::tests::parse_command_args_for_test;
+    use redis_runtime::parse_command_args_for_test;
     let original = "hello\nworld\t!";
     let quoted = quote_command_arg(original);
     let cmd = format!("PUBLISH ch {quoted}");

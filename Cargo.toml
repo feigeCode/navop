@@ -17,6 +17,8 @@ members = [
     "crates/extension-protocol",
     "crates/extension-host",
     "crates/extension-driver",
+    "drivers/redis-driver",
+    "drivers/mongodb-driver",
     "crates/extension-api",
     "crates/extension-component",
     "crates/extension-wasm",
@@ -33,7 +35,7 @@ members = [
     "crates/process-util",
     "crates/remote_desktop",
     "crates/remote_desktop_view",
-    "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
+    "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 
 [workspace.package]
@@ -99,6 +101,8 @@ db = { path = "crates/db" }
 connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
+redis-runtime = { path = "crates/redis-runtime" }
+mongodb-runtime = { path = "crates/mongodb-runtime" }
 one-ui = { path = "crates/one_ui" }
 ssh = { path = "crates/ssh" }
 sftp = { path = "crates/sftp" }

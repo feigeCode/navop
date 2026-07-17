@@ -218,3 +218,52 @@ mod embedded_cli_removal_tests {
         assert!(source.contains(&option));
     }
 }
+
+#[cfg(test)]
+mod native_driver_feature_contract_tests {
+    fn feature_block(manifest: &str) -> &str {
+        manifest
+            .split_once("[features]")
+            .map(|(_, features)| features)
+            .unwrap_or_default()
+            .split_once("[lints]")
+            .map(|(features, _)| features)
+            .unwrap_or_default()
+    }
+
+    fn dependency_is_optional_or_absent(manifest: &str, dependency: &str) -> bool {
+        manifest
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("{dependency} =")))
+            .is_none_or(|line| line.contains("optional = true"))
+    }
+
+    #[test]
+    fn builtin_native_driver_features_are_declared_and_default_off() {
+        let manifest = include_str!("../Cargo.toml");
+        let features = feature_block(manifest);
+        let default_line = features
+            .lines()
+            .find(|line| line.trim_start().starts_with("default ="))
+            .expect("main must declare default features");
+
+        assert!(features.contains("builtin-redis ="));
+        assert!(features.contains("builtin-mongodb ="));
+        assert!(!default_line.contains("builtin-redis"));
+        assert!(!default_line.contains("builtin-mongodb"));
+    }
+
+    #[test]
+    fn direct_native_database_sdks_are_optional_or_absent() {
+        let redis_view = include_str!("../../crates/redis_view/Cargo.toml");
+        let mongodb_view = include_str!("../../crates/mongodb_view/Cargo.toml");
+        let onetcli_runtime = include_str!("../../crates/onetcli_runtime/Cargo.toml");
+
+        assert!(dependency_is_optional_or_absent(redis_view, "redis_client"));
+        assert!(dependency_is_optional_or_absent(
+            onetcli_runtime,
+            "redis_client"
+        ));
+        assert!(dependency_is_optional_or_absent(mongodb_view, "mongodb"));
+    }
+}

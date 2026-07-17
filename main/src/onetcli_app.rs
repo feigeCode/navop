@@ -645,6 +645,8 @@ pub fn init(cx: &mut App) {
     crate::public_mcp_runtime::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
+    #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
+    init_native_data_driver_factories(cx);
     remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
@@ -660,6 +662,36 @@ pub fn init(cx: &mut App) {
     cx.set_global(db_state);
     db_view::init_ask_ai_notifier(cx);
     cx.activate(true);
+}
+
+#[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
+fn init_native_data_driver_factories(cx: &mut App) {
+    let Some(root) = extension_runtime::extension::extensions_root() else {
+        return;
+    };
+    let Ok(registry) =
+        extension_host::NativeDriverRegistry::load_from_dir(&root.join("database_drivers"))
+    else {
+        return;
+    };
+    #[cfg(not(feature = "builtin-redis"))]
+    if let Some(manifest) = registry.find("redis", "redis") {
+        redis_view::init_with_factory(
+            cx,
+            redis_runtime::RedisConnectionFactory::Ipc(Box::new(manifest)),
+        );
+    }
+    #[cfg(not(feature = "builtin-mongodb"))]
+    if let Some(modern) = registry.find("mongodb", "mongodb-modern") {
+        let factory = match registry.find("mongodb", "mongodb-legacy") {
+            Some(legacy) => mongodb_runtime::MongoConnectionFactory::IpcWithLegacy {
+                modern: Box::new(modern),
+                legacy: Box::new(legacy),
+            },
+            None => mongodb_runtime::MongoConnectionFactory::Ipc(Box::new(modern)),
+        };
+        mongodb_view::init_with_factory(cx, factory);
+    }
 }
 
 pub fn refresh_keybindings(cx: &mut App) {

@@ -162,6 +162,7 @@ where
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reader_loop<D, R, W>(
     driver: Arc<D>,
     mut reader: R,

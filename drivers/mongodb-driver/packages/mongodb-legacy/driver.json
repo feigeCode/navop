@@ -1,0 +1,21 @@
+{
+  "id": "mongodb-legacy",
+  "name": "MongoDB Legacy",
+  "api": "mongodb",
+  "protocol_version": "1.0",
+  "entry": { "command": "./onetcli-mongodb-legacy-driver" },
+  "transport": { "name": "mongodb-legacy.sock" },
+  "methods": [
+    "conn/open",
+    "conn/close",
+    "mongodb/command",
+    "mongodb/find",
+    "blob/read",
+    "blob/close"
+  ],
+  "compatibility": {
+    "variant": "legacy",
+    "server": { "max": "3.6" }
+  },
+  "process": { "scope": "connection", "kill_on_drop": true }
+}

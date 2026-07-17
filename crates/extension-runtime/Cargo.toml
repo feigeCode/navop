@@ -11,6 +11,7 @@ connection-import-protocol = { workspace = true }
 db = { workspace = true }
 db_view = { workspace = true }
 extension-component = { workspace = true }
+extension-protocol = { workspace = true }
 extension-wasm = { workspace = true, optional = true }
 extension_view = { workspace = true }
 flate2 = "1"

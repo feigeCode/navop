@@ -1,9 +1,10 @@
 //! Redis 全局状态管理
 
-use crate::connection::{RedisConnection, RedisConnectionImpl};
+use crate::connection::RedisConnection;
 use crate::types::{RedisConnectionConfig, RedisError};
 use dashmap::DashMap;
 use gpui::Global;
+use redis_runtime::RedisConnectionFactory;
 use rust_i18n::t;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -12,19 +13,42 @@ use tokio::sync::RwLock;
 type ConnectionMap = DashMap<String, Arc<RwLock<Box<dyn RedisConnection>>>>;
 
 /// Redis 全局状态
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct GlobalRedisState {
     /// 连接映射：connection_id -> connection
     connections: Arc<ConnectionMap>,
+    factory: Arc<RwLock<RedisConnectionFactory>>,
+}
+
+impl Default for GlobalRedisState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Global for GlobalRedisState {}
 
 impl GlobalRedisState {
     pub fn new() -> Self {
+        #[cfg(feature = "builtin-redis")]
+        let factory = RedisConnectionFactory::Builtin;
+        #[cfg(not(feature = "builtin-redis"))]
+        let factory = RedisConnectionFactory::Unavailable;
         Self {
             connections: Arc::new(DashMap::new()),
+            factory: Arc::new(RwLock::new(factory)),
         }
+    }
+
+    pub fn new_with_factory(factory: RedisConnectionFactory) -> Self {
+        Self {
+            connections: Arc::new(DashMap::new()),
+            factory: Arc::new(RwLock::new(factory)),
+        }
+    }
+
+    pub async fn set_factory(&self, factory: RedisConnectionFactory) {
+        *self.factory.write().await = factory;
     }
 
     /// 创建并存储新连接
@@ -39,10 +63,9 @@ impl GlobalRedisState {
             ));
         }
 
-        let mut conn = RedisConnectionImpl::new(config);
-        conn.connect().await?;
-
-        let conn_arc: Arc<RwLock<Box<dyn RedisConnection>>> = Arc::new(RwLock::new(Box::new(conn)));
+        let factory = self.factory.read().await.clone();
+        let conn = factory.create(config).await?;
+        let conn_arc: Arc<RwLock<Box<dyn RedisConnection>>> = Arc::new(RwLock::new(conn));
         self.connections.insert(connection_id.clone(), conn_arc);
 
         Ok(connection_id)
@@ -95,11 +118,21 @@ pub struct RedisManager;
 impl RedisManager {
     /// 测试连接配置
     pub async fn test_connection(config: &RedisConnectionConfig) -> Result<(), RedisError> {
-        let mut conn = RedisConnectionImpl::new(config.clone());
-        conn.connect().await?;
-        conn.ping().await?;
-        conn.disconnect().await?;
-        Ok(())
+        #[cfg(feature = "builtin-redis")]
+        {
+            let mut conn = redis_runtime::BuiltinRedisConnection::new(config.clone());
+            conn.connect().await?;
+            conn.ping().await?;
+            conn.disconnect().await?;
+            Ok(())
+        }
+        #[cfg(not(feature = "builtin-redis"))]
+        {
+            let _ = config;
+            Err(RedisError::NotSupported(
+                "Redis test connection requires the builtin backend or an IPC factory".into(),
+            ))
+        }
     }
 
     /// 从 StoredConnection 创建配置

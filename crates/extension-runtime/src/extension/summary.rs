@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde_json::Value;
+
 use crate::extension::ExtensionKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +14,8 @@ pub struct ExtensionSummary {
     pub path: PathBuf,
     pub icon: Option<String>,
     pub driver_id: Option<String>,
+    pub driver_api: Option<String>,
+    pub driver_compatibility: Option<Value>,
     pub default_port: Option<u16>,
 }
 
@@ -31,6 +35,8 @@ impl ExtensionSummary {
             path,
             icon: None,
             driver_id: None,
+            driver_api: None,
+            driver_compatibility: None,
             default_port: None,
         }
     }
@@ -52,6 +58,16 @@ impl ExtensionSummary {
 
     pub fn with_driver_id(mut self, driver_id: impl Into<String>) -> Self {
         self.driver_id = Some(driver_id.into());
+        self
+    }
+
+    pub fn with_driver_api(mut self, driver_api: impl Into<String>) -> Self {
+        self.driver_api = Some(driver_api.into());
+        self
+    }
+
+    pub fn with_driver_compatibility(mut self, compatibility: Value) -> Self {
+        self.driver_compatibility = Some(compatibility);
         self
     }
 

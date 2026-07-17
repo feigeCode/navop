@@ -1,0 +1,31 @@
+[package]
+name = "mongodb-runtime"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+bson = { version = "2.13", features = ["chrono-0_4"] }
+connection_tunnel.workspace = true
+extension-host.workspace = true
+extension-protocol.workspace = true
+mongodb = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+rust-i18n.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[features]
+default = []
+builtin-mongodb = ["dep:mongodb"]
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

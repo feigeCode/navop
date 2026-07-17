@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use bson::{Bson, Document};
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
@@ -18,8 +19,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use mongodb::bson::{Bson, Document};
-use mongodb::options::FindOptions;
+use mongodb_runtime::MongoFindOptions as FindOptions;
 use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::edit_table::{EditTable, EditTableEvent, EditTableState};
@@ -672,7 +672,7 @@ impl CollectionView {
         let mut options = FindOptions::default();
         options.limit = Some(inputs.page_size);
         if skip > 0 {
-            options.skip = Some(skip as u64);
+            options.skip = Some(skip);
         }
         if let Some(sort) = inputs.sort.clone() {
             options.sort = Some(sort);
@@ -3193,7 +3193,7 @@ mod tests {
         BsonCellValue, MongoDocumentTableDelegate, build_set_update_document,
         collect_table_columns, parse_edit_cell_value, table_cell_text,
     };
-    use mongodb::bson::{DateTime, doc, oid::ObjectId};
+    use bson::{DateTime, doc, oid::ObjectId};
 
     #[test]
     fn parse_required_document_accepts_extended_json_and_preserves_bson_types() {
@@ -3270,7 +3270,7 @@ mod tests {
     #[test]
     fn table_cell_text_formats_nested_values_and_missing_cells() {
         let nested = Bson::Document(doc! { "enabled": true, "count": 2 });
-        let datetime = mongodb::bson::DateTime::parse_rfc3339_str("2026-05-24T08:00:00Z").unwrap();
+        let datetime = bson::DateTime::parse_rfc3339_str("2026-05-24T08:00:00Z").unwrap();
 
         assert_eq!("", table_cell_text(None));
         assert_eq!(

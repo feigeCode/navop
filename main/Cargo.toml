@@ -29,6 +29,7 @@ futures = { workspace = true }
 smol = { workspace = true }
 db_view = { workspace = true }
 extension-runtime = { workspace = true, features = ["wasm-components"] }
+extension-host.workspace = true
 extension_view = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
@@ -40,7 +41,9 @@ port_forwarding = { workspace = true }
 port_forwarding_view = { workspace = true }
 sftp_view = { workspace = true }
 redis_view = { workspace = true }
+redis-runtime.workspace = true
 mongodb_view = { workspace = true }
+mongodb-runtime.workspace = true
 remote_desktop = { workspace = true }
 remote_desktop_view = { workspace = true }
 remote_file_editor = { workspace = true }
@@ -71,6 +74,9 @@ tempfile = "3"
 [features]
 default = ["wasm-components"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
+builtin-redis = ["redis_view/builtin-redis", "onetcli_runtime/builtin-redis"]
+builtin-mongodb = ["mongodb_view/builtin-mongodb"]
+builtin-data-drivers = ["builtin-redis", "builtin-mongodb"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []

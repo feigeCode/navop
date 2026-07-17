@@ -366,8 +366,10 @@ mod tests {
         IpcDriverManifest {
             id: id.to_string(),
             name: name.to_string(),
+            api: "database".into(),
             description: String::new(),
             version: String::new(),
+            compatibility: serde_json::Value::Null,
             entry: IpcDriverEntry {
                 command: "./driver".to_string(),
                 commands: Default::default(),

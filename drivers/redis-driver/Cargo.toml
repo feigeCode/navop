@@ -1,0 +1,19 @@
+[package]
+name = "onetcli-redis-driver"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+anyhow.workspace = true
+base64.workspace = true
+extension-driver.workspace = true
+extension-protocol.workspace = true
+futures.workspace = true
+redis_client.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true
