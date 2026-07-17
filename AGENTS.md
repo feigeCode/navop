@@ -359,6 +359,13 @@
 - **验证方式**：用 `nc -vz <private-ip> 22` 与 `route -n get <private-ip>` 区分系统路由和应用权限；检查 `codesign -dv --verbose=4 Navop.app` 显示预期 Bundle Identifier、已绑定 `Info.plist` 和 sealed resources，并运行 macOS bundle 脚本测试及 SSH 错误提示测试。
 - **适用范围**：`resources/macos/Info.plist`、`script/bundle-macos.sh`、macOS Release/DMG 流程，以及 SSH、SFTP、数据库、远程桌面、端口转发等局域网 TCP 连接入口。
 
+- **标题**：安装器文件关联变更必须覆盖只替换二进制的应用内更新
+- **触发信号**：新版 MSI/DEB/RPM/`.app` 已声明新的文件类型，但旧用户通过应用内更新后，系统“打开方式”中仍没有 Navop，或双击文件仍无法交给新版本。
+- **根因 / 约束**：Windows/Linux 应用内更新只替换可执行文件，不会重新运行 MSI 注册表组件、复制 desktop/MIME 资源或刷新桌面缓存；macOS 虽替换整个 `.app`，同路径覆盖后 LaunchServices 也可能尚未重新扫描。现代系统还会保护用户已有的默认应用选择，不能依赖静默覆盖 `UserChoice`。
+- **正确做法**：把关联定义同时用于安装器和应用内启动迁移。新版本首次启动时在后台幂等执行：Windows 写入当前用户 `Software\Classes` 的 ProgID、`OpenWithProgids` 和绝对打开命令并发送 `SHCNE_ASSOCCHANGED`；Linux 将嵌入的 desktop/MIME 模板写入 `XDG_DATA_HOME`、刷新缓存，并只在当前 MIME 没有默认应用时设置 Navop；macOS 对当前 `.app` 执行 `lsregister -f`。用包含 schema 与 executable path 的 stamp 避免重复迁移，应用移动后应自动重跑。
+- **验证方式**：用纯 contract 覆盖三种扩展、绝对路径/desktop `Exec` 转义、不写 `UserChoice`、已有默认应用不覆盖、stamp 幂等和 `.app` 推导；运行 main 测试与 check，并在 Windows CI 验证条件编译、在 Linux 包环境验证用户级 desktop/MIME 文件和缓存刷新。
+- **适用范围**：`main/src/file_association.rs`、`main/src/main.rs`、`main/src/update/*`、`resources/{macos,linux}`、Windows WiX 和所有新增文件关联/URL scheme 的发布迁移。
+
 - **标题**：macOS GUI 编辑器不要直接依赖 Bundle 内部 executable 处理重复打开
 - **触发信号**：第一次能打开外部编辑器，但编辑器已运行时再次打开远程文件没有反应、产生第二个无效进程，或编辑器随 OnetCli 生命周期收到 `SIGHUP`。
 - **根因 / 约束**：部分 macOS 应用（例如 Notepad--）依赖 LaunchServices 的 `QEvent::FileOpen` 向已有实例交付文件；直接执行 `.app/Contents/MacOS/*` 会绕过该机制。编辑器安装检测仍应检查真实 executable，不能简单把 `/usr/bin/open` 当作可用性候选。
