@@ -14,6 +14,7 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState, LocalInputStyle},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     notification::Notification,
     select::{Select, SelectItem, SelectState},
     tooltip::Tooltip,
@@ -23,7 +24,7 @@ use one_core::storage::{
     GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
 use rust_i18n::t;
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crate::theme::TerminalColors;
 
@@ -34,8 +35,6 @@ pub enum QuickCommandPanelEvent {
     Close,
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
-    /// 快捷命令数据发生变化
-    CommandsChanged(Vec<QuickCommand>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,9 +55,110 @@ fn command_matches_group_filter(command: &QuickCommand, filter: &QuickCommandGro
         QuickCommandGroupFilter::Group(group) => command
             .group_name
             .as_deref()
-            .map(|name| name == group)
+            .map(|name| name.trim() == group)
             .unwrap_or(false),
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QuickCommandGroupChip {
+    filter: QuickCommandGroupFilter,
+    color: Option<String>,
+}
+
+fn quick_command_groups(commands: &[QuickCommand]) -> Vec<QuickCommandGroupChip> {
+    let mut grouped = std::collections::BTreeMap::<String, Option<String>>::new();
+    for command in commands {
+        let Some(name) = command.group_name.as_ref() else {
+            continue;
+        };
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry = grouped.entry(trimmed.to_string()).or_insert(None);
+        if entry.is_none() {
+            *entry = command
+                .group_color
+                .clone()
+                .filter(|color| !color.trim().is_empty());
+        }
+    }
+
+    let mut groups = vec![
+        QuickCommandGroupChip {
+            filter: QuickCommandGroupFilter::All,
+            color: None,
+        },
+        QuickCommandGroupChip {
+            filter: QuickCommandGroupFilter::Ungrouped,
+            color: None,
+        },
+    ];
+    groups.extend(
+        grouped
+            .into_iter()
+            .map(|(name, color)| QuickCommandGroupChip {
+                filter: QuickCommandGroupFilter::Group(name),
+                color,
+            }),
+    );
+    groups
+}
+
+fn quick_command_group_chip_label(filter: &QuickCommandGroupFilter) -> String {
+    match filter {
+        QuickCommandGroupFilter::All => "全部".to_string(),
+        QuickCommandGroupFilter::Ungrouped => "未分组".to_string(),
+        QuickCommandGroupFilter::Group(name) => name.clone(),
+    }
+}
+
+fn quick_command_group_color(color: Option<&str>, fallback: gpui::Hsla) -> gpui::Hsla {
+    match color.unwrap_or_default() {
+        "blue" => gpui::rgb(0x3b82f6).into(),
+        "cyan" => gpui::rgb(0x06b6d4).into(),
+        "green" => gpui::rgb(0x22c55e).into(),
+        "yellow" => gpui::rgb(0xeab308).into(),
+        "orange" => gpui::rgb(0xf97316).into(),
+        "red" => gpui::rgb(0xef4444).into(),
+        "pink" => gpui::rgb(0xec4899).into(),
+        "purple" => gpui::rgb(0xa855f7).into(),
+        "gray" => gpui::rgb(0x64748b).into(),
+        _ => fallback,
+    }
+}
+
+fn quick_command_group_color_choices() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("", "默认"),
+        ("blue", "蓝"),
+        ("cyan", "青"),
+        ("green", "绿"),
+        ("yellow", "黄"),
+        ("orange", "橙"),
+        ("red", "红"),
+        ("pink", "粉"),
+        ("purple", "紫"),
+        ("gray", "灰"),
+    ]
+}
+
+fn new_command_group_defaults(
+    filter: &QuickCommandGroupFilter,
+    commands: &[QuickCommand],
+) -> (String, String) {
+    let QuickCommandGroupFilter::Group(selected_name) = filter else {
+        return (String::new(), String::new());
+    };
+    let color = quick_command_groups(commands)
+        .into_iter()
+        .find_map(|chip| match chip.filter {
+            QuickCommandGroupFilter::Group(name) if name == *selected_name => chip.color,
+            _ => None,
+        })
+        .unwrap_or_default();
+    (selected_name.clone(), color)
 }
 
 #[derive(Clone, PartialEq)]
@@ -209,27 +309,13 @@ impl QuickCommandPanel {
         cx.notify();
     }
 
-    pub fn current_commands(&self) -> Vec<QuickCommand> {
-        self.commands.clone()
-    }
-
-    pub fn set_group_filter(
-        &mut self,
-        group_filter: QuickCommandGroupFilter,
-        cx: &mut Context<Self>,
-    ) {
+    fn set_group_filter(&mut self, group_filter: QuickCommandGroupFilter, cx: &mut Context<Self>) {
         if self.group_filter == group_filter {
             return;
         }
         self.group_filter = group_filter;
         self.filter_commands();
         cx.notify();
-    }
-
-    fn emit_commands_changed(&self, cx: &mut Context<Self>) {
-        cx.emit(QuickCommandPanelEvent::CommandsChanged(
-            self.commands.clone(),
-        ));
     }
 
     fn sort_commands(&mut self) {
@@ -265,7 +351,6 @@ impl QuickCommandPanel {
                 self.commands = commands;
                 self.sort_commands();
                 self.filter_commands();
-                self.emit_commands_changed(cx);
             }
             Err(error) => tracing::error!(%error, "Failed to load commands"),
         }
@@ -299,7 +384,6 @@ impl QuickCommandPanel {
         self.commands.push(command);
         self.sort_commands();
         self.filter_commands();
-        self.emit_commands_changed(cx);
         cx.notify();
         Ok(())
     }
@@ -323,7 +407,6 @@ impl QuickCommandPanel {
         }
         self.sort_commands();
         self.filter_commands();
-        self.emit_commands_changed(cx);
         cx.notify();
         Ok(())
     }
@@ -343,14 +426,16 @@ impl QuickCommandPanel {
             .as_ref()
             .and_then(|command| command.description.clone())
             .unwrap_or_default();
+        let (default_group_name, default_group_color) =
+            new_command_group_defaults(&self.group_filter, &self.commands);
         let initial_group_name = existing
             .as_ref()
             .and_then(|command| command.group_name.clone())
-            .unwrap_or_default();
+            .unwrap_or(default_group_name);
         let initial_group_color = existing
             .as_ref()
             .and_then(|command| command.group_color.clone())
-            .unwrap_or_default();
+            .unwrap_or(default_group_color);
         let initial_command = existing
             .as_ref()
             .map(|command| command.command.clone())
@@ -590,7 +675,6 @@ impl QuickCommandPanel {
             Ok(()) => {
                 self.commands.retain(|command| command.id != Some(id));
                 self.filter_commands();
-                self.emit_commands_changed(cx);
                 cx.notify();
             }
             Err(error) => tracing::error!(%error, "Failed to delete command"),
@@ -615,7 +699,6 @@ impl QuickCommandPanel {
                 }
                 self.sort_commands();
                 self.filter_commands();
-                self.emit_commands_changed(cx);
                 cx.notify();
             }
             Err(error) => tracing::error!(%error, "Failed to toggle pin"),
@@ -651,6 +734,216 @@ impl QuickCommandPanel {
             })
             .cloned()
             .collect();
+    }
+
+    fn quick_command_repo(&self, cx: &App) -> Option<Arc<QuickCommandRepository>> {
+        cx.try_global::<GlobalStorageState>()
+            .and_then(|state| state.storage.get::<QuickCommandRepository>())
+    }
+
+    fn rename_group(&mut self, old_name: String, new_name: Option<String>, cx: &mut Context<Self>) {
+        let Some(repo) = self.quick_command_repo(cx) else {
+            return;
+        };
+        match repo.rename_group(&old_name, new_name.as_deref()) {
+            Ok(()) => {
+                self.group_filter = match new_name {
+                    Some(name) if !name.trim().is_empty() => QuickCommandGroupFilter::Group(name),
+                    _ => QuickCommandGroupFilter::Ungrouped,
+                };
+                self.load_commands(cx);
+            }
+            Err(error) => {
+                tracing::error!(%error, %old_name, "Failed to rename quick command group")
+            }
+        }
+    }
+
+    fn recolor_group(&mut self, group_name: String, color: Option<String>, cx: &mut Context<Self>) {
+        let Some(repo) = self.quick_command_repo(cx) else {
+            return;
+        };
+        match repo.recolor_group(&group_name, color.as_deref()) {
+            Ok(()) => self.load_commands(cx),
+            Err(error) => {
+                tracing::error!(%error, %group_name, "Failed to recolor quick command group")
+            }
+        }
+    }
+
+    fn clear_group(&mut self, group_name: String, cx: &mut Context<Self>) {
+        let Some(repo) = self.quick_command_repo(cx) else {
+            return;
+        };
+        match repo.clear_group(&group_name) {
+            Ok(()) => {
+                self.group_filter = QuickCommandGroupFilter::Ungrouped;
+                self.load_commands(cx);
+            }
+            Err(error) => {
+                tracing::error!(%error, %group_name, "Failed to clear quick command group")
+            }
+        }
+    }
+
+    fn open_rename_group_dialog(
+        panel: Entity<Self>,
+        group_name: String,
+        colors: TerminalColors,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let input_style = quick_command_dialog_input_style(&colors);
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("输入新的分组名称")
+                .default_value(&group_name)
+        });
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
+            let input_ok = input.clone();
+            let panel_ok = panel.clone();
+            let original = group_name.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_dialog_button_variants(&colors, dialog_cx);
+            dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
+                .title("重命名分组")
+                .confirm()
+                .child(
+                    div().bg(colors.background).child(
+                        Input::new(&input)
+                            .small()
+                            .w_full()
+                            .local_style(input_style)
+                            .caret_color(colors.foreground),
+                    ),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("保存")
+                        .ok_variant(ok_variant)
+                        .cancel_text("取消")
+                        .cancel_variant(cancel_variant),
+                )
+                .on_ok(move |_, _, cx| {
+                    let next = input_ok.read(cx).value().trim().to_string();
+                    panel_ok.update(cx, |panel, cx| {
+                        panel.rename_group(
+                            original.clone(),
+                            (!next.is_empty()).then_some(next.clone()),
+                            cx,
+                        );
+                    });
+                    true
+                })
+        });
+    }
+
+    fn open_delete_group_dialog(
+        panel: Entity<Self>,
+        group_name: String,
+        colors: TerminalColors,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
+            let panel_ok = panel.clone();
+            let original = group_name.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_dialog_button_variants(&colors, dialog_cx);
+            dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
+                .title("删除分组")
+                .confirm()
+                .child(
+                    div()
+                        .bg(colors.background)
+                        .text_color(colors.foreground)
+                        .child(format!(
+                            "确定删除分组“{}”吗？该分组下的快捷命令会保留，但会变为未分组。",
+                            group_name
+                        )),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("删除分组")
+                        .ok_variant(ok_variant)
+                        .cancel_text("取消")
+                        .cancel_variant(cancel_variant),
+                )
+                .on_ok(move |_, _, cx| {
+                    panel_ok.update(cx, |panel, cx| {
+                        panel.clear_group(original.clone(), cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    fn group_context_menu(
+        panel: Entity<Self>,
+        chip: QuickCommandGroupChip,
+        menu: PopupMenu,
+        colors: TerminalColors,
+    ) -> PopupMenu {
+        let QuickCommandGroupFilter::Group(group_name) = &chip.filter else {
+            return menu;
+        };
+        let mut menu = menu;
+        let group_name_for_rename = group_name.clone();
+        let group_name_for_delete = group_name.clone();
+
+        let rename_panel = panel.clone();
+        let rename_colors = colors.clone();
+        menu = menu.item(
+            PopupMenuItem::new("重命名分组").on_click(move |_, window, cx| {
+                Self::open_rename_group_dialog(
+                    rename_panel.clone(),
+                    group_name_for_rename.clone(),
+                    rename_colors.clone(),
+                    window,
+                    cx,
+                );
+            }),
+        );
+
+        menu = menu.separator();
+        for (value, label) in quick_command_group_color_choices() {
+            let recolor_panel = panel.clone();
+            let group_name = group_name.clone();
+            let value = value.to_string();
+            let checked = chip.color.as_deref().unwrap_or_default() == value;
+            menu = menu.item(
+                PopupMenuItem::new(format!("颜色：{}", label))
+                    .checked(checked)
+                    .on_click(move |_, _, cx| {
+                        recolor_panel.update(cx, |panel, cx| {
+                            panel.recolor_group(
+                                group_name.clone(),
+                                (!value.trim().is_empty()).then_some(value.clone()),
+                                cx,
+                            );
+                        });
+                    }),
+            );
+        }
+
+        let delete_panel = panel;
+        menu.separator().item(
+            PopupMenuItem::new("删除分组").on_click(move |_, window, cx| {
+                Self::open_delete_group_dialog(
+                    delete_panel.clone(),
+                    group_name_for_delete.clone(),
+                    colors.clone(),
+                    window,
+                    cx,
+                );
+            }),
+        )
     }
 
     fn paste_command(&self, command: String, cx: &mut Context<Self>) {
@@ -772,6 +1065,105 @@ impl QuickCommandPanel {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_command_editor(None, None, window, cx);
                     })),
+            )
+    }
+
+    fn render_group_chip(
+        &self,
+        chip: QuickCommandGroupChip,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let is_active = self.group_filter == chip.filter;
+        let is_named = matches!(chip.filter, QuickCommandGroupFilter::Group(_));
+        let filter = chip.filter.clone();
+        let label = quick_command_group_chip_label(&chip.filter);
+        let dot_color = quick_command_group_color(chip.color.as_deref(), self.colors.accent);
+        let panel_for_menu = cx.entity().clone();
+        let chip_for_menu = chip.clone();
+        let colors_for_menu = self.colors.clone();
+
+        let chip_element = h_flex()
+            .id(SharedString::from(format!("quick-command-group-{label}")))
+            .flex_shrink_0()
+            .h_7()
+            .px_2()
+            .gap_1()
+            .items_center()
+            .rounded_full()
+            .cursor_pointer()
+            .bg(if is_active {
+                self.colors.accent.opacity(0.16)
+            } else {
+                self.colors.muted.opacity(0.72)
+            })
+            .border_1()
+            .border_color(if is_active {
+                self.colors.accent
+            } else {
+                self.colors.border
+            })
+            .hover(|style| style.bg(self.colors.muted))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_group_filter(filter.clone(), cx);
+            }))
+            .when(is_named, |this| {
+                this.child(div().size_2().flex_shrink_0().rounded_full().bg(dot_color))
+            })
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(if is_active {
+                        gpui::FontWeight::SEMIBOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    })
+                    .text_color(if is_active {
+                        self.colors.accent
+                    } else {
+                        self.colors.foreground
+                    })
+                    .child(label),
+            );
+
+        if is_named {
+            chip_element
+                .context_menu(move |menu, _window, _cx| {
+                    Self::group_context_menu(
+                        panel_for_menu.clone(),
+                        chip_for_menu.clone(),
+                        menu,
+                        colors_for_menu.clone(),
+                    )
+                })
+                .into_any_element()
+        } else {
+            chip_element.into_any_element()
+        }
+    }
+
+    fn render_group_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let groups = quick_command_groups(&self.commands);
+        div()
+            .flex_shrink_0()
+            .w_full()
+            .min_w_0()
+            .overflow_x_hidden()
+            .border_b_1()
+            .border_color(self.colors.border)
+            .child(
+                h_flex()
+                    .id("quick-command-groups-scroll")
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .overflow_x_scroll()
+                    .children(
+                        groups
+                            .into_iter()
+                            .map(|chip| self.render_group_chip(chip, cx)),
+                    ),
             )
     }
 
@@ -983,6 +1375,7 @@ impl Render for QuickCommandPanel {
             .bg(self.colors.background)
             .text_color(self.colors.foreground)
             .child(self.render_search_bar(cx))
+            .child(self.render_group_bar(cx))
             .when(self.is_loading, |this| {
                 this.child(self.render_loading_state())
             })
@@ -1031,8 +1424,9 @@ impl Render for QuickCommandPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickCommandGroupFilter, command_matches_group_filter, normalize_group_fields,
-        quick_command_dialog_input_style, quick_command_group_color_items,
+        QuickCommandGroupFilter, command_matches_group_filter, new_command_group_defaults,
+        normalize_group_fields, quick_command_dialog_input_style, quick_command_group_chip_label,
+        quick_command_group_color_items, quick_command_groups,
     };
     use crate::theme::TerminalColors;
     use gpui::rgb;
@@ -1042,6 +1436,106 @@ mod tests {
         let mut command = QuickCommand::new("echo test".to_string());
         command.group_name = group_name.map(str::to_string);
         command
+    }
+
+    fn grouped_command(name: Option<&str>, color: Option<&str>) -> QuickCommand {
+        let mut command = command_in_group(name);
+        command.group_color = color.map(str::to_string);
+        command
+    }
+
+    #[test]
+    fn panel_group_chips_include_fixed_filters_and_sorted_full_named_groups() {
+        let groups = quick_command_groups(&[
+            grouped_command(Some("zeta deployment"), Some("purple")),
+            grouped_command(None, None),
+            grouped_command(Some("alpha database"), Some("green")),
+            grouped_command(Some("  "), Some("red")),
+        ]);
+
+        assert_eq!(4, groups.len());
+        assert_eq!(QuickCommandGroupFilter::All, groups[0].filter);
+        assert_eq!("全部", quick_command_group_chip_label(&groups[0].filter));
+        assert_eq!(QuickCommandGroupFilter::Ungrouped, groups[1].filter);
+        assert_eq!("未分组", quick_command_group_chip_label(&groups[1].filter));
+        assert_eq!(
+            QuickCommandGroupFilter::Group("alpha database".to_string()),
+            groups[2].filter
+        );
+        assert_eq!(
+            "alpha database",
+            quick_command_group_chip_label(&groups[2].filter)
+        );
+        assert_eq!(Some("green"), groups[2].color.as_deref());
+        assert_eq!(
+            QuickCommandGroupFilter::Group("zeta deployment".to_string()),
+            groups[3].filter
+        );
+        assert_eq!(
+            "zeta deployment",
+            quick_command_group_chip_label(&groups[3].filter)
+        );
+        assert_eq!(Some("purple"), groups[3].color.as_deref());
+    }
+
+    #[test]
+    fn panel_group_chip_preserves_first_non_empty_color() {
+        let groups = quick_command_groups(&[
+            grouped_command(Some("deploy"), None),
+            grouped_command(Some("deploy"), Some("cyan")),
+            grouped_command(Some("deploy"), Some("red")),
+        ]);
+
+        assert_eq!(Some("cyan"), groups[2].color.as_deref());
+    }
+
+    #[test]
+    fn new_command_defaults_to_selected_named_group_only() {
+        let commands = vec![grouped_command(Some("deploy"), Some("orange"))];
+
+        assert_eq!(
+            ("deploy".to_string(), "orange".to_string()),
+            new_command_group_defaults(
+                &QuickCommandGroupFilter::Group("deploy".to_string()),
+                &commands,
+            )
+        );
+        assert_eq!(
+            (String::new(), String::new()),
+            new_command_group_defaults(&QuickCommandGroupFilter::All, &commands)
+        );
+        assert_eq!(
+            (String::new(), String::new()),
+            new_command_group_defaults(&QuickCommandGroupFilter::Ungrouped, &commands)
+        );
+    }
+
+    #[test]
+    fn panel_renders_horizontally_scrollable_groups_below_search() {
+        let source = include_str!("quick_command_panel.rs");
+        let render = source
+            .split_once("impl Render for QuickCommandPanel")
+            .expect("QuickCommandPanel render implementation")
+            .1
+            .split_once("#[cfg(test)]")
+            .expect("QuickCommandPanel render boundary")
+            .0;
+        let group_bar = source
+            .split_once("fn render_group_bar")
+            .expect("group bar implementation")
+            .1
+            .split_once("fn render_command_item")
+            .expect("group bar implementation boundary")
+            .0;
+        let search = render
+            .find(".child(self.render_search_bar(cx))")
+            .expect("search bar render call");
+        let groups = render
+            .find(".child(self.render_group_bar(cx))")
+            .expect("group bar render call");
+
+        assert!(search < groups);
+        assert!(group_bar.contains(".overflow_x_scroll()"));
     }
 
     #[test]
@@ -1063,11 +1557,15 @@ mod tests {
     }
 
     #[test]
-    fn named_group_filter_requires_an_exact_group_name() {
+    fn named_group_filter_ignores_outer_whitespace_but_remains_case_sensitive() {
         let filter = QuickCommandGroupFilter::Group("deploy".to_string());
 
         assert!(command_matches_group_filter(
             &command_in_group(Some("deploy")),
+            &filter
+        ));
+        assert!(command_matches_group_filter(
+            &command_in_group(Some(" deploy ")),
             &filter
         ));
         assert!(!command_matches_group_filter(

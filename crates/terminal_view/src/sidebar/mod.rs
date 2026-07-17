@@ -18,7 +18,7 @@ pub(crate) mod tool_dock;
 use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
-pub use quick_command_panel::{QuickCommandGroupFilter, QuickCommandPanel};
+pub use quick_command_panel::QuickCommandPanel;
 pub use rich_input_panel::{
     RichInputPanel, RichInputPanelEvent, RichInputSubmit, prepare_rich_input_submit,
 };
@@ -41,20 +41,15 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants},
-    dialog::DialogButtonProps,
-    h_flex,
-    input::{Input, InputState, LocalInputStyle},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    tooltip::Tooltip,
-    v_flex,
+    Icon, IconName, Sizable, Size,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
-    ConnectionRepository, GlobalStorageState, QuickCommandRepository, TerminalHistoryScope,
-    models::StoredConnection, traits::Repository,
+    ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
+    traits::Repository,
 };
 use rust_i18n::t;
 use ssh::SshSessionManager;
@@ -135,169 +130,6 @@ fn same_connection(left: &StoredConnection, right: &StoredConnection) -> bool {
                 && left.params == right.params
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct QuickCommandGroupChip {
-    filter: QuickCommandGroupFilter,
-    color: Option<String>,
-}
-
-fn quick_command_groups(
-    commands: &[one_core::storage::QuickCommand],
-) -> Vec<QuickCommandGroupChip> {
-    let mut grouped = std::collections::BTreeMap::<String, Option<String>>::new();
-    for command in commands {
-        let Some(name) = command.group_name.as_ref() else {
-            continue;
-        };
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let entry = grouped.entry(trimmed.to_string()).or_insert(None);
-        if entry.is_none() {
-            *entry = command
-                .group_color
-                .clone()
-                .filter(|color| !color.trim().is_empty());
-        }
-    }
-
-    let groups = grouped
-        .into_iter()
-        .map(|(name, color)| QuickCommandGroupChip {
-            filter: QuickCommandGroupFilter::Group(name.clone()),
-            color,
-        })
-        .collect::<Vec<_>>();
-
-    let mut all = vec![
-        QuickCommandGroupChip {
-            filter: QuickCommandGroupFilter::All,
-            color: None,
-        },
-        QuickCommandGroupChip {
-            filter: QuickCommandGroupFilter::Ungrouped,
-            color: None,
-        },
-    ];
-    all.extend(groups);
-    all
-}
-
-fn quick_command_group_chip_tooltip(filter: &QuickCommandGroupFilter) -> String {
-    match filter {
-        QuickCommandGroupFilter::All => "全部分组".to_string(),
-        QuickCommandGroupFilter::Ungrouped => "未分组".to_string(),
-        QuickCommandGroupFilter::Group(name) => name.clone(),
-    }
-}
-
-fn quick_command_group_chip_label(filter: &QuickCommandGroupFilter) -> SharedString {
-    match filter {
-        QuickCommandGroupFilter::All => SharedString::from("全"),
-        QuickCommandGroupFilter::Ungrouped => SharedString::from("未"),
-        QuickCommandGroupFilter::Group(name) => {
-            let abbreviated = name.chars().take(2).collect::<String>();
-            SharedString::from(abbreviated)
-        }
-    }
-}
-
-fn quick_command_group_chip_has_custom_color(color: Option<&str>) -> bool {
-    color.map(|value| !value.trim().is_empty()).unwrap_or(false)
-}
-
-fn quick_command_group_color(color: Option<&str>, fallback: gpui::Hsla) -> gpui::Hsla {
-    match color.unwrap_or_default() {
-        "blue" => gpui::rgb(0x3b82f6).into(),
-        "cyan" => gpui::rgb(0x06b6d4).into(),
-        "green" => gpui::rgb(0x22c55e).into(),
-        "yellow" => gpui::rgb(0xeab308).into(),
-        "orange" => gpui::rgb(0xf97316).into(),
-        "red" => gpui::rgb(0xef4444).into(),
-        "pink" => gpui::rgb(0xec4899).into(),
-        "purple" => gpui::rgb(0xa855f7).into(),
-        "gray" => gpui::rgb(0x64748b).into(),
-        _ => fallback,
-    }
-}
-
-fn quick_command_group_chip_background(
-    has_custom_color: bool,
-    is_active: bool,
-    color: gpui::Hsla,
-    muted: gpui::Hsla,
-) -> gpui::Hsla {
-    if has_custom_color || is_active {
-        color
-    } else {
-        muted
-    }
-}
-
-fn quick_command_group_chip_border(
-    is_active: bool,
-    color: gpui::Hsla,
-    accent_foreground: gpui::Hsla,
-) -> gpui::Hsla {
-    if is_active { accent_foreground } else { color }
-}
-
-fn quick_command_group_chip_text_color(
-    has_custom_color: bool,
-    is_active: bool,
-    _color: gpui::Hsla,
-    accent_foreground: gpui::Hsla,
-    foreground: gpui::Hsla,
-) -> gpui::Hsla {
-    if has_custom_color || is_active {
-        accent_foreground
-    } else {
-        foreground
-    }
-}
-
-fn quick_command_group_color_choices() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("", "默认"),
-        ("blue", "蓝"),
-        ("cyan", "青"),
-        ("green", "绿"),
-        ("yellow", "黄"),
-        ("orange", "橙"),
-        ("red", "红"),
-        ("pink", "粉"),
-        ("purple", "紫"),
-        ("gray", "灰"),
-    ]
-}
-
-fn quick_command_group_dialog_input_style(colors: &TerminalColors) -> LocalInputStyle {
-    LocalInputStyle {
-        background: colors.muted,
-        foreground: colors.foreground,
-        muted_foreground: colors.muted_foreground,
-        border: colors.border,
-    }
-}
-
-fn quick_command_group_dialog_button_variants(
-    colors: &TerminalColors,
-    cx: &App,
-) -> (ButtonVariant, ButtonVariant) {
-    let ok = ButtonCustomVariant::new(cx)
-        .color(colors.accent)
-        .foreground(colors.accent_foreground)
-        .hover(colors.accent.opacity(0.88))
-        .active(colors.accent.opacity(0.76));
-    let cancel = ButtonCustomVariant::new(cx)
-        .color(colors.muted)
-        .foreground(colors.foreground)
-        .hover(colors.border)
-        .active(colors.border.opacity(0.82));
-    (ButtonVariant::Custom(ok), ButtonVariant::Custom(cancel))
 }
 
 fn load_terminal_ai_connections(cx: &App) -> Vec<StoredConnection> {
@@ -644,10 +476,6 @@ pub struct TerminalSidebar {
     history_command_panel: Option<Entity<HistoryCommandPanel>>,
     /// Rich Input 面板
     rich_input_panel: Entity<RichInputPanel>,
-    /// 快捷命令分组按钮
-    quick_command_groups: Vec<QuickCommandGroupChip>,
-    /// 当前快捷命令分组筛选
-    selected_quick_command_group: QuickCommandGroupFilter,
     /// AI 聊天面板
     ai_chat_panel: Entity<DefaultAgentChatPanel>,
     /// SSH 广播输入面板
@@ -726,8 +554,6 @@ impl TerminalSidebar {
             })
         });
         let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
-        let initial_quick_commands = quick_command_panel.read(cx).current_commands();
-        let initial_quick_command_groups = quick_command_groups(&initial_quick_commands);
         let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
             let connections = load_terminal_ai_connections(cx);
             let (scope, catalog, mentions) = build_terminal_ai_context(connection, &connections);
@@ -864,10 +690,6 @@ impl TerminalSidebar {
                 quick_command_panel::QuickCommandPanelEvent::ExecuteCommand(cmd) => {
                     cx.emit(TerminalSidebarEvent::ExecuteCommand(cmd.clone()));
                 }
-                quick_command_panel::QuickCommandPanelEvent::CommandsChanged(commands) => {
-                    this.quick_command_groups = quick_command_groups(commands);
-                    cx.notify();
-                }
             },
         );
 
@@ -956,8 +778,6 @@ impl TerminalSidebar {
             quick_command_panel,
             history_command_panel,
             rich_input_panel,
-            quick_command_groups: initial_quick_command_groups,
-            selected_quick_command_group: QuickCommandGroupFilter::All,
             ai_chat_panel,
             broadcast_input_panel,
             file_manager_panel,
@@ -1058,62 +878,6 @@ impl TerminalSidebar {
                     open: self.tool_dock.is_tool_open(panel),
                 })
                 .collect(),
-            quick_command_groups: self.quick_command_groups.clone(),
-            selected_quick_command_group: self.selected_quick_command_group.clone(),
-        }
-    }
-
-    fn quick_command_repo(&self, cx: &App) -> Option<Arc<QuickCommandRepository>> {
-        cx.try_global::<GlobalStorageState>()
-            .and_then(|state| state.storage.get::<QuickCommandRepository>())
-    }
-
-    fn refresh_quick_command_state(&mut self, cx: &mut Context<Self>) {
-        self.quick_command_panel.update(cx, |panel, cx| {
-            panel.load_commands(cx);
-            panel.set_group_filter(self.selected_quick_command_group.clone(), cx);
-        });
-    }
-
-    fn rename_quick_command_group(
-        &mut self,
-        old_name: String,
-        new_name: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(repo) = self.quick_command_repo(cx) else {
-            return;
-        };
-        if repo.rename_group(&old_name, new_name.as_deref()).is_ok() {
-            self.selected_quick_command_group = match new_name {
-                Some(name) if !name.trim().is_empty() => QuickCommandGroupFilter::Group(name),
-                _ => QuickCommandGroupFilter::Ungrouped,
-            };
-            self.refresh_quick_command_state(cx);
-        }
-    }
-
-    fn recolor_quick_command_group(
-        &mut self,
-        group_name: String,
-        color: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(repo) = self.quick_command_repo(cx) else {
-            return;
-        };
-        if repo.recolor_group(&group_name, color.as_deref()).is_ok() {
-            self.refresh_quick_command_state(cx);
-        }
-    }
-
-    fn clear_quick_command_group(&mut self, group_name: String, cx: &mut Context<Self>) {
-        let Some(repo) = self.quick_command_repo(cx) else {
-            return;
-        };
-        if repo.clear_group(&group_name).is_ok() {
-            self.selected_quick_command_group = QuickCommandGroupFilter::Ungrouped;
-            self.refresh_quick_command_state(cx);
         }
     }
 
@@ -1440,71 +1204,6 @@ impl TerminalSidebar {
             )
     }
 
-    fn render_group_filter_button(
-        &self,
-        chip: &QuickCommandGroupChip,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let is_active = self.selected_quick_command_group == chip.filter;
-        let filter = chip.filter.clone();
-        let tooltip = quick_command_group_chip_tooltip(&chip.filter);
-        let color = quick_command_group_color(chip.color.as_deref(), self.colors.accent);
-        let text = quick_command_group_chip_label(&chip.filter);
-        let has_custom_color = quick_command_group_chip_has_custom_color(chip.color.as_deref());
-
-        div()
-            .id(SharedString::from(format!("quick-group-{}", tooltip)))
-            .w(px(28.0))
-            .h(px(28.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(quick_command_group_chip_background(
-                has_custom_color,
-                is_active,
-                color,
-                self.colors.muted,
-            ))
-            .border_1()
-            .border_color(quick_command_group_chip_border(
-                is_active,
-                color,
-                self.colors.accent_foreground,
-            ))
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.selected_quick_command_group = filter.clone();
-                this.quick_command_panel.update(cx, |panel, cx| {
-                    panel.set_group_filter(filter.clone(), cx);
-                });
-                cx.notify();
-            }))
-            .child(
-                h_flex()
-                    .w_full()
-                    .h_full()
-                    .items_center()
-                    .justify_center()
-                    .child(div().w(px(7.0)).h_full().rounded_l_md().bg(color))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(quick_command_group_chip_text_color(
-                                has_custom_color,
-                                is_active,
-                                color,
-                                self.colors.accent_foreground,
-                                self.colors.foreground,
-                            ))
-                            .child(text),
-                    ),
-            )
-    }
-
     /// 渲染工具栏
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_color = self.colors.border;
@@ -1525,13 +1224,6 @@ impl TerminalSidebar {
                         .iter()
                         .copied()
                         .map(|panel| self.render_toolbar_button(panel, window, cx)),
-                ),
-            )
-            .child(
-                v_flex().items_center().pb_2().gap_1().children(
-                    self.quick_command_groups
-                        .iter()
-                        .map(|chip| self.render_group_filter_button(chip, cx)),
                 ),
             )
             .into_any_element()
@@ -1627,8 +1319,6 @@ impl TerminalSidebar {
 struct TerminalToolbarSnapshot {
     colors: TerminalColors,
     buttons: Vec<TerminalToolbarButtonSnapshot>,
-    quick_command_groups: Vec<QuickCommandGroupChip>,
-    selected_quick_command_group: QuickCommandGroupFilter,
 }
 
 #[derive(Clone, Copy)]
@@ -1644,153 +1334,6 @@ pub(crate) struct TerminalSidebarToolbar {
 impl TerminalSidebarToolbar {
     pub(crate) fn new(sidebar: Entity<TerminalSidebar>) -> Self {
         Self { sidebar }
-    }
-
-    fn open_rename_group_dialog(&self, group_name: String, window: &mut Window, cx: &mut App) {
-        let sidebar = self.sidebar.clone();
-        let colors = self.sidebar.read(cx).colors.clone();
-        let input_style = quick_command_group_dialog_input_style(&colors);
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("输入新的分组名称")
-                .default_value(&group_name)
-        });
-        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
-            let input_ok = input.clone();
-            let sidebar_ok = sidebar.clone();
-            let original = group_name.clone();
-            let (ok_variant, cancel_variant) =
-                quick_command_group_dialog_button_variants(&colors, dialog_cx);
-            dialog
-                .bg(colors.background)
-                .text_color(colors.foreground)
-                .border_color(colors.border)
-                .title("重命名分组")
-                .confirm()
-                .child(
-                    div().bg(colors.background).child(
-                        Input::new(&input)
-                            .small()
-                            .w_full()
-                            .local_style(input_style)
-                            .caret_color(colors.foreground),
-                    ),
-                )
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("保存")
-                        .ok_variant(ok_variant)
-                        .cancel_text("取消")
-                        .cancel_variant(cancel_variant),
-                )
-                .on_ok(move |_, _, cx| {
-                    let next = input_ok.read(cx).value().trim().to_string();
-                    sidebar_ok.update(cx, |sidebar, cx| {
-                        sidebar.rename_quick_command_group(
-                            original.clone(),
-                            (!next.is_empty()).then_some(next.clone()),
-                            cx,
-                        );
-                    });
-                    true
-                })
-        });
-    }
-
-    fn open_delete_group_dialog(&self, group_name: String, window: &mut Window, cx: &mut App) {
-        let sidebar = self.sidebar.clone();
-        let colors = self.sidebar.read(cx).colors.clone();
-        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
-            let sidebar_ok = sidebar.clone();
-            let original = group_name.clone();
-            let (ok_variant, cancel_variant) =
-                quick_command_group_dialog_button_variants(&colors, dialog_cx);
-            dialog
-                .bg(colors.background)
-                .text_color(colors.foreground)
-                .border_color(colors.border)
-                .title("删除分组")
-                .confirm()
-                .child(
-                    div()
-                        .bg(colors.background)
-                        .text_color(colors.foreground)
-                        .child(format!(
-                            "确定删除分组“{}”吗？该分组下的快捷命令会保留，但会变为未分组。",
-                            group_name
-                        )),
-                )
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("删除分组")
-                        .ok_variant(ok_variant)
-                        .cancel_text("取消")
-                        .cancel_variant(cancel_variant),
-                )
-                .on_ok(move |_, _, cx| {
-                    sidebar_ok.update(cx, |sidebar, cx| {
-                        sidebar.clear_quick_command_group(original.clone(), cx);
-                    });
-                    true
-                })
-        });
-    }
-
-    fn group_context_menu(
-        &self,
-        chip: &QuickCommandGroupChip,
-        menu: PopupMenu,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> PopupMenu {
-        let QuickCommandGroupFilter::Group(group_name) = &chip.filter else {
-            return menu;
-        };
-        let mut menu = menu;
-        let rename_toolbar = self.sidebar.clone();
-        let recolor_toolbar = self.sidebar.clone();
-        let delete_toolbar = self.sidebar.clone();
-        let group_name_for_rename = group_name.clone();
-        let group_name_for_delete = group_name.clone();
-
-        menu = menu.item(
-            PopupMenuItem::new("重命名分组").on_click(move |_, window, cx| {
-                let toolbar = TerminalSidebarToolbar {
-                    sidebar: rename_toolbar.clone(),
-                };
-                toolbar.open_rename_group_dialog(group_name_for_rename.clone(), window, cx);
-            }),
-        );
-
-        menu = menu.separator();
-        for (value, label) in quick_command_group_color_choices() {
-            let sidebar = recolor_toolbar.clone();
-            let group_name = group_name.clone();
-            let value = value.to_string();
-            let checked = chip.color.as_deref().unwrap_or_default() == value;
-            menu = menu.item(
-                PopupMenuItem::new(format!("颜色：{}", label))
-                    .checked(checked)
-                    .on_click(move |_, _, cx| {
-                        sidebar.update(cx, |sidebar, cx| {
-                            sidebar.recolor_quick_command_group(
-                                group_name.clone(),
-                                (!value.trim().is_empty()).then_some(value.clone()),
-                                cx,
-                            );
-                        });
-                    }),
-            );
-        }
-
-        menu.separator().item(
-            PopupMenuItem::new("删除分组").on_click(move |_, window, cx| {
-                let toolbar = TerminalSidebarToolbar {
-                    sidebar: delete_toolbar.clone(),
-                };
-                toolbar.open_delete_group_dialog(group_name_for_delete.clone(), window, cx);
-            }),
-        )
     }
 
     fn render_button(
@@ -1826,74 +1369,6 @@ impl TerminalSidebarToolbar {
                     .text_color(if button.open { accent_fg } else { muted_fg }),
             )
     }
-
-    fn render_group_button(
-        &self,
-        chip: QuickCommandGroupChip,
-        selected: QuickCommandGroupFilter,
-        colors: TerminalColors,
-    ) -> impl IntoElement {
-        let sidebar = self.sidebar.clone();
-        let sidebar_for_click = sidebar.clone();
-        let sidebar_for_menu = sidebar.clone();
-        let is_active = selected == chip.filter;
-        let filter = chip.filter.clone();
-        let tooltip = quick_command_group_chip_tooltip(&chip.filter);
-        let color = quick_command_group_color(chip.color.as_deref(), colors.accent);
-        let has_custom_color = quick_command_group_chip_has_custom_color(chip.color.as_deref());
-        let label = quick_command_group_chip_label(&chip.filter);
-
-        div()
-            .id(SharedString::from(format!("toolbar-group-{}", tooltip)))
-            .w(px(28.0))
-            .h(px(28.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(quick_command_group_chip_background(
-                has_custom_color,
-                is_active,
-                color,
-                colors.muted,
-            ))
-            .border_1()
-            .border_color(quick_command_group_chip_border(
-                is_active,
-                color,
-                colors.accent_foreground,
-            ))
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .on_click(move |_, _window, cx| {
-                sidebar_for_click.update(cx, |sidebar, cx| {
-                    sidebar.selected_quick_command_group = filter.clone();
-                    sidebar.quick_command_panel.update(cx, |panel, cx| {
-                        panel.set_group_filter(filter.clone(), cx);
-                    });
-                    cx.notify();
-                });
-            })
-            .context_menu(move |menu, window, cx| {
-                let toolbar = TerminalSidebarToolbar {
-                    sidebar: sidebar_for_menu.clone(),
-                };
-                toolbar.group_context_menu(&chip, menu, window, cx)
-            })
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(quick_command_group_chip_text_color(
-                        has_custom_color,
-                        is_active,
-                        color,
-                        colors.accent_foreground,
-                        colors.foreground,
-                    ))
-                    .child(label),
-            )
-    }
 }
 
 impl Render for TerminalSidebarToolbar {
@@ -1916,15 +1391,6 @@ impl Render for TerminalSidebarToolbar {
                         .map(|button| self.render_button(button, snapshot.colors.clone())),
                 ),
             )
-            .child(v_flex().flex_1().items_center().pt_2().gap_1().children(
-                snapshot.quick_command_groups.into_iter().map(|chip| {
-                    self.render_group_button(
-                        chip,
-                        snapshot.selected_quick_command_group.clone(),
-                        snapshot.colors.clone(),
-                    )
-                }),
-            ))
     }
 }
 
@@ -1987,20 +1453,12 @@ impl Render for TerminalSidebar {
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickCommandGroupFilter, SidebarPanel, TerminalToolDockState,
-        agent_theme_from_terminal_theme, build_terminal_ai_context, quick_command_groups,
-        terminal_sidebar_available_panels,
+        SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
+        build_terminal_ai_context, terminal_sidebar_available_panels,
     };
     use crate::theme::TerminalTheme;
     use one_core::sidebar_contribution::SidebarPlacement;
-    use one_core::storage::{ConnectionType, QuickCommand, StoredConnection};
-
-    fn grouped_command(name: Option<&str>, color: Option<&str>) -> QuickCommand {
-        let mut command = QuickCommand::new("echo test".to_string());
-        command.group_name = name.map(str::to_string);
-        command.group_color = color.map(str::to_string);
-        command
-    }
+    use one_core::storage::{ConnectionType, StoredConnection};
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
@@ -2032,27 +1490,18 @@ mod tests {
     }
 
     #[test]
-    fn quick_command_groups_include_fixed_filters_and_sorted_named_groups() {
-        let groups = quick_command_groups(&[
-            grouped_command(Some("zeta"), Some("purple")),
-            grouped_command(None, None),
-            grouped_command(Some("alpha"), Some("green")),
-            grouped_command(Some("  "), Some("red")),
-        ]);
+    fn terminal_toolbar_only_renders_top_level_tools() {
+        let source = include_str!("mod.rs");
+        let toolbar_render = source
+            .split_once("impl Render for TerminalSidebarToolbar")
+            .expect("terminal toolbar render implementation")
+            .1
+            .split_once("pub(crate) struct TerminalSidebarToolPanel")
+            .expect("terminal toolbar render boundary")
+            .0;
 
-        assert_eq!(4, groups.len());
-        assert_eq!(QuickCommandGroupFilter::All, groups[0].filter);
-        assert_eq!(QuickCommandGroupFilter::Ungrouped, groups[1].filter);
-        assert_eq!(
-            QuickCommandGroupFilter::Group("alpha".to_string()),
-            groups[2].filter
-        );
-        assert_eq!(Some("green"), groups[2].color.as_deref());
-        assert_eq!(
-            QuickCommandGroupFilter::Group("zeta".to_string()),
-            groups[3].filter
-        );
-        assert_eq!(Some("purple"), groups[3].color.as_deref());
+        assert!(!toolbar_render.contains("quick_command_group"));
+        assert!(!toolbar_render.contains("render_group_button"));
     }
 
     #[test]
