@@ -8,7 +8,6 @@ use terminal::terminal::TerminalConnectionKind;
 
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::resize::WorkspaceSidebarResize;
-use super::tab_drag::TerminalTabDropTarget;
 use super::{TerminalPaneId, TerminalSplitTree};
 use crate::view::TerminalView;
 
@@ -20,7 +19,6 @@ pub struct TerminalWorkspace {
     pub(super) sidebar_panel_size: gpui::Pixels,
     pub(super) sidebar_resizing: Option<WorkspaceSidebarResize>,
     pub(super) workspace_bounds: gpui::Bounds<gpui::Pixels>,
-    pub(super) tab_drop_target: Option<TerminalTabDropTarget>,
     pub(super) pane_tab_metadata: HashMap<TerminalPaneId, TerminalPaneTabMetadata>,
     pub(super) pane_subscriptions: HashMap<TerminalPaneId, Vec<Subscription>>,
 }
@@ -102,7 +100,6 @@ impl TerminalWorkspace {
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             sidebar_resizing: None,
             workspace_bounds: gpui::Bounds::default(),
-            tab_drop_target: None,
             pane_tab_metadata,
             pane_subscriptions: HashMap::new(),
         };

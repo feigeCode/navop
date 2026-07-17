@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, div, px, relative,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
+    relative,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
@@ -79,14 +80,23 @@ impl TerminalWorkspace {
             .text_xs()
             .tooltip(move |window, cx| Tooltip::new(tooltip_title.clone()).build(window, cx))
             .when_some(drag_source, |this, source| {
-                this.cursor_grab().on_drag(
-                    DragTab::from_external(drag_title, source),
-                    |drag, _, window, cx| {
+                this.cursor_grab()
+                    .on_mouse_down(MouseButton::Left, |_, window, cx| {
                         window.prevent_default();
                         cx.stop_propagation();
-                        cx.new(|_| drag.clone())
-                    },
-                )
+                    })
+                    .on_mouse_move(|_, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_drag(
+                        DragTab::from_external(drag_title, source),
+                        |drag, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            cx.new(|_| drag.clone())
+                        },
+                    )
             })
             .child(title)
             .into_any_element()

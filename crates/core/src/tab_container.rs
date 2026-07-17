@@ -710,11 +710,11 @@ impl DragTab {
         }
     }
 
-    fn is_external(&self) -> bool {
+    pub fn is_external(&self) -> bool {
         self.external_source.is_some()
     }
 
-    fn take_external_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem> {
+    pub fn take_external_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem> {
         self.external_source.as_ref()?.take_tab(window, cx)
     }
 }

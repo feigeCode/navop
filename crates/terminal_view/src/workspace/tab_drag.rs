@@ -1,22 +1,14 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Context, DragMoveEvent, Entity, InteractiveElement as _, IntoElement as _,
-    ParentElement as _, Styled as _, Window, div, relative,
+    AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement as _,
+    ParentElement as _, SharedString, Styled as _, Window, div, relative,
 };
 use gpui_component::{ActiveTheme as _, Placement};
-use one_core::tab_container::{DragTab, TabContainer, TabItem};
+use one_core::tab_container::{DragTab, TabContainer, TabContentEvent, TabItem, TabOpenMode};
 
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::{TerminalPaneId, TerminalWorkspace};
 use crate::view::TerminalView;
-
-const TAB_DROP_GROUP: &str = "terminal-tab-split";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct TerminalTabDropTarget {
-    pane_id: TerminalPaneId,
-    placement: Placement,
-}
 
 struct TerminalTabSource {
     container: Entity<TabContainer>,
@@ -31,71 +23,77 @@ impl TerminalWorkspace {
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let placement = self
-            .tab_drop_target
-            .filter(|target| target.pane_id == pane_id)
-            .map(|target| target.placement);
         div()
             .id(("terminal-tab-drop-region", pane_id.value()))
-            .group(TAB_DROP_GROUP)
             .relative()
             .size_full()
             .min_w_0()
             .min_h_0()
-            .on_drag_move(
-                cx.listener(move |this, drag: &DragMoveEvent<DragTab>, _, cx| {
-                    this.update_tab_drop_target(pane_id, drag, cx);
-                }),
-            )
             .child(content)
-            .child(
-                div()
-                    .id(("terminal-tab-drop-target", pane_id.value()))
-                    .invisible()
-                    .absolute()
-                    .bg(cx.theme().drop_target)
-                    .map(|overlay| place_overlay(overlay, placement))
-                    .group_drag_over::<DragTab>(TAB_DROP_GROUP, |overlay| overlay.visible())
-                    .on_drop(cx.listener(move |this, drag: &DragTab, window, cx| {
-                        this.drop_terminal_tab(pane_id, drag, window, cx);
-                    })),
-            )
+            .children([
+                self.render_tab_drop_zone(pane_id, Placement::Left, cx),
+                self.render_tab_drop_zone(pane_id, Placement::Right, cx),
+                self.render_tab_drop_zone(pane_id, Placement::Top, cx),
+                self.render_tab_drop_zone(pane_id, Placement::Bottom, cx),
+            ])
             .into_any_element()
     }
 
-    fn update_tab_drop_target(
-        &mut self,
+    fn render_tab_drop_zone(
+        &self,
         pane_id: TerminalPaneId,
-        drag: &DragMoveEvent<DragTab>,
+        placement: Placement,
         cx: &mut Context<Self>,
-    ) {
-        let target_workspace = cx.entity();
-        let transferable = terminal_tab_source(drag.drag(cx), &target_workspace, cx).is_some();
-        let placement = transferable
-            .then(|| normalized_drop_position(drag))
-            .flatten();
-        let target = placement.map(|placement| TerminalTabDropTarget { pane_id, placement });
-        if self.tab_drop_target != target {
-            self.tab_drop_target = target;
-            cx.notify();
-        }
+    ) -> AnyElement {
+        let id = SharedString::from(format!(
+            "terminal-tab-drop-zone-{}-{placement:?}",
+            pane_id.value()
+        ));
+        div()
+            .id(id)
+            .invisible()
+            .absolute()
+            .bg(cx.theme().drop_target)
+            .map(|zone| place_drop_zone(zone, placement))
+            .drag_over::<DragTab>(move |zone, _, _, _| show_drop_highlight(zone, placement))
+            .on_drop(cx.listener(move |this, drag: &DragTab, window, cx| {
+                this.drop_terminal_tab(pane_id, placement, drag, window, cx);
+            }))
+            .into_any_element()
     }
 
     fn drop_terminal_tab(
         &mut self,
         pane_id: TerminalPaneId,
+        placement: Placement,
         drag: &DragTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.tab_drop_target.take() else {
-            return;
-        };
-        if target.pane_id != pane_id || !self.split_tree.contains(pane_id) {
+        if !self.split_tree.contains(pane_id) {
             cx.notify();
             return;
         }
         let target_workspace = cx.entity();
+
+        if drag.is_external() {
+            // A split pane's external source can be this same workspace.  Run
+            // the detach after the current entity update finishes to avoid a
+            // re-entrant `Entity::update` panic, then insert it at the chosen
+            // pane edge.
+            let drag = drag.clone();
+            window.defer(cx, move |window, cx| {
+                let Some(tab) = drag.take_external_tab(window, cx) else {
+                    return;
+                };
+                target_workspace.update(cx, |workspace, cx| {
+                    workspace.finish_external_tab_drop(pane_id, placement, tab, window, cx);
+                });
+            });
+            cx.notify();
+            return;
+        }
+
         let Some(source) = terminal_tab_source(drag, &target_workspace, cx) else {
             cx.notify();
             return;
@@ -116,17 +114,44 @@ impl TerminalWorkspace {
 
         let tab_metadata = TerminalPaneTabMetadata::from_tab(&tab);
 
-        if !self.insert_pane(
-            pane_id,
-            target.placement,
-            source.pane,
-            tab_metadata,
-            window,
-            cx,
-        ) {
+        if !self.insert_pane(pane_id, placement, source.pane, tab_metadata, window, cx) {
             restore_tab(source.container, tab, window, cx);
         }
         cx.notify();
+    }
+
+    fn finish_external_tab_drop(
+        &mut self,
+        pane_id: TerminalPaneId,
+        placement: Placement,
+        tab: TabItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source_pane = tab
+            .content()
+            .view()
+            .downcast::<TerminalWorkspace>()
+            .ok()
+            .and_then(|source_workspace| {
+                let source_state = source_workspace.read(cx);
+                let source_pane_id = source_state.split_tree.transferable_pane()?;
+                source_state.panes.get(&source_pane_id).cloned()
+            });
+        let Some(source_pane) = source_pane else {
+            cx.emit(TabContentEvent::OpenTab {
+                tab,
+                mode: TabOpenMode::Background,
+            });
+            return;
+        };
+        let tab_metadata = TerminalPaneTabMetadata::from_tab(&tab);
+        if !self.insert_pane(pane_id, placement, source_pane, tab_metadata, window, cx) {
+            cx.emit(TabContentEvent::OpenTab {
+                tab,
+                mode: TabOpenMode::Background,
+            });
+        }
     }
 }
 
@@ -183,69 +208,73 @@ fn restore_tab(
     });
 }
 
-fn normalized_drop_position(drag: &DragMoveEvent<DragTab>) -> Option<Placement> {
-    let width = f32::from(drag.bounds.size.width);
-    let height = f32::from(drag.bounds.size.height);
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    let x = f32::from(drag.event.position.x - drag.bounds.left()) / width;
-    let y = f32::from(drag.event.position.y - drag.bounds.top()) / height;
-    drop_placement(x, y)
-}
-
-fn drop_placement(x: f32, y: f32) -> Option<Placement> {
-    if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
-        return None;
-    }
-    [
-        (x, Placement::Left),
-        (1.0 - x, Placement::Right),
-        (y, Placement::Top),
-        (1.0 - y, Placement::Bottom),
-    ]
-    .into_iter()
-    .min_by(|left, right| left.0.total_cmp(&right.0))
-    .map(|(_, placement)| placement)
-}
-
-fn place_overlay(
-    overlay: gpui::Stateful<gpui::Div>,
-    placement: Option<Placement>,
+fn place_drop_zone(
+    zone: gpui::Stateful<gpui::Div>,
+    placement: Placement,
 ) -> gpui::Stateful<gpui::Div> {
     match placement {
-        Some(Placement::Left) => overlay.left_0().top_0().bottom_0().w(relative(0.5)),
-        Some(Placement::Right) => overlay.right_0().top_0().bottom_0().w(relative(0.5)),
-        Some(Placement::Top) => overlay.top_0().left_0().right_0().h(relative(0.5)),
-        Some(Placement::Bottom) => overlay.bottom_0().left_0().right_0().h(relative(0.5)),
-        None => overlay.top_0().left_0().size_0(),
+        Placement::Left => zone.left_0().top_0().bottom_0().w(relative(0.25)),
+        Placement::Right => zone.right_0().top_0().bottom_0().w(relative(0.25)),
+        Placement::Top => zone
+            .top_0()
+            .left(relative(0.25))
+            .w(relative(0.5))
+            .h(relative(0.5)),
+        Placement::Bottom => zone
+            .bottom_0()
+            .left(relative(0.25))
+            .w(relative(0.5))
+            .h(relative(0.5)),
+    }
+}
+
+fn show_drop_highlight(zone: gpui::StyleRefinement, placement: Placement) -> gpui::StyleRefinement {
+    match placement {
+        Placement::Left | Placement::Right => zone.visible().w(relative(0.5)),
+        Placement::Top | Placement::Bottom => {
+            zone.visible().left_0().right_0().w_full().h(relative(0.5))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use gpui_component::Placement;
-
-    use super::drop_placement;
-
     #[test]
-    fn tab_drop_uses_the_entire_terminal_pane() {
-        assert_eq!(Some(Placement::Left), drop_placement(0.35, 0.5));
-        assert_eq!(Some(Placement::Bottom), drop_placement(0.49, 0.64));
+    fn every_pane_renders_four_direct_drop_zones_above_its_content() {
+        let source = include_str!("tab_drag.rs");
+
+        let content_index = source.find(".child(content)").expect("pane content");
+        let zones_index = source[content_index..]
+            .find("self.render_tab_drop_zone")
+            .map(|offset| content_index + offset)
+            .expect("drop zones");
+        assert!(content_index < zones_index);
+        for placement in ["Left", "Right", "Top", "Bottom"] {
+            assert!(source.contains(&format!("Placement::{placement}, cx")));
+        }
+        assert!(source.contains("show_drop_highlight(zone, placement)"));
+        assert!(source.contains("this.drop_terminal_tab(pane_id, placement"));
     }
 
     #[test]
-    fn tab_drop_resolves_all_four_split_directions() {
-        assert_eq!(Some(Placement::Left), drop_placement(0.1, 0.5));
-        assert_eq!(Some(Placement::Right), drop_placement(0.9, 0.5));
-        assert_eq!(Some(Placement::Top), drop_placement(0.5, 0.1));
-        assert_eq!(Some(Placement::Bottom), drop_placement(0.5, 0.9));
+    fn drop_highlight_expands_to_half_of_the_target_pane() {
+        let source = include_str!("tab_drag.rs");
+
+        assert!(
+            source
+                .contains("Placement::Left | Placement::Right => zone.visible().w(relative(0.5))")
+        );
+        assert!(source.contains("zone.visible().left_0().right_0().w_full().h(relative(0.5))"));
     }
 
     #[test]
-    fn tab_drop_uses_the_nearest_edge_at_corners() {
-        assert_eq!(Some(Placement::Top), drop_placement(0.2, 0.05));
-        assert_eq!(Some(Placement::Right), drop_placement(0.95, 0.2));
+    fn pane_title_drag_is_accepted_by_direct_split_drop_zones() {
+        let source = include_str!("tab_drag.rs");
+
+        assert!(source.contains("if drag.is_external()"));
+        assert!(source.contains("window.defer(cx"));
+        assert!(source.contains("drag.take_external_tab(window, cx)"));
+        assert!(source.contains("finish_external_tab_drop"));
     }
 
     #[test]
