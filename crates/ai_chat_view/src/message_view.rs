@@ -195,6 +195,8 @@ fn render_user_message_themed<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     theme: &AgentChatTheme,
 ) -> AnyElement {
+    let bubble_width = user_message_bubble_width(&msg.content);
+
     h_flex()
         .debug_selector(|| "ai-chat-user-row".to_string())
         .w_full()
@@ -203,7 +205,7 @@ fn render_user_message_themed<E: MessageExtension>(
         .child(
             div()
                 .debug_selector(|| "ai-chat-user-bubble".to_string())
-                .w_full()
+                .w(bubble_width)
                 .max_w(px(720.0))
                 .min_w_0()
                 .px_3()
@@ -223,6 +225,31 @@ fn render_user_message_themed<E: MessageExtension>(
                 ),
         )
         .into_any_element()
+}
+
+fn user_message_bubble_width(content: &str) -> gpui::Pixels {
+    const MIN_WIDTH: f32 = 64.0;
+    const MAX_WIDTH: f32 = 720.0;
+    const HORIZONTAL_PADDING: f32 = 24.0;
+    const ASCII_CHAR_WIDTH: f32 = 7.0;
+    const WIDE_CHAR_WIDTH: f32 = 14.0;
+
+    let content_width = content
+        .lines()
+        .map(|line| {
+            line.chars()
+                .map(|character| {
+                    if character.is_ascii() {
+                        ASCII_CHAR_WIDTH
+                    } else {
+                        WIDE_CHAR_WIDTH
+                    }
+                })
+                .sum::<f32>()
+        })
+        .fold(0.0, f32::max);
+
+    px((content_width + HORIZONTAL_PADDING).clamp(MIN_WIDTH, MAX_WIDTH))
 }
 
 pub fn render_system_message<E: MessageExtension>(

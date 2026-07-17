@@ -4,9 +4,9 @@
 //! 构建 [`AgentChatView`],并暴露 close event 与外部消息入口。
 
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Window, div, prelude::FluentBuilder,
+    AnyWindowHandle, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::{
@@ -36,6 +36,20 @@ pub enum DefaultAgentChatPanelEvent {
 pub(crate) enum DefaultAgentChatPanelMode {
     Sidebar,
     Workbench,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderRefreshAction {
+    RebuildView,
+    RefreshModels,
+}
+
+pub(crate) fn provider_refresh_action(has_view: bool) -> ProviderRefreshAction {
+    if has_view {
+        ProviderRefreshAction::RefreshModels
+    } else {
+        ProviderRefreshAction::RebuildView
+    }
 }
 
 pub(crate) fn should_refresh_resource_catalog(event: &ConnectionDataEvent) -> bool {
@@ -75,6 +89,7 @@ pub struct DefaultAgentChatPanel {
     connection_subscription: Option<Subscription>,
     provider_subscription: Option<Subscription>,
     provider_refresh_generation: u64,
+    window_handle: AnyWindowHandle,
     theme: Option<AgentChatTheme>,
     show_sidebar_header: bool,
     show_sidebar_frame_controls: bool,
@@ -208,12 +223,17 @@ impl DefaultAgentChatPanel {
             view_subscription: None,
             pending_message: None,
             pending_system_instruction: None,
-            pending_resource_context: None,
+            pending_resource_context: Some((
+                resources.clone(),
+                mentions.clone(),
+                available_resources.clone(),
+            )),
             pending_resource_catalog: None,
             pending_code_block_actions: Vec::new(),
             connection_subscription: None,
             provider_subscription: None,
             provider_refresh_generation: 0,
+            window_handle: window.window_handle(),
             theme: None,
             show_sidebar_header: true,
             show_sidebar_frame_controls: false,
@@ -222,7 +242,7 @@ impl DefaultAgentChatPanel {
         };
         panel.subscribe_connection_events(cx);
         panel.subscribe_provider_events(cx);
-        Self::spawn_build_view(resources, mentions, available_resources, mode, window, cx);
+        panel.spawn_build_view(cx);
         panel
     }
 
@@ -238,10 +258,15 @@ impl DefaultAgentChatPanel {
     }
 
     fn refresh_provider_models(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.view.clone() else {
-            return;
-        };
         self.provider_refresh_generation = self.provider_refresh_generation.wrapping_add(1);
+        match provider_refresh_action(self.view.is_some()) {
+            ProviderRefreshAction::RebuildView => {
+                self.spawn_build_view(cx);
+                return;
+            }
+            ProviderRefreshAction::RefreshModels => {}
+        }
+        let view = self.view.clone().expect("view checked above");
         let generation = self.provider_refresh_generation;
         let storage = cx.global::<GlobalStorageState>().storage.clone();
         let provider_state = cx.global::<GlobalProviderState>().clone();
@@ -416,14 +441,14 @@ impl DefaultAgentChatPanel {
         cx.notify();
     }
 
-    fn spawn_build_view(
-        resources: agent_runtime::ResourceContext,
-        mentions: Vec<MentionItem>,
-        available_resources: Vec<agent_runtime::ResourceRef>,
-        mode: DefaultAgentChatPanelMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn spawn_build_view(&mut self, cx: &mut Context<Self>) {
+        let Some((resources, mentions, available_resources)) =
+            self.pending_resource_context.clone()
+        else {
+            return;
+        };
+        let mode = self.mode;
+        let generation = self.provider_refresh_generation;
         let storage = cx.global::<GlobalStorageState>().storage.clone();
         let provider_state = cx.global::<GlobalProviderState>().clone();
         let registry = build_plan_tool_registry(cx).unwrap_or_else(|error| {
@@ -434,7 +459,7 @@ impl DefaultAgentChatPanel {
             tracing::warn!(%error, "Failed to build ACP agent configs");
             Vec::new()
         });
-        let window_handle = window.window_handle();
+        let window_handle = self.window_handle.clone();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let provider_configs = load_enabled_provider_configs(&storage);
@@ -458,6 +483,9 @@ impl DefaultAgentChatPanel {
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 if let Some(panel) = this.upgrade() {
+                    if panel.read(cx).provider_refresh_generation != generation {
+                        return;
+                    }
                     panel.update(cx, |panel, cx| match config {
                         Ok(mut config) => {
                             if let Some(theme) = panel.theme.clone() {

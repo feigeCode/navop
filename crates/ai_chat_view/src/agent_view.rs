@@ -4920,6 +4920,9 @@ mod tests {
         let user_row = cx
             .debug_bounds("ai-chat-user-row")
             .expect("user row should render");
+        let user_bubble = cx
+            .debug_bounds("ai-chat-user-bubble")
+            .expect("user bubble should render");
 
         let expected_column_width = scroll.size.width - px(32.0);
         assert_eq!(
@@ -4933,6 +4936,15 @@ mod tests {
         assert_eq!(
             column.origin.x, user_row.origin.x,
             "user message row should not drift horizontally: column={column:?}, row={user_row:?}"
+        );
+        assert!(
+            user_bubble.size.width < px(240.0),
+            "short user message bubble should fit its content instead of filling the row: row={user_row:?}, bubble={user_bubble:?}"
+        );
+        assert_eq!(
+            user_row.origin.x + user_row.size.width,
+            user_bubble.origin.x + user_bubble.size.width,
+            "user message bubble should align to the right edge: row={user_row:?}, bubble={user_bubble:?}"
         );
     }
 
