@@ -465,3 +465,77 @@ impl Repository for QuickCommandRepository {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{QuickCommand, QuickCommandRepository};
+    use crate::storage::connection::SqliteConnection;
+    use crate::storage::migration::run_migrations;
+    use crate::storage::traits::Repository;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_repository() -> QuickCommandRepository {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_path = std::env::temp_dir().join(format!(
+            "navop-quick-command-group-{}-{unique}-{counter}.db",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&db_path);
+        let connection = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
+        connection
+            .with_connection(run_migrations)
+            .expect("run migrations");
+        QuickCommandRepository::new(connection)
+    }
+
+    fn insert_grouped_command(
+        repository: &QuickCommandRepository,
+        command: &str,
+        group_name: &str,
+        group_color: &str,
+    ) -> i64 {
+        let mut item = QuickCommand::new(command.to_string());
+        item.group_name = Some(group_name.to_string());
+        item.group_color = Some(group_color.to_string());
+        repository.insert(&mut item).expect("insert command")
+    }
+
+    #[test]
+    fn group_management_updates_every_command_in_the_group() {
+        let repository = test_repository();
+        let first_id = insert_grouped_command(&repository, "echo first", "deploy", "blue");
+        let second_id = insert_grouped_command(&repository, "echo second", "deploy", "blue");
+
+        repository
+            .rename_group(" deploy ", Some(" production "))
+            .expect("rename group");
+        repository
+            .recolor_group(" production ", Some(" green "))
+            .expect("recolor group");
+
+        for id in [first_id, second_id] {
+            let command = repository.get(id).expect("load command").expect("command");
+            assert_eq!(Some("production"), command.group_name.as_deref());
+            assert_eq!(Some("green"), command.group_color.as_deref());
+        }
+    }
+
+    #[test]
+    fn clearing_group_preserves_commands_and_clears_name_and_color() {
+        let repository = test_repository();
+        let id = insert_grouped_command(&repository, "echo keep", "deploy", "purple");
+
+        repository.clear_group(" deploy ").expect("clear group");
+
+        let command = repository.get(id).expect("load command").expect("command");
+        assert_eq!("echo keep", command.command);
+        assert_eq!(None, command.group_name);
+        assert_eq!(None, command.group_color);
+    }
+}

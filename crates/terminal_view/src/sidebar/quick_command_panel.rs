@@ -10,11 +10,12 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, LocalInputStyle},
     notification::Notification,
+    select::{Select, SelectItem, SelectState},
     tooltip::Tooltip,
     v_flex,
 };
@@ -58,6 +59,85 @@ fn command_matches_group_filter(command: &QuickCommand, filter: &QuickCommandGro
             .map(|name| name == group)
             .unwrap_or(false),
     }
+}
+
+#[derive(Clone, PartialEq)]
+struct ColorSelectItem {
+    value: String,
+    label: SharedString,
+}
+
+impl SelectItem for ColorSelectItem {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+fn quick_command_group_color_items() -> Vec<ColorSelectItem> {
+    [
+        ("", "默认"),
+        ("blue", "蓝"),
+        ("cyan", "青"),
+        ("green", "绿"),
+        ("yellow", "黄"),
+        ("orange", "橙"),
+        ("red", "红"),
+        ("pink", "粉"),
+        ("purple", "紫"),
+        ("gray", "灰"),
+    ]
+    .into_iter()
+    .map(|(value, label)| ColorSelectItem {
+        value: value.to_string(),
+        label: SharedString::from(label),
+    })
+    .collect()
+}
+
+fn normalize_group_fields(
+    group_name: String,
+    group_color: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let group_name = group_name.trim().to_string();
+    if group_name.is_empty() {
+        return (None, None);
+    }
+    let group_color = group_color
+        .map(|color| color.trim().to_string())
+        .filter(|color| !color.is_empty());
+    (Some(group_name), group_color)
+}
+
+fn quick_command_dialog_input_style(colors: &TerminalColors) -> LocalInputStyle {
+    LocalInputStyle {
+        background: colors.muted,
+        foreground: colors.foreground,
+        muted_foreground: colors.muted_foreground,
+        border: colors.border,
+    }
+}
+
+fn quick_command_dialog_button_variants(
+    colors: &TerminalColors,
+    cx: &App,
+) -> (ButtonVariant, ButtonVariant) {
+    let ok = ButtonCustomVariant::new(cx)
+        .color(colors.accent)
+        .foreground(colors.accent_foreground)
+        .hover(colors.accent.opacity(0.88))
+        .active(colors.accent.opacity(0.76));
+    let cancel = ButtonCustomVariant::new(cx)
+        .color(colors.muted)
+        .foreground(colors.foreground)
+        .hover(colors.border)
+        .active(colors.border.opacity(0.82));
+    (ButtonVariant::Custom(ok), ButtonVariant::Custom(cancel))
 }
 
 /// 快捷命令面板组件
@@ -194,31 +274,14 @@ impl QuickCommandPanel {
         cx.notify();
     }
 
-    fn group_for_new_command(&self) -> (Option<String>, Option<String>) {
-        let QuickCommandGroupFilter::Group(group_name) = &self.group_filter else {
-            return (None, None);
-        };
-        let color = self
-            .commands
-            .iter()
-            .find(|command| command.group_name.as_deref() == Some(group_name.as_str()))
-            .and_then(|command| command.group_color.clone());
-        (Some(group_name.clone()), color)
-    }
-
     /// 从外部添加快捷命令（例如右键菜单）
-    pub fn add_command_external(&mut self, command: String, cx: &mut Context<Self>) {
-        if command.trim().is_empty() {
-            return;
-        }
-        let (group_name, group_color) = self.group_for_new_command();
-        let mut new_command = QuickCommand::new(command);
-        new_command.connection_id = self.connection_id;
-        new_command.group_name = group_name;
-        new_command.group_color = group_color;
-        if let Err(error) = self.save_new_command(new_command, cx) {
-            tracing::error!(%error, "Failed to add command");
-        }
+    pub fn add_command_external(
+        &mut self,
+        command: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_command_editor(None, Some(command), window, cx);
     }
 
     fn save_new_command(
@@ -283,22 +346,10 @@ impl QuickCommandPanel {
         let initial_group_name = existing
             .as_ref()
             .and_then(|command| command.group_name.clone())
-            .or_else(|| match &self.group_filter {
-                QuickCommandGroupFilter::Group(group) => Some(group.clone()),
-                _ => None,
-            })
             .unwrap_or_default();
         let initial_group_color = existing
             .as_ref()
             .and_then(|command| command.group_color.clone())
-            .or_else(|| {
-                self.commands
-                    .iter()
-                    .find(|command| {
-                        command.group_name.as_deref() == Some(initial_group_name.as_str())
-                    })
-                    .and_then(|command| command.group_color.clone())
-            })
             .unwrap_or_default();
         let initial_command = existing
             .as_ref()
@@ -314,6 +365,8 @@ impl QuickCommandPanel {
         let description_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("输入备注或使用说明（可选）")
+                .multi_line(true)
+                .rows(2)
                 .default_value(&initial_description)
         });
         let group_state = cx.new(|cx| {
@@ -321,10 +374,18 @@ impl QuickCommandPanel {
                 .placeholder("输入分组名称（可选）")
                 .default_value(&initial_group_name)
         });
+        let color_items = quick_command_group_color_items();
+        let selected_color_index = color_items
+            .iter()
+            .position(|item| item.value == initial_group_color)
+            .unwrap_or(0);
         let color_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("颜色：blue / green / red / purple …")
-                .default_value(&initial_group_color)
+            SelectState::new(
+                color_items,
+                Some(gpui_component::IndexPath::new(selected_color_index)),
+                window,
+                cx,
+            )
         });
         let command_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -344,8 +405,10 @@ impl QuickCommandPanel {
         } else {
             "新增"
         };
+        let colors = self.colors.clone();
+        let input_style = quick_command_dialog_input_style(&colors);
         let view = cx.entity().clone();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
             let view_ok = view.clone();
             let existing_ok = existing.clone();
             let name_ok = name_state.clone();
@@ -353,50 +416,123 @@ impl QuickCommandPanel {
             let group_ok = group_state.clone();
             let color_ok = color_state.clone();
             let command_ok = command_state.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_dialog_button_variants(&colors, dialog_cx);
             dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
                 .title(title)
                 .confirm()
                 .child(
                     v_flex()
                         .gap_3()
+                        .bg(colors.background)
+                        .text_color(colors.foreground)
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_xs().child("名称"))
-                                .child(Input::new(&name_state).small().w_full()),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("名称"),
+                                )
+                                .child(
+                                    Input::new(&name_state)
+                                        .small()
+                                        .w_full()
+                                        .local_style(input_style)
+                                        .caret_color(colors.foreground),
+                                ),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_xs().child("说明"))
-                                .child(Input::new(&description_state).small().w_full()),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("说明"),
+                                )
+                                .child(
+                                    div().w_full().h(gpui::px(76.0)).child(
+                                        Input::new(&description_state)
+                                            .small()
+                                            .w_full()
+                                            .h_full()
+                                            .local_style(input_style)
+                                            .caret_color(colors.foreground),
+                                    ),
+                                ),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_xs().child("分组"))
-                                .child(Input::new(&group_state).small().w_full()),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("分组"),
+                                )
+                                .child(
+                                    Input::new(&group_state)
+                                        .small()
+                                        .w_full()
+                                        .local_style(input_style)
+                                        .caret_color(colors.foreground),
+                                ),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .child(div().text_xs().child("分组颜色"))
-                                .child(Input::new(&color_state).small().w_full()),
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("分组颜色"),
+                                )
+                                .child(
+                                    Select::new(&color_state)
+                                        .small()
+                                        .w_full()
+                                        .local_style(input_style)
+                                        .local_menu_item_style(
+                                            colors.foreground,
+                                            colors.muted,
+                                            colors.accent,
+                                            colors.accent_foreground,
+                                        ),
+                                ),
                         )
                         .child(
-                            v_flex().gap_1().child(div().text_xs().child("命令")).child(
-                                div()
-                                    .w_full()
-                                    .h(gpui::px(132.0))
-                                    .child(Input::new(&command_state).small().w_full().h_full()),
-                            ),
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(colors.muted_foreground)
+                                        .child("命令"),
+                                )
+                                .child(
+                                    div().w_full().h(gpui::px(132.0)).child(
+                                        Input::new(&command_state)
+                                            .small()
+                                            .w_full()
+                                            .h_full()
+                                            .local_style(input_style)
+                                            .caret_color(colors.foreground),
+                                    ),
+                                ),
                         )
                         .into_any_element(),
                 )
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(ok_text)
-                        .cancel_text("取消"),
+                        .ok_variant(ok_variant)
+                        .cancel_text("取消")
+                        .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, window, cx| {
                     let command = command_ok.read(cx).value().trim().to_string();
@@ -410,17 +546,15 @@ impl QuickCommandPanel {
                     let name = name_ok.read(cx).value().trim().to_string();
                     let description = description_ok.read(cx).value().trim().to_string();
                     let group_name = group_ok.read(cx).value().trim().to_string();
-                    let group_color = color_ok.read(cx).value().trim().to_string();
+                    let group_color = color_ok.read(cx).selected_value().cloned();
+                    let (group_name, group_color) = normalize_group_fields(group_name, group_color);
                     view_ok.update(cx, |this, cx| {
                         let result = if let Some(mut existing) = existing_ok.clone() {
                             existing.name = (!name.is_empty()).then_some(name.clone());
                             existing.description =
                                 (!description.is_empty()).then_some(description.clone());
-                            existing.group_name =
-                                (!group_name.is_empty()).then_some(group_name.clone());
-                            existing.group_color = (!group_name.is_empty()
-                                && !group_color.is_empty())
-                            .then_some(group_color.clone());
+                            existing.group_name = group_name.clone();
+                            existing.group_color = group_color.clone();
                             existing.command = command.clone();
                             this.save_existing_command(existing, cx)
                         } else {
@@ -428,15 +562,16 @@ impl QuickCommandPanel {
                             new_command.name = (!name.is_empty()).then_some(name.clone());
                             new_command.description =
                                 (!description.is_empty()).then_some(description.clone());
-                            new_command.group_name =
-                                (!group_name.is_empty()).then_some(group_name.clone());
-                            new_command.group_color = (!group_name.is_empty()
-                                && !group_color.is_empty())
-                            .then_some(group_color.clone());
+                            new_command.group_name = group_name.clone();
+                            new_command.group_color = group_color.clone();
                             this.save_new_command(new_command, cx)
                         };
                         if let Err(error) = result {
-                            tracing::error!(%error, "Failed to save quick command");
+                            window.push_notification(
+                                Notification::error(format!("保存快捷命令失败: {error}"))
+                                    .autohide(true),
+                                cx,
+                            );
                         }
                     });
                     true
@@ -564,23 +699,31 @@ impl QuickCommandPanel {
         cx: &mut Context<Self>,
     ) {
         let view = cx.entity().clone();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        let colors = self.colors.clone();
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
             let view_ok = view.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_dialog_button_variants(&colors, dialog_cx);
             let preview = if command.chars().count() > 120 {
                 format!("{}...", command.chars().take(120).collect::<String>())
             } else {
                 command.clone()
             };
             dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
                 .title(t!("QuickCommand.delete_confirm_title").to_string())
                 .child(
                     v_flex()
                         .gap_2()
+                        .bg(colors.background)
+                        .text_color(colors.foreground)
                         .child(t!("QuickCommand.delete_confirm_message").to_string())
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(gpui::rgb(0x9ca3af))
+                                .text_color(colors.muted_foreground)
                                 .child(preview),
                         )
                         .into_any_element(),
@@ -588,7 +731,9 @@ impl QuickCommandPanel {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("QuickCommand.delete_action").to_string())
-                        .cancel_text(t!("Common.cancel").to_string()),
+                        .ok_variant(ok_variant)
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, _, cx| {
                     view_ok.update(cx, |this, cx| this.delete_command(id, cx));
@@ -885,7 +1030,12 @@ impl Render for QuickCommandPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{QuickCommandGroupFilter, command_matches_group_filter};
+    use super::{
+        QuickCommandGroupFilter, command_matches_group_filter, normalize_group_fields,
+        quick_command_dialog_input_style, quick_command_group_color_items,
+    };
+    use crate::theme::TerminalColors;
+    use gpui::rgb;
     use one_core::storage::QuickCommand;
 
     fn command_in_group(group_name: Option<&str>) -> QuickCommand {
@@ -928,5 +1078,60 @@ mod tests {
             &command_in_group(None),
             &filter
         ));
+    }
+
+    #[test]
+    fn quick_command_group_color_palette_matches_upstream() {
+        let values = quick_command_group_color_items()
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            values,
+            vec![
+                "", "blue", "cyan", "green", "yellow", "orange", "red", "pink", "purple", "gray",
+            ]
+        );
+    }
+
+    #[test]
+    fn blank_group_name_always_clears_group_color() {
+        assert_eq!(
+            normalize_group_fields("  ".to_string(), Some("blue".to_string())),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn group_fields_are_trimmed_and_default_color_is_omitted() {
+        assert_eq!(
+            normalize_group_fields(" deploy ".to_string(), Some("  ".to_string())),
+            (Some("deploy".to_string()), None)
+        );
+        assert_eq!(
+            normalize_group_fields(" deploy ".to_string(), Some("green".to_string())),
+            (Some("deploy".to_string()), Some("green".to_string()))
+        );
+    }
+
+    #[test]
+    fn quick_command_dialog_input_style_uses_terminal_palette() {
+        let colors = TerminalColors {
+            background: rgb(0x101010).into(),
+            foreground: rgb(0xf0f0f0).into(),
+            muted: rgb(0x202020).into(),
+            muted_foreground: rgb(0x909090).into(),
+            border: rgb(0x303030).into(),
+            accent: rgb(0x3366ff).into(),
+            accent_foreground: rgb(0xffffff).into(),
+        };
+
+        let style = quick_command_dialog_input_style(&colors);
+
+        assert_eq!(colors.muted, style.background);
+        assert_eq!(colors.foreground, style.foreground);
+        assert_eq!(colors.muted_foreground, style.muted_foreground);
+        assert_eq!(colors.border, style.border);
     }
 }

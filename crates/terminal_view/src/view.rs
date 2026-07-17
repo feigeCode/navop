@@ -3673,9 +3673,9 @@ impl TerminalView {
                 menu = menu.item(
                     PopupMenuItem::new(t!("ContextMenu.save_quick_command"))
                         .icon(IconName::SquareTerminal)
-                        .on_click(move |_, _window, cx| {
+                        .on_click(move |_, window, cx| {
                             sidebar_quick.update(cx, |sidebar, cx| {
-                                sidebar.add_quick_command(save_text.clone(), cx);
+                                sidebar.add_quick_command(save_text.clone(), window, cx);
                             });
                         }),
                 );

@@ -42,10 +42,10 @@ use gpui::{
 };
 use gpui_component::{
     Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, LocalInputStyle},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     tooltip::Tooltip,
     v_flex,
@@ -272,6 +272,32 @@ fn quick_command_group_color_choices() -> Vec<(&'static str, &'static str)> {
         ("purple", "紫"),
         ("gray", "灰"),
     ]
+}
+
+fn quick_command_group_dialog_input_style(colors: &TerminalColors) -> LocalInputStyle {
+    LocalInputStyle {
+        background: colors.muted,
+        foreground: colors.foreground,
+        muted_foreground: colors.muted_foreground,
+        border: colors.border,
+    }
+}
+
+fn quick_command_group_dialog_button_variants(
+    colors: &TerminalColors,
+    cx: &App,
+) -> (ButtonVariant, ButtonVariant) {
+    let ok = ButtonCustomVariant::new(cx)
+        .color(colors.accent)
+        .foreground(colors.accent_foreground)
+        .hover(colors.accent.opacity(0.88))
+        .active(colors.accent.opacity(0.76));
+    let cancel = ButtonCustomVariant::new(cx)
+        .color(colors.muted)
+        .foreground(colors.foreground)
+        .hover(colors.border)
+        .active(colors.border.opacity(0.82));
+    (ButtonVariant::Custom(ok), ButtonVariant::Custom(cancel))
 }
 
 fn load_terminal_ai_connections(cx: &App) -> Vec<StoredConnection> {
@@ -1332,9 +1358,9 @@ impl TerminalSidebar {
     }
 
     /// 添加快捷命令（外部调用）
-    pub fn add_quick_command(&self, command: String, cx: &mut Context<Self>) {
+    pub fn add_quick_command(&self, command: String, window: &mut Window, cx: &mut Context<Self>) {
         self.quick_command_panel.update(cx, |panel, cx| {
-            panel.add_command_external(command, cx);
+            panel.add_command_external(command, window, cx);
         });
     }
 
@@ -1622,23 +1648,40 @@ impl TerminalSidebarToolbar {
 
     fn open_rename_group_dialog(&self, group_name: String, window: &mut Window, cx: &mut App) {
         let sidebar = self.sidebar.clone();
+        let colors = self.sidebar.read(cx).colors.clone();
+        let input_style = quick_command_group_dialog_input_style(&colors);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("输入新的分组名称")
                 .default_value(&group_name)
         });
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
             let input_ok = input.clone();
             let sidebar_ok = sidebar.clone();
             let original = group_name.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_group_dialog_button_variants(&colors, dialog_cx);
             dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
                 .title("重命名分组")
                 .confirm()
-                .child(Input::new(&input).small().w_full())
+                .child(
+                    div().bg(colors.background).child(
+                        Input::new(&input)
+                            .small()
+                            .w_full()
+                            .local_style(input_style)
+                            .caret_color(colors.foreground),
+                    ),
+                )
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("保存")
-                        .cancel_text("取消"),
+                        .ok_variant(ok_variant)
+                        .cancel_text("取消")
+                        .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, _, cx| {
                     let next = input_ok.read(cx).value().trim().to_string();
@@ -1656,20 +1699,33 @@ impl TerminalSidebarToolbar {
 
     fn open_delete_group_dialog(&self, group_name: String, window: &mut Window, cx: &mut App) {
         let sidebar = self.sidebar.clone();
-        window.open_dialog(cx, move |dialog, _window, _cx| {
+        let colors = self.sidebar.read(cx).colors.clone();
+        window.open_dialog(cx, move |dialog, _window, dialog_cx| {
             let sidebar_ok = sidebar.clone();
             let original = group_name.clone();
+            let (ok_variant, cancel_variant) =
+                quick_command_group_dialog_button_variants(&colors, dialog_cx);
             dialog
+                .bg(colors.background)
+                .text_color(colors.foreground)
+                .border_color(colors.border)
                 .title("删除分组")
                 .confirm()
-                .child(format!(
-                    "确定删除分组“{}”吗？该分组下的快捷命令会保留，但会变为未分组。",
-                    group_name
-                ))
+                .child(
+                    div()
+                        .bg(colors.background)
+                        .text_color(colors.foreground)
+                        .child(format!(
+                            "确定删除分组“{}”吗？该分组下的快捷命令会保留，但会变为未分组。",
+                            group_name
+                        )),
+                )
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("删除分组")
-                        .cancel_text("取消"),
+                        .ok_variant(ok_variant)
+                        .cancel_text("取消")
+                        .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, _, cx| {
                     sidebar_ok.update(cx, |sidebar, cx| {
@@ -1931,12 +1987,20 @@ impl Render for TerminalSidebar {
 #[cfg(test)]
 mod tests {
     use super::{
-        SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
-        build_terminal_ai_context, terminal_sidebar_available_panels,
+        QuickCommandGroupFilter, SidebarPanel, TerminalToolDockState,
+        agent_theme_from_terminal_theme, build_terminal_ai_context, quick_command_groups,
+        terminal_sidebar_available_panels,
     };
     use crate::theme::TerminalTheme;
     use one_core::sidebar_contribution::SidebarPlacement;
-    use one_core::storage::{ConnectionType, StoredConnection};
+    use one_core::storage::{ConnectionType, QuickCommand, StoredConnection};
+
+    fn grouped_command(name: Option<&str>, color: Option<&str>) -> QuickCommand {
+        let mut command = QuickCommand::new("echo test".to_string());
+        command.group_name = name.map(str::to_string);
+        command.group_color = color.map(str::to_string);
+        command
+    }
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
@@ -1965,6 +2029,30 @@ mod tests {
 
         assert!(dock.toolbar_visible());
         assert!(dock.open_panels().is_empty());
+    }
+
+    #[test]
+    fn quick_command_groups_include_fixed_filters_and_sorted_named_groups() {
+        let groups = quick_command_groups(&[
+            grouped_command(Some("zeta"), Some("purple")),
+            grouped_command(None, None),
+            grouped_command(Some("alpha"), Some("green")),
+            grouped_command(Some("  "), Some("red")),
+        ]);
+
+        assert_eq!(4, groups.len());
+        assert_eq!(QuickCommandGroupFilter::All, groups[0].filter);
+        assert_eq!(QuickCommandGroupFilter::Ungrouped, groups[1].filter);
+        assert_eq!(
+            QuickCommandGroupFilter::Group("alpha".to_string()),
+            groups[2].filter
+        );
+        assert_eq!(Some("green"), groups[2].color.as_deref());
+        assert_eq!(
+            QuickCommandGroupFilter::Group("zeta".to_string()),
+            groups[3].filter
+        );
+        assert_eq!(Some("purple"), groups[3].color.as_deref());
     }
 
     #[test]
