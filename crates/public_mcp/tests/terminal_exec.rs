@@ -95,6 +95,7 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
                         .to_string()
                 }),
                 duration_ms: 12,
+                command_id: None,
             })
         })
     }

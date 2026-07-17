@@ -13,6 +13,7 @@ impl ExecSupervisor {
         request: TerminalExecRequest,
     ) -> Vec<ExecEffect> {
         let duration = request.ready_timeout;
+        let observer = request.observer.clone();
         self.active = Some(ActiveExec {
             id,
             request,
@@ -21,6 +22,8 @@ impl ExecSupervisor {
             raw: Vec::new(),
             command_started: false,
             detached: false,
+            timed_out: false,
+            observer,
         });
         vec![ExecEffect::ArmTimeout {
             id,
@@ -30,6 +33,7 @@ impl ExecSupervisor {
     }
 
     pub(super) fn start_clear(&mut self, id: u64, request: TerminalExecRequest) -> Vec<ExecEffect> {
+        let observer = request.observer.clone();
         self.active = Some(ActiveExec {
             id,
             request,
@@ -38,6 +42,8 @@ impl ExecSupervisor {
             raw: Vec::new(),
             command_started: false,
             detached: false,
+            timed_out: false,
+            observer,
         });
         self.readiness = ShellCommandReadiness::ClearingInput { command_epoch: id };
         vec![
@@ -77,13 +83,12 @@ impl ExecSupervisor {
             if active.detached {
                 return Vec::new();
             }
+            let output =
+                output_with_completion(&active, TerminalExecCompletion::ObservedOutput, None);
+            super::publish_progress(&active, TerminalExecCompletion::ObservedOutput, None, true);
             return vec![ExecEffect::Complete {
                 id: active.id,
-                output: output_with_completion(
-                    &active,
-                    TerminalExecCompletion::ObservedOutput,
-                    None,
-                ),
+                output,
             }];
         }
         Vec::new()
@@ -152,14 +157,18 @@ impl ExecSupervisor {
         if active.detached {
             return Vec::new();
         }
-        vec![ExecEffect::Complete {
-            id,
-            output: output_with_completion(
-                &active,
-                TerminalExecCompletion::ShellIntegrationExit,
-                Some(exit_code),
-            ),
-        }]
+        let output = output_with_completion(
+            &active,
+            TerminalExecCompletion::ShellIntegrationExit,
+            Some(exit_code),
+        );
+        super::publish_progress(
+            &active,
+            TerminalExecCompletion::ShellIntegrationExit,
+            Some(exit_code),
+            true,
+        );
+        vec![ExecEffect::Complete { id, output }]
     }
 
     pub(super) fn active_is_clearing(&self) -> bool {

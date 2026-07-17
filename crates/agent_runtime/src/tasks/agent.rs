@@ -39,7 +39,8 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// 单轮内模型 / 工具往返的最大迭代次数,防止失控。
-const MAX_ITERATIONS: usize = 16;
+/// 复杂任务可能需要逐个检查多个资源，16 次会过早截断；保留有界保护并提高到 64 次。
+const MAX_ITERATIONS: usize = 64;
 const DEBUG_PREVIEW_CHARS: usize = 1200;
 
 /// codex 风格的统一 Agent 任务。

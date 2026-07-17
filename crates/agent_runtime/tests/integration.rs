@@ -369,6 +369,39 @@ async fn agent_simple_question_answers_without_plan() {
 }
 
 #[tokio::test]
+async fn agent_loop_supports_more_than_sixteen_tool_round_trips() {
+    let mut responses = (0..17)
+        .map(|index| {
+            ModelResponse::tool_call(function_tool_call(
+                format!("call_{index}"),
+                "echo",
+                json!({"message": format!("step {index}")}).to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    responses.push(ModelResponse::text("复杂任务完成。"));
+    let model = Arc::new(MockModelClient::new(responses));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "执行复杂任务".into(), TaskKind::Agent)
+        .await
+        .expect("agent loop should finish beyond sixteen round trips");
+
+    assert!(matches!(
+        outcome,
+        TaskOutcome::Completed { answer: Some(answer) } if answer == "复杂任务完成。"
+    ));
+    assert_eq!(18, model.request_count());
+}
+
+#[tokio::test]
 async fn agent_loop_compacts_large_history_before_model_request() {
     let model = Arc::new(MockModelClient::new([
         ModelResponse::text("摘要: 旧上下文说明用户要部署 Java 项目。"),
@@ -380,7 +413,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
     ));
     let session = runtime.create_session(ResourceContext::new());
     let mut rx = runtime.subscribe();
-    session.record_user_input("旧上下文 ".repeat(7000));
+    session.record_user_input("旧上下文 ".repeat(9000));
 
     runtime
         .run_turn_blocking(session.id(), "继续".into(), TaskKind::Agent)

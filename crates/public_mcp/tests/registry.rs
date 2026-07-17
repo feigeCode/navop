@@ -56,6 +56,7 @@ impl TerminalExecSessionHandle for FakeTerminal {
                 exit_code: None,
                 output: String::new(),
                 duration_ms: 0,
+                command_id: None,
             })
         })
     }

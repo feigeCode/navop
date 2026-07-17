@@ -19,6 +19,6 @@ pub use terminal::TerminalScrollProxy;
 pub use types::{
     LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
     TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,
-    TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput, TerminalExecRequest,
-    TerminalInputHandle, TerminalSize,
+    TerminalExecCompletion, TerminalExecHandle, TerminalExecObserver, TerminalExecOutput,
+    TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };

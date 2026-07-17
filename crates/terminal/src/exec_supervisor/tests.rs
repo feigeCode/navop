@@ -4,8 +4,10 @@ use super::{
 };
 use crate::osc::OscEvent;
 use crate::{
-    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecRequest,
+    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecObserver,
+    TerminalExecRequest,
 };
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod ready_wait;
@@ -17,6 +19,7 @@ fn request(command: &str) -> TerminalExecRequest {
         wait_for_output: true,
         ready_timeout: Duration::ZERO,
         timeout: Duration::from_secs(30),
+        observer: None,
     }
 }
 
@@ -276,6 +279,51 @@ fn observing_timeout_returns_bounded_partial_output() {
             if output.completion == TerminalExecCompletion::TimedOut
                 && output.output == "partial"
     ));
+}
+
+#[test]
+fn observing_timeout_keeps_progress_and_rejects_replacement_command() {
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let sink = progress.clone();
+    let mut tracked = request("long-command");
+    tracked.observer = Some(TerminalExecObserver::new(move |update| {
+        sink.lock().expect("progress lock").push(update);
+    }));
+    let mut supervisor = ready_supervisor();
+    assert!(matches!(
+        supervisor.start(260, tracked).as_slice(),
+        [ExecEffect::Write { .. }, ExecEffect::ArmTimeout { .. }]
+    ));
+    supervisor.on_osc(&OscEvent::InputStart);
+    supervisor.on_terminal_chunk(b"long-command\r\npartial\r\n", &[OscEvent::CommandStart]);
+
+    assert!(matches!(
+        supervisor.timeout(260, ExecPhase::Observing).as_slice(),
+        [ExecEffect::Complete { output, .. }]
+            if output.completion == TerminalExecCompletion::TimedOut
+    ));
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 261,
+            error: TerminalExecError::Busy,
+        }],
+        supervisor.start(261, request("echo replacement"))
+    );
+
+    supervisor.on_terminal_chunk(b"done\r\n", &[]);
+    supervisor.on_terminal_chunk(
+        b"\x1b]133;D;0\x07",
+        &[OscEvent::CommandFinished { exit_code: 0 }],
+    );
+    let progress = progress.lock().expect("progress lock");
+    assert!(progress.iter().any(|update| {
+        update.completion == TerminalExecCompletion::TimedOut && !update.is_final
+    }));
+    assert!(progress.iter().any(|update| {
+        update.completion == TerminalExecCompletion::ShellIntegrationExit
+            && update.is_final
+            && update.output.contains("done")
+    }));
 }
 
 #[test]

@@ -40,9 +40,7 @@ impl ToolHandler for TerminalExecRuntime {
         ToolDescriptor {
             id: "terminal.exec".to_string(),
             title: "Execute in terminal".to_string(),
-            description:
-                "Insert a command into an active visible terminal session and optionally submit it."
-                    .to_string(),
+            description: "Insert a command into an active visible terminal session and optionally submit it. A timeout returns a command_id while the original command keeps running; read that command through ssh.command.poll/output and use terminal.control to interrupt the visible process.".to_string(),
             input_schema: exec_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),

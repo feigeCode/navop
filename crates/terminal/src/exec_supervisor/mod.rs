@@ -1,6 +1,7 @@
 use crate::osc::OscEvent;
 use crate::{
-    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecRequest,
+    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecObserver,
+    TerminalExecProgress, TerminalExecRequest,
 };
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,8 @@ struct ActiveExec {
     raw: Vec<u8>,
     command_started: bool,
     detached: bool,
+    timed_out: bool,
+    observer: Option<TerminalExecObserver>,
 }
 
 pub(crate) struct ExecSupervisor {
@@ -143,7 +146,15 @@ impl ExecSupervisor {
         {
             active.raw.extend_from_slice(data);
         }
-        events.iter().flat_map(|event| self.on_osc(event)).collect()
+        let effects: Vec<_> = events.iter().flat_map(|event| self.on_osc(event)).collect();
+        if let Some(active) = self
+            .active
+            .as_ref()
+            .filter(|active| active.phase == ExecPhase::Observing && !active.detached)
+        {
+            publish_progress(active, TerminalExecCompletion::ObservedOutput, None, false);
+        }
+        effects
     }
 
     pub(crate) fn cancel(&mut self, id: u64) -> Vec<ExecEffect> {
@@ -162,6 +173,7 @@ impl ExecSupervisor {
             }
             ExecPhase::Observing => {
                 active.detached = true;
+                active.observer = None;
                 Vec::new()
             }
         }
@@ -184,14 +196,14 @@ impl ExecSupervisor {
             self.readiness = ShellCommandReadiness::Unknown;
             return fail(id, TerminalExecError::ClearInputTimeout);
         }
-        let active = self.active.take().expect("timed out exec exists");
-        if active.detached {
+        let active = self.active.as_mut().expect("timed out exec exists");
+        if active.detached || active.timed_out {
             return Vec::new();
         }
-        vec![ExecEffect::Complete {
-            id,
-            output: output_with_completion(&active, TerminalExecCompletion::TimedOut, None),
-        }]
+        active.timed_out = true;
+        publish_progress(active, TerminalExecCompletion::TimedOut, None, false);
+        let output = output_with_completion(active, TerminalExecCompletion::TimedOut, None);
+        vec![ExecEffect::Complete { id, output }]
     }
 
     pub(crate) fn disconnect(&mut self) -> Vec<ExecEffect> {
@@ -201,6 +213,9 @@ impl ExecSupervisor {
         };
         if active.detached {
             Vec::new()
+        } else if active.timed_out {
+            publish_progress(&active, TerminalExecCompletion::TimedOut, None, true);
+            Vec::new()
         } else {
             fail(active.id, TerminalExecError::Disconnected)
         }
@@ -209,6 +224,25 @@ impl ExecSupervisor {
 
 fn fail(id: u64, error: TerminalExecError) -> Vec<ExecEffect> {
     vec![ExecEffect::Fail { id, error }]
+}
+
+fn publish_progress(
+    active: &ActiveExec,
+    completion: TerminalExecCompletion,
+    exit_code: Option<i32>,
+    is_final: bool,
+) {
+    let Some(observer) = active.observer.clone() else {
+        return;
+    };
+    let output = output_with_completion(active, completion, exit_code);
+    observer.publish(TerminalExecProgress {
+        output: output.output,
+        completion,
+        exit_code,
+        duration_ms: output.duration_ms,
+        is_final,
+    });
 }
 
 #[cfg(test)]

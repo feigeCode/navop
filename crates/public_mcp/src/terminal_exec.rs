@@ -31,6 +31,7 @@ pub struct TerminalExecResult {
     pub exit_code: Option<i32>,
     pub output: String,
     pub duration_ms: u64,
+    pub command_id: Option<String>,
 }
 
 fn default_submit() -> bool {

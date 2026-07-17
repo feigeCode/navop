@@ -1,10 +1,12 @@
 use gpui::{App, Global};
+use public_mcp::command_store::{CommandEntry, RemoteCommandStore};
 use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
     TerminalControlCancellation, TerminalControlFuture, TerminalControlSessionHandle,
     TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle, TerminalSessionHandle,
     TerminalSessionSnapshot,
 };
+use public_mcp::remote_ops::RemoteCommandStatus;
 use public_mcp::terminal_control::{
     TerminalControlAction, TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
 };
@@ -17,8 +19,8 @@ use terminal::{
     TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
     TerminalControlReadiness as CoreTerminalControlReadiness,
     TerminalControlRequest as CoreTerminalControlRequest,
-    TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle,
-    TerminalExecRequest as CoreTerminalExecRequest,
+    TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle, TerminalExecObserver,
+    TerminalExecProgress, TerminalExecRequest as CoreTerminalExecRequest,
 };
 use uuid::Uuid;
 
@@ -99,6 +101,7 @@ impl TerminalPublicMcpRegistration {
             .register_terminal_exec(ThreadSafeTerminalExecHandle {
                 state: self.state.clone(),
                 exec: self.exec.clone(),
+                command_store: self.registry.command_store().clone(),
             });
     }
 
@@ -191,6 +194,7 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
 struct ThreadSafeTerminalExecHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     exec: Arc<Mutex<Option<TerminalExecHandle>>>,
+    command_store: RemoteCommandStore,
 }
 
 struct ThreadSafeTerminalControlHandle {
@@ -257,10 +261,25 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
             .lock()
             .expect("public MCP exec lock poisoned")
             .clone();
+        let command_store = self.command_store.clone();
+        let session_id = self
+            .state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .session_id
+            .clone();
         Box::pin(async move {
             let exec_handle =
                 exec_handle.ok_or_else(|| anyhow::anyhow!("terminal exec handle is not ready"))?;
-            let core_result = exec_handle
+            let tracked = (request.submit && request.wait_for_output)
+                .then(|| command_store.register_observed(&session_id, &request.command));
+            let observer = tracked.as_ref().map(|(_, entry)| {
+                let entry = entry.clone();
+                TerminalExecObserver::new(move |progress| {
+                    apply_terminal_progress(&entry, progress);
+                })
+            });
+            let core_result = match exec_handle
                 .exec(
                     CoreTerminalExecRequest {
                         command: request.command.clone(),
@@ -270,11 +289,31 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
                         timeout: Duration::from_millis(
                             request.timeout_ms.unwrap_or(DEFAULT_OUTPUT_TIMEOUT_MS),
                         ),
+                        observer,
                     },
                     cancellation,
                 )
                 .await
-                .map_err(|error| anyhow::anyhow!(error))?;
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some((command_id, entry)) = &tracked {
+                        entry.push_stderr(error.to_string().as_bytes());
+                        entry.complete(RemoteCommandStatus::Failed, None);
+                        command_store.remove(command_id);
+                    }
+                    return Err(anyhow::anyhow!(error));
+                }
+            };
+            if let Some((_, entry)) = &tracked {
+                entry.replace_stdout(core_result.output.as_bytes());
+                if core_result.completion != CoreTerminalExecCompletion::TimedOut {
+                    entry.complete(
+                        completed_terminal_status(core_result.completion, core_result.exit_code),
+                        core_result.exit_code,
+                    );
+                }
+            }
             Ok(TerminalExecResult {
                 target: request.target,
                 command: request.command,
@@ -283,8 +322,35 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
                 exit_code: core_result.exit_code,
                 output: core_result.output,
                 duration_ms: core_result.duration_ms,
+                command_id: (core_result.completion == CoreTerminalExecCompletion::TimedOut)
+                    .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
+                    .flatten(),
             })
         })
+    }
+}
+
+fn apply_terminal_progress(entry: &CommandEntry, progress: TerminalExecProgress) {
+    entry.replace_stdout(progress.output.as_bytes());
+    if progress.is_final {
+        entry.complete(
+            completed_terminal_status(progress.completion, progress.exit_code),
+            progress.exit_code,
+        );
+    }
+}
+
+fn completed_terminal_status(
+    completion: CoreTerminalExecCompletion,
+    exit_code: Option<i32>,
+) -> RemoteCommandStatus {
+    if completion == CoreTerminalExecCompletion::TimedOut {
+        return RemoteCommandStatus::TimedOut;
+    }
+    if exit_code.is_none() || exit_code == Some(0) {
+        RemoteCommandStatus::Exited
+    } else {
+        RemoteCommandStatus::Failed
     }
 }
 
@@ -460,6 +526,7 @@ mod tests {
                     duration_ms: 0,
                 },
             )))),
+            command_store: RemoteCommandStore::default(),
         };
 
         let result = handle
@@ -502,6 +569,7 @@ mod tests {
                     duration_ms: 42,
                 },
             )))),
+            command_store: RemoteCommandStore::default(),
         };
 
         let result = handle
@@ -529,10 +597,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_exec_timeout_returns_tracked_command_id_and_partial_output() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let command_store = RemoteCommandStore::default();
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            exec: Arc::new(Mutex::new(Some(fake_exec_handle(
+                requests,
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::TimedOut,
+                    exit_code: None,
+                    output: "partial output".to_string(),
+                    duration_ms: 60_000,
+                },
+            )))),
+            command_store: command_store.clone(),
+        };
+
+        let result = handle
+            .exec_in_terminal(
+                TerminalExecRequest {
+                    target: "terminal-1".to_string(),
+                    command: "long-command".to_string(),
+                    submit: true,
+                    wait_for_output: true,
+                    ready_timeout_ms: 0,
+                    timeout_ms: Some(60_000),
+                },
+                TerminalExecCancellation::new(),
+            )
+            .await
+            .expect("timed out terminal exec should detach");
+
+        let command_id = result.command_id.expect("timeout should return command id");
+        assert_eq!(
+            RemoteCommandStatus::Running,
+            command_store.poll_by_id(&command_id).unwrap().status
+        );
+        assert_eq!(
+            "partial output",
+            command_store
+                .output(&public_mcp::remote_ops::RemoteCommandOutputRequest {
+                    command_id,
+                    stdout_offset: 0,
+                    stderr_offset: 0,
+                    limit_bytes: None,
+                })
+                .unwrap()
+                .stdout
+        );
+    }
+
+    #[tokio::test]
     async fn terminal_exec_handle_fails_when_exec_handle_is_missing() {
         let handle = ThreadSafeTerminalExecHandle {
             state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
             exec: Arc::new(Mutex::new(None)),
+            command_store: RemoteCommandStore::default(),
         };
 
         let error = handle
