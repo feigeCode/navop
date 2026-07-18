@@ -15,8 +15,8 @@ use gpui_component::{
     v_flex,
 };
 use public_mcp::client_config::{
-    ClientConfigHealth, ClientConfigInstall, claude_code_config_path, codex_config_path,
-    helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
+    ClientConfigHealth, ClientConfigInstall, RECOMMENDED_PACKAGE_VERSION, claude_code_config_path,
+    codex_config_path, helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
     install_claude_code_config, install_codex_config, uninstall_claude_code_config,
     uninstall_codex_config,
 };
@@ -112,13 +112,30 @@ fn client_config_item_view_model(
 ) -> McpClientConfigItemViewModel {
     match inspected {
         Ok((_, health)) => McpClientConfigItemViewModel {
-            status: t!(client_config_health_label_key(*health)).to_string(),
+            status: client_config_health_label(*health),
             action_enabled: client_config_action_enabled(*health),
         },
         Err(error) => McpClientConfigItemViewModel {
             status: error.to_string(),
             action_enabled: false,
         },
+    }
+}
+
+fn client_config_health_label(health: ClientConfigHealth) -> String {
+    let package = format!("@navop/mcp@{RECOMMENDED_PACKAGE_VERSION}");
+    match health {
+        ClientConfigHealth::UpToDate => t!(
+            "Settings.General.Mcp.client_config_status_up_to_date",
+            package = package
+        )
+        .to_string(),
+        ClientConfigHealth::PackageVersionOutdated => t!(
+            "Settings.General.Mcp.client_config_status_package_outdated",
+            package = package
+        )
+        .to_string(),
+        _ => t!(client_config_health_label_key(health)).to_string(),
     }
 }
 
@@ -261,19 +278,22 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
         }
         ClientConfigHealth::NeedsRepair => "Settings.General.Mcp.client_config_status_needs_repair",
         ClientConfigHealth::NeedsMigration => {
-            "Settings.General.Mcp.client_config_status_needs_repair"
+            "Settings.General.Mcp.client_config_status_needs_migration"
         }
         ClientConfigHealth::PackageVersionOutdated => {
-            "Settings.General.Mcp.client_config_status_needs_repair"
+            "Settings.General.Mcp.client_config_status_package_outdated"
         }
-        ClientConfigHealth::NodeUnavailable | ClientConfigHealth::NpxUnavailable => {
-            "Settings.General.Mcp.client_config_status_missing_helper"
+        ClientConfigHealth::NodeUnavailable => {
+            "Settings.General.Mcp.client_config_status_node_unavailable"
+        }
+        ClientConfigHealth::NpxUnavailable => {
+            "Settings.General.Mcp.client_config_status_npx_unavailable"
         }
         ClientConfigHealth::MissingHelper => {
-            "Settings.General.Mcp.client_config_status_missing_helper"
+            "Settings.General.Mcp.client_config_status_legacy_helper_missing"
         }
         ClientConfigHealth::UnusableHelper => {
-            "Settings.General.Mcp.client_config_status_unusable_helper"
+            "Settings.General.Mcp.client_config_status_legacy_helper_unusable"
         }
     }
 }

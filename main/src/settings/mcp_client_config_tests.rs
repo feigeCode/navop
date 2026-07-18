@@ -16,20 +16,38 @@ fn client_config_health_labels_match_config_states() {
         client_config_health_label_key(ClientConfigHealth::NeedsRepair)
     );
     assert_eq!(
-        "Settings.General.Mcp.client_config_status_needs_repair",
+        "Settings.General.Mcp.client_config_status_needs_migration",
         client_config_health_label_key(ClientConfigHealth::NeedsMigration)
     );
     assert_eq!(
-        "Settings.General.Mcp.client_config_status_needs_repair",
+        "Settings.General.Mcp.client_config_status_package_outdated",
         client_config_health_label_key(ClientConfigHealth::PackageVersionOutdated)
     );
     assert_eq!(
-        "Settings.General.Mcp.client_config_status_missing_helper",
+        "Settings.General.Mcp.client_config_status_legacy_helper_missing",
         client_config_health_label_key(ClientConfigHealth::MissingHelper)
     );
     assert_eq!(
-        "Settings.General.Mcp.client_config_status_unusable_helper",
+        "Settings.General.Mcp.client_config_status_legacy_helper_unusable",
         client_config_health_label_key(ClientConfigHealth::UnusableHelper)
+    );
+    assert_eq!(
+        "Settings.General.Mcp.client_config_status_node_unavailable",
+        client_config_health_label_key(ClientConfigHealth::NodeUnavailable)
+    );
+    assert_eq!(
+        "Settings.General.Mcp.client_config_status_npx_unavailable",
+        client_config_health_label_key(ClientConfigHealth::NpxUnavailable)
+    );
+}
+
+#[test]
+fn package_health_labels_include_the_exact_recommended_version() {
+    let package = format!("@navop/mcp@{}", RECOMMENDED_PACKAGE_VERSION);
+
+    assert!(client_config_health_label(ClientConfigHealth::UpToDate).contains(&package));
+    assert!(
+        client_config_health_label(ClientConfigHealth::PackageVersionOutdated).contains(&package)
     );
 }
 

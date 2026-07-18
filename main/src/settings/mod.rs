@@ -3,6 +3,7 @@ mod mcp_agent_config_copy;
 pub mod mcp_client_config;
 mod mcp_helper_install;
 pub mod mcp_settings;
+mod mcp_skill_install;
 pub mod mcp_status;
 pub mod notes_settings;
 mod notes_shortcut_capture;
