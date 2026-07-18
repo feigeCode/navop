@@ -1023,13 +1023,6 @@ impl AgentInput {
                     .child(run_button),
             )
     }
-
-    fn close_resource_popover_for_dialog(&mut self, cx: &mut Context<Self>) {
-        if self.open_menu == Some(ComposerMenuKind::Target) {
-            self.open_menu = None;
-            cx.notify();
-        }
-    }
 }
 
 fn referenced_mentions_in_text(text: &str, mentions: &[MentionItem]) -> Vec<MentionItem> {
