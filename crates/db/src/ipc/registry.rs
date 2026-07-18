@@ -15,16 +15,27 @@ mod entry;
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
 static IPC_DRIVER_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+fn default_driver_api() -> String {
+    "database".to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpcDriverManifest {
     pub id: String,
     pub name: String,
+    /// 旧 SQL driver manifest 未声明时默认归类为 database。
+    #[serde(default = "default_driver_api")]
+    pub api: String,
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub version: String,
+    /// Sidecar/server compatibility metadata. SQL registry keeps this opaque so
+    /// non-SQL selectors can evolve without coupling `db` to their schemas.
+    #[serde(default)]
+    pub compatibility: serde_json::Value,
     pub entry: IpcDriverEntry,
     pub transport: IpcDriverTransport,
     #[serde(default)]
@@ -299,6 +310,12 @@ impl IpcDriverManifest {
                 "external driver id and name are required",
             ));
         }
+        if self.api.trim().is_empty() {
+            return Err(DbError::connection(format!(
+                "external driver '{}' api is required",
+                self.id
+            )));
+        }
         if self.entry.command.trim().is_empty() {
             return Err(DbError::connection(format!(
                 "external driver '{}' command is required",
@@ -514,6 +531,21 @@ impl IpcDriverRegistry {
             .iter()
             .find(|driver| driver.id == driver_id)
             .cloned()
+    }
+
+    pub fn find_by_api(&self, api: &str, driver_id: &str) -> Option<IpcDriverManifest> {
+        self.drivers
+            .iter()
+            .find(|driver| driver.api == api && driver.id == driver_id)
+            .cloned()
+    }
+
+    pub fn drivers_for_api(&self, api: &str) -> Vec<IpcDriverManifest> {
+        self.drivers
+            .iter()
+            .filter(|driver| driver.api == api)
+            .cloned()
+            .collect()
     }
 }
 

@@ -10,9 +10,11 @@ agent_runtime = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 db = { workspace = true }
+extension-host.workspace = true
 futures = { workspace = true }
 one-core = { workspace = true }
-redis_client = { workspace = true }
+redis-runtime.workspace = true
+redis_client = { workspace = true, optional = true }
 serde_json = { workspace = true }
 sftp = { workspace = true }
 ssh = { workspace = true }
@@ -21,6 +23,7 @@ tool_runtime = { workspace = true }
 [features]
 default = []
 builtin-duckdb = ["db/builtin-duckdb"]
+builtin-redis = ["dep:redis_client"]
 
 [dev-dependencies]
 rusqlite = { workspace = true }

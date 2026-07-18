@@ -41,8 +41,10 @@ pub mod redis_tree_view;
 pub mod sidebar;
 
 // 核心导出
-pub use connection::{RedisConnection, RedisConnectionImpl};
+#[cfg(feature = "builtin-redis")]
+pub use connection::RedisConnectionImpl;
 pub use manager::{GlobalRedisState, RedisManager};
+pub use redis_runtime::RedisConnection;
 pub use types::*;
 
 // 视图导出
@@ -60,5 +62,10 @@ pub use sidebar::{RedisSidebar, RedisSidebarEvent};
 /// 注册全局状态和其他必要的初始化操作
 pub fn init(cx: &mut App) {
     cx.set_global(GlobalRedisState::new());
+    redis_cli_view::init(cx);
+}
+
+pub fn init_with_factory(cx: &mut App, factory: redis_runtime::RedisConnectionFactory) {
+    cx.set_global(GlobalRedisState::new_with_factory(factory));
     redis_cli_view::init(cx);
 }

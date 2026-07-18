@@ -665,13 +665,38 @@ fn write_driver_manifest(root: &Path, dir_name: &str, id: &str, name: &str) {
     .unwrap();
 }
 
+#[test]
+fn legacy_manifest_defaults_to_database_api() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"driver"},"transport":{"name":"demo.sock"}}"#,
+    )
+    .unwrap();
+
+    assert_eq!("database", manifest.api);
+}
+
+#[test]
+fn registry_can_filter_drivers_by_api_without_cross_talk() {
+    let mut redis = manifest("redis", "Redis");
+    redis.api = "redis".into();
+    let sql = manifest("postgres", "PostgreSQL");
+
+    let registry = IpcDriverRegistry::from_drivers(vec![redis, sql]);
+
+    assert_eq!(1, registry.drivers_for_api("redis").len());
+    assert_eq!("redis", registry.find_by_api("redis", "redis").unwrap().api);
+    assert!(registry.find_by_api("redis", "postgres").is_none());
+}
+
 fn manifest(id: &str, name: &str) -> IpcDriverManifest {
     IpcDriverManifest {
         id: id.to_string(),
         name: name.to_string(),
+        api: "database".into(),
         category: None,
         description: String::new(),
         version: String::new(),
+        compatibility: serde_json::Value::Null,
         entry: IpcDriverEntry {
             command: "./driver".to_string(),
             commands: Default::default(),

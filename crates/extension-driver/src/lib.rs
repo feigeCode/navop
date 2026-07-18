@@ -17,8 +17,12 @@
 // ProtocolError 作为 Err 类型较大(~248 bytes),协议层固定如此,统一 allow。
 #![allow(clippy::result_large_err)]
 
+mod async_runtime;
 mod runtime;
 
+pub use async_runtime::{
+    AsyncDriverConnection, AsyncNativeDriver, AsyncOpenedConnection, serve_async,
+};
 pub use runtime::serve;
 
 use std::sync::Arc;
@@ -26,6 +30,28 @@ use std::sync::Arc;
 use extension_protocol::ProtocolError;
 use extension_protocol::conn::ConnId;
 use serde_json::Value;
+
+/// Connect a sidecar to the host-created local socket named by `env_var`, then
+/// run the Tokio-first driver runtime until shutdown or EOF.
+pub async fn serve_async_from_env<D>(driver: D, env_var: &str) -> anyhow::Result<()>
+where
+    D: AsyncNativeDriver,
+{
+    use interprocess::local_socket::{
+        GenericNamespaced, ToNsName,
+        tokio::{Stream, prelude::*},
+    };
+
+    let socket_name = std::env::var(env_var)
+        .map_err(|_| anyhow::anyhow!("required local socket env `{env_var}` is not set"))?;
+    let name = socket_name
+        .clone()
+        .to_ns_name::<GenericNamespaced>()
+        .map_err(|error| anyhow::anyhow!("invalid local socket name `{socket_name}`: {error}"))?;
+    let stream = Stream::connect(name).await?;
+    let (reader, writer) = tokio::io::split(stream);
+    serve_async(driver, reader, writer).await
+}
 
 /// 硬取消钩子:包裹驱动私有的中断机制(例如 DuckDB 的 `InterruptHandle::interrupt`)。
 ///

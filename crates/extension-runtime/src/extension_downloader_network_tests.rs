@@ -554,7 +554,9 @@ fn install_marketplace_entry_generic_downloads_and_installs_database_driver() {
             tmp.path().join("extensions/database_drivers/fake_pg")
         )
         .with_description("Test database driver")
-        .with_driver_id("fake_pg"),
+        .with_driver_id("fake_pg")
+        .with_driver_api("database")
+        .with_driver_compatibility(serde_json::Value::Null),
         summary
     );
     assert!(summary.path.join("driver.json").exists());

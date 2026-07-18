@@ -166,6 +166,11 @@ fn database_driver_provider_lists_installed_driver_summaries() {
             "name": "Fake PostgreSQL",
             "description": "Test database driver",
             "version": "1.2.3",
+            "api": "mongodb",
+            "compatibility": {
+                "server": { "min": "4.0", "max": "8.0" },
+                "variant": "modern"
+            },
             "entry": { "command": "./fake_driver" },
             "transport": { "name": "fake_pg.sock" },
             "ui": {
@@ -189,6 +194,15 @@ fn database_driver_provider_lists_installed_driver_summaries() {
     assert_eq!("1.2.3", list[0].version);
     assert_eq!("Test database driver", list[0].description);
     assert_eq!(Some("fake_pg"), list[0].driver_id.as_deref());
+    assert_eq!(Some("mongodb"), list[0].driver_api.as_deref());
+    assert_eq!(
+        Some("modern"),
+        list[0]
+            .driver_compatibility
+            .as_ref()
+            .and_then(|value| value.get("variant"))
+            .and_then(serde_json::Value::as_str)
+    );
     assert_eq!(Some("Database"), list[0].icon.as_deref());
     assert_eq!(Some(15432), list[0].default_port);
 }
@@ -232,6 +246,30 @@ fn database_driver_provider_install_from_dir_reports_invalid_driver_manifest() {
 }
 
 #[test]
+fn database_driver_provider_install_rejects_missing_packaged_entry() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let driver_dir = tmp.path().join("redis");
+    fs::create_dir_all(&driver_dir).unwrap();
+    fs::write(
+        driver_dir.join("driver.json"),
+        r#"{
+            "id": "redis",
+            "name": "Redis",
+            "api": "redis",
+            "entry": { "command": "./missing-redis-sidecar" },
+            "transport": { "name": "redis.sock" }
+        }"#,
+    )
+    .unwrap();
+
+    let error = DatabaseDriverExtensionProvider
+        .install_from_dir(&driver_dir)
+        .unwrap_err();
+
+    assert!(error.to_string().contains("驱动入口不存在"));
+}
+
+#[test]
 fn database_driver_provider_install_from_dir_accepts_single_wrapped_driver_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("database_drivers");
@@ -250,6 +288,13 @@ fn database_driver_provider_install_from_dir_accepts_single_wrapped_driver_direc
         }"#,
     )
     .unwrap();
+    let entry = driver_dir.join("gbase8s-ipc-driver");
+    fs::write(&entry, b"driver").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&entry, fs::Permissions::from_mode(0o755)).unwrap();
+    }
 
     let provider = DatabaseDriverExtensionProvider;
     let summary = provider.install_from_dir(&outer_dir).unwrap();

@@ -1,9 +1,10 @@
 //! MongoDB 全局状态管理
 
-use crate::connection::{MongoConnection, MongoConnectionImpl};
+use crate::connection::MongoConnection;
 use crate::types::{MongoConnectionConfig, MongoError};
 use dashmap::DashMap;
 use gpui::Global;
+use mongodb_runtime::MongoConnectionFactory;
 use one_core::storage::MongoDBParams;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use rust_i18n::t;
@@ -25,17 +26,36 @@ const MONGO_PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'/').add(b'?').a
 type ConnectionMap = DashMap<String, Arc<RwLock<Box<dyn MongoConnection>>>>;
 
 /// MongoDB 全局状态
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct GlobalMongoState {
     connections: Arc<ConnectionMap>,
+    factory: Arc<RwLock<MongoConnectionFactory>>,
+}
+
+impl Default for GlobalMongoState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Global for GlobalMongoState {}
 
 impl GlobalMongoState {
     pub fn new() -> Self {
+        #[cfg(feature = "builtin-mongodb")]
+        let factory = MongoConnectionFactory::Builtin;
+        #[cfg(not(feature = "builtin-mongodb"))]
+        let factory = MongoConnectionFactory::Unavailable;
         Self {
             connections: Arc::new(DashMap::new()),
+            factory: Arc::new(RwLock::new(factory)),
+        }
+    }
+
+    pub fn new_with_factory(factory: MongoConnectionFactory) -> Self {
+        Self {
+            connections: Arc::new(DashMap::new()),
+            factory: Arc::new(RwLock::new(factory)),
         }
     }
 
@@ -50,11 +70,11 @@ impl GlobalMongoState {
             ));
         }
 
-        let mut connection = MongoConnectionImpl::new(config);
-        connection.connect().await?;
+        let factory = self.factory.read().await.clone();
+        let connection = factory.create(config).await?;
 
         let connection_arc: Arc<RwLock<Box<dyn MongoConnection>>> =
-            Arc::new(RwLock::new(Box::new(connection)));
+            Arc::new(RwLock::new(connection));
         self.connections
             .insert(connection_id.clone(), connection_arc);
 
@@ -106,11 +126,21 @@ pub struct MongoManager;
 
 impl MongoManager {
     pub async fn test_connection(config: &MongoConnectionConfig) -> Result<(), MongoError> {
-        let mut connection = MongoConnectionImpl::new(config.clone());
-        connection.connect().await?;
-        connection.ping().await?;
-        connection.disconnect().await?;
-        Ok(())
+        #[cfg(not(feature = "builtin-mongodb"))]
+        {
+            let _ = config;
+            return Err(MongoError::Internal(
+                "MongoDB IPC test requires a configured native driver manifest".into(),
+            ));
+        }
+        #[cfg(feature = "builtin-mongodb")]
+        {
+            let mut connection = mongodb_runtime::BuiltinMongoConnection::new(config.clone());
+            connection.connect().await?;
+            connection.ping().await?;
+            connection.disconnect().await?;
+            Ok(())
+        }
     }
 
     pub fn build_connection_string(params: &MongoDBParams) -> Result<String, MongoError> {

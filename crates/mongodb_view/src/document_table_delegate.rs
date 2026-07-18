@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use bson::{Bson, Document, doc};
 use gpui::{
     App, AppContext, Context, IntoElement, ParentElement, SharedString, Styled, Subscription,
     Window, div, prelude::FluentBuilder, px,
@@ -8,7 +9,6 @@ use gpui_component::{
     ActiveTheme,
     input::{InputEvent, InputState},
 };
-use mongodb::bson::{Bson, Document, doc};
 use one_ui::edit_table::{CellEditor, Column, EditTableDelegate, EditTableState};
 
 use crate::types::{MongoError, bson_to_compact_json, bson_to_string};
@@ -417,7 +417,7 @@ pub fn parse_edit_cell_value(original: Option<&Bson>, text: &str) -> Result<Bson
             .parse::<bool>()
             .map(Bson::Boolean)
             .map_err(|error| MongoError::InvalidFilter(error.to_string())),
-        Bson::DateTime(_) => mongodb::bson::DateTime::parse_rfc3339_str(trimmed)
+        Bson::DateTime(_) => bson::DateTime::parse_rfc3339_str(trimmed)
             .map(Bson::DateTime)
             .map_err(|error| MongoError::InvalidFilter(error.to_string())),
         Bson::Null => {

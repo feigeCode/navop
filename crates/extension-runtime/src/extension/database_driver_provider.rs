@@ -30,6 +30,7 @@ impl ExtensionProvider for DatabaseDriverExtensionProvider {
         let manifest = manifest
             .as_ref()
             .ok_or_else(|| anyhow!("未在 {} 找到 driver.json", dir.display()))?;
+        validate_packaged_entry(&manifest.manifest_dir, &manifest.entry.command)?;
         Ok(to_summary(manifest))
     }
 
@@ -42,6 +43,25 @@ impl ExtensionProvider for DatabaseDriverExtensionProvider {
         std::fs::remove_dir_all(dir).with_context(|| format!("删除驱动目录 {}", dir.display()))?;
         Ok(name)
     }
+}
+
+fn validate_packaged_entry(dir: &Path, command: &str) -> Result<()> {
+    let command_path = Path::new(command);
+    // Bare commands are resolved through PATH. Relative commands (including
+    // `./sidecar`) are package-local and must exist before installation.
+    if command_path.is_absolute() || command_path.parent().is_none() {
+        return Ok(());
+    }
+
+    let entry = dir.join(command_path);
+    let metadata = entry
+        .metadata()
+        .with_context(|| format!("驱动入口不存在: {}", entry.display()))?;
+    if !metadata.is_file() {
+        return Err(anyhow!("驱动入口不是文件: {}", entry.display()));
+    }
+
+    Ok(())
 }
 
 fn to_summary(manifest: &IpcDriverManifest) -> ExtensionSummary {
@@ -63,7 +83,9 @@ fn to_summary(manifest: &IpcDriverManifest) -> ExtensionSummary {
         manifest.manifest_dir.clone(),
     )
     .with_description(description)
-    .with_driver_id(manifest.id.clone());
+    .with_driver_id(manifest.id.clone())
+    .with_driver_api(manifest.api.clone())
+    .with_driver_compatibility(manifest.compatibility.clone());
 
     if !manifest.ui.icon.is_empty() {
         summary = summary.with_icon(manifest.ui.icon.clone());

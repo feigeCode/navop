@@ -1,3 +1,4 @@
+use extension_protocol::error::{ProtocolError, error_codes};
 use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
@@ -27,6 +28,65 @@ pub enum DriverRequirement {
     NotRequired,
     Required { driver_id: String },
     InvalidConfig { message: String },
+}
+
+/// Generic sidecar requirement shared by every native driver API.
+///
+/// Domain crates decide whether their selected backend is built in or IPC;
+/// this layer only translates that decision into an installable `(api, id)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeDriverRequirement {
+    NotRequired,
+    Required { api: String, driver_id: String },
+    InvalidConfig { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeDriverBackend {
+    Builtin,
+    Ipc { driver_id: String },
+}
+
+pub fn required_native_driver(
+    api: impl Into<String>,
+    backend: NativeDriverBackend,
+) -> NativeDriverRequirement {
+    let api = api.into();
+    if api.trim().is_empty() {
+        return NativeDriverRequirement::InvalidConfig {
+            message: "native driver api is required".to_string(),
+        };
+    }
+    match backend {
+        NativeDriverBackend::Builtin => NativeDriverRequirement::NotRequired,
+        NativeDriverBackend::Ipc { driver_id } if driver_id.trim().is_empty() => {
+            NativeDriverRequirement::InvalidConfig {
+                message: format!("native driver id is required for api `{api}`"),
+            }
+        }
+        NativeDriverBackend::Ipc { driver_id } => NativeDriverRequirement::Required {
+            api,
+            driver_id: driver_id.trim().to_string(),
+        },
+    }
+}
+
+/// Returns an explicit fallback requirement only for a structured server
+/// incompatibility. This keeps auth, TLS, timeout and other operational errors
+/// from silently switching driver implementations.
+pub fn fallback_native_driver_for_error(
+    api: impl Into<String>,
+    fallback_driver_id: impl Into<String>,
+    error: &ProtocolError,
+) -> Option<NativeDriverRequirement> {
+    (error.code == error_codes::SERVER_INCOMPATIBLE).then(|| {
+        required_native_driver(
+            api,
+            NativeDriverBackend::Ipc {
+                driver_id: fallback_driver_id.into(),
+            },
+        )
+    })
 }
 
 pub trait DatabaseDriverConnectionOpener: Sized + 'static {
@@ -121,6 +181,7 @@ fn prompt_install_driver<T>(
 {
     let connection_name = connection.name.clone();
     prompt_install_driver_with_completion(
+        "database".to_string(),
         driver_id.clone(),
         connection_name,
         window,
@@ -139,10 +200,36 @@ pub fn prompt_install_database_driver<T>(
 ) where
     T: 'static,
 {
-    prompt_install_driver_with_completion(driver_id, connection_name, window, cx, |_, _, _| {});
+    prompt_install_native_driver(
+        "database".to_string(),
+        driver_id,
+        connection_name,
+        window,
+        cx,
+    );
+}
+
+pub fn prompt_install_native_driver<T>(
+    api: String,
+    driver_id: String,
+    connection_name: String,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) where
+    T: 'static,
+{
+    prompt_install_driver_with_completion(
+        api,
+        driver_id,
+        connection_name,
+        window,
+        cx,
+        |_, _, _| {},
+    );
 }
 
 fn prompt_install_driver_with_completion<T, F>(
+    api: String,
     driver_id: String,
     connection_name: String,
     window: &mut Window,
@@ -153,16 +240,16 @@ fn prompt_install_driver_with_completion<T, F>(
     F: FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
 {
     if ExtensionRegistry::global().is_none() {
-        notify_error(window, cx, "扩展系统未初始化，无法安装数据库驱动");
+        notify_error(window, cx, format!("扩展系统未初始化，无法安装 {api} 驱动"));
         return;
     }
 
     let answer = window.prompt(
         PromptLevel::Warning,
-        "需要安装数据库驱动",
+        "需要安装驱动",
         Some(&format!(
-            "连接「{}」需要安装「{}」数据库驱动。",
-            connection_name, driver_id
+            "连接「{}」需要安装「{}」{} 驱动。",
+            connection_name, driver_id, api
         )),
         &["下载并安装", "取消"],
         cx,
@@ -205,6 +292,7 @@ fn prompt_install_driver_with_completion<T, F>(
         finish_install_and_open(
             window_handle,
             this,
+            api,
             driver_id,
             progress_view_weak,
             outcome,
@@ -255,6 +343,7 @@ fn open_install_progress_dialog(
 fn finish_install_and_open<T: 'static>(
     window_handle: gpui::AnyWindowHandle,
     target: WeakEntity<T>,
+    api: String,
     driver_id: String,
     progress_view: gpui::WeakEntity<DriverInstallProgressView>,
     outcome: Result<(), String>,
@@ -269,10 +358,10 @@ fn finish_install_and_open<T: 'static>(
         if let Some(target) = target.upgrade() {
             target.update(cx, |target, cx| match outcome {
                 Ok(()) => {
-                    notify_success(window, cx, format!("已安装 {driver_id} 数据库驱动"));
+                    notify_success(window, cx, format!("已安装 {driver_id} {api} 驱动"));
                     on_success(target, window, cx);
                 }
-                Err(error) => notify_error(window, cx, format!("安装数据库驱动失败: {error}")),
+                Err(error) => notify_error(window, cx, format!("安装 {api} 驱动失败: {error}")),
             });
         }
     });

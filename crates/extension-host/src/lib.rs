@@ -8,16 +8,26 @@
 pub mod client;
 pub mod error;
 pub mod host_api;
+pub mod manifest;
 pub mod negotiation;
 pub mod process;
+pub mod process_session;
 pub mod runtime;
 pub mod transport;
 
 pub use client::{CancellationToken, JsonRpcClient, JsonRpcClientHandle, RequestOptions};
 pub use error::{HostError, HostResult};
 pub use host_api::{HostApiHandler, HostApiProvider};
+pub use manifest::{
+    NativeDriverEntry, NativeDriverManifest, NativeDriverProcessPolicy, NativeDriverProcessScope,
+    NativeDriverRegistry, NativeDriverTransport,
+};
 pub use negotiation::{ExtensionSession, NegotiationConfig};
 pub use process::{ProcessHandle, SpawnConfig, SpawnTransport};
+pub use process_session::{
+    DEFAULT_SESSION_REQUEST_TIMEOUT, DEFAULT_SESSION_SHUTDOWN_GRACE, NotificationReceiver,
+    ProcessRpcSession, ProcessRpcSessionConfig,
+};
 pub use runtime::{
     ComponentExtensionRuntime, ExtensionRuntime, ExtensionRuntimeFactory, ExtensionRuntimeType,
     IpcExtensionRuntime,

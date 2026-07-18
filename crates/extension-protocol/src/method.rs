@@ -84,6 +84,28 @@ pub const DATA_IMPORT_ABORT: &str = "data/import_abort";
 pub const STREAM_READ: &str = "stream/read";
 pub const STREAM_CLOSE: &str = "stream/close";
 
+// -- 通用 blob 流 --
+pub const BLOB_OPEN: &str = "blob/open";
+pub const BLOB_READ: &str = "blob/read";
+pub const BLOB_CLOSE: &str = "blob/close";
+
+// -- 通用有界事件流 --
+pub const EVENT_OPEN: &str = "event/open";
+pub const EVENT_READ: &str = "event/read";
+pub const EVENT_CLOSE: &str = "event/close";
+
+// -- Redis --
+pub const REDIS_COMMAND: &str = "redis/command";
+pub const REDIS_PIPELINE: &str = "redis/pipeline";
+pub const REDIS_PUBSUB_OPEN: &str = "redis/pubsub_open";
+pub const REDIS_PUBSUB_CONTROL: &str = "redis/pubsub_control";
+
+// -- MongoDB --
+pub const MONGODB_COMMAND: &str = "mongodb/command";
+pub const MONGODB_FIND: &str = "mongodb/find";
+pub const MONGODB_CURSOR_GET_MORE: &str = "mongodb/cursor_get_more";
+pub const MONGODB_CURSOR_CLOSE: &str = "mongodb/cursor_close";
+
 // -- Host API(扩展 → 宿主) --
 pub const HOST_REQUEST_CREDENTIAL: &str = "host/request_credential";
 pub const HOST_NOTIFY: &str = "host/notify";
@@ -164,6 +186,20 @@ pub const ALL_METHODS: &[&str] = &[
     DATA_IMPORT_ABORT,
     STREAM_READ,
     STREAM_CLOSE,
+    BLOB_OPEN,
+    BLOB_READ,
+    BLOB_CLOSE,
+    EVENT_OPEN,
+    EVENT_READ,
+    EVENT_CLOSE,
+    REDIS_COMMAND,
+    REDIS_PIPELINE,
+    REDIS_PUBSUB_OPEN,
+    REDIS_PUBSUB_CONTROL,
+    MONGODB_COMMAND,
+    MONGODB_FIND,
+    MONGODB_CURSOR_GET_MORE,
+    MONGODB_CURSOR_CLOSE,
 ];
 
 /// 该 method 名是否是协议已知方法。驱动声明 `methods` 时用它过滤拼写错误。

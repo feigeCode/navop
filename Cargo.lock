@@ -1286,6 +1286,7 @@ dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "bitvec",
+ "chrono",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "hex",
@@ -3610,7 +3611,9 @@ name = "extension-driver"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "extension-protocol",
+ "interprocess",
  "serde_json",
  "tokio",
  "tracing",
@@ -3626,6 +3629,7 @@ dependencies = [
  "process-util",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3652,6 +3656,7 @@ dependencies = [
  "db",
  "db_view",
  "extension-component",
+ "extension-protocol",
  "extension-wasm",
  "extension_view",
  "flate2",
@@ -6810,6 +6815,7 @@ dependencies = [
  "db",
  "db_view",
  "dirs 6.0.0",
+ "extension-host",
  "extension-runtime",
  "extension_view",
  "flate2",
@@ -6819,6 +6825,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "mongodb-runtime",
  "mongodb_view",
  "notes",
  "one-core",
@@ -6829,6 +6836,7 @@ dependencies = [
  "port_forwarding_view",
  "public_mcp",
  "raw-window-handle",
+ "redis-runtime",
  "redis_view",
  "remote_desktop",
  "remote_desktop_view",
@@ -7247,19 +7255,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "mongodb-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bson",
+ "connection_tunnel",
+ "extension-host",
+ "extension-protocol",
+ "futures-util",
+ "mongodb",
+ "rust-i18n",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "mongodb_view"
 version = "0.1.0"
 dependencies = [
  "ai_chat_view",
  "anyhow",
  "async-trait",
+ "bson",
  "connection-form",
  "connection_tunnel",
  "dashmap 5.5.3",
  "futures-util",
  "gpui",
  "gpui-component",
- "mongodb",
+ "mongodb-runtime",
  "one-core",
  "one-ui",
  "percent-encoding",
@@ -8090,9 +8120,11 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "db",
+ "extension-host",
  "futures",
  "one-core",
  "redis",
+ "redis-runtime",
  "rusqlite",
  "serde_json",
  "sftp",
@@ -9702,6 +9734,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "redis-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "extension-host",
+ "extension-protocol",
+ "futures",
+ "one-core",
+ "redis",
+ "rust-i18n",
+ "serde",
+ "serde_json",
+ "shell-words",
+ "ssh",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "redis_view"
 version = "0.1.0"
 dependencies = [
@@ -9718,11 +9774,10 @@ dependencies = [
  "gpui-component",
  "one-core",
  "one-ui",
- "redis",
+ "redis-runtime",
  "rust-i18n",
  "serde",
  "serde_json",
- "ssh",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

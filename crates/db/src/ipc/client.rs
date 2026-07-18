@@ -16,16 +16,13 @@ use std::time::Duration;
 
 use crate::connection::DbError;
 use crate::ipc::registry::IpcDriverManifest;
-use extension_host::client::{JsonRpcClient as HostClient, JsonRpcClientHandle, RequestOptions};
 use extension_host::error::HostError;
-use extension_host::negotiation::{ExtensionSession, NegotiationConfig, negotiate, shutdown};
-use extension_host::process::{ProcessHandle, SpawnConfig, SpawnTransport, default_socket_name};
-use extension_host::transport::FramedTransport;
+use extension_host::negotiation::{ExtensionSession, NegotiationConfig};
+use extension_host::process::{SpawnConfig, SpawnTransport, default_socket_name};
+use extension_host::{ProcessRpcSession, ProcessRpcSessionConfig};
 use one_core::storage::DbConnectionConfig;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::sync::Mutex as StdMutex;
-use tracing::warn;
 
 /// 单次请求默认超时(毫秒)。
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
@@ -49,19 +46,7 @@ const SHUTDOWN_GRACE_MS: u32 = 5_000;
 /// client.shutdown().await;
 /// ```
 pub struct JsonRpcClient {
-    handle: JsonRpcClientHandle,
-    session: ExtensionSession,
-    // 用 std Mutex<Option<...>> 而不是 tokio Mutex,是因为 shutdown 时希望同步 take,
-    // 之后再 await 各自的关闭流程(reader task / process kill)。
-    inner: StdMutex<Option<ClientInner>>,
-    // 写一次性 flag:reader 退出后,主动询问 is_closed 通过此提示——也可直接用
-    // handle.is_closed(),保留为日后扩展(例如观测)
-    driver_id: String,
-}
-
-struct ClientInner {
-    owner: HostClient,
-    process: ProcessHandle,
+    inner: ProcessRpcSession,
 }
 
 impl JsonRpcClient {
@@ -87,35 +72,18 @@ impl JsonRpcClient {
             )));
         }
 
-        let spawn_config = build_spawn_config(driver, config);
-        let mut process = extension_host::process::spawn(spawn_config)
+        let session_config = ProcessRpcSessionConfig::new(
+            build_spawn_config(driver, config),
+            build_negotiation(driver),
+        )
+        .with_request_timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
+        .with_shutdown_grace_ms(SHUTDOWN_GRACE_MS)
+        .with_label(driver.id.clone());
+        let inner = ProcessRpcSession::start(session_config)
             .await
             .map_err(host_error_to_db_error)?;
 
-        let stream = process.take_stream().ok_or_else(|| {
-            DbError::connection(format!(
-                "external driver '{}' did not return a connected stream",
-                driver.id
-            ))
-        })?;
-
-        let (reader, writer) = tokio::io::split(stream);
-        let transport = FramedTransport::new(reader, writer);
-        let owner = HostClient::start(transport);
-        let handle = owner.handle();
-
-        // init 握手
-        let negotiation = build_negotiation(driver);
-        let session = negotiate(&handle, negotiation)
-            .await
-            .map_err(host_error_to_db_error)?;
-
-        Ok(Self {
-            handle,
-            session,
-            inner: StdMutex::new(Some(ClientInner { owner, process })),
-            driver_id: driver.id.clone(),
-        })
+        Ok(Self { inner })
     }
 
     /// 调用 wire 方法并把 result 反序列化为 `T`。
@@ -130,59 +98,30 @@ impl JsonRpcClient {
 
     /// 调用 wire 方法,返回 raw `serde_json::Value`(协议层场景用)。
     pub async fn request_value(&self, method: &str, params: Value) -> Result<Value, DbError> {
-        let options =
-            RequestOptions::default().with_timeout(Duration::from_millis(REQUEST_TIMEOUT_MS));
-        self.handle
-            .call_raw(method, params, options)
+        self.inner
+            .request_value(method, params)
             .await
             .map_err(host_error_to_db_error)
     }
 
     /// 当前协商出的 capability 集合(`init` 之后冻结)。
     pub fn session(&self) -> &ExtensionSession {
-        &self.session
+        self.inner.session()
     }
 
     /// driver 是否支持某项 capability。
     pub fn supports(&self, capability: &str) -> bool {
-        self.session.has_feature(capability)
+        self.inner.supports(capability)
     }
 
     /// 是否已关闭(reader task 退出 / 用户调 `shutdown`)。
     pub fn is_closed(&self) -> bool {
-        self.handle.is_closed()
+        self.inner.is_closed()
     }
 
     /// 优雅关闭:先发 `shutdown` RPC 给扩展,再 abort reader,最后 kill child。
     pub async fn shutdown(&self) {
-        // 1. 让扩展尝试 graceful shutdown(grace 时间内自行清理)。
-        if let Err(error) = shutdown(&self.handle, SHUTDOWN_GRACE_MS).await {
-            // 协议 shutdown 失败不致命(可能是子进程已经异常退出),warning 即可。
-            warn!(
-                driver = %self.driver_id,
-                error = %error,
-                "graceful shutdown failed; proceeding to abort reader and kill child"
-            );
-        }
-
-        // 2. 取出 owner 与 process,owner.shutdown 内部 await reader task 退出,
-        //    process 在 Drop 时 kill_on_drop。
-        let inner = {
-            let mut guard = self.inner.lock().expect("inner mutex poisoned");
-            guard.take()
-        };
-        if let Some(ClientInner { owner, process }) = inner {
-            owner.shutdown().await;
-            drop(process);
-        }
-    }
-}
-
-impl Drop for JsonRpcClient {
-    fn drop(&mut self) {
-        // 兜底:确保 handle 标记关闭(让 in-flight caller 收 Closed),
-        // owner 在 inner Drop 时也会 abort reader task,process 在 Drop 时 kill。
-        self.handle.close();
+        self.inner.shutdown().await;
     }
 }
 
@@ -363,9 +302,11 @@ mod tests {
         IpcDriverManifest {
             id: "dummy".into(),
             name: "Dummy".into(),
+            api: "database".into(),
             category: None,
             description: String::new(),
             version: String::new(),
+            compatibility: Value::Null,
             entry: IpcDriverEntry {
                 command: command.into(),
                 commands: Default::default(),

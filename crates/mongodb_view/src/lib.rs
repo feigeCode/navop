@@ -21,7 +21,9 @@ pub mod sidebar;
 pub mod types;
 
 pub use collection_view::CollectionView;
-pub use connection::{MongoConnection, MongoConnectionImpl};
+pub use connection::MongoConnection;
+#[cfg(feature = "builtin-mongodb")]
+pub use connection::MongoConnectionImpl;
 pub use manager::{GlobalMongoState, MongoManager};
 pub use mongo_form_window::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 pub use mongo_tab::MongoTabView;
@@ -33,4 +35,8 @@ pub use types::*;
 /// 初始化 MongoDB 模块
 pub fn init(cx: &mut App) {
     cx.set_global(GlobalMongoState::new());
+}
+
+pub fn init_with_factory(cx: &mut App, factory: mongodb_runtime::MongoConnectionFactory) {
+    cx.set_global(GlobalMongoState::new_with_factory(factory));
 }

@@ -1369,9 +1369,11 @@ mod tests {
         IpcDriverManifest {
             id: "demo".into(),
             name: "DemoDB".into(),
+            api: "database".into(),
             category: None,
             description: String::new(),
             version: String::new(),
+            compatibility: serde_json::Value::Null,
             entry: IpcDriverEntry {
                 command: "driver".into(),
                 commands: Default::default(),

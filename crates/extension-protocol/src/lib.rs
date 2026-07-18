@@ -30,17 +30,21 @@
 //! - [`host`]: 反向 Host API(扩展 → 宿主)
 //! - [`event`][]: 单向事件通知
 
+pub mod blob;
 pub mod conn;
 pub mod data;
 pub mod ddl;
 pub mod envelope;
 pub mod error;
 pub mod event;
+pub mod event_stream;
 pub mod framing;
 pub mod host;
 pub mod lifecycle;
 pub mod method;
+pub mod mongodb;
 pub mod query;
+pub mod redis;
 pub mod row;
 pub mod schema;
 pub mod sql;
