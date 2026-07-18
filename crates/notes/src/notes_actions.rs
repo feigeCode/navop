@@ -8,6 +8,7 @@ use gpui_component::{
     v_flex,
 };
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Clone, Copy)]
 pub(crate) enum CreateKind {
@@ -16,6 +17,20 @@ pub(crate) enum CreateKind {
 }
 
 impl NotesView {
+    pub(crate) fn start_create_in(
+        &mut self,
+        directory: PathBuf,
+        kind: CreateKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !directory.as_os_str().is_empty() {
+            self.tree.expanded_directories.insert(directory.clone());
+        }
+        self.current_directory = directory;
+        self.start_create(kind, window, cx);
+    }
+
     pub(crate) fn start_create(
         &mut self,
         kind: CreateKind,
@@ -124,7 +139,8 @@ impl NotesView {
                 .storage()
                 .and_then(|storage| storage.create_directory(&self.current_directory, name))
                 .map(|path| {
-                    self.tree.expanded_directories.insert(path);
+                    self.tree.expanded_directories.insert(path.clone());
+                    self.selected_sidebar_path = Some(path);
                 }),
             CreateKind::Document(format) => self
                 .storage()
@@ -133,7 +149,8 @@ impl NotesView {
                 })
                 .map(|descriptor| {
                     self.tree.last_created_format = format;
-                    self.tree.selected_document = Some(descriptor.relative_path);
+                    self.tree.selected_document = Some(descriptor.relative_path.clone());
+                    self.selected_sidebar_path = Some(descriptor.relative_path);
                 }),
         };
         self.finish_file_operation(result, window, cx);
@@ -201,6 +218,20 @@ impl NotesView {
             {
                 self.tree.selected_document = None;
             }
+            if self
+                .selected_sidebar_path
+                .as_ref()
+                .is_some_and(|selected| selected.starts_with(path))
+            {
+                self.selected_sidebar_path = None;
+            }
+            if self
+                .context_menu_path
+                .as_ref()
+                .is_some_and(|selected| selected.starts_with(path))
+            {
+                self.context_menu_path = None;
+            }
             self.tree
                 .expanded_directories
                 .retain(|expanded| !expanded.starts_with(path));
@@ -224,6 +255,14 @@ impl NotesView {
         cx.notify();
     }
     fn remap_tree_paths(&mut self, old: &Path, new: &Path) {
+        self.selected_sidebar_path = self
+            .selected_sidebar_path
+            .as_ref()
+            .map(|path| remap_path(path, old, new));
+        self.context_menu_path = self
+            .context_menu_path
+            .as_ref()
+            .map(|path| remap_path(path, old, new));
         self.tree.selected_document = self
             .tree
             .selected_document

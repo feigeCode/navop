@@ -23,10 +23,6 @@ pub(crate) fn mcp_runtime_requirements_item() -> SettingItem {
     .description(t!("Settings.General.Mcp.runtime_requirements_desc").to_string())
 }
 
-pub(crate) fn mcp_runtime_requirements_item_id() -> &'static str {
-    "mcp-runtime-requirements"
-}
-
 fn runtime_requirements_status() -> String {
     match ClientConfigInstall::from_current_app() {
         Ok(install) => t!(
@@ -40,16 +36,5 @@ fn runtime_requirements_status() -> String {
             error = error.to_string()
         )
         .to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn runtime_requirements_item_uses_stable_id() {
-        assert_eq!(
-            "mcp-runtime-requirements",
-            super::mcp_runtime_requirements_item_id()
-        );
     }
 }

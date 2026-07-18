@@ -45,6 +45,8 @@ pub struct NotesView {
     pub(crate) active_editor: Option<EditorHandle>,
     pub(crate) active_document_id: Option<String>,
     pub(crate) current_directory: PathBuf,
+    pub(crate) selected_sidebar_path: Option<PathBuf>,
+    pub(crate) context_menu_path: Option<PathBuf>,
     pub(crate) notebook_name: SharedString,
     pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
     pub(crate) syntax_highlight_provider: Arc<NavopSyntaxHighlightProvider>,
@@ -149,6 +151,8 @@ impl NotesView {
             active_editor: None,
             active_document_id: None,
             current_directory: PathBuf::new(),
+            selected_sidebar_path: None,
+            context_menu_path: None,
             notebook_name,
             ai_provider,
             syntax_highlight_provider,
@@ -170,6 +174,9 @@ impl NotesView {
         let nodes = self.storage()?.scan_tree()?;
         self.rows = self.tree.project(&nodes);
         self.tree.select_fallback(&self.rows);
+        if self.selected_sidebar_path.is_none() {
+            self.selected_sidebar_path = self.tree.selected_document.clone();
+        }
         self.storage()?.save_state(&self.tree.to_ui_state())?;
         if let Some(path) = self.tree.selected_document.clone() {
             self.open_document(&path, window, cx)?;
@@ -237,6 +244,8 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.selected_sidebar_path = Some(path.clone());
+        self.context_menu_path = None;
         let result = if kind == NodeKind::Directory {
             self.current_directory = path.clone();
             self.tree.toggle_directory(&path);

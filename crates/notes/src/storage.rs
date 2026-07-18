@@ -118,6 +118,14 @@ impl NotesStorage {
         })
     }
 
+    pub(crate) fn absolute_path(&self, relative_path: &Path) -> Result<PathBuf> {
+        if relative_path.as_os_str().is_empty() {
+            self.resolve_directory(relative_path)
+        } else {
+            self.resolve_existing(relative_path)
+        }
+    }
+
     pub fn rename_node(&self, relative_path: &Path, new_name: &str) -> Result<PathBuf> {
         let source = self.resolve_existing(relative_path)?;
         let parent = source.parent().context("node has no parent")?;
