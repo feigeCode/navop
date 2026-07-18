@@ -546,6 +546,10 @@ pub fn discover_default_private_keys() -> Vec<String> {
         return Vec::new();
     };
 
+    discover_default_private_keys_in(&home_dir)
+}
+
+fn discover_default_private_keys_in(home_dir: &std::path::Path) -> Vec<String> {
     let ssh_dir = home_dir.join(".ssh");
     ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"]
         .into_iter()
@@ -556,14 +560,22 @@ pub fn discover_default_private_keys() -> Vec<String> {
 }
 
 pub fn expand_auto_publickey_auth() -> Vec<SshAuth> {
+    expand_auto_publickey_auth_with_default_keys(discover_default_private_keys())
+}
+
+fn expand_auto_publickey_auth_with_default_keys(
+    default_keys: impl IntoIterator<Item = String>,
+) -> Vec<SshAuth> {
     let mut auth_candidates = vec![SshAuth::Agent];
-    auth_candidates.extend(discover_default_private_keys().into_iter().map(|key_path| {
-        SshAuth::PrivateKey {
-            key_path,
-            passphrase: None,
-            certificate_path: None,
-        }
-    }));
+    auth_candidates.extend(
+        default_keys
+            .into_iter()
+            .map(|key_path| SshAuth::PrivateKey {
+                key_path,
+                passphrase: None,
+                certificate_path: None,
+            }),
+    );
     auth_candidates
 }
 
@@ -806,7 +818,9 @@ where
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::{Arc, Mutex, Mutex as StdMutex, OnceLock};
+    use std::sync::{Arc, Mutex as StdMutex};
+    #[cfg(unix)]
+    use std::sync::{Mutex, OnceLock};
 
     fn test_auth_failure_messages() -> AuthFailureMessages {
         AuthFailureMessages {
@@ -823,10 +837,6 @@ mod tests {
             keyboard_interactive_failed: "keyboard_interactive_failed".to_string(),
             keyboard_interactive_cancelled: "keyboard_interactive_cancelled".to_string(),
         }
-    }
-
-    fn home_dir_env_key() -> &'static str {
-        if cfg!(windows) { "USERPROFILE" } else { "HOME" }
     }
 
     #[cfg(unix)]
@@ -864,10 +874,6 @@ mod tests {
 
     #[test]
     fn discover_default_private_keys_returns_expected_order() {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let env_lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
-        let _guard = env_lock.lock().expect("环境锁不应中毒");
-
         let temp_home = std::env::temp_dir().join(format!(
             "onetcli-ssh-test-{}",
             std::time::SystemTime::now()
@@ -880,22 +886,7 @@ mod tests {
         std::fs::write(ssh_dir.join("id_rsa"), "rsa").expect("应可写入 id_rsa");
         std::fs::write(ssh_dir.join("id_ed25519"), "ed25519").expect("应可写入 id_ed25519");
 
-        let env_key = home_dir_env_key();
-        let previous = std::env::var(env_key).ok();
-        unsafe {
-            std::env::set_var(env_key, &temp_home);
-        }
-
-        let discovered = discover_default_private_keys();
-
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var(env_key, value);
-            },
-            None => unsafe {
-                std::env::remove_var(env_key);
-            },
-        }
+        let discovered = discover_default_private_keys_in(&temp_home);
 
         std::fs::remove_dir_all(&temp_home).expect("应可清理临时目录");
 
@@ -910,10 +901,6 @@ mod tests {
 
     #[test]
     fn expand_auto_publickey_auth_contains_agent_and_default_keys() {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let env_lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
-        let _guard = env_lock.lock().expect("环境锁不应中毒");
-
         let temp_home = std::env::temp_dir().join(format!(
             "onetcli-ssh-test-expand-{}",
             std::time::SystemTime::now()
@@ -926,22 +913,9 @@ mod tests {
         let key_path = ssh_dir.join("id_ed25519");
         std::fs::write(&key_path, "ed25519").expect("应可写入默认私钥");
 
-        let env_key = home_dir_env_key();
-        let previous = std::env::var(env_key).ok();
-        unsafe {
-            std::env::set_var(env_key, &temp_home);
-        }
-
-        let expanded = expand_auto_publickey_auth();
-
-        match previous {
-            Some(value) => unsafe {
-                std::env::set_var(env_key, value);
-            },
-            None => unsafe {
-                std::env::remove_var(env_key);
-            },
-        }
+        let expanded = expand_auto_publickey_auth_with_default_keys(vec![
+            key_path.to_string_lossy().to_string(),
+        ]);
 
         std::fs::remove_dir_all(&temp_home).expect("应可清理临时目录");
 
