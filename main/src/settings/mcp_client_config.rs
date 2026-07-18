@@ -1,9 +1,9 @@
 use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item;
 #[cfg(test)]
 use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item_id;
-use crate::settings::mcp_helper_install::mcp_helper_install_item;
+use crate::settings::mcp_helper_install::mcp_runtime_requirements_item;
 #[cfg(test)]
-use crate::settings::mcp_helper_install::mcp_helper_install_item_id;
+use crate::settings::mcp_helper_install::mcp_runtime_requirements_item_id;
 use anyhow::{Result, bail};
 use gpui::{App, ParentElement, Styled, Window, div};
 use gpui_component::{
@@ -24,7 +24,7 @@ use rust_i18n::t;
 use std::path::PathBuf;
 
 pub fn mcp_client_config_items() -> Vec<SettingItem> {
-    vec![mcp_helper_install_item()]
+    vec![mcp_runtime_requirements_item()]
         .into_iter()
         .chain(
             [
@@ -299,7 +299,7 @@ fn client_config_action_label(health: ClientConfigHealth) -> String {
 
 #[cfg(test)]
 pub(crate) fn mcp_client_config_item_ids() -> Vec<&'static str> {
-    std::iter::once(mcp_helper_install_item_id())
+    std::iter::once(mcp_runtime_requirements_item_id())
         .chain(
             [
                 McpClientConfigTarget::Codex,

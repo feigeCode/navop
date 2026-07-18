@@ -126,14 +126,22 @@ fn validate_npm_distribution(
 }
 
 fn is_valid_scoped_package(package: &str) -> bool {
-    let Some((scope, name)) = package.strip_prefix('@').and_then(|value| value.split_once('/')) else {
+    let Some((scope, name)) = package
+        .strip_prefix('@')
+        .and_then(|value| value.split_once('/'))
+    else {
         return false;
     };
-    !scope.is_empty() && !name.is_empty() && scope.chars().all(package_char) && name.chars().all(package_char)
+    !scope.is_empty()
+        && !name.is_empty()
+        && scope.chars().all(package_char)
+        && name.chars().all(package_char)
 }
 
 fn package_char(character: char) -> bool {
-    character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '-' | '_' | '.')
+    character.is_ascii_lowercase()
+        || character.is_ascii_digit()
+        || matches!(character, '-' | '_' | '.')
 }
 
 fn is_exact_semver(version: &str) -> bool {

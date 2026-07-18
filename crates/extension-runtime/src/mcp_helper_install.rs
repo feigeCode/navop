@@ -7,12 +7,12 @@ use crate::extension_downloader::{
     fetch_manifest_url, install_from_staging_generic,
 };
 
-pub const ONETCLI_PUBLIC_MCP_HELPER_ID: &str = "onetcli-public-mcp";
+pub const NAVOP_MCP_HELPER_ID: &str = "navop-mcp";
 
 pub fn find_mcp_helper_entry(entries: &[MarketplaceEntry]) -> Option<&MarketplaceEntry> {
-    entries.iter().find(|entry| {
-        entry.kind == ExtensionKind::McpHelper && entry.id == ONETCLI_PUBLIC_MCP_HELPER_ID
-    })
+    entries
+        .iter()
+        .find(|entry| entry.kind == ExtensionKind::McpHelper && entry.id == NAVOP_MCP_HELPER_ID)
 }
 
 pub async fn install_mcp_helper_from_marketplace_with_registry(
@@ -37,9 +37,9 @@ pub async fn install_mcp_helper_from_marketplace_with_registry_and_progress(
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_manifest_url(http_client.clone(), manifest_url).await?;
     let entries = manifest.into_entries();
-    let entry = find_mcp_helper_entry(&entries).cloned().ok_or_else(|| {
-        anyhow::anyhow!("扩展市场未找到 MCP helper {ONETCLI_PUBLIC_MCP_HELPER_ID}")
-    })?;
+    let entry = find_mcp_helper_entry(&entries)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("扩展市场未找到 MCP helper {NAVOP_MCP_HELPER_ID}"))?;
     install_mcp_helper_marketplace_entry(http_client, &entry, registry, on_progress).await
 }
 
@@ -55,9 +55,9 @@ pub async fn install_mcp_helper_from_marketplace_with_progress(
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
-    let entry = find_mcp_helper_entry(&entries).cloned().ok_or_else(|| {
-        anyhow::anyhow!("扩展市场未找到 MCP helper {ONETCLI_PUBLIC_MCP_HELPER_ID}")
-    })?;
+    let entry = find_mcp_helper_entry(&entries)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("扩展市场未找到 MCP helper {NAVOP_MCP_HELPER_ID}"))?;
     let registry =
         ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))?;
     let registry = registry
@@ -101,17 +101,14 @@ mod tests {
     #[test]
     fn find_mcp_helper_entry_matches_kind_and_stable_id() {
         let entries = vec![
-            entry("onetcli-public-mcp", ExtensionKind::DatabaseDriver),
+            entry("navop-mcp", ExtensionKind::DatabaseDriver),
             entry("other-helper", ExtensionKind::McpHelper),
-            entry("onetcli-public-mcp", ExtensionKind::McpHelper),
+            entry("navop-mcp", ExtensionKind::McpHelper),
         ];
 
         let found = super::find_mcp_helper_entry(&entries);
 
-        assert_eq!(
-            Some("onetcli-public-mcp"),
-            found.map(|entry| entry.id.as_str())
-        );
+        assert_eq!(Some("navop-mcp"), found.map(|entry| entry.id.as_str()));
     }
 
     #[test]
@@ -122,14 +119,14 @@ mod tests {
         let manifest = format!(
             r#"{{
                 "extensions": [{{
-                    "id": "onetcli-public-mcp",
+                    "id": "navop-mcp",
                     "kind": "mcp_helper",
                     "name": "Navop MCP Helper",
                     "version": "1.2.3",
                     "release_tag": "mcp-helper-v1.2.3",
                     "artifacts": {{
                         "universal": {{
-                            "file": "onetcli-public-mcp-universal.tar.gz",
+                            "file": "navop-mcp-mcp-helper-universal.tar.gz",
                             "sha256": "{sha256}"
                         }}
                     }}
@@ -151,9 +148,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(ExtensionKind::McpHelper, summary.kind);
-        assert_eq!("onetcli-public-mcp", summary.name);
+        assert_eq!("navop-mcp", summary.name);
         assert!(summary.path.join("mcp_helper.json").exists());
-        assert!(summary.path.join("onetcli-public-mcp").exists());
+        assert!(summary.path.join("navop-mcp-1.2.3.tgz").exists());
     }
 
     #[test]
@@ -164,14 +161,14 @@ mod tests {
         let manifest = format!(
             r#"{{
                 "extensions": [{{
-                    "id": "onetcli-public-mcp",
+                    "id": "navop-mcp",
                     "kind": "mcp_helper",
                     "name": "Navop MCP Helper",
                     "version": "1.2.3",
                     "release_tag": "mcp-helper-v1.2.3",
                     "artifacts": {{
                         "universal": {{
-                            "file": "onetcli-public-mcp-universal.tar.gz",
+                            "file": "navop-mcp-mcp-helper-universal.tar.gz",
                             "sha256": "{sha256}"
                         }}
                     }}
@@ -199,7 +196,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!("onetcli-public-mcp", summary.name);
+        assert_eq!("navop-mcp", summary.name);
         let events = events.lock().unwrap();
         assert!(events.iter().any(|event| {
             matches!(
@@ -229,16 +226,17 @@ mod tests {
     fn mcp_helper_tarball_bytes() -> Vec<u8> {
         let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         let mut archive = tar::Builder::new(encoder);
-        append_executable_bytes(&mut archive, "onetcli-public-mcp", b"helper");
+        append_bytes(&mut archive, "navop-mcp-1.2.3.tgz", b"npm-package");
         append_bytes(
             &mut archive,
             "mcp_helper.json",
             br#"{
-                "id": "onetcli-public-mcp",
-                "name": "Navop MCP Helper",
-                "description": "Public MCP bridge",
+                "id": "navop-mcp",
+                "name": "Navop MCP",
+                "description": "TypeScript MCP bridge and domain CLI",
                 "version": "1.2.3",
-                "entry": { "command": "./onetcli-public-mcp" }
+                "entry": { "command": "npx", "args": ["-y", "@navop/mcp@1.2.3", "mcp"] },
+                "distribution": { "type": "npm", "package": "@navop/mcp", "version": "1.2.3" }
             }"#,
         );
         let encoder = archive.into_inner().unwrap();
@@ -266,14 +264,6 @@ mod tests {
         bytes: &[u8],
     ) {
         append_bytes_with_mode(archive, name, bytes, 0o644);
-    }
-
-    fn append_executable_bytes(
-        archive: &mut tar::Builder<flate2::write::GzEncoder<Vec<u8>>>,
-        name: &str,
-        bytes: &[u8],
-    ) {
-        append_bytes_with_mode(archive, name, bytes, 0o755);
     }
 
     fn append_bytes_with_mode(

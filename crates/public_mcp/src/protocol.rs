@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-const SERVER_NAME: &str = "onetcli-public-mcp";
+const SERVER_NAME: &str = "navop-public-mcp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]

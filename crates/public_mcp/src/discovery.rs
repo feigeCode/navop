@@ -51,6 +51,12 @@ impl DiscoveryDocument {
         Ok(format!("{}:{}", self.host, self.port).parse()?)
     }
 
+    pub fn legacy_compatible(&self) -> Self {
+        let mut document = self.clone();
+        document.app = LEGACY_APP_NAME.to_string();
+        document
+    }
+
     pub fn validate_for_stdio_bridge(&self) -> Result<()> {
         if self.version != DISCOVERY_VERSION {
             bail!(
@@ -77,10 +83,12 @@ impl DiscoveryDocument {
 }
 
 pub fn public_mcp_discovery_path() -> PathBuf {
-    let base = dirs::config_dir()
-        .or_else(dirs::data_dir)
-        .unwrap_or_else(std::env::temp_dir);
+    let base = default_config_dir();
     public_mcp_discovery_path_from(&base)
+}
+
+pub fn legacy_public_mcp_discovery_path() -> PathBuf {
+    legacy_public_mcp_discovery_path_from(&default_config_dir())
 }
 
 pub fn public_mcp_discovery_path_from(base: &Path) -> PathBuf {
@@ -89,6 +97,12 @@ pub fn public_mcp_discovery_path_from(base: &Path) -> PathBuf {
 
 pub fn legacy_public_mcp_discovery_path_from(base: &Path) -> PathBuf {
     base.join(LEGACY_APP_NAME).join(DISCOVERY_FILE_NAME)
+}
+
+fn default_config_dir() -> PathBuf {
+    dirs::config_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 pub fn read_discovery(path: &Path) -> Result<DiscoveryDocument> {

@@ -127,7 +127,7 @@ mod tests {
 
         assert_eq!(
             vec![
-                "mcp-install-helper",
+                "mcp-runtime-requirements",
                 "mcp-install-codex-config",
                 "mcp-install-claude-code-config",
                 "mcp-copy-agent-config"

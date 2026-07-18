@@ -48,6 +48,21 @@ fn discovery_validation_accepts_navop_and_legacy_onetcli_apps() {
 }
 
 #[test]
+fn legacy_compatible_discovery_preserves_endpoint_and_token() {
+    let document = DiscoveryDocument::new(
+        1,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+        "a".repeat(64),
+        PublicMcpMode::Persistent,
+    );
+    let legacy = document.legacy_compatible();
+    assert_eq!("onetcli", legacy.app);
+    assert_eq!(document.host, legacy.host);
+    assert_eq!(document.port, legacy.port);
+    assert_eq!(document.token, legacy.token);
+}
+
+#[test]
 fn discovery_paths_prefer_new_navop_brand_and_retain_legacy_path() {
     let root = std::path::Path::new("/tmp/config");
     assert_eq!(

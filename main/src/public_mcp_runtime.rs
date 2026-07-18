@@ -20,7 +20,8 @@ use one_core::gpui_tokio::Tokio;
 use one_core::settings::{AppSettings, McpPermissionMode};
 use public_mcp::approval::PublicMcpApprovalManager;
 use public_mcp::discovery::{
-    public_mcp_discovery_path, read_discovery, remove_discovery, write_discovery,
+    legacy_public_mcp_discovery_path, public_mcp_discovery_path, read_discovery, remove_discovery,
+    write_discovery,
 };
 use public_mcp::runtime::PublicMcpRuntime;
 use public_mcp::tools::InternalFunctionDefinition;
@@ -43,6 +44,7 @@ impl Drop for GlobalPublicMcpRuntime {
     fn drop(&mut self) {
         if self.runtime.is_some() {
             let _ = remove_discovery(&public_mcp_discovery_path());
+            let _ = remove_discovery(&legacy_public_mcp_discovery_path());
             tracing::debug!("Public MCP runtime stopped");
         }
     }
@@ -51,6 +53,7 @@ impl Drop for GlobalPublicMcpRuntime {
 pub fn init(cx: &mut App) {
     let discovery_path = public_mcp_discovery_path();
     let _ = remove_discovery(&discovery_path);
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
     ai_chat_view::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
     ai_chat_view::set_acp_tool_mode_provider(
         cx,
@@ -308,6 +311,7 @@ fn next_generation(cx: &mut App) -> u64 {
     state.active_config = None;
     state.status = state.status.clone().starting(state.generation);
     let _ = remove_discovery(&public_mcp_discovery_path());
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
     state.generation
 }
 
@@ -355,11 +359,25 @@ fn stop_runtime(cx: &mut App) {
     state.active_config = None;
     state.status = state.status.clone().disabled();
     let _ = remove_discovery(&public_mcp_discovery_path());
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
 }
 
 fn publish_runtime_discovery(runtime: &PublicMcpRuntime) -> anyhow::Result<()> {
-    let document = read_discovery(runtime.discovery_path())?;
-    write_discovery(&public_mcp_discovery_path(), &document)?;
+    publish_discovery_documents(
+        runtime.discovery_path(),
+        &public_mcp_discovery_path(),
+        &legacy_public_mcp_discovery_path(),
+    )
+}
+
+fn publish_discovery_documents(
+    source: &std::path::Path,
+    canonical: &std::path::Path,
+    legacy: &std::path::Path,
+) -> anyhow::Result<()> {
+    let document = read_discovery(source)?;
+    write_discovery(canonical, &document)?;
+    write_discovery(legacy, &document.legacy_compatible())?;
     Ok(())
 }
 
@@ -371,7 +389,8 @@ fn staged_discovery_path(generation: u64) -> PathBuf {
 mod tests {
     use super::{
         GlobalPublicMcpRuntime, PublicMcpRuntimeStatus, mcp_permission_mode_for_tool_execution,
-        next_generation, staged_discovery_path, tool_execution_mode_for_permission,
+        next_generation, publish_discovery_documents, staged_discovery_path,
+        tool_execution_mode_for_permission,
     };
     use agent_runtime::ToolExecutionMode;
     use gpui::{Subscription, TestAppContext};
@@ -392,6 +411,35 @@ mod tests {
             Some("public-mcp-42.staging.json"),
             staged.file_name().and_then(|name| name.to_str())
         );
+    }
+
+    #[test]
+    fn publishing_discovery_keeps_legacy_installed_helpers_working() {
+        use public_mcp::discovery::{
+            DiscoveryDocument, PublicMcpMode, read_discovery, write_discovery,
+        };
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("staged.json");
+        let canonical = dir.path().join("navop/public-mcp.json");
+        let legacy = dir.path().join("onetcli/public-mcp.json");
+        let document = DiscoveryDocument::new(
+            1,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+            "a".repeat(64),
+            PublicMcpMode::Persistent,
+        );
+        write_discovery(&source, &document).unwrap();
+
+        publish_discovery_documents(&source, &canonical, &legacy).unwrap();
+
+        let current = read_discovery(&canonical).unwrap();
+        let old = read_discovery(&legacy).unwrap();
+        assert_eq!("navop", current.app);
+        assert_eq!("onetcli", old.app);
+        assert_eq!(current.port, old.port);
+        assert_eq!(current.token, old.token);
     }
 
     #[test]

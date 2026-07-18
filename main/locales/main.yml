@@ -1470,70 +1470,22 @@ Settings:
         en: Install
         zh-CN: 安装
         zh-HK: 安裝
-      install_helper:
-        en: Install MCP Helper
-        zh-CN: 安装 MCP Helper
-        zh-HK: 安裝 MCP Helper
-      install_helper_desc:
-        en: Download the public MCP helper from the extension marketplace before writing client configs
-        zh-CN: 从扩展市场下载 Public MCP helper，然后再写入客户端配置
-        zh-HK: 從擴展市場下載 Public MCP helper，然後再寫入客戶端配置
-      install_helper_button:
-        en: Download
-        zh-CN: 下载
-        zh-HK: 下載
-      install_helper_started:
-        en: Installing MCP helper from extension marketplace...
-        zh-CN: 正在从扩展市场安装 MCP helper...
-        zh-HK: 正在從擴展市場安裝 MCP helper...
-      install_helper_already_running:
-        en: MCP helper installation is already running
-        zh-CN: MCP helper 正在安装中
-        zh-HK: MCP helper 正在安裝中
-      install_helper_success:
-        en: "MCP helper installed: %{path}"
-        zh-CN: "MCP helper 已安装：%{path}"
-        zh-HK: "MCP helper 已安裝：%{path}"
-      install_helper_failed:
-        en: "Failed to install MCP helper: %{error}"
-        zh-CN: "MCP helper 安装失败：%{error}"
-        zh-HK: "MCP helper 安裝失敗：%{error}"
-      helper_status_installed:
-        en: "Installed at %{path}"
-        zh-CN: "已安装：%{path}"
-        zh-HK: "已安裝：%{path}"
-      helper_status_missing:
-        en: "Expected at %{path}"
-        zh-CN: "预期路径：%{path}"
-        zh-HK: "預期路徑：%{path}"
-      helper_status_unusable:
-        en: "MCP helper is not executable: %{path}"
-        zh-CN: "MCP helper 不可执行：%{path}"
-        zh-HK: "MCP helper 不可執行：%{path}"
-      helper_status_installing:
-        en: Installing from extension marketplace...
-        zh-CN: 正在从扩展市场安装...
-        zh-HK: 正在從擴展市場安裝...
-      helper_status_connecting:
-        en: Connecting to download source...
-        zh-CN: 正在连接下载源...
-        zh-HK: 正在連接下載源...
-      helper_status_downloading:
-        en: "Downloading MCP helper %{percent}%"
-        zh-CN: "正在下载 MCP helper %{percent}%"
-        zh-HK: "正在下載 MCP helper %{percent}%"
-      helper_status_downloading_unknown:
-        en: Downloading MCP helper...
-        zh-CN: 正在下载 MCP helper...
-        zh-HK: 正在下載 MCP helper...
-      helper_status_retrying:
-        en: Download source failed, retrying...
-        zh-CN: 下载源失败，正在重试...
-        zh-HK: 下載源失敗，正在重試...
-      helper_status_installing_package:
-        en: Installing MCP helper...
-        zh-CN: 正在安装 MCP helper...
-        zh-HK: 正在安裝 MCP helper...
+      runtime_requirements:
+        en: Node.js and Navop CLI
+        zh-CN: Node.js 与 Navop CLI
+        zh-HK: Node.js 與 Navop CLI
+      runtime_requirements_desc:
+        en: Navop clients launch the exact recommended @navop/mcp version through npx; it is downloaded and cached by npm, not installed from the extension marketplace
+        zh-CN: Navop 客户端通过 npx 启动精确的推荐 @navop/mcp 版本，由 npm 下载并缓存，不再从扩展市场安装
+        zh-HK: Navop 客戶端透過 npx 啟動精確的建議 @navop/mcp 版本，由 npm 下載並快取，不再從擴充功能市集安裝
+      runtime_requirements_ready:
+        en: "%{package} will run through %{path}"
+        zh-CN: "%{package} 将通过 %{path} 运行"
+        zh-HK: "%{package} 將透過 %{path} 執行"
+      runtime_requirements_missing:
+        en: "Node.js/npx is unavailable: %{error}"
+        zh-CN: "Node.js/npx 不可用：%{error}"
+        zh-HK: "Node.js/npx 無法使用：%{error}"
       install_codex_config:
         en: Install Codex MCP Config
         zh-CN: 安装 Codex MCP 配置
