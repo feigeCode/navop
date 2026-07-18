@@ -119,7 +119,7 @@ fn conversion_does_not_overwrite_existing_markdown() -> Result<()> {
 }
 
 #[test]
-fn conversion_rejects_unsupported_rich_text_without_creating_markdown() -> Result<()> {
+fn conversion_normalizes_rich_text_marks_that_markdown_cannot_preserve() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     storage.create_notebook("Notes", "")?;
@@ -131,17 +131,41 @@ fn conversion_rejects_unsupported_rich_text_without_creating_markdown() -> Resul
     document = cditor_app::EditorDocument::from_json(&serde_json::to_string(&value)?)?;
     std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
 
-    assert!(
-        storage
-            .convert_rich_text_to_markdown(&rich_text.relative_path)
-            .is_err()
+    let converted = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
+    assert_eq!("Body", std::fs::read_to_string(converted.absolute_path)?);
+    Ok(())
+}
+
+#[test]
+fn conversion_exports_whiteboard_preview_and_editable_source() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    storage.create_notebook("Notes", "")?;
+    let rich_text = storage.create_document(Path::new(""), "Board")?;
+    let runtime = cditor_app::runtime::DocumentRuntime::from_payloads(
+        1,
+        vec![cditor_app::core::rich_text::BlockPayloadRecord {
+            block_id: 1,
+            content_version: 1,
+            kind: cditor_app::core::rich_text::RichBlockKind::Whiteboard,
+            payload: cditor_app::core::rich_text::BlockPayload::Whiteboard(
+                cditor_app::core::rich_text::WhiteboardPayload {
+                    scene_json: r#"{"camera":{"x":0.0,"y":0.0,"zoom":1.0},"elements":[]}"#
+                        .to_owned(),
+                },
+            ),
+        }],
+        720.0,
     );
-    assert!(
-        !rich_text
-            .absolute_path
-            .with_file_name("Underlined.md")
-            .exists()
-    );
+    let document = cditor_app::EditorDocument::from_runtime(&rich_text.document_id, &runtime)?;
+    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
+
+    let converted = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
+    let markdown = std::fs::read_to_string(&converted.absolute_path)?;
+    assert!(markdown.contains("cditor:whiteboard"));
+    let assets = converted.absolute_path.with_file_name("Board.assets");
+    assert!(assets.join("whiteboard-1.svg").is_file());
+    assert!(assets.join("whiteboard-1.cditor-board.json").is_file());
     Ok(())
 }
 

@@ -2,7 +2,7 @@ use crate::path_policy::{MARKDOWN_SUFFIX, document_display_name};
 use crate::storage_support::write_text_atomic_new;
 use crate::{DocumentDescriptor, DocumentFormat, NotesStorage};
 use anyhow::{Context, Result, bail};
-use cditor_app::{EditorDocument, MarkdownExportMode};
+use cditor_app::{EditorDocument, MarkdownBundleOptions, MarkdownExportMode};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -17,7 +17,6 @@ impl NotesStorage {
             bail!("only rich-text documents can be converted to Markdown");
         }
         let document = EditorDocument::from_json(&fs::read_to_string(&source.absolute_path)?)?;
-        let exported = document.export_markdown(MarkdownExportMode::Strict)?;
         let file_name = source
             .relative_path
             .file_name()
@@ -43,7 +42,27 @@ impl NotesStorage {
                 relative_target.display()
             );
         }
+        let target_store =
+            crate::markdown_file_store::MarkdownFileStore::new(absolute_target.clone());
+        let asset_directory = target_store.asset_directory()?;
+        let exported = document.export_markdown_bundle(
+            MarkdownExportMode::BestEffort,
+            &MarkdownBundleOptions {
+                asset_directory: asset_directory.clone(),
+                ..MarkdownBundleOptions::default()
+            },
+        )?;
         write_text_atomic_new(&absolute_target, &exported.markdown)?;
+        if let Err(error) = target_store.write_assets(&exported.assets) {
+            let _ = fs::remove_file(&absolute_target);
+            let _ = fs::remove_dir_all(
+                absolute_target
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(asset_directory),
+            );
+            return Err(error);
+        }
         let descriptor = DocumentDescriptor {
             document_id: Uuid::new_v4().to_string(),
             format: DocumentFormat::Markdown,
