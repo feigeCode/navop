@@ -14,7 +14,7 @@
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="下载量" /></a>
     <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
-    <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Supplementary-blue?style=for-the-badge" alt="许可证" /></a>
+    <a href="#许可证"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20GPL%20component-blue?style=for-the-badge" alt="许可证：Apache-2.0 与 GPL 组件" /></a>
     <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ 群 860670605" /></a>
     <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="加入微信群" /></a>
   </p>
@@ -56,18 +56,15 @@
   </p>
 </div>
 
-## v0.8.0 更新亮点
+## v0.8.10 更新亮点
 
-- **AI Agent 与 Function Calling** — AI Agent 支持通过工具调用完成结构化任务，支持通过工具加载 skills，并优化资源池、资源 mention 和资源目录刷新体验。
-- **Public MCP、CLI 与 Agent Skill** — 外部 Codex、Claude 和其他 MCP 客户端可通过 `@navop/mcp` 连接 Navop 的认证 loopback runtime；工具、Schema、Tool Exposure、权限、会话与审批仍全部以宿主为准。
-- **HTML 预览流程** — HTML 代码块支持在浏览器中打开，也支持通过应用内弹窗进行渲染预览，避免在聊天内容中出现干扰阅读的内联预览。
-- **数据库比较与同步** — 优化 schema/data compare 窗口、比较目标加载、多表同步和数据库比较同步稳定性。
-- **终端效率提升** — 新增终端命令历史面板，支持 SSH 多窗口广播输入，并优化远程 shell integration 的安装、卸载和环境变量处理。
-- **连接导入** — 新增从其他应用导入连接的入口，并优化首页侧边栏布局。
-- **团队功能入口** — 新增团队管理入口，并通过功能开关控制展示范围。
-- **扩展与语言包** — 新增 language bundle 扩展类型，支持检测和安装语言包。
-- **渲染与字体修复** — 修复字体 fallback / 字体渲染导致的乱码问题，并优化渲染进程阻塞导致的连接列表、数据列表滚动卡顿。
-- **设置与 UI 打磨** — API Key 输入框支持显示/隐藏切换，输入组件支持本地主题样式，窗口和选择组件布局适配进一步优化。
+- **Notes 笔记工作区** — 新增本地 Markdown 文档、富文本与 Markdown 双向转换、白板 Markdown bundle、可配置文档位置、编辑器快捷键和 Cditor AI Provider。
+- **文档渲染** — 新增 Tree-sitter 语法高亮、Mermaid 和数学公式渲染、扩展提供的渲染器，以及渲染器预热、缓存和主题同步。
+- **终端工作区** — 新增原生可拖拽分屏、跨工作区标签转移、快捷命令分组、广播输入和更清晰的拖放放置反馈。
+- **终端诊断** — 新增有界的 `terminal.read` 滚屏检查，并为可见终端和后台命令流程增加更安全的执行前检查。
+- **Public MCP 与 Agent 集成** — 完成 Navop npm runtime 迁移，新增 MongoDB 工具和宿主权威能力发现，并优化 ACP 与 Public MCP 审批流程。
+- **Redis 与文件工作流** — 新增独立 Redis 工具页签、多数据库连接、服务端 Key 分页、二进制安全的 String 查看，以及关联数据库/Markdown 文件打开。
+- **扩展与发版稳定性** — 增加渲染器资源和执行时间限制，保留体积优化的 release profile，并修复 `-D warnings` 下的跨平台 release 构建失败。
 
 
 ## 为什么选择 Navop？
@@ -109,11 +106,15 @@
 
 ### Redis 与 MongoDB
 
-专用 Redis 视图支持键浏览、值查看与集群连接。MongoDB 视图支持集合浏览、文档查看与查询。
+专用 Redis 视图支持多数据库 Key 浏览、服务端分页、二进制安全的 String 查看与集群连接。MongoDB 视图支持集合浏览、文档查看、查询，以及通过 Public MCP 暴露由 Navop 宿主权威定义的 MongoDB 工具。
+
+### Notes 笔记
+
+Notes 工作区支持本地 Markdown 文档、富文本与 Markdown 双向转换、白板 Markdown bundle、语法高亮、Mermaid 和数学公式渲染。文档位置、编辑器快捷键和 AI Provider 均可配置，渲染能力还可以通过扩展提供和更新。
 
 ### SSH、SFTP、端口转发、串口与终端
 
-集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，支持多标签页同时操作。本地终端可选择系统默认、PowerShell、CMD、WSL、Git Bash，或配置自定义程序与安全解析的启动参数。终端还支持命令历史、SSH 多窗口广播输入和远程 shell integration 管理。内置 SFTP 侧边栏支持拖拽上传，也支持从系统文件管理器复制文件后直接粘贴上传，并可通过路径收藏快速跳转到常用目录。终端会话还支持粘贴剪贴板图片，并将图片传递给兼容的服务器端 TUI 应用。
+集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，并可在原生可拖拽分屏工作区中排列终端。本地终端可选择系统默认、PowerShell、CMD、WSL、Git Bash，或配置自定义程序与安全解析的启动参数。终端还支持快捷命令分组、命令历史、广播输入、有界 `terminal.read` 诊断和远程 shell integration 管理。内置 SFTP 侧边栏支持拖拽上传，也支持从系统文件管理器复制文件后直接粘贴上传，并可通过路径收藏快速跳转到常用目录。终端会话还支持粘贴剪贴板图片，并将图片传递给兼容的服务器端 TUI 应用。
 
 ### 端口转发
 
@@ -336,7 +337,7 @@ Navop 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle �
 <details>
 <summary><strong>Navop 是免费的吗？</strong></summary>
 
-所有功能不依赖赞助解锁。源码基于 Apache License 2.0 开源，分发和产品化使用还需要遵守 Navop 补充协议。
+所有功能不依赖赞助解锁。Navop 自有源码适用 Apache License 2.0 和 Navop 补充协议；Notes 工作区同时包含 GPL 许可证的 Cditor 依赖，发行物还必须遵守所有适用的第三方许可证条款。
 </details>
 
 <details>
@@ -366,9 +367,11 @@ ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
 
 ## 许可证
 
-本项目基于 [Apache License 2.0](LICENSE-APACHE) 开源。
+Navop 源代码基于 [Apache License 2.0](LICENSE-APACHE) 开源。
 
-Navop 应用的分发与使用须同时遵守 [Navop 补充协议](NAVOP_LICENSE)，该补充协议在 Apache 2.0 基础上增加以下限制：
+Notes 工作区包含 [Cditor](https://github.com/feigeCode/Cditor) 这一 GPL 许可证依赖。包含 Cditor 组件的发行物和相关衍生分发必须遵守适用的 GNU GPL 条款，以及 Cditor 提供的许可证和版权声明。
+
+Navop 自有代码还须遵守 [Navop 补充协议](NAVOP_LICENSE)，该补充协议在 Apache 2.0 基础上增加以下限制。补充协议不会替代或限制 Cditor 等第三方组件自身适用的许可证：
 
 - 禁止二次分发、转售或将本软件作为独立产品再分发
 - 禁止基于本软件代码创建竞争性产品或服务
