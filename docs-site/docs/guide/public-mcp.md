@@ -18,13 +18,56 @@ Tool Exposure 可分别开放 Terminal、SSH Exec、可见终端、Connections�
 
 Public MCP 客户端桥接需要 Node.js 20+ 和可用的 `npx`。先在终端确认版本，再从 Navop 设置页复制 Codex、Claude Desktop、Claude Code 或通用 MCP JSON 配置。不同客户端的配置位置与重启方式不同，应按界面生成的内容操作。
 
-Navop 还可安装或更新供 Codex 与 Agents 使用的 Navop Skill。Skill 提供使用指导，不会把 npm 包变成静态工具 registry；客户端仍需连接运行中的 Navop 才能获取真实工具。
+Navop 还可安装或更新供 Codex 与 Agents 使用的 Navop Skill。使用 Skill 前必须全局安装 `@navop/cli`；AI Agent 通过 `navop ... --json` 发现并操作 Navop 中的数据库、SSH、终端、文件、连接和工作区资源。Skill 不会把所有工具说明静态写进提示词，而是指导 Agent 在需要时查询状态、命令和实时 Schema。
 
-## 使用 @navop/mcp CLI
+## 为什么使用 Navop Skill
 
-`@navop/mcp` CLI 提供 `status`、`tools`、`schema`、`call` 和 `mcp` 等命令。`status` 检查发现与服务状态，`tools` 列出当前暴露工具，`schema` 读取实时参数定义，`call` 调用指定工具，`mcp` 为兼容客户端运行桥接。
+直接把 Navop 配置为原生 MCP Server 时，客户端可能在每轮对话中向模型携带大量已暴露工具的名称、描述和 JSON Schema。随着工具增多，这些重复定义会占用上下文并增加 Token 消耗。Navop Skill 让 AI Agent 平时只保留紧凑工作流，真正执行任务时再通过终端按需运行 `navop` 的状态、领域命令或 `tool schema/call`。
 
-使用 `npx @navop/mcp ...` 前确认包来源和版本。工具列表、资源 ID 和参数必须从当前 `tools`/`schema` 结果获取，不允许猜测连接 ID、复用其他设备的 ID 或绕过审批。
+```bash
+npm install -g @navop/cli@latest
+navop skill install --target codex --scope user
+navop status --json
+navop db query --help
+navop tool schema <tool-name> --json
+navop tool call <tool-name> --arguments '<json-object>' --json
+```
+
+下面是几类常见的只读操作示例。占位符必须替换为 Navop 实时返回的连接或会话 ID，执行前应先运行对应命令的 `--help` 或读取实时 Schema：
+
+```bash
+# 发现当前资源与会话
+navop connections list --json
+navop connections sessions --json
+
+# SSH：在已打开的 SSH 会话中执行命令
+navop ssh exec --target <ssh-session-id> --command 'uname -a' --json
+
+# SFTP：列出远程日志目录
+navop sftp list --connection <ssh-connection-id-or-name> --path /var/log --json
+
+# Redis：读取一个 Key
+navop redis get --connection-id <redis-connection-id-or-name> --key app:status --json
+
+# MongoDB：查询活动用户
+navop mongo find --connection-id <mongo-session-id> --database app --collection users --filter '{"active":true}' --limit 20 --json
+
+# SQL 数据库：执行只读查询
+navop db query --connection <database-connection-id-or-name> --sql 'SELECT 1' --json
+
+# 可见终端：读取最近输出
+navop terminal read --target <terminal-session-id> --lines 80 --json
+```
+
+这种方式特别适合 Codex 等能够执行终端命令的 Agent：无需把完整 Navop 工具目录预先注册到每一轮模型上下文，就能按任务发现当前工具和资源，通常可以减少重复上下文和 Token 开销。实际节省量取决于客户端如何注入 MCP 工具定义以及当前启用的工具数量。
+
+Skill 并不意味着底层完全绕开 MCP。`navop` CLI 内部仍连接 Navop 的本机认证 Public MCP endpoint，Navop 继续负责 Tool Exposure、资源 ID、权限、审批、会话、结果和审计。Skill 只是改变 Agent 侧的使用方式：从“每轮携带整套工具”改成“通过终端按需发现和调用”。
+
+## 使用 @navop/cli
+
+`@navop/cli` 提供 `status`、`tools`、`schema`、`call` 及各资源领域命令。独立的 `@navop/mcp` 只负责为兼容客户端运行 stdio 桥接。
+
+使用 `navop ...` 前确认包来源。工具列表、资源 ID 和参数必须从当前 `tools`/`schema` 结果获取，不允许猜测连接 ID、复用其他设备的 ID 或绕过审批。
 
 ## 审批、资源与故障处理
 
@@ -34,25 +77,34 @@ Navop 还可安装或更新供 Codex 与 Agents 使用的 Navop Skill。Skill �
 
 ## 安装前检查
 
-Public MCP 由正在运行的 Navop 提供真实工具，`@navop/mcp` 只是外部客户端、CLI、Skill 和 stdio 桥接层。开始前确认：
+Public MCP 由正在运行的 Navop 提供真实工具；`@navop/client` 是共享连接层，`@navop/cli` 提供终端命令和 Skill，`@navop/mcp` 只提供 stdio 桥接。开始前确认：
 
 1. Navop 正在运行，并已在“设置 → 通用 → MCP”启用 MCP Server。
 2. 当前设备已安装 Node.js 20 或更高版本，并能运行 `npx`。
 3. 已选择合适的 Permission Profile。
 4. Tool Exposure 只开放当前任务需要的能力组。
-5. 外部客户端使用 Navop 推荐的 `@navop/mcp` 精确版本。
+5. AI Agent 已全局安装 `@navop/cli@latest`；原生 MCP 客户端使用 `@navop/mcp@latest`。
 
 ## CLI 自检流程
 
 下面的命令适合确认运行时、工具列表和单个工具 Schema。示例版本以当前 README 为准；实际使用时优先复制 Navop 设置页给出的精确命令。
 
 ```bash
-npx -y @navop/mcp@0.1.2 status --json
-npx -y @navop/mcp@0.1.2 tools --json
-npx -y @navop/mcp@0.1.2 schema <tool-name> --json
-npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
-npx -y @navop/mcp@0.1.2 mcp
+navop status --json
+navop tools --json
+navop schema <tool-name> --json
+navop call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@latest
 ```
+
+需要确认或更新 CLI 时运行：
+
+```bash
+npm view @navop/cli version
+navop --version
+```
+
+使用 Skill 前运行 `npm install -g @navop/cli@latest`；更新已安装的 CLI 可运行 `npm update -g @navop/cli`。
 
 推荐的排查顺序是 `status → tools → schema → call`。不要猜测工具名称、参数或资源 ID；资源 ID 应来自 Navop 实时返回的连接、会话或工作区结果。
 

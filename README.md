@@ -1,4 +1,4 @@
-> 老仓库 / Legacy repository：<https://github.com/feigeCode/onetcli> · [![OnetCli Stars](https://img.shields.io/github/stars/feigeCode/onetcli?style=flat-square&logo=github&label=OnetCli%20Stars)](https://github.com/feigeCode/onetcli)
+> Navop desktop workspace: <https://github.com/feigeCode/navop>
 
 <div align="center">
   <p>
@@ -144,17 +144,27 @@ Navop includes an authenticated Public MCP runtime for external Codex, Claude, M
 
 The runtime binds to a dynamic loopback-only port and requires the 64-character token stored in Navop's user-only discovery file. Navop remains the only tool implementation, security, permission, approval, connection/session, and audit boundary. The built-in Agent continues to call the internal Rust ToolRegistry directly; it does not reconnect to Navop through npm.
 
-External clients use the separately published [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package as a thin stdio bridge, host-driven CLI, and installable Agent Skill:
+External MCP clients use the separately published [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) stdio bridge. AI Agents use the separately published [`@navop/cli`](https://github.com/feigeCode/navop-mcp) package and its bundled Skill:
 
 ```bash
-npx -y @navop/mcp@0.1.2 status --json
-npx -y @navop/mcp@0.1.2 tools --json
-npx -y @navop/mcp@0.1.2 schema <tool-name> --json
-npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
-npx -y @navop/mcp@0.1.2 mcp
+npm install -g @navop/cli@latest
+navop status --json
+navop tools --json
+navop schema <tool-name> --json
+navop call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@latest
 ```
 
-The npm version is the version of the external client, CLI, Skill, and stdio launcher—not the version of Navop's host tool registry. Tool names, descriptions, schemas, annotations, Tool Exposure groups, permission mode, sessions, and results come from the running Navop host through MCP `initialize`, `tools/list`, `tools/call`, and the read-only `navop.runtime_status` tool. Navop can therefore add or update host tools without requiring a synchronized npm release.
+The Navop Skill gives an AI Agent a lower-context terminal workflow instead of registering the complete Navop tool catalog as native MCP tools in every turn. It uses `navop status`, `navop db query`, `navop ssh exec`, or the live `tool schema/call` interface. The Agent loads the compact Skill, then discovers a command or schema only when the task needs it. This avoids repeatedly placing a large set of tool names, descriptions, and JSON schemas into model context and can reduce repeated context and Token overhead when many tools are exposed.
+
+The Skill and CLI do not bypass or replace the Navop host runtime. CLI commands still connect to the authenticated loopback Public MCP endpoint internally, and the running Navop application remains authoritative for tools, schemas, resource ids, Tool Exposure, permissions, approvals, sessions, results, and auditing.
+
+| Agent integration | Context behavior | Best fit |
+| --- | --- | --- |
+| Native MCP tools | The client may advertise many enabled Navop tools and schemas to the model on each turn. | Clients that prefer direct structured tool calling and can manage the larger tool context. |
+| Navop Skill + terminal CLI | The Agent keeps a compact Skill and discovers status, commands, and schemas on demand before running `navop ... --json`. | Codex and terminal-capable AI Agents that want broad Navop access with a smaller recurring context and lower token overhead. |
+
+The npm packages version the shared client, CLI/Skill, and stdio bridge, not Navop's host tool registry. Tool names, descriptions, schemas, annotations, Tool Exposure groups, permission mode, sessions, and results come from the running Navop host through MCP `initialize`, `tools/list`, `tools/call`, and the read-only `navop.runtime_status` tool. Navop can therefore add or update host tools without requiring a synchronized npm release.
 
 Current Public MCP capability groups include:
 
@@ -181,7 +191,38 @@ Navop permission profiles map to Public MCP behavior:
 | Confirm / `ask` | mutations require approval in the Navop UI |
 | Auto / `allow` | mutations run automatically; destructive intent must still be explicit |
 
-Navop can install and inspect exact-version Codex and Claude Code MCP configurations, copy a generic MCP JSON configuration, and install/update the bundled `navop` Skill for Codex or Agents-compatible clients. The Skill does not embed a static tool manual; it instructs Agents to obtain current methods from `navop status`, `tools/list`, and live tool schemas.
+Navop can install and inspect Codex and Claude Code MCP configurations, copy a generic MCP JSON configuration, and install/update the bundled `navop` Skill for Codex or Agents-compatible clients. The Skill does not embed a static tool manual or preload every tool schema. It teaches Agents to use `navop`, begin with `status --json`, inspect only the required command or live schema, and then operate the selected Navop resource.
+
+```bash
+npm install -g @navop/cli@latest
+navop skill install --target codex --scope user
+navop skill install --target agents --scope user
+navop status --json
+navop db query --help
+navop tool schema <tool-name> --json
+navop tool call <tool-name> --arguments '<json-object>' --json
+npm view @navop/cli version
+navop --version
+```
+
+The baseline documentation uses `@latest` for the install/update source. The CLI must be installed globally before an Agent runs `navop` commands:
+
+```bash
+npm install -g @navop/cli@latest
+navop status --json
+```
+
+Representative read-only terminal workflows follow the same pattern. First discover the current connection or session identifiers; then inspect the live help or schema before running the operation:
+
+```bash
+navop connections sessions --json
+navop ssh exec --target <ssh-session-id> --command 'uname -a' --json
+navop sftp list --connection <ssh-connection-id-or-name> --path /var/log --json
+navop redis get --connection-id <redis-connection-id-or-name> --key app:status --json
+navop mongo find --connection-id <mongo-session-id> --database app --collection users --filter '{"active":true}' --limit 20 --json
+navop db query --connection <database-connection-id-or-name> --sql 'SELECT 1' --json
+navop terminal read --target <terminal-session-id> --lines 80 --json
+```
 
 ### Performance & Rendering
 

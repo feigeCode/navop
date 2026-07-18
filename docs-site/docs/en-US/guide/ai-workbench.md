@@ -18,7 +18,7 @@ Review generated SQL and commands before execution and compare explanations with
 
 Use `@` to reference available connections, query results, files, or resource-pool entries, and attach images when useful. Provide only the minimum data needed; names, result rows, and screenshots may be sensitive.
 
-Skills supply focused workflows and rules. Review their source and permissions before import, manage or remove them as needed, and re-evaluate behavior after updates. A Skill may request tools but cannot bypass Navop permissions.
+Skills supply focused workflows and rules. The Navop Skill lets terminal-capable AI Agents such as Codex operate Navop resources through `navop ... --json`, discovering commands and schemas only when a task needs them instead of carrying the complete MCP tool catalog in every model turn. This can reduce repeated tool-definition context and Token overhead. The CLI still connects to Navop's local Public MCP runtime and cannot bypass Tool Exposure, permissions, or approvals. Review Skill source and permissions before import and re-evaluate behavior after updates.
 
 ## Manage sessions and approvals
 
