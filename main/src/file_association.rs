@@ -424,6 +424,7 @@ fn run_optional_refresh(program: &str, directory: &Path) -> Result<()> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn macos_app_bundle_from_executable(executable: &Path) -> Result<PathBuf> {
     let macos_dir = executable
         .parent()

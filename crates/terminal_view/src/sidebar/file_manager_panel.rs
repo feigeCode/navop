@@ -4923,8 +4923,8 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
-        build_new_file_target_path, build_retry_reset_plan, clear_remote_listing_state,
-        frame_move_options, should_apply_directory_result, should_refresh_after_upload,
+        build_retry_reset_plan, clear_remote_listing_state, frame_move_options,
+        should_apply_directory_result, should_refresh_after_upload,
     };
     use one_core::sidebar_contribution::SidebarPlacement;
     use std::collections::HashSet;
