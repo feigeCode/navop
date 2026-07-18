@@ -1,22 +1,42 @@
-use super::ApprovalEnvelope;
+use super::{AcpApprovalRoute, ApprovalEnvelope};
+use ai_chat_view::{AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalRequest};
 use public_mcp::approval::{
     PublicMcpApprovalFuture, PublicMcpApprovalOutcome, PublicMcpApprovalRequest, PublicMcpApprover,
 };
 use public_mcp::approval_grants::PublicMcpApprovalGrantStore;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
+
+static NEXT_MESSAGE_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(super) struct ChannelApprover {
     sender: mpsc::UnboundedSender<ApprovalEnvelope>,
     timeout: Duration,
-    grants: PublicMcpApprovalGrantStore,
+    routes: PublicMcpApprovalGrantStore<AcpApprovalRoute>,
 }
 
 impl PublicMcpApprover for ChannelApprover {
     fn request_approval(&self, request: PublicMcpApprovalRequest) -> PublicMcpApprovalFuture {
-        if self.grants.consume(&request) {
-            return Box::pin(async { PublicMcpApprovalOutcome::Approved });
+        if let Some(route) = self.routes.take(&request) {
+            let request = AcpPublicMcpApprovalRequest {
+                request_id: format!(
+                    "public-mcp:{}",
+                    NEXT_MESSAGE_APPROVAL_ID.fetch_add(1, Ordering::Relaxed)
+                ),
+                tool_name: request.tool_name,
+                summary: request.summary,
+                details: request.details,
+            };
+            return Box::pin(async move {
+                match (route.provider)(request).await {
+                    AcpPublicMcpApprovalOutcome::Approved => PublicMcpApprovalOutcome::Approved,
+                    AcpPublicMcpApprovalOutcome::Denied => PublicMcpApprovalOutcome::Denied {
+                        reason: Some("operator denied public MCP request".to_string()),
+                    },
+                }
+            });
         }
         let sender = self.sender.clone();
         let timeout = self.timeout;
@@ -49,14 +69,14 @@ impl PublicMcpApprover for ChannelApprover {
 
 pub(super) fn channel_approver(
     timeout: Duration,
-    grants: PublicMcpApprovalGrantStore,
+    routes: PublicMcpApprovalGrantStore<AcpApprovalRoute>,
 ) -> (ChannelApprover, mpsc::UnboundedReceiver<ApprovalEnvelope>) {
     let (sender, receiver) = mpsc::unbounded_channel();
     (
         ChannelApprover {
             sender,
             timeout,
-            grants,
+            routes,
         },
         receiver,
     )
@@ -76,6 +96,7 @@ mod tests {
     use public_mcp::approval::{PublicMcpApprovalOutcome, PublicMcpApprovalRequest};
     use public_mcp::permissions::PublicMcpOperationKind;
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
 
     fn request() -> PublicMcpApprovalRequest {
         PublicMcpApprovalRequest {
@@ -130,18 +151,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn matching_acp_grant_skips_exactly_one_dialog_queue_request() {
-        let grants = PublicMcpApprovalGrantStore::new(Duration::from_secs(10));
-        grants
-            .register(json!({ "target": "ssh-1" }))
-            .expect("valid ACP arguments should create a grant");
-        let (approver, mut receiver) = channel_approver(Duration::from_secs(10), grants);
+    async fn matching_acp_route_uses_message_approval_before_dialog_fallback() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let provider: ai_chat_view::AcpPublicMcpApprovalProvider = Arc::new({
+            let seen = seen.clone();
+            move |request| {
+                seen.lock().expect("seen lock").push(request);
+                Box::pin(async { AcpPublicMcpApprovalOutcome::Approved })
+            }
+        });
+        let routes = PublicMcpApprovalGrantStore::new(Duration::from_secs(10));
+        routes
+            .register_payload(
+                Some(json!({ "target": "ssh-1" })),
+                AcpApprovalRoute { provider },
+            )
+            .expect("valid ACP route should be registered");
+        let (approver, mut receiver) = channel_approver(Duration::from_secs(10), routes);
 
         assert_eq!(
             PublicMcpApprovalOutcome::Approved,
             approver.request_approval(runtime_request()).await
         );
         assert!(receiver.try_recv().is_err());
+        let seen = seen.lock().expect("seen lock");
+        assert_eq!(1, seen.len());
+        assert_eq!("ssh.exec", seen[0].tool_name);
+        assert_eq!(
+            Some("ssh-1"),
+            seen[0]
+                .arguments()
+                .and_then(|arguments| arguments.get("target"))
+                .and_then(serde_json::Value::as_str)
+        );
+        drop(seen);
 
         let approval = tokio::spawn({
             let approver = approver.clone();
@@ -150,7 +193,7 @@ mod tests {
         let envelope = receiver
             .recv()
             .await
-            .expect("the consumed grant must not approve a second request");
+            .expect("the consumed route must not capture a second request");
         envelope.approve();
         assert_eq!(
             PublicMcpApprovalOutcome::Approved,

@@ -107,5 +107,5 @@ fn permission_modes_map_to_unified_runtime_profiles() {
     assert_eq!(PermissionProfile::Auto, auto.mode);
     assert_eq!(OperationPolicy::Allow, auto.read_policy);
     assert_eq!(OperationPolicy::Allow, auto.write_policy);
-    assert_eq!(OperationPolicy::Ask, auto.high_risk_policy);
+    assert_eq!(OperationPolicy::Allow, auto.high_risk_policy);
 }

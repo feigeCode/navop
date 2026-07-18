@@ -114,7 +114,7 @@ fn tool_runtime_provider_requests_approval_for_mutating_tools_and_redacts_secret
 }
 
 #[test]
-fn tool_runtime_provider_asks_for_high_risk_tools_in_allow_mode() {
+fn tool_runtime_provider_runs_high_risk_tools_without_approval_in_allow_mode() {
     let provider = ToolRuntimeMcpProvider::new(ToolRegistry::new(vec![Arc::new(RuntimeWriteTool)]));
     let registry = PublicMcpToolRegistry::new(vec![Arc::new(provider)]);
     let approver = Arc::new(RecordingApprover::approved());
@@ -130,15 +130,13 @@ fn tool_runtime_provider_asks_for_high_risk_tools_in_allow_mode() {
             approver: PublicMcpApprovalManager::new(approver.clone()),
         },
     ))
-    .expect("approved high-risk runtime tool should run");
+    .expect("auto mode high-risk runtime tool should run");
 
     assert_eq!(
         Some(json!({ "written": "ship" })),
         result.structured_content
     );
-    let requests = approver.requests();
-    assert_eq!(1, requests.len());
-    assert_eq!("example.write", requests[0].tool_name);
+    assert!(approver.requests().is_empty());
 }
 
 #[derive(Clone)]

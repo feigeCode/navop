@@ -35,7 +35,11 @@ pub fn permission_policy_for_mode(mode: PermissionMode) -> tool_runtime::Permiss
         PermissionMode::Ask => tool_runtime::PermissionProfile::Confirm,
         PermissionMode::Allow => tool_runtime::PermissionProfile::Auto,
     };
-    tool_runtime::PermissionPolicy::for_profile(profile)
+    let mut policy = tool_runtime::PermissionPolicy::for_profile(profile);
+    if mode == PermissionMode::Allow {
+        policy.high_risk_policy = tool_runtime::OperationPolicy::Allow;
+    }
+    policy
 }
 
 pub fn decide_permission(

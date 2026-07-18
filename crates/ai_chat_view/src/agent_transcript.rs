@@ -11,7 +11,7 @@ use agent_runtime::{
 };
 use std::collections::{HashMap, HashSet};
 
-use crate::acp::{AcpPermissionOption, AcpPermissionRequest};
+use crate::acp::{AcpPermissionOption, AcpPermissionRequest, AcpPublicMcpApprovalRequest};
 use crate::agent_cards::{
     ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, PlanCardData,
     PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
@@ -55,6 +55,8 @@ pub struct AgentTranscript {
     active_subagents: Vec<SubAgentCardData>,
     /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
     resource_labels: HashMap<String, String>,
+    /// 当前会话工具调用的原始入参；用于把精简 ACP permission 与实际 MCP 调用精确关联。
+    tool_inputs: HashMap<String, serde_json::Value>,
     /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
     terminal_events: HashSet<TerminalEventKey>,
 }
@@ -81,6 +83,7 @@ impl AgentTranscript {
         self.acp_status_id = None;
         self.latest_plan = None;
         self.active_subagents.clear();
+        self.tool_inputs.clear();
         self.terminal_events.clear();
     }
 
@@ -357,6 +360,33 @@ impl AgentTranscript {
             .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
     }
 
+    pub(crate) fn push_public_mcp_approval(&mut self, request: &AcpPublicMcpApprovalRequest) {
+        if self.has_pending_tool_confirm(&request.request_id) {
+            return;
+        }
+        self.finish_active_status();
+        self.close_streaming_segment();
+        let arguments = request
+            .arguments()
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let input = build_tool_input_display(&request.tool_name, &arguments);
+        let data = ToolConfirmCardData {
+            call_id: request.request_id.clone(),
+            tool_name: request.tool_name.clone(),
+            items: Vec::new(),
+            input_summary: input.summary,
+            input_json: input.json,
+            question: format!(
+                "设置中已开启“安全确认”，因此 ACP 授权后，实际工具执行仍需再次审批。\n\n如不需要二次审批，可将 MCP 权限模式修改为“自动执行”。\n\n{}",
+                request.summary
+            ),
+            status: "pending".into(),
+        };
+        self.messages
+            .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+    }
+
     fn apply_terminal_event(&mut self, event: &RuntimeEvent) {
         self.finish_active_status();
         match event {
@@ -471,6 +501,8 @@ impl AgentTranscript {
     fn push_tool_call(&mut self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
         self.finish_active_status();
         self.close_streaming_segment();
+        self.tool_inputs
+            .insert(call_id.to_string(), arguments.clone());
         let input = build_tool_input_display(tool_name, arguments);
         let data = ToolCardData {
             call_id: call_id.to_string(),
@@ -528,6 +560,7 @@ impl AgentTranscript {
     }
 
     fn finish_tool_call(&mut self, call_id: &str, success: bool) {
+        self.tool_inputs.remove(call_id);
         if let Some(mut data) = self.find_tool_card(call_id) {
             data.running = false;
             data.success = Some(success);
@@ -535,7 +568,11 @@ impl AgentTranscript {
         }
     }
 
-    fn resolve_tool_confirm(&mut self, call_id: &str, approved: bool) {
+    pub(crate) fn tool_call_arguments(&self, call_id: &str) -> Option<&serde_json::Value> {
+        self.tool_inputs.get(call_id)
+    }
+
+    pub(crate) fn resolve_tool_confirm(&mut self, call_id: &str, approved: bool) {
         let Some(mut data) = self.find_confirm_card(call_id) else {
             return;
         };
@@ -1325,6 +1362,33 @@ mod tests {
         assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn public_mcp_safety_confirmation_renders_full_arguments_and_mode_hint() {
+        let mut tr = AgentTranscript::new();
+        tr.push_public_mcp_approval(&AcpPublicMcpApprovalRequest {
+            request_id: "public-mcp-approval-1".into(),
+            tool_name: "terminal.exec".into(),
+            summary: "Call Execute in terminal".into(),
+            details: serde_json::json!({
+                "requestArguments": {
+                    "target": "haiwai comi",
+                    "command": "du -xhd1 / 2>/dev/null | sort -h"
+                }
+            }),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!(Some(TOOL_CONFIRM_CARD), tr.messages[0].variant.card_kind());
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.call_id, "public-mcp-approval-1");
+        assert_eq!(data.tool_name, "terminal.exec");
+        assert_eq!(data.input_summary, "du -xhd1 / 2>/dev/null | sort -h");
+        assert!(data.input_json.contains("haiwai comi"));
+        assert!(data.question.contains("安全确认"));
+        assert!(data.question.contains("二次审批"));
+        assert!(data.question.contains("自动执行"));
     }
 
     #[test]

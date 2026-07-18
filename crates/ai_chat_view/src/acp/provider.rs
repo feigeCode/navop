@@ -1,4 +1,7 @@
-use crate::{AcpAgentConfig, AcpAgentEntry, AcpPermissionOption, AcpPermissionRequest};
+use crate::{
+    AcpAgentConfig, AcpAgentEntry, AcpPermissionOption, AcpPermissionRequest,
+    AcpPublicMcpApprovalProvider,
+};
 use agent_runtime::ToolExecutionMode;
 use gpui::{App, Global};
 use std::sync::Arc;
@@ -49,7 +52,11 @@ impl Drop for AcpPermissionGrant {
 }
 
 pub type AcpPermissionGrantProvider = Arc<
-    dyn Fn(&AcpPermissionRequest, &AcpPermissionOption) -> Option<AcpPermissionGrant>
+    dyn Fn(
+            &AcpPermissionRequest,
+            &AcpPermissionOption,
+            AcpPublicMcpApprovalProvider,
+        ) -> Option<AcpPermissionGrant>
         + Send
         + Sync
         + 'static,
@@ -88,7 +95,11 @@ pub fn set_acp_tool_mode_provider(
 
 pub fn set_acp_permission_grant_provider(
     cx: &mut App,
-    provider: impl Fn(&AcpPermissionRequest, &AcpPermissionOption) -> Option<AcpPermissionGrant>
+    provider: impl Fn(
+        &AcpPermissionRequest,
+        &AcpPermissionOption,
+        AcpPublicMcpApprovalProvider,
+    ) -> Option<AcpPermissionGrant>
     + Send
     + Sync
     + 'static,
@@ -102,11 +113,12 @@ pub(crate) fn acquire_acp_permission_grant(
     cx: &App,
     request: &AcpPermissionRequest,
     option: &AcpPermissionOption,
+    public_mcp_approval_provider: AcpPublicMcpApprovalProvider,
 ) -> Option<AcpPermissionGrant> {
     let provider = cx
         .try_global::<GlobalAcpPermissionGrantProvider>()
         .map(|provider| provider.provider.clone())?;
-    provider(request, option)
+    provider(request, option, public_mcp_approval_provider)
 }
 
 pub fn current_acp_tool_mode(cx: &mut App) -> Option<ToolExecutionMode> {

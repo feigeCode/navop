@@ -41,6 +41,15 @@ impl AcpPermissionRequest {
             .or_else(|| self.details.get("raw_input"))
             .filter(|arguments| arguments.is_object())
     }
+
+    pub(crate) fn use_fallback_raw_input(&mut self, arguments: Value) {
+        if self.raw_input().is_some() || !arguments.is_object() {
+            return;
+        }
+        if let Some(details) = self.details.as_object_mut() {
+            details.insert("rawInput".to_string(), arguments);
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,6 +248,24 @@ mod tests {
         assert_eq!("call", request.tool_call_id);
         assert_eq!(
             Some(&serde_json::json!({"path": "/tmp/file"})),
+            request.raw_input()
+        );
+    }
+
+    #[test]
+    fn fallback_raw_input_only_fills_missing_protocol_arguments() {
+        let mut request = acp_permission_request(permission_request());
+        request
+            .details
+            .as_object_mut()
+            .expect("tool call details")
+            .remove("rawInput");
+
+        request.use_fallback_raw_input(serde_json::json!({"command": "pwd"}));
+        request.use_fallback_raw_input(serde_json::json!({"command": "ignored"}));
+
+        assert_eq!(
+            Some(&serde_json::json!({"command": "pwd"})),
             request.raw_input()
         );
     }

@@ -8,29 +8,33 @@ use std::time::{Duration, Instant};
 pub struct PublicMcpApprovalGrantId(String);
 
 #[derive(Clone)]
-pub struct PublicMcpApprovalGrantStore {
-    state: Arc<Mutex<PublicMcpApprovalGrantState>>,
+pub struct PublicMcpApprovalGrantStore<T = ()> {
+    state: Arc<Mutex<PublicMcpApprovalGrantState<T>>>,
 }
 
-impl PublicMcpApprovalGrantStore {
+impl<T> PublicMcpApprovalGrantStore<T> {
     pub fn new(ttl: Duration) -> Self {
         Self {
             state: Arc::new(Mutex::new(PublicMcpApprovalGrantState::new(ttl))),
         }
     }
 
-    pub fn register(&self, arguments: Value) -> Option<PublicMcpApprovalGrantId> {
+    pub fn register_payload(
+        &self,
+        arguments: Option<Value>,
+        payload: T,
+    ) -> Option<PublicMcpApprovalGrantId> {
         self.state
             .lock()
             .expect("public MCP approval grant lock poisoned")
-            .register(arguments, Instant::now())
+            .register(arguments, payload, Instant::now())
     }
 
-    pub fn consume(&self, request: &PublicMcpApprovalRequest) -> bool {
+    pub fn take(&self, request: &PublicMcpApprovalRequest) -> Option<T> {
         self.state
             .lock()
             .expect("public MCP approval grant lock poisoned")
-            .consume(request, Instant::now())
+            .take(request, Instant::now())
     }
 
     pub fn revoke(&self, grant_id: &PublicMcpApprovalGrantId) -> bool {
@@ -38,6 +42,16 @@ impl PublicMcpApprovalGrantStore {
             .lock()
             .expect("public MCP approval grant lock poisoned")
             .revoke(grant_id)
+    }
+}
+
+impl PublicMcpApprovalGrantStore<()> {
+    pub fn register(&self, arguments: Value) -> Option<PublicMcpApprovalGrantId> {
+        self.register_payload(Some(arguments), ())
+    }
+
+    pub fn consume(&self, request: &PublicMcpApprovalRequest) -> bool {
+        self.take(request).is_some()
     }
 }
 
@@ -71,18 +85,19 @@ fn is_secret_key(key: &str) -> bool {
         || normalized.contains("private_key")
 }
 
-struct PublicMcpApprovalGrant {
+struct PublicMcpApprovalGrant<T> {
     id: PublicMcpApprovalGrantId,
-    arguments: Value,
+    arguments: Option<Value>,
+    payload: T,
     expires_at: Instant,
 }
 
-struct PublicMcpApprovalGrantState {
+struct PublicMcpApprovalGrantState<T> {
     ttl: Duration,
-    grants: Vec<PublicMcpApprovalGrant>,
+    grants: Vec<PublicMcpApprovalGrant<T>>,
 }
 
-impl PublicMcpApprovalGrantState {
+impl<T> PublicMcpApprovalGrantState<T> {
     fn new(ttl: Duration) -> Self {
         Self {
             ttl,
@@ -90,41 +105,48 @@ impl PublicMcpApprovalGrantState {
         }
     }
 
-    fn register(&mut self, arguments: Value, now: Instant) -> Option<PublicMcpApprovalGrantId> {
-        if !arguments.is_object() {
-            return None;
-        }
+    fn register(
+        &mut self,
+        arguments: Option<Value>,
+        payload: T,
+        now: Instant,
+    ) -> Option<PublicMcpApprovalGrantId> {
+        let arguments = match arguments {
+            Some(arguments) if arguments.is_object() => Some(redact_approval_arguments(arguments)),
+            Some(_) => return None,
+            None => None,
+        };
         self.prune_expired(now);
         let id = PublicMcpApprovalGrantId(uuid::Uuid::new_v4().to_string());
         self.grants.push(PublicMcpApprovalGrant {
             id: id.clone(),
-            arguments: redact_approval_arguments(arguments),
+            arguments,
+            payload,
             expires_at: now + self.ttl,
         });
         Some(id)
     }
 
-    fn consume(&mut self, request: &PublicMcpApprovalRequest, now: Instant) -> bool {
+    fn take(&mut self, request: &PublicMcpApprovalRequest, now: Instant) -> Option<T> {
         self.prune_expired(now);
         if request.operation != PublicMcpOperationKind::CallToolRuntimeTool {
-            return false;
+            return None;
         }
-        let Some(arguments) = request
+        let arguments = request
             .details
             .get("requestArguments")
-            .or_else(|| request.details.get("arguments"))
-        else {
-            return false;
-        };
-        let Some(index) = self
+            .or_else(|| request.details.get("arguments"));
+        let exact = arguments.and_then(|arguments| {
+            self.grants
+                .iter()
+                .position(|grant| grant.arguments.as_ref() == Some(arguments))
+        });
+        let wildcard = self
             .grants
             .iter()
-            .position(|grant| grant.arguments == *arguments)
-        else {
-            return false;
-        };
-        self.grants.remove(index);
-        true
+            .position(|grant| grant.arguments.is_none());
+        let index = exact.or(wildcard)?;
+        Some(self.grants.remove(index).payload)
     }
 
     fn revoke(&mut self, grant_id: &PublicMcpApprovalGrantId) -> bool {
@@ -165,11 +187,19 @@ mod tests {
         let now = Instant::now();
         let mut grants = PublicMcpApprovalGrantState::new(Duration::from_secs(10));
         let grant_id = grants
-            .register(json!({"command": "ls"}), now)
+            .register(Some(json!({"command": "ls"})), (), now)
             .expect("valid arguments should create a grant");
 
-        assert!(grants.consume(&public_request(json!({"command": "ls"})), now));
-        assert!(!grants.consume(&public_request(json!({"command": "ls"})), now));
+        assert!(
+            grants
+                .take(&public_request(json!({"command": "ls"})), now)
+                .is_some()
+        );
+        assert!(
+            grants
+                .take(&public_request(json!({"command": "ls"})), now)
+                .is_none()
+        );
         assert!(!grants.revoke(&grant_id));
     }
 
@@ -178,14 +208,22 @@ mod tests {
         let now = Instant::now();
         let mut grants = PublicMcpApprovalGrantState::new(Duration::from_secs(10));
         grants
-            .register(json!({"command": "ls"}), now)
+            .register(Some(json!({"command": "ls"})), (), now)
             .expect("valid arguments should create a grant");
 
-        assert!(!grants.consume(&public_request(json!({"command": "pwd"})), now));
-        assert!(!grants.consume(
-            &public_request(json!({"command": "ls"})),
-            now + Duration::from_secs(11),
-        ));
+        assert!(
+            grants
+                .take(&public_request(json!({"command": "pwd"})), now)
+                .is_none()
+        );
+        assert!(
+            grants
+                .take(
+                    &public_request(json!({"command": "ls"})),
+                    now + Duration::from_secs(11),
+                )
+                .is_none()
+        );
     }
 
     #[test]
@@ -193,7 +231,11 @@ mod tests {
         let now = Instant::now();
         let mut grants = PublicMcpApprovalGrantState::new(Duration::from_secs(10));
         grants
-            .register(json!({"command": "ls", "password": "secret"}), now)
+            .register(
+                Some(json!({"command": "ls", "password": "secret"})),
+                (),
+                now,
+            )
             .expect("valid arguments should create a grant");
         let mut request = public_request(json!({
             "command": "ls",
@@ -205,20 +247,41 @@ mod tests {
             "password": "<redacted>",
         });
 
-        assert!(grants.consume(&request, now));
+        assert!(grants.take(&request, now).is_some());
     }
 
     #[test]
     fn grant_rejects_non_object_arguments_and_non_runtime_approvals() {
         let now = Instant::now();
         let mut grants = PublicMcpApprovalGrantState::new(Duration::from_secs(10));
-        assert!(grants.register(json!("ls"), now).is_none());
+        assert!(grants.register(Some(json!("ls")), (), now).is_none());
         grants
-            .register(json!({"command": "ls"}), now)
+            .register(Some(json!({"command": "ls"})), (), now)
             .expect("valid arguments should create a grant");
 
         let mut request = public_request(json!({"command": "ls"}));
         request.operation = PublicMcpOperationKind::ExecuteRemoteCommand;
-        assert!(!grants.consume(&request, now));
+        assert!(grants.take(&request, now).is_none());
+    }
+
+    #[test]
+    fn payload_grant_prefers_exact_match_before_wildcard_route() {
+        let now = Instant::now();
+        let mut grants = PublicMcpApprovalGrantState::new(Duration::from_secs(10));
+        grants
+            .register(None, "fallback", now)
+            .expect("wildcard route should be accepted");
+        grants
+            .register(Some(json!({"command": "ls"})), "exact", now)
+            .expect("exact route should be accepted");
+
+        assert_eq!(
+            Some("exact"),
+            grants.take(&public_request(json!({"command": "ls"})), now)
+        );
+        assert_eq!(
+            Some("fallback"),
+            grants.take(&public_request(json!({"command": "pwd"})), now)
+        );
     }
 }

@@ -43,8 +43,10 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
     AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome, AcpPermissionProvider,
-    AcpRecoveryAction, AcpSessionState, acp_permission_channel, acquire_acp_permission_grant,
-    build_acp_agent_entries, current_acp_tool_mode, set_current_acp_tool_mode,
+    AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome,
+    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionState, acp_permission_channel,
+    acp_public_mcp_approval_channel, acquire_acp_permission_grant, build_acp_agent_entries,
+    current_acp_tool_mode, set_current_acp_tool_mode,
 };
 use crate::agent_cards::{
     ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
@@ -514,6 +516,10 @@ pub struct AgentChatView {
     acp_connecting_id: Option<SharedString>,
     /// 当前 ACP 连接尚未响应的权限请求。
     pending_acp_permissions: HashMap<String, AcpPermissionEnvelope>,
+    /// 安全确认模式下，实际 Public MCP 调用尚未响应的二次审批。
+    pending_public_mcp_approvals: HashMap<String, AcpPublicMcpApprovalEnvelope>,
+    /// 把匹配的 Public MCP 审批请求路由回当前 ACP 消息流。
+    acp_public_mcp_approval_provider: Option<AcpPublicMcpApprovalProvider>,
     scroll_handle: ScrollHandle,
     auto_scroll: AutoScrollState,
     task_kind: TaskKind,
@@ -536,6 +542,8 @@ pub struct AgentChatView {
     _event_task: Task<()>,
     /// 当前 ACP 连接的权限请求泵；切换连接时丢弃以隔离旧连接请求。
     _acp_permission_task: Option<Task<()>>,
+    /// 当前 ACP 连接的 Public MCP 二次审批泵。
+    _acp_public_mcp_approval_task: Option<Task<()>>,
 }
 
 impl AgentChatView {
@@ -715,6 +723,8 @@ impl AgentChatView {
             acp_connecting: false,
             acp_connecting_id: None,
             pending_acp_permissions: HashMap::new(),
+            pending_public_mcp_approvals: HashMap::new(),
+            acp_public_mcp_approval_provider: None,
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
             task_kind,
@@ -730,6 +740,7 @@ impl AgentChatView {
             _subscriptions: subscriptions,
             _event_task: event_task,
             _acp_permission_task: None,
+            _acp_public_mcp_approval_task: None,
         }
     }
 
@@ -784,6 +795,10 @@ impl AgentChatView {
         approved: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.pending_public_mcp_approvals.contains_key(&call_id) {
+            self.resolve_pending_public_mcp_approval(&call_id, approved, cx);
+            return true;
+        }
         if !self.transcript.has_pending_tool_confirm(&call_id) {
             return false;
         }
@@ -794,8 +809,35 @@ impl AgentChatView {
     fn start_acp_permission_session(&mut self, cx: &mut Context<Self>) -> AcpPermissionProvider {
         self.reset_acp_permission_session(cx);
         let (provider, receiver) = acp_permission_channel();
+        let (public_mcp_provider, public_mcp_receiver) = acp_public_mcp_approval_channel();
+        self.acp_public_mcp_approval_provider = Some(public_mcp_provider);
         self._acp_permission_task = Some(Self::spawn_acp_permission_pump(receiver, cx));
+        self._acp_public_mcp_approval_task = Some(Self::spawn_public_mcp_approval_pump(
+            public_mcp_receiver,
+            cx,
+        ));
         provider
+    }
+
+    fn spawn_public_mcp_approval_pump(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AcpPublicMcpApprovalMessage>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            while let Some(message) = receiver.recv().await {
+                let updated = this.update(cx, |this, cx| match message {
+                    AcpPublicMcpApprovalMessage::Requested(envelope) => {
+                        this.receive_public_mcp_approval(envelope, cx)
+                    }
+                    AcpPublicMcpApprovalMessage::Expired { request_id } => {
+                        this.expire_public_mcp_approval(&request_id, cx)
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
     }
 
     fn spawn_acp_permission_pump(
@@ -836,6 +878,27 @@ impl AgentChatView {
         cx.notify();
     }
 
+    fn receive_public_mcp_approval(
+        &mut self,
+        envelope: AcpPublicMcpApprovalEnvelope,
+        cx: &mut Context<Self>,
+    ) {
+        let request = envelope.request().clone();
+        if self
+            .pending_public_mcp_approvals
+            .contains_key(&request.request_id)
+        {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            return;
+        }
+        self.transcript.push_public_mcp_approval(&request);
+        self.pending_public_mcp_approvals
+            .insert(request.request_id.clone(), envelope);
+        self.request_scroll_to_bottom();
+        self.auto_scroll.request_settle();
+        cx.notify();
+    }
+
     fn resolve_pending_acp_permission(
         &mut self,
         request_id: String,
@@ -855,8 +918,18 @@ impl AgentChatView {
             self.pending_acp_permissions.insert(request_id, envelope);
             return false;
         };
-        let request = envelope.request().clone();
-        let grant = acquire_acp_permission_grant(cx, &request, &option);
+        let mut request = envelope.request().clone();
+        if let Some(arguments) = self
+            .transcript
+            .tool_call_arguments(&request.tool_call_id)
+            .cloned()
+        {
+            request.use_fallback_raw_input(arguments);
+        }
+        let grant = self
+            .acp_public_mcp_approval_provider
+            .clone()
+            .and_then(|provider| acquire_acp_permission_grant(cx, &request, &option, provider));
         let delivered = envelope.resolve(AcpPermissionOutcome::Selected {
             option_id: option.option_id.clone(),
         });
@@ -870,6 +943,36 @@ impl AgentChatView {
         }
         cx.notify();
         true
+    }
+
+    fn resolve_pending_public_mcp_approval(
+        &mut self,
+        request_id: &str,
+        approved: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(envelope) = self.pending_public_mcp_approvals.remove(request_id) else {
+            return;
+        };
+        let delivered = envelope.resolve(if approved {
+            AcpPublicMcpApprovalOutcome::Approved
+        } else {
+            AcpPublicMcpApprovalOutcome::Denied
+        });
+        if delivered {
+            self.transcript.resolve_tool_confirm(request_id, approved);
+        } else {
+            self.transcript.resolve_tool_confirm(request_id, false);
+        }
+        cx.notify();
+    }
+
+    fn expire_public_mcp_approval(&mut self, request_id: &str, cx: &mut Context<Self>) {
+        if let Some(envelope) = self.pending_public_mcp_approvals.remove(request_id) {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            self.transcript.resolve_tool_confirm(request_id, false);
+            cx.notify();
+        }
     }
 
     fn expire_acp_permission(&mut self, request_id: &str, cx: &mut Context<Self>) {
@@ -891,7 +994,19 @@ impl AgentChatView {
 
     fn reset_acp_permission_session(&mut self, cx: &mut Context<Self>) {
         self.cancel_pending_acp_permissions(cx);
+        self.cancel_pending_public_mcp_approvals(cx);
+        self.acp_public_mcp_approval_provider = None;
         self._acp_permission_task = None;
+        self._acp_public_mcp_approval_task = None;
+    }
+
+    fn cancel_pending_public_mcp_approvals(&mut self, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_public_mcp_approvals);
+        for (request_id, envelope) in pending {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            self.transcript.resolve_tool_confirm(&request_id, false);
+        }
+        cx.notify();
     }
 
     fn spawn_event_pump(
@@ -3268,7 +3383,10 @@ mod tests {
         ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
         TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
     };
-    use crate::{AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest};
+    use crate::{
+        AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest,
+        AcpPublicMcpApprovalRequest,
+    };
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -4346,20 +4464,27 @@ mod tests {
         init_test_ui(cx);
         let granted = Arc::new(AtomicUsize::new(0));
         let revoked = Arc::new(AtomicUsize::new(0));
+        let granted_arguments = Arc::new(std::sync::Mutex::new(None));
         cx.update({
             let granted = granted.clone();
             let revoked = revoked.clone();
+            let granted_arguments = granted_arguments.clone();
             move |cx| {
-                crate::set_acp_permission_grant_provider(cx, move |_request, option| {
-                    if !option.kind.starts_with("allow") {
-                        return None;
-                    }
-                    granted.fetch_add(1, Ordering::SeqCst);
-                    let revoked = revoked.clone();
-                    Some(crate::AcpPermissionGrant::new(move || {
-                        revoked.fetch_add(1, Ordering::SeqCst);
-                    }))
-                });
+                crate::set_acp_permission_grant_provider(
+                    cx,
+                    move |request, option, _public_mcp_provider| {
+                        if !option.kind.starts_with("allow") {
+                            return None;
+                        }
+                        granted.fetch_add(1, Ordering::SeqCst);
+                        *granted_arguments.lock().expect("granted arguments lock") =
+                            request.raw_input().cloned();
+                        let revoked = revoked.clone();
+                        Some(crate::AcpPermissionGrant::new(move || {
+                            revoked.fetch_add(1, Ordering::SeqCst);
+                        }))
+                    },
+                );
             }
         });
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
@@ -4367,7 +4492,20 @@ mod tests {
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
 
-        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        view.update(cx, |view, cx| {
+            let _ = view.start_acp_permission_session(cx);
+            view.transcript.apply(&RuntimeEvent::ToolCallStarted {
+                session_id: view.session_id.clone(),
+                turn_id: agent_runtime::TurnId::from_string("turn"),
+                call_id: ToolCallId::from_string("call"),
+                tool_name: ToolName::new("terminal.exec"),
+                arguments: json!({
+                    "target": "haiwai comi",
+                    "command": "du -xhd1 /"
+                }),
+            });
+            view.receive_acp_permission(envelope, cx);
+        });
         cx.run_until_parked();
         let allow = cx
             .debug_bounds("acp-permission-allow_once")
@@ -4383,6 +4521,16 @@ mod tests {
         );
         assert_eq!(1, granted.load(Ordering::SeqCst));
         assert_eq!(0, revoked.load(Ordering::SeqCst));
+        assert_eq!(
+            Some(json!({
+                "target": "haiwai comi",
+                "command": "du -xhd1 /"
+            })),
+            granted_arguments
+                .lock()
+                .expect("granted arguments lock")
+                .clone()
+        );
     }
 
     #[gpui::test]
@@ -4392,15 +4540,18 @@ mod tests {
         cx.update({
             let revoked = revoked.clone();
             move |cx| {
-                crate::set_acp_permission_grant_provider(cx, move |_request, option| {
-                    if !option.kind.starts_with("allow") {
-                        return None;
-                    }
-                    let revoked = revoked.clone();
-                    Some(crate::AcpPermissionGrant::new(move || {
-                        revoked.fetch_add(1, Ordering::SeqCst);
-                    }))
-                });
+                crate::set_acp_permission_grant_provider(
+                    cx,
+                    move |_request, option, _public_mcp_provider| {
+                        if !option.kind.starts_with("allow") {
+                            return None;
+                        }
+                        let revoked = revoked.clone();
+                        Some(crate::AcpPermissionGrant::new(move || {
+                            revoked.fetch_add(1, Ordering::SeqCst);
+                        }))
+                    },
+                );
             }
         });
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
@@ -4409,7 +4560,10 @@ mod tests {
         let (envelope, outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
         drop(outcome_rx);
 
-        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        view.update(cx, |view, cx| {
+            let _ = view.start_acp_permission_session(cx);
+            view.receive_acp_permission(envelope, cx);
+        });
         cx.run_until_parked();
         let allow = cx
             .debug_bounds("acp-permission-allow_once")
@@ -4418,6 +4572,93 @@ mod tests {
         cx.run_until_parked();
 
         assert_eq!(1, revoked.load(Ordering::SeqCst));
+    }
+
+    #[gpui::test]
+    fn gpui_public_mcp_safety_confirmation_resolves_inside_message_flow(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request_id = "public-mcp:approval-1";
+        let (envelope, mut outcome_rx) =
+            AcpPublicMcpApprovalEnvelope::new(AcpPublicMcpApprovalRequest {
+                request_id: request_id.into(),
+                tool_name: "terminal.exec".into(),
+                summary: "Call Execute in terminal".into(),
+                details: json!({
+                    "requestArguments": {
+                        "target": "haiwai comi",
+                        "command": "du -xhd1 / 2>/dev/null | sort -h"
+                    }
+                }),
+            });
+
+        view.update(cx, |view, cx| {
+            view.receive_public_mcp_approval(envelope, cx)
+        });
+        cx.run_until_parked();
+
+        let data = view.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(TOOL_CONFIRM_CARD))
+                .and_then(|message| ToolConfirmCardData::from_json(&message.content))
+                .expect("Public MCP confirmation card")
+        });
+        assert!(data.input_json.contains("haiwai comi"));
+        assert!(data.question.contains("安全确认"));
+        assert!(data.question.contains("自动执行"));
+
+        cx.dispatch_action(ApproveToolCall {
+            call_id: request_id.into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPublicMcpApprovalOutcome::Approved,
+            outcome_rx.try_recv().expect("Public MCP approval response")
+        );
+        assert!(!view.read_with(cx, |view, _| {
+            view.transcript.has_pending_tool_confirm(request_id)
+        }));
+    }
+
+    #[gpui::test]
+    fn gpui_public_mcp_safety_confirmation_can_be_rejected(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request_id = "public-mcp:approval-reject";
+        let (envelope, mut outcome_rx) =
+            AcpPublicMcpApprovalEnvelope::new(AcpPublicMcpApprovalRequest {
+                request_id: request_id.into(),
+                tool_name: "terminal.exec".into(),
+                summary: "Call Execute in terminal".into(),
+                details: json!({
+                    "requestArguments": {"command": "rm -rf /tmp/example"}
+                }),
+            });
+
+        view.update(cx, |view, cx| {
+            view.receive_public_mcp_approval(envelope, cx)
+        });
+        cx.dispatch_action(RejectToolCall {
+            call_id: request_id.into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPublicMcpApprovalOutcome::Denied,
+            outcome_rx
+                .try_recv()
+                .expect("Public MCP rejection response")
+        );
+        assert!(!view.read_with(cx, |view, _| {
+            view.transcript.has_pending_tool_confirm(request_id)
+        }));
     }
 
     #[gpui::test]

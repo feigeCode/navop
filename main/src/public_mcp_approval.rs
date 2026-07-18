@@ -21,7 +21,12 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
-const ACP_APPROVAL_GRANT_TIMEOUT: Duration = Duration::from_secs(15);
+const ACP_APPROVAL_ROUTE_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Clone)]
+struct AcpApprovalRoute {
+    provider: ai_chat_view::AcpPublicMcpApprovalProvider,
+}
 
 pub struct GlobalPublicMcpApprovalQueue {
     manager: PublicMcpApprovalManager,
@@ -34,23 +39,30 @@ pub fn init(cx: &mut App) {
         return;
     }
 
-    let grants = PublicMcpApprovalGrantStore::new(ACP_APPROVAL_GRANT_TIMEOUT);
-    let (approver, mut receiver) = channel_approver(APPROVAL_TIMEOUT, grants.clone());
+    let routes = PublicMcpApprovalGrantStore::<AcpApprovalRoute>::new(ACP_APPROVAL_ROUTE_TIMEOUT);
+    let (approver, mut receiver) = channel_approver(APPROVAL_TIMEOUT, routes.clone());
     let manager = PublicMcpApprovalManager::new(Arc::new(approver));
     cx.set_global(GlobalPublicMcpApprovalQueue {
         manager: manager.clone(),
     });
-    ai_chat_view::set_acp_permission_grant_provider(cx, move |request, option| {
-        if !option.kind.starts_with("allow") {
-            return None;
-        }
-        let arguments = request.raw_input()?.clone();
-        let grant_id = grants.register(arguments)?;
-        let grants = grants.clone();
-        Some(ai_chat_view::AcpPermissionGrant::new(move || {
-            grants.revoke(&grant_id);
-        }))
-    });
+    ai_chat_view::set_acp_permission_grant_provider(
+        cx,
+        move |request, option, public_mcp_approval_provider| {
+            if !option.kind.starts_with("allow") {
+                return None;
+            }
+            let grant_id = routes.register_payload(
+                request.raw_input().cloned(),
+                AcpApprovalRoute {
+                    provider: public_mcp_approval_provider,
+                },
+            )?;
+            let routes = routes.clone();
+            Some(ai_chat_view::AcpPermissionGrant::new(move || {
+                routes.revoke(&grant_id);
+            }))
+        },
+    );
     let queue = Arc::new(Mutex::new(ApprovalQueueState::default()));
 
     cx.spawn(async move |cx: &mut AsyncApp| {
