@@ -7,7 +7,24 @@ pub fn local_config_from_settings(
     settings: &AppSettings,
     working_dir: Option<String>,
 ) -> Result<LocalConfig> {
-    let (shell, args) = resolve_profile(&settings.local_terminal_profile)?;
+    local_config_from_profile_settings(&settings.local_terminal_profile, working_dir)
+}
+
+pub fn local_config_from_settings_with_profile(
+    settings: &AppSettings,
+    profile_kind: LocalTerminalProfileKind,
+    working_dir: Option<String>,
+) -> Result<LocalConfig> {
+    let mut profile = settings.local_terminal_profile.clone();
+    profile.kind = profile_kind;
+    local_config_from_profile_settings(&profile, working_dir)
+}
+
+fn local_config_from_profile_settings(
+    profile: &LocalTerminalProfileSettings,
+    working_dir: Option<String>,
+) -> Result<LocalConfig> {
+    let (shell, args) = resolve_profile(profile)?;
     Ok(LocalConfig {
         shell,
         args,
@@ -136,7 +153,10 @@ fn find_in_path(program: &str) -> Option<String> {
 mod tests {
     use one_core::settings::{AppSettings, LocalTerminalProfileKind, LocalTerminalProfileSettings};
 
-    use super::{local_config_from_settings, resolve_windows_profile};
+    use super::{
+        local_config_from_settings, local_config_from_settings_with_profile,
+        resolve_windows_profile,
+    };
 
     #[test]
     fn system_profile_keeps_automatic_shell_resolution() {
@@ -175,6 +195,28 @@ mod tests {
         settings.local_terminal_profile.custom_program = "fish".to_string();
         settings.local_terminal_profile.custom_arguments = "'unterminated".to_string();
         assert!(local_config_from_settings(&settings, None).is_err());
+    }
+
+    #[test]
+    fn temporary_profile_override_keeps_custom_command_settings() {
+        let settings = AppSettings {
+            local_terminal_profile: LocalTerminalProfileSettings {
+                kind: LocalTerminalProfileKind::System,
+                custom_program: "fish".to_string(),
+                custom_arguments: "--login".to_string(),
+            },
+            ..AppSettings::default()
+        };
+
+        let config = local_config_from_settings_with_profile(
+            &settings,
+            LocalTerminalProfileKind::Custom,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(Some("fish".to_string()), config.shell);
+        assert_eq!(vec!["--login"], config.args);
     }
 
     #[test]

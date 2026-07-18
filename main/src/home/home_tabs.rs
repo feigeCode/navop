@@ -8,6 +8,7 @@ use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
 use notes::NotesView;
 use one_core::license::Feature;
+use one_core::settings::LocalTerminalProfileKind;
 use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
@@ -15,7 +16,7 @@ use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use rust_i18n::t;
 use sftp_view::{SftpView, SftpViewEvent};
-use terminal::local_config_from_settings;
+use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
 use terminal_view::{
     TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
 };
@@ -679,7 +680,30 @@ impl HomePage {
     }
 
     pub(crate) fn add_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let config = match local_config_from_settings(AppSettings::global(cx), None) {
+        self.add_terminal_tab_from_profile(None, window, cx);
+    }
+
+    pub(crate) fn add_terminal_tab_with_profile(
+        &mut self,
+        profile_kind: LocalTerminalProfileKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_terminal_tab_from_profile(Some(profile_kind), window, cx);
+    }
+
+    fn add_terminal_tab_from_profile(
+        &mut self,
+        profile_kind: Option<LocalTerminalProfileKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = AppSettings::global(cx);
+        let config = match profile_kind {
+            Some(kind) => local_config_from_settings_with_profile(settings, kind, None),
+            None => local_config_from_settings(settings, None),
+        };
+        let config = match config {
             Ok(config) => config,
             Err(error) => {
                 push_local_terminal_config_error(window, &error, cx);

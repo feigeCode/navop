@@ -1025,6 +1025,10 @@ NewConnection:
     en: Open a local terminal tab
     zh-CN: 打开一个本地终端标签页
     zh-HK: 開啟一個本機終端標籤頁
+  open_terminal:
+    en: Open Terminal
+    zh-CN: 打开终端
+    zh-HK: 開啟終端
   description_rdp:
     en: Remote Desktop Protocol connection
     zh-CN: 远程桌面协议连接
