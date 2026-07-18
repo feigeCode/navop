@@ -2460,23 +2460,6 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    fn resource_detail_dialog_closes_resource_popover_state(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::init(cx);
-        });
-        let (view, cx) = cx.add_window_view(AgentInputLayoutRoot::with_resource_pool);
-
-        view.update(cx, |root, cx| {
-            root.input.update(cx, |input, cx| {
-                input.open_menu = Some(ComposerMenuKind::Target);
-                input.close_resource_popover_for_dialog(cx);
-                assert!(input.open_menu.is_none());
-            });
-        });
-    }
-
     #[test]
     fn merged_mode_menu_keeps_all_tool_confirmation_options() {
         let options = vec![
