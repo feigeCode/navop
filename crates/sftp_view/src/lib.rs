@@ -1,9 +1,16 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod context_menu_handler;
+mod endpoint;
 mod file_list_panel;
+mod left_remote;
+mod left_remote_state;
+mod ssh_config;
 
 use context_menu_handler::ContextMenuHandler;
+use endpoint::{
+    DragSource, LeftEndpointItem, LeftEndpointKind, PaneSide, TransferRoute, transfer_route,
+};
 pub use file_list_panel::{
     DraggedFileItem, DraggedFileItems, FileItem, FileListPanel, FileListPanelEvent,
 };
@@ -14,7 +21,7 @@ use gpui::{
     Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -24,14 +31,13 @@ use gpui_component::{
     popover::{Popover, PopoverState},
     progress::Progress,
     scroll::ScrollableElement,
+    select::{SearchableVec, Select, SelectEvent, SelectState},
     spinner::Spinner,
     tooltip::Tooltip,
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
-use one_core::storage::models::{
-    ActiveConnections, ProxyType as StorageProxyType, SshAuthMethod, StoredConnection,
-};
+use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
@@ -46,16 +52,16 @@ use remote_image_preview::{
 };
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
-use ssh::{
-    ChannelEvent, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshChannel,
-    SshConnectConfig, SshSessionManager,
-};
+use sftp::{ServerCopyItem, ServerCopyRequest, copy_between_servers};
+use ssh::{ChannelEvent, SshChannel, SshConnectConfig, SshSessionManager};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
+
+use left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
 
 actions!(
     sftp_view,
@@ -172,6 +178,7 @@ enum TransferOperation {
         entries: Vec<FileItem>,
         local_dir: PathBuf,
     },
+    ServerCopy(Box<ServerCopyOperation>),
 }
 
 #[derive(Clone)]
@@ -201,6 +208,33 @@ struct RemoteCommandOutput {
     stdout: String,
     stderr: String,
     exit_status: u32,
+}
+
+struct ServerCopyTaskInput {
+    task_id: usize,
+    source_config: SshConnectConfig,
+    target_config: SshConnectConfig,
+    items: Vec<ServerCopyItem>,
+    target_side: PaneSide,
+    progress: Arc<SharedProgress>,
+}
+
+#[derive(Clone)]
+struct ServerCopyOperation {
+    source_config: SshConnectConfig,
+    target_config: SshConnectConfig,
+    items: Vec<ServerCopyItem>,
+    target_side: PaneSide,
+}
+
+#[derive(Clone)]
+struct PendingServerCopy {
+    source_config: SshConnectConfig,
+    target_config: SshConnectConfig,
+    items: Vec<ServerCopyItem>,
+    target_side: PaneSide,
+    target_dir: String,
+    existing_names: std::collections::HashSet<String>,
 }
 
 impl TransferClientPool {
@@ -669,6 +703,8 @@ pub struct SftpView {
 
     local_panel: Entity<FileListPanel>,
     remote_panel: Entity<FileListPanel>,
+    left_endpoint_select: Entity<SelectState<SearchableVec<LeftEndpointItem>>>,
+    left_remote: Option<LeftRemoteEndpoint>,
 
     local_path_editing: bool,
     remote_path_editing: bool,
@@ -718,84 +754,8 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let ssh_params = conn
-            .to_ssh_params()
+        let config = ssh_config::ssh_config_for(&conn)
             .expect("StoredConnection should contain valid SSH params");
-
-        let auth = match ssh_params.auth_method {
-            SshAuthMethod::Password { password } => SshAuth::Password(password),
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => SshAuth::PrivateKey {
-                key_path,
-                passphrase,
-                certificate_path: None,
-            },
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => SshAuth::PrivateKeyContent {
-                private_key,
-                passphrase,
-                certificate_path: None,
-            },
-            SshAuthMethod::Agent => SshAuth::Agent,
-            SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        };
-
-        let config = SshConnectConfig {
-            host: ssh_params.host,
-            port: ssh_params.port,
-            username: ssh_params.username,
-            auth,
-            timeout: ssh_params.connect_timeout.map(Duration::from_secs),
-            keepalive_interval: ssh_params.keepalive_interval.map(Duration::from_secs),
-            keepalive_max: ssh_params.keepalive_max,
-            jump_server: ssh_params.jump_server.map(|jump| {
-                let jump_auth = match jump.auth_method {
-                    SshAuthMethod::Password { password } => SshAuth::Password(password),
-                    SshAuthMethod::PrivateKey {
-                        key_path,
-                        passphrase,
-                    } => SshAuth::PrivateKey {
-                        key_path,
-                        passphrase,
-                        certificate_path: None,
-                    },
-                    SshAuthMethod::PrivateKeyContent {
-                        private_key,
-                        passphrase,
-                    } => SshAuth::PrivateKeyContent {
-                        private_key,
-                        passphrase,
-                        certificate_path: None,
-                    },
-                    SshAuthMethod::Agent => SshAuth::Agent,
-                    SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-                };
-                JumpServerConnectConfig {
-                    host: jump.host,
-                    port: jump.port,
-                    username: jump.username,
-                    auth: jump_auth,
-                }
-            }),
-            proxy: ssh_params.proxy.map(|p| {
-                let proxy_type = match p.proxy_type {
-                    StorageProxyType::Socks5 => ProxyType::Socks5,
-                    StorageProxyType::Http => ProxyType::Http,
-                };
-                ProxyConnectConfig {
-                    proxy_type,
-                    host: p.host,
-                    port: p.port,
-                    username: p.username,
-                    password: p.password,
-                }
-            }),
-            keyboard_interactive_responder: None,
-        };
 
         let focus_handle = cx.focus_handle();
         let local_current_path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -810,6 +770,17 @@ impl SftpView {
         });
 
         let remote_panel = cx.new(|cx| FileListPanel::new("/root".to_string(), true, window, cx));
+        let left_endpoint_items =
+            endpoint::endpoint_items(&conn, t!("Endpoint.local").to_string(), cx);
+        let left_endpoint_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(left_endpoint_items),
+                Some(IndexPath::default()),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
 
         let local_path_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.path").to_string()));
@@ -840,10 +811,18 @@ impl SftpView {
                     full_path: _,
                     is_dir,
                 } => {
-                    this.on_local_item_double_click(name.clone(), *is_dir, cx);
+                    if this.left_remote.is_some() {
+                        this.on_left_remote_item_double_click(name.clone(), *is_dir, cx);
+                    } else {
+                        this.on_local_item_double_click(name.clone(), *is_dir, cx);
+                    }
                 }
                 FileListPanelEvent::PathChanged(path) => {
-                    this.on_local_path_changed(path.clone(), cx);
+                    if this.left_remote.is_some() {
+                        this.navigate_left_remote_to(path.clone(), cx);
+                    } else {
+                        this.on_local_path_changed(path.clone(), cx);
+                    }
                 }
                 _ => {
                     this.handle_local_context_menu_event(event, window, cx);
@@ -873,6 +852,17 @@ impl SftpView {
                 }
                 _ => {
                     this.handle_remote_context_menu_event(event, window, cx);
+                }
+            },
+        ));
+
+        subscriptions.push(cx.subscribe_in(
+            &left_endpoint_select,
+            window,
+            |this, _select, event: &SelectEvent<SearchableVec<LeftEndpointItem>>, window, cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    this.switch_left_endpoint(value.clone(), window, cx);
                 }
             },
         ));
@@ -949,6 +939,8 @@ impl SftpView {
             remote_history_index: 0,
             local_panel,
             remote_panel,
+            left_endpoint_select,
+            left_remote: None,
             local_path_editing: false,
             remote_path_editing: false,
             local_path_input,
@@ -1998,7 +1990,10 @@ impl SftpView {
 
     fn start_local_path_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.local_path_editing = true;
-        let path = self.local_current_path.to_string_lossy().to_string();
+        let path = self.left_remote.as_ref().map_or_else(
+            || self.local_current_path.to_string_lossy().to_string(),
+            |endpoint| endpoint.current_path.clone(),
+        );
         self.local_path_input.update(cx, |state, cx| {
             state.set_value(&path, window, cx);
             state.focus(window, cx);
@@ -2019,6 +2014,12 @@ impl SftpView {
     fn confirm_local_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let new_path = self.local_path_input.read(cx).text().to_string();
         self.local_path_editing = false;
+        if self.left_remote.is_some() {
+            if !new_path.is_empty() {
+                self.navigate_left_remote_to(new_path, cx);
+            }
+            return;
+        }
         if !new_path.is_empty() {
             let path = PathBuf::from(&new_path);
             if path.exists() && path.is_dir() {
@@ -2530,6 +2531,25 @@ impl SftpView {
                     cx,
                 );
             }
+            TransferOperation::ServerCopy(operation) => {
+                let ServerCopyOperation {
+                    source_config,
+                    target_config,
+                    items,
+                    target_side,
+                } = *operation;
+                self.start_server_copy_task(
+                    ServerCopyTaskInput {
+                        task_id: task.id,
+                        source_config,
+                        target_config,
+                        items,
+                        target_side,
+                        progress: task.shared_progress,
+                    },
+                    cx,
+                );
+            }
         }
     }
 
@@ -2847,6 +2867,65 @@ impl SftpView {
         .detach();
     }
 
+    fn start_server_copy_task(&mut self, input: ServerCopyTaskInput, cx: &mut Context<Self>) {
+        input.progress.scanning.store(true, Ordering::Relaxed);
+        let cancelled = input.progress.cancelled.clone();
+        let shared_progress = input.progress.clone();
+        let task_id = input.task_id;
+        let target_side = input.target_side;
+        let copy_task = Tokio::spawn(cx, async move {
+            copy_between_servers(ServerCopyRequest {
+                source_config: input.source_config,
+                target_config: input.target_config,
+                items: input.items,
+                cancelled,
+                progress: Arc::new(move |progress| {
+                    shared_progress.scanning.store(false, Ordering::Relaxed);
+                    shared_progress
+                        .transferred
+                        .store(progress.transferred, Ordering::Relaxed);
+                    shared_progress
+                        .total
+                        .store(progress.total, Ordering::Relaxed);
+                    shared_progress
+                        .speed
+                        .store(progress.speed.to_bits(), Ordering::Relaxed);
+                    if let Ok(mut current) = shared_progress.current_file.write() {
+                        *current = progress.current_file;
+                    }
+                    shared_progress
+                        .current_file_transferred
+                        .store(progress.current_file_transferred, Ordering::Relaxed);
+                    shared_progress
+                        .current_file_total
+                        .store(progress.current_file_total, Ordering::Relaxed);
+                }),
+            })
+            .await
+            .map(|_| ())
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = match copy_task.await {
+                Ok(result) => result,
+                Err(error) => Err(anyhow::Error::new(error)),
+            };
+            let succeeded = result.is_ok();
+            let _ = this.update(cx, |this, cx| {
+                this.update_task_state_from_result(task_id, result, cx);
+                if succeeded {
+                    match target_side {
+                        PaneSide::Left => this.refresh_left_remote_dir(cx),
+                        PaneSide::Right => this.refresh_remote_dir(cx),
+                    }
+                }
+                this.schedule_transfers(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn start_local_delete_task(
         &mut self,
         task_id: usize,
@@ -3154,6 +3233,10 @@ impl SftpView {
             TransferOperation::Download { .. } | TransferOperation::DeleteLocal { .. } => {
                 self.refresh_local_dir(cx);
             }
+            TransferOperation::ServerCopy(operation) => match operation.target_side {
+                PaneSide::Left => self.refresh_left_remote_dir(cx),
+                PaneSide::Right => self.refresh_remote_dir(cx),
+            },
         }
     }
 
@@ -3848,6 +3931,74 @@ impl SftpView {
         self.refresh_local_dir(cx);
     }
 
+    fn selected_items_as_dragged(&self, side: PaneSide, cx: &App) -> Option<DraggedFileItems> {
+        let (panel, current_path, source) = match side {
+            PaneSide::Left => (
+                &self.local_panel,
+                self.left_remote
+                    .as_ref()
+                    .map(|endpoint| endpoint.current_path.clone())
+                    .unwrap_or_else(|| self.local_current_path.to_string_lossy().to_string()),
+                if self.left_remote.is_some() {
+                    DragSource::RemoteLeft
+                } else {
+                    DragSource::LocalLeft
+                },
+            ),
+            PaneSide::Right => (
+                &self.remote_panel,
+                self.remote_current_path.clone(),
+                DragSource::RemoteRight,
+            ),
+        };
+        let items = panel
+            .read(cx)
+            .selected_items(cx)
+            .into_iter()
+            .map(|item| {
+                let full_path = if matches!(source, DragSource::LocalLeft) {
+                    PathBuf::from(&current_path)
+                        .join(&item.name)
+                        .to_string_lossy()
+                        .to_string()
+                } else {
+                    join_remote_path(&current_path, &item.name)
+                };
+                DraggedFileItem {
+                    name: item.name,
+                    size: item.size,
+                    is_dir: item.is_dir,
+                    full_path,
+                    is_remote: !matches!(source, DragSource::LocalLeft),
+                    source,
+                }
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            None
+        } else {
+            Some(DraggedFileItems::multiple(
+                items,
+                !matches!(source, DragSource::LocalLeft),
+                source,
+            ))
+        }
+    }
+
+    fn transfer_left_selection_to_right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(items) = self.selected_items_as_dragged(PaneSide::Left, cx) else {
+            return;
+        };
+        self.handle_dragged_drop_to_right(items, window, cx);
+    }
+
+    fn transfer_right_selection_to_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(items) = self.selected_items_as_dragged(PaneSide::Right, cx) else {
+            return;
+        };
+        self.handle_dragged_drop_to_left(items, window, cx);
+    }
+
     fn handle_remote_drop(
         &mut self,
         paths: Vec<PathBuf>,
@@ -3948,6 +4099,362 @@ impl SftpView {
             .detach();
     }
 
+    fn handle_dragged_drop_to_left(
+        &mut self,
+        dragged: DraggedFileItems,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match transfer_route(self.left_endpoint_kind(), dragged.source, PaneSide::Left) {
+            Some(TransferRoute::Download) => {
+                self.handle_remote_files_drop_to_local(dragged, window, cx);
+            }
+            Some(TransferRoute::ServerToServer { .. }) => {
+                self.enqueue_server_copy(dragged, PaneSide::Left, window, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_dragged_drop_to_right(
+        &mut self,
+        dragged: DraggedFileItems,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match transfer_route(self.left_endpoint_kind(), dragged.source, PaneSide::Right) {
+            Some(TransferRoute::Upload) => {
+                self.handle_local_files_drop_to_remote(dragged, window, cx);
+            }
+            Some(TransferRoute::ServerToServer { .. }) => {
+                self.enqueue_server_copy(dragged, PaneSide::Right, window, cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn left_endpoint_kind(&self) -> LeftEndpointKind {
+        if self.left_remote.is_some() {
+            LeftEndpointKind::Remote
+        } else {
+            LeftEndpointKind::Local
+        }
+    }
+
+    fn enqueue_server_copy(
+        &mut self,
+        dragged: DraggedFileItems,
+        target_side: PaneSide,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (source_config, target_config, target_dir) = match (dragged.source, target_side) {
+            (DragSource::RemoteLeft, PaneSide::Right) => {
+                let Some(left) = self.left_remote.as_ref() else {
+                    return;
+                };
+                (
+                    left.config.clone(),
+                    self.sftp_config.clone(),
+                    self.remote_current_path.clone(),
+                )
+            }
+            (DragSource::RemoteRight, PaneSide::Left) => {
+                let Some(left) = self.left_remote.as_ref() else {
+                    return;
+                };
+                (
+                    self.sftp_config.clone(),
+                    left.config.clone(),
+                    left.current_path.clone(),
+                )
+            }
+            _ => return,
+        };
+        let items = dragged
+            .items
+            .into_iter()
+            .map(|item| ServerCopyItem {
+                source_path: item.full_path,
+                target_path: join_remote_path(&target_dir, &item.name),
+                is_dir: item.is_dir,
+                size: item.size,
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
+
+        let target_client = match target_side {
+            PaneSide::Left => self
+                .left_remote
+                .as_ref()
+                .and_then(|left| left.client.clone()),
+            PaneSide::Right => self.sftp_client.clone(),
+        };
+        let Some(target_client) = target_client else {
+            return;
+        };
+        let pending = PendingServerCopy {
+            source_config,
+            target_config,
+            items,
+            target_side,
+            target_dir,
+            existing_names: std::collections::HashSet::new(),
+        };
+        let target_dir = pending.target_dir.clone();
+        let view = cx.entity().clone();
+        let list_task = Tokio::spawn(cx, async move {
+            let mut client = target_client.lock().await;
+            client.list_dir(&target_dir).await
+        });
+        window
+            .spawn(cx, async move |cx| {
+                let entries = match list_task.await {
+                    Ok(Ok(entries)) => entries,
+                    Ok(Err(error)) => {
+                        let _ = view.update_in(cx, |_, window, cx| {
+                            window.push_notification(
+                                Notification::error(
+                                    t!("Error.read_dir_failed", error = error).to_string(),
+                                ),
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+                    Err(error) => {
+                        let _ = view.update_in(cx, |_, window, cx| {
+                            window.push_notification(
+                                Notification::error(
+                                    t!("Error.read_dir_failed", error = error).to_string(),
+                                ),
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+                };
+                let mut pending = pending;
+                pending.existing_names = entries.into_iter().map(|entry| entry.name).collect();
+                let conflicts = pending
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        item.target_path
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|name| pending.existing_names.contains(name))
+                    })
+                    .count();
+                let _ = view.update_in(cx, |this, window, cx| {
+                    if conflicts == 0 {
+                        this.enqueue_server_copy_now(pending, cx);
+                    } else {
+                        this.show_server_copy_conflict(pending, window, cx);
+                    }
+                });
+            })
+            .detach();
+        return;
+    }
+
+    fn enqueue_server_copy_now(&mut self, pending: PendingServerCopy, cx: &mut Context<Self>) {
+        let PendingServerCopy {
+            source_config,
+            target_config,
+            items,
+            target_side,
+            ..
+        } = pending;
+        if items.is_empty() {
+            return;
+        }
+
+        let progress = Arc::new(SharedProgress {
+            transferred: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+            speed: AtomicU64::new(0),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            scanning: AtomicBool::new(true),
+            current_file: std::sync::RwLock::new(None),
+            current_file_transferred: AtomicU64::new(0),
+            current_file_total: AtomicU64::new(0),
+        });
+        let task_id = self.next_task_id;
+        self.next_task_id += 1;
+        self.transfer_queue.enqueue(TransferTask {
+            id: task_id,
+            operation: TransferOperation::ServerCopy(Box::new(ServerCopyOperation {
+                source_config,
+                target_config,
+                items,
+                target_side,
+            })),
+            state: TransferTaskState::Pending,
+            shared_progress: progress,
+            error: None,
+        });
+        self.schedule_transfers(cx);
+    }
+
+    fn show_server_copy_conflict(
+        &mut self,
+        pending: PendingServerCopy,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let conflicts = pending
+            .items
+            .iter()
+            .filter_map(|item| item.target_path.rsplit('/').next())
+            .filter(|name| pending.existing_names.contains(*name))
+            .take(3)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let has_dir = pending.items.iter().any(|item| {
+            item.is_dir
+                && item
+                    .target_path
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| pending.existing_names.contains(name))
+        });
+        let view = cx.entity().clone();
+        let overwrite = pending.clone();
+        let skip = pending.clone();
+        let keep = pending.clone();
+        let merge = pending.clone();
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let view_overwrite = view.clone();
+            let view_skip = view.clone();
+            let view_keep = view.clone();
+            let view_merge = view.clone();
+            let footer_overwrite = overwrite.clone();
+            let footer_skip = skip.clone();
+            let footer_keep = keep.clone();
+            let footer_merge = merge.clone();
+            dialog
+                .title(t!("Dialog.file_conflict").to_string())
+                .w(px(450.))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(t!("Conflict.files_exist").to_string())
+                        .child(
+                            div()
+                                .p_2()
+                                .bg(cx.theme().secondary)
+                                .rounded_md()
+                                .child(conflicts.clone()),
+                        ),
+                )
+                .footer(move |_, _, _window, _cx| {
+                    let view_overwrite = view_overwrite.clone();
+                    let view_skip = view_skip.clone();
+                    let view_keep = view_keep.clone();
+                    let view_merge = view_merge.clone();
+                    let skip = footer_skip.clone();
+                    let keep = footer_keep.clone();
+                    let merge = footer_merge.clone();
+                    let overwrite = footer_overwrite.clone();
+                    let mut buttons: Vec<gpui::AnyElement> = vec![
+                        Button::new("server-copy-skip")
+                            .label(t!("Conflict.skip").to_string())
+                            .ghost()
+                            .on_click({
+                                let pending = skip.clone();
+                                move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let mut pending = pending.clone();
+                                    pending.items.retain(|item| {
+                                        item.target_path.rsplit('/').next().is_none_or(|name| {
+                                            !pending.existing_names.contains(name)
+                                        })
+                                    });
+                                    let _ = view_skip.update(cx, |this, cx| {
+                                        this.enqueue_server_copy_now(pending, cx);
+                                    });
+                                }
+                            })
+                            .into_any_element(),
+                        Button::new("server-copy-keep")
+                            .label(t!("Conflict.keep_both").to_string())
+                            .ghost()
+                            .on_click({
+                                let pending = keep.clone();
+                                move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let mut pending = pending.clone();
+                                    let mut names = pending.existing_names.clone();
+                                    for item in &mut pending.items {
+                                        let Some(name) = item.target_path.rsplit('/').next() else {
+                                            continue;
+                                        };
+                                        if pending.existing_names.contains(name) {
+                                            let renamed = generate_unique_name(name, &names);
+                                            names.insert(renamed.clone());
+                                            if let Some((parent, _)) =
+                                                item.target_path.rsplit_once('/')
+                                            {
+                                                item.target_path = format!("{parent}/{renamed}");
+                                            }
+                                        }
+                                    }
+                                    let _ = view_keep.update(cx, |this, cx| {
+                                        this.enqueue_server_copy_now(pending, cx);
+                                    });
+                                }
+                            })
+                            .into_any_element(),
+                    ];
+                    if has_dir {
+                        buttons.push(
+                            Button::new("server-copy-merge")
+                                .label(t!("Conflict.merge").to_string())
+                                .ghost()
+                                .on_click({
+                                    let pending = merge.clone();
+                                    move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        let mut pending = pending.clone();
+                                        pending.items.retain(|item| {
+                                            item.is_dir
+                                                || item.target_path.rsplit('/').next().is_none_or(
+                                                    |name| !pending.existing_names.contains(name),
+                                                )
+                                        });
+                                        let _ = view_merge.update(cx, |this, cx| {
+                                            this.enqueue_server_copy_now(pending, cx);
+                                        });
+                                    }
+                                })
+                                .into_any_element(),
+                        );
+                    }
+                    buttons.push(
+                        Button::new("server-copy-overwrite")
+                            .label(t!("Conflict.overwrite").to_string())
+                            .primary()
+                            .on_click({
+                                let pending = overwrite.clone();
+                                move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = view_overwrite.update(cx, |this, cx| {
+                                        this.enqueue_server_copy_now(pending.clone(), cx);
+                                    });
+                                }
+                            })
+                            .into_any_element(),
+                    );
+                    buttons
+                })
+                .overlay_closable(false)
+                .close_button(true)
+        });
+    }
+
     fn handle_remote_files_drop_to_local(
         &mut self,
         dragged: DraggedFileItems,
@@ -4024,6 +4531,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if dragged.source != DragSource::LocalLeft {
+            return;
+        }
         let Some(client) = self.sftp_client.clone() else {
             return;
         };
@@ -4279,6 +4789,14 @@ impl SftpView {
                 TransferOperation::DeleteLocal { entries, .. } => (
                     IconName::Remove,
                     t!("Delete.delete_n_items", count = entries.len()).to_string(),
+                ),
+                TransferOperation::ServerCopy(operation) => (
+                    IconName::ArrowRight,
+                    t!(
+                        "Transfer.server_copy_n_items",
+                        count = operation.items.len()
+                    )
+                    .to_string(),
                 ),
             };
 
@@ -4561,17 +5079,76 @@ impl SftpView {
         breadcrumb
     }
 
+    fn render_left_remote_breadcrumb(&self, cx: &mut Context<Self>) -> Breadcrumb {
+        let Some(endpoint) = self.left_remote.as_ref() else {
+            return Breadcrumb::new();
+        };
+        let path = endpoint.current_path.clone();
+        if path == "." {
+            return Breadcrumb::new().child(breadcrumb_item("."));
+        }
+
+        let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+        let absolute = path.starts_with('/');
+        let mut breadcrumb = Breadcrumb::new();
+        if absolute {
+            breadcrumb = breadcrumb.child(breadcrumb_item("/").on_click(cx.listener(
+                |this, _, _window, cx| this.navigate_left_remote_to("/".to_string(), cx),
+            )));
+        }
+        const MAX_VISIBLE_PARTS: usize = 3;
+        let visible_start = parts.len().saturating_sub(MAX_VISIBLE_PARTS);
+        if visible_start > 0 {
+            breadcrumb = breadcrumb.child(breadcrumb_item("...").disabled(true));
+        }
+        for index in visible_start..parts.len() {
+            let target = if absolute {
+                format!("/{}", parts[..=index].join("/"))
+            } else {
+                parts[..=index].join("/")
+            };
+            breadcrumb = breadcrumb.child(breadcrumb_item(parts[index].to_string()).on_click(
+                cx.listener(move |this, _, _window, cx| {
+                    this.navigate_left_remote_to(target.clone(), cx);
+                }),
+            ));
+        }
+        breadcrumb
+    }
+
     fn render_local_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let breadcrumb = self.render_local_breadcrumb(cx);
+        let is_left_remote = self.left_remote.is_some();
+        let breadcrumb = if is_left_remote {
+            self.render_left_remote_breadcrumb(cx)
+        } else {
+            self.render_local_breadcrumb(cx)
+        };
         let selected_count = self.get_local_selected_count(cx);
         let has_selection = selected_count > 0;
         let local_path_input = self.local_path_input.clone();
         let is_editing = self.local_path_editing;
         let is_dragging = self.is_dragging_over_local;
-        let can_go_back = self.can_go_back_local();
-        let can_go_forward = self.can_go_forward_local();
-        let is_favorite = self.is_current_local_path_favorite();
-        let favorite_paths = self.local_favorite_paths();
+        let can_go_back = if is_left_remote {
+            self.can_go_back_left_remote()
+        } else {
+            self.can_go_back_local()
+        };
+        let can_go_forward = if is_left_remote {
+            self.can_go_forward_left_remote()
+        } else {
+            self.can_go_forward_local()
+        };
+        let is_favorite = !is_left_remote && self.is_current_local_path_favorite();
+        let favorite_paths = if is_left_remote {
+            Vec::new()
+        } else {
+            self.local_favorite_paths()
+        };
+        let left_endpoint_select = self.left_endpoint_select.clone();
+        let left_ready = self
+            .left_remote
+            .as_ref()
+            .is_none_or(|endpoint| endpoint.state == LeftRemoteConnectionState::Connected);
 
         v_flex()
             .flex_1()
@@ -4588,6 +5165,12 @@ impl SftpView {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
+                        Select::new(&left_endpoint_select)
+                            .small()
+                            .w(px(180.))
+                            .search_placeholder(t!("Endpoint.search").to_string()),
+                    )
+                    .child(
                         h_flex()
                             .gap_1()
                             .child(
@@ -4597,7 +5180,11 @@ impl SftpView {
                                     .small()
                                     .disabled(!can_go_back)
                                     .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.go_back_local(cx);
+                                        if this.left_remote.is_some() {
+                                            this.go_back_left_remote(cx);
+                                        } else {
+                                            this.go_back_local(cx);
+                                        }
                                     })),
                             )
                             .child(
@@ -4607,7 +5194,11 @@ impl SftpView {
                                     .small()
                                     .disabled(!can_go_forward)
                                     .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.go_forward_local(cx);
+                                        if this.left_remote.is_some() {
+                                            this.go_forward_left_remote(cx);
+                                        } else {
+                                            this.go_forward_local(cx);
+                                        }
                                     })),
                             ),
                     )
@@ -4662,6 +5253,7 @@ impl SftpView {
                                     } else {
                                         t!("FavoritePath.add_current").to_string()
                                     })
+                                    .disabled(is_left_remote)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.toggle_current_local_favorite(window, cx);
                                     })),
@@ -4673,7 +5265,11 @@ impl SftpView {
                                     .ghost()
                                     .small()
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.refresh_local_dir_with_window(window, cx);
+                                        if this.left_remote.is_some() {
+                                            this.refresh_left_remote_dir(cx);
+                                        } else {
+                                            this.refresh_local_dir_with_window(window, cx);
+                                        }
                                     })),
                             )
                             .child(
@@ -4681,9 +5277,9 @@ impl SftpView {
                                     .icon(IconName::Upload)
                                     .ghost()
                                     .small()
-                                    .disabled(!has_selection)
+                                    .disabled(!has_selection || !left_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.upload_selected(window, cx);
+                                        this.transfer_left_selection_to_right(window, cx);
                                     })),
                             )
                             .child(
@@ -4691,6 +5287,7 @@ impl SftpView {
                                     .icon(IconName::File)
                                     .ghost()
                                     .small()
+                                    .disabled(is_left_remote)
                                     .tooltip(t!("File.new_file"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.create_new_file(PanelSide::Local, window, cx);
@@ -4701,6 +5298,7 @@ impl SftpView {
                                     .icon(IconName::NewFolder)
                                     .ghost()
                                     .small()
+                                    .disabled(is_left_remote)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.show_new_folder_dialog(PanelSide::Local, window, cx);
                                     })),
@@ -4710,7 +5308,7 @@ impl SftpView {
                                     .icon(IconName::Remove)
                                     .ghost()
                                     .small()
-                                    .disabled(!has_selection)
+                                    .disabled(is_left_remote || !has_selection)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.delete_local_selected(window, cx);
                                     })),
@@ -4726,16 +5324,69 @@ impl SftpView {
                     .drag_over::<DraggedFileItems>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                         this.is_dragging_over_local = false;
-                        this.handle_local_drop(paths.paths().to_vec(), window, cx);
+                        if this.left_remote.is_some() {
+                            window.push_notification(
+                                Notification::info(t!("Endpoint.remote_edit_pending").to_string())
+                                    .autohide(true),
+                                cx,
+                            );
+                        } else {
+                            this.handle_local_drop(paths.paths().to_vec(), window, cx);
+                        }
                     }))
                     .on_drop(cx.listener(|this, items: &DraggedFileItems, window, cx| {
                         tracing::info!("local-drop-zone on_drop: items count={}", items.len());
                         this.is_dragging_over_local = false;
-                        if items.is_remote {
-                            this.handle_remote_files_drop_to_local(items.clone(), window, cx);
-                        }
+                        this.handle_dragged_drop_to_left(items.clone(), window, cx);
                     }))
-                    .child(self.local_panel.clone())
+                    .child(match self.left_remote.as_ref() {
+                        None => self.local_panel.clone().into_any_element(),
+                        Some(endpoint) => match &endpoint.state {
+                            LeftRemoteConnectionState::Connected => div()
+                                .size_full()
+                                .relative()
+                                .child(self.local_panel.clone())
+                                .when(endpoint.loading, |element| {
+                                    element.child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .bg(gpui::rgba(0x00000040))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(Spinner::new().with_size(Size::Large)),
+                                    )
+                                })
+                                .into_any_element(),
+                            LeftRemoteConnectionState::Connecting => h_flex()
+                                .size_full()
+                                .justify_center()
+                                .items_center()
+                                .gap_2()
+                                .child(Spinner::new().with_size(Size::Large))
+                                .child(t!("Connection.connecting").to_string())
+                                .into_any_element(),
+                            LeftRemoteConnectionState::Disconnected(error) => v_flex()
+                                .size_full()
+                                .justify_center()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::CircleX)
+                                        .with_size(px(18.))
+                                        .text_color(cx.theme().danger),
+                                )
+                                .child(t!("Connection.disconnected").to_string())
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(error.clone()),
+                                )
+                                .into_any_element(),
+                        },
+                    })
                     .when(is_dragging, |el| el.child(self.render_drop_overlay(cx))),
             )
     }
@@ -4745,6 +5396,10 @@ impl SftpView {
         let selected_count = self.get_remote_selected_count(cx);
         let has_selection = selected_count > 0;
         let is_connected = self.connection_state == ConnectionState::Connected;
+        let left_ready = self
+            .left_remote
+            .as_ref()
+            .is_none_or(|endpoint| endpoint.state == LeftRemoteConnectionState::Connected);
         let remote_path_input = self.remote_path_input.clone();
         let is_editing = self.remote_path_editing;
         let is_dragging = self.is_dragging_over_remote;
@@ -4867,9 +5522,13 @@ impl SftpView {
                                     .ghost()
                                     .small()
                                     .tooltip(t!("Common.download"))
-                                    .disabled(!has_selection || !is_connected)
+                                    .disabled(!has_selection || !is_connected || !left_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        this.download_selected(window, cx);
+                                        if this.left_remote.is_some() {
+                                            this.transfer_right_selection_to_left(window, cx);
+                                        } else {
+                                            this.download_selected(window, cx);
+                                        }
                                     })),
                             )
                             .child(
@@ -4923,13 +5582,7 @@ impl SftpView {
                             }))
                             .on_drop(cx.listener(|this, items: &DraggedFileItems, window, cx| {
                                 this.is_dragging_over_remote = false;
-                                if !items.is_remote {
-                                    this.handle_local_files_drop_to_remote(
-                                        items.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                }
+                                this.handle_dragged_drop_to_right(items.clone(), window, cx);
                             }))
                     })
                     .child(match &self.connection_state {
@@ -5085,6 +5738,7 @@ impl TabContent for SftpView {
                 if confirmed {
                     let _ = this.update(cx, |this, cx| {
                         this.cancel_all_transfers();
+                        this.disconnect_left_remote(cx);
                         cx.notify();
                     });
                     // 用户确认关闭，断开连接
@@ -5106,6 +5760,7 @@ impl TabContent for SftpView {
         }
 
         // 没有活跃任务，直接关闭
+        self.disconnect_left_remote(cx);
         if let Some(client) = self.sftp_client.take() {
             let task = Tokio::spawn(cx, async move {
                 let mut guard = client.lock().await;

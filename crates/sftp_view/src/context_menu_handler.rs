@@ -26,6 +26,43 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 impl SftpView {
+    fn handle_left_remote_context_menu_event(
+        &mut self,
+        event: &FileListPanelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            FileListPanelEvent::Download { .. } => {
+                self.transfer_left_selection_to_right(window, cx);
+            }
+            FileListPanelEvent::Refresh => self.refresh_left_remote_dir(cx),
+            FileListPanelEvent::ToggleHiddenFiles => {
+                self.local_panel
+                    .update(cx, |panel, cx| panel.toggle_show_hidden(cx));
+            }
+            FileListPanelEvent::CopyFileName { name } => {
+                self.copy_file_name(name, window, cx);
+            }
+            FileListPanelEvent::CopyAbsolutePath { full_path } => {
+                self.copy_absolute_path(full_path, window, cx);
+            }
+            FileListPanelEvent::OpenInTerminal => {
+                self.open_left_remote_terminal(None, cx);
+            }
+            FileListPanelEvent::OpenInTerminalAt { full_path } => {
+                self.open_left_remote_terminal(Some(full_path.clone()), cx);
+            }
+            _ => {
+                window.push_notification(
+                    Notification::info(t!("Endpoint.remote_edit_pending").to_string())
+                        .autohide(true),
+                    cx,
+                );
+            }
+        }
+    }
+
     fn select_and_upload_files_to(
         &mut self,
         remote_path: String,
@@ -226,6 +263,10 @@ impl ContextMenuHandler for SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.left_remote.is_some() {
+            self.handle_left_remote_context_menu_event(event, window, cx);
+            return;
+        }
         match event {
             FileListPanelEvent::NewFile => {
                 self.create_new_file(PanelSide::Local, window, cx);
@@ -240,7 +281,9 @@ impl ContextMenuHandler for SftpView {
                 name: _,
                 full_path: _,
             } => {
-                // 本地文件不支持下载，无操作
+                if self.left_remote.is_some() {
+                    self.transfer_left_selection_to_right(window, cx);
+                }
             }
             FileListPanelEvent::ChangePermissions { name, full_path } => {
                 self.change_permissions(name, full_path, window, cx);
@@ -302,7 +345,11 @@ impl ContextMenuHandler for SftpView {
                 name: _,
                 full_path: _,
             } => {
-                self.download_selected(window, cx);
+                if self.left_remote.is_some() {
+                    self.transfer_right_selection_to_left(window, cx);
+                } else {
+                    self.download_selected(window, cx);
+                }
             }
             FileListPanelEvent::Edit { full_path } => {
                 self.open_remote_file(full_path.clone(), window, cx);

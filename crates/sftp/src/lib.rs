@@ -1,6 +1,9 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod direct_copy;
+mod direct_copy_scripts;
 mod russh_impl;
+mod server_copy;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -10,6 +13,10 @@ use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
 pub use russh_impl::RusshSftpClient;
+pub use server_copy::{
+    CopyPlanEntry, CopyStrategy, ServerCopyItem, ServerCopyRequest, choose_copy_strategy,
+    copy_between_servers, join_copy_path, relay_copy,
+};
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {

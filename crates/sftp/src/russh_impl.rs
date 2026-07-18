@@ -1,3 +1,4 @@
+use crate::server_copy::CopyFileRequest;
 use crate::{
     FileEntry, PathMetadata, ProgressCallback, SftpClient, TransferCancelled, TransferProgress,
     validate_read_size,
@@ -627,6 +628,60 @@ impl RusshSftpClient {
             .await
             .map_err(|e| anyhow!("Failed to sync local file: {}", e))?;
 
+        Ok(())
+    }
+
+    pub(crate) async fn copy_file_to(
+        &mut self,
+        target: &mut Self,
+        request: CopyFileRequest<'_>,
+    ) -> Result<()> {
+        let mut source_file = self
+            .sftp
+            .open_with_flags(request.source_path, OpenFlags::READ)
+            .await
+            .map_err(|error| anyhow!("Failed to open {}: {}", request.source_path, error))?;
+        let mut target_file = target
+            .sftp
+            .open_with_flags(
+                request.target_path,
+                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+            )
+            .await
+            .map_err(|error| anyhow!("Failed to create {}: {}", request.target_path, error))?;
+        let file_name = request
+            .source_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(request.source_path)
+            .to_string();
+        let started_at = Instant::now();
+        let mut file_transferred = 0;
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+
+        loop {
+            ensure_not_cancelled(&request.cancelled)?;
+            let read = source_file.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            target_file.write_all(&buffer[..read]).await?;
+            file_transferred += read as u64;
+            let elapsed = started_at.elapsed().as_secs_f64();
+            (request.progress)(TransferProgress {
+                transferred: request.completed + file_transferred,
+                total: request.total,
+                speed: if elapsed > 0.0 {
+                    file_transferred as f64 / elapsed
+                } else {
+                    0.0
+                },
+                current_file: Some(file_name.clone()),
+                current_file_transferred: file_transferred,
+                current_file_total: request.file_size,
+            });
+        }
+        target_file.sync_all().await?;
         Ok(())
     }
 }
