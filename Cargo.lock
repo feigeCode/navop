@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "async-channel",
  "serde",
@@ -1600,7 +1600,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1621,7 +1621,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "serde",
  "serde_json",
@@ -1631,7 +1631,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1640,7 +1640,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1650,7 +1650,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -3087,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b82b6d81255d39ebfaff8e6d362eb040959a2550#b82b6d81255d39ebfaff8e6d362eb040959a2550"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=35adbeff0300e3aaa6ab3a35abd237f0716984c7#35adbeff0300e3aaa6ab3a35abd237f0716984c7"
 dependencies = [
  "gpui",
  "log",
