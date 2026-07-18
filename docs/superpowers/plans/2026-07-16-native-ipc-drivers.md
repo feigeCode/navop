@@ -173,7 +173,8 @@
 
 **Files:**
 - Add: `crates/extension-protocol/src/redis.rs`
-- Add: `drivers/redis-driver/*` or approved workspace location
+- Migrated to `navop-extensions/extensions/ipc/redis/*` with its standalone
+  release metadata and package entry.
 - Add: Redis IPC backend under `redis-runtime/src/ipc/*`
 - Modify: `crates/onetcli_runtime/src/redis_tools/*`
 - Modify: `main/src/public_mcp_runtime/redis.rs`
@@ -205,8 +206,8 @@
 
 **Files:**
 - Add: `crates/extension-protocol/src/mongodb.rs`
-- Add: `drivers/mongodb-driver/*`
-- Add: `drivers/mongodb-legacy-driver/*`
+- Migrated to the shared `navop-extensions/drivers/mongodb-driver/*` crate and
+  `extensions/ipc/mongodb-modern|mongodb-legacy/*` release manifests.
 - Add: Mongo IPC backend under `mongodb-runtime/src/ipc/*`
 - Modify driver compatibility selection and tests
 
@@ -299,7 +300,8 @@
 - Mongo IPC facade now owns optional manifest/session/conn state and implements real generic-session connect, disconnect, ping, BSON command and find decoding. The sidecar implements BSON-preserving find with limit/skip/sort/projection. Remaining facade methods still fail explicitly instead of falling through to an SDK.
 - Mongo command facade Green: list databases/collections, create/drop collection/database, aggregate, count, CRUD, indexes, collection validation and explain now map to standard MongoDB command documents over the same generic BSON RPC; only cursor get-more/large-result blob routing remains to complete. Main initializes installed Redis/Mongo manifests through `NativeDriverRegistry` and configures the runtime factories without coupling UI to SDKs.
 - Mongo large-result Green: sidecar packs BSON documents as length-prefixed binary blobs above the 4 MiB inline threshold; generic async runtime registers `documents_blob_id` as a connection-owned resource, host reads/decodes chunks and closes the blob. Runtime blob round-trip test passes.
-- Packaging Green: `script/package-native-data-drivers.sh /tmp/navop-native-data-drivers` builds all three sidecars, validates manifest entry executables and verifies all six artifacts with SHA-256. The checksum list intentionally excludes `SHA256SUMS` itself.
+- Packaging responsibility moved to `navop-extensions/scripts/release-driver.mjs`,
+  which builds and verifies the three independent native driver packages.
 - Size A/B: default release `target/release/navop` is 93,595,648 bytes; `--features builtin-data-drivers` is 98,511,056 bytes (+4,915,408 bytes, about 5.25%). The standalone native-driver package is 12,688 KiB in the current macOS build.
 - Final focused verification: `cargo fmt --all -- --check`; 338 tests across extension-protocol/host/driver, redis-runtime, mongodb-runtime and onetcli_runtime; default and `builtin-data-drivers` main checks; `git diff --check` all passed. Known future-incompatibility warnings remain limited to baseline `block` and `proc-macro-error2` packages.
 - Follow-up quality gate: boxed `RedisConnectionFactory::Ipc` to satisfy `clippy::large_enum_variant`; focused no-deps clippy now passes for extension-protocol/host/driver, redis-runtime, mongodb-runtime and onetcli_runtime, followed by 53 runtime tests and a default main check.

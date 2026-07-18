@@ -10,8 +10,16 @@ async fn sidecar_round_trips_binary_values_and_pipeline() {
         eprintln!("skipping Redis sidecar integration: NAVOP_REDIS_DRIVER_BIN is unset");
         return;
     };
-    let mut manifest: NativeDriverManifest =
-        serde_json::from_str(include_str!("../../../drivers/redis-driver/driver.json")).unwrap();
+    let mut manifest: NativeDriverManifest = serde_json::from_value(serde_json::json!({
+        "id": "redis",
+        "name": "Redis",
+        "api": "redis",
+        "protocol_version": "1.0",
+        "entry": { "command": "redis-driver" },
+        "transport": { "name": "redis.sock" },
+        "methods": ["conn/open", "conn/close", "redis/command", "redis/pipeline"]
+    }))
+    .unwrap();
     manifest.entry.command = binary.to_string_lossy().into_owned();
     manifest.manifest_dir = std::env::temp_dir();
 

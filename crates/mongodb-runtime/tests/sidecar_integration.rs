@@ -12,9 +12,15 @@ async fn sidecar_round_trips_bson_commands_and_find() {
         eprintln!("skipping MongoDB sidecar integration: NAVOP_MONGO_DRIVER_BIN is unset");
         return;
     };
-    let mut manifest: NativeDriverManifest = serde_json::from_str(include_str!(
-        "../../../drivers/mongodb-driver/packages/mongodb-modern/driver.json"
-    ))
+    let mut manifest: NativeDriverManifest = serde_json::from_value(serde_json::json!({
+        "id": "mongodb-modern",
+        "name": "MongoDB Modern",
+        "api": "mongodb",
+        "protocol_version": "1.0",
+        "entry": { "command": "mongodb-driver" },
+        "transport": { "name": "mongodb-modern.sock" },
+        "methods": ["conn/open", "conn/close", "mongodb/command", "mongodb/find"]
+    }))
     .unwrap();
     manifest.entry.command = binary.to_string_lossy().into_owned();
     manifest.manifest_dir = std::env::temp_dir();

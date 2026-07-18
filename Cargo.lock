@@ -8112,37 +8112,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "onetcli-mongodb-driver"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "bson",
- "extension-driver",
- "extension-protocol",
- "futures-util",
- "mongodb",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "onetcli-redis-driver"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "extension-driver",
- "extension-protocol",
- "futures",
- "redis",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "onetcli_runtime"
 version = "0.1.0"
 dependencies = [

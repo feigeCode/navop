@@ -17,8 +17,6 @@ members = [
     "crates/extension-protocol",
     "crates/extension-host",
     "crates/extension-driver",
-    "drivers/redis-driver",
-    "drivers/mongodb-driver",
     "crates/extension-api",
     "crates/extension-component",
     "crates/extension-wasm",
