@@ -1,6 +1,7 @@
 use crate::document_rendering::NavopDocumentRendererProvider;
 use crate::notes_notifications::notify_operation_error;
 use crate::syntax_highlighting::NavopSyntaxHighlightProvider;
+use crate::theme_provider::{NavopThemeProvider, cditor_theme};
 use crate::{
     DocumentDescriptor, DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow,
     TreeState,
@@ -48,6 +49,7 @@ pub struct NotesView {
     pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
     pub(crate) syntax_highlight_provider: Arc<NavopSyntaxHighlightProvider>,
     pub(crate) document_renderer_provider: Option<Arc<NavopDocumentRendererProvider>>,
+    pub(crate) theme_provider: Arc<NavopThemeProvider>,
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
@@ -129,6 +131,14 @@ impl NotesView {
             .cloned()
             .map(NavopDocumentRendererProvider::new)
             .map(Arc::new);
+        let theme_provider = Arc::new(NavopThemeProvider::new(cditor_theme(
+            cx.theme().background,
+            cx.theme().foreground,
+            cx.theme().muted_foreground,
+            cx.theme().border,
+            cx.theme().primary,
+            cx.theme().danger,
+        )));
         Self {
             storage: None,
             load_state,
@@ -143,6 +153,7 @@ impl NotesView {
             ai_provider,
             syntax_highlight_provider,
             document_renderer_provider,
+            theme_provider,
             setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
@@ -197,6 +208,7 @@ impl NotesView {
                 None => builder.without_ai(),
             };
             builder = builder.syntax_highlight_provider_arc(self.syntax_highlight_provider.clone());
+            builder = builder.theme_provider_arc(self.theme_provider.clone());
             if let Some(provider) = self.document_renderer_provider.clone() {
                 builder = builder.document_renderer_provider_arc(provider);
             }

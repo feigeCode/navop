@@ -40,6 +40,7 @@ impl NotesView {
                     ai_provider: self.ai_provider.clone(),
                     ai_model_id: ai_model_id.as_deref(),
                     syntax_highlight_provider: self.syntax_highlight_provider.clone(),
+                    theme_provider: self.theme_provider.clone(),
                     document_renderer_provider: self
                         .document_renderer_provider
                         .clone()

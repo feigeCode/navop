@@ -314,6 +314,8 @@ pub struct ToolExposureToolsetSettings {
     #[serde(default)]
     pub redis: bool,
     #[serde(default)]
+    pub mongo: bool,
+    #[serde(default)]
     pub internal_functions: bool,
 }
 
@@ -327,6 +329,7 @@ impl ToolExposureToolsetSettings {
             sftp: false,
             database: false,
             redis: false,
+            mongo: false,
             internal_functions: false,
         }
     }
@@ -340,6 +343,7 @@ impl ToolExposureToolsetSettings {
             sftp: true,
             database: true,
             redis: true,
+            mongo: true,
             internal_functions: true,
         }
     }

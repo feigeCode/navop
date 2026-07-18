@@ -118,8 +118,8 @@ fn open_connection_on_navop_window(
     open_mode: TabOpenMode,
     cx: &mut App,
 ) -> Result<Value, String> {
-    let target_window = resolve_navop_window(cx)
-        .ok_or_else(|| "no Navop window is available".to_string())?;
+    let target_window =
+        resolve_navop_window(cx).ok_or_else(|| "no Navop window is available".to_string())?;
     let home_page = cx
         .try_global::<GlobalHomePage>()
         .ok_or_else(|| "home page is not initialized".to_string())?

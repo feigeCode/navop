@@ -1,4 +1,4 @@
-use super::{internal_functions, redis, resource_pool};
+use super::{internal_functions, mongo, redis, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
@@ -141,6 +141,11 @@ fn build_tool_registry_for_surface(
             cx,
         )));
     }
+    if toolsets.mongo {
+        runtime_registries.push(tool_runtime::ToolRegistry::new(mongo::mongo_tool_handlers(
+            cx,
+        )));
+    }
     if !runtime_registries.is_empty() {
         let mut provider =
             ToolRuntimeMcpProvider::new(tool_runtime::ToolRegistry::merge(runtime_registries)?);
@@ -246,6 +251,49 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "redis.keys"));
         assert!(tools.iter().any(|tool| tool.name == "redis.get"));
         assert!(tools.iter().any(|tool| tool.name == "redis.set"));
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_includes_mongo_tools(cx: &mut TestAppContext) {
+        let toolsets = ToolExposureToolsetSettings {
+            terminal: false,
+            connections: false,
+            mongo: true,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            cx.set_global(mongodb_view::GlobalMongoState::new());
+            build_tool_registry(cx, &toolsets)
+                .expect("MongoDB registry should build")
+                .tools()
+        });
+
+        for expected in [
+            "mongo.list_connections",
+            "mongo.list_databases",
+            "mongo.list_collections",
+            "mongo.find",
+            "mongo.aggregate",
+            "mongo.count",
+            "mongo.list_indexes",
+            "mongo.create_index",
+            "mongo.drop_index",
+            "mongo.create_collection",
+            "mongo.drop_database",
+            "mongo.get_validation",
+            "mongo.set_validation",
+            "mongo.insert",
+            "mongo.replace",
+            "mongo.update",
+            "mongo.delete",
+            "mongo.explain",
+        ] {
+            assert!(
+                tools.iter().any(|tool| tool.name == expected),
+                "missing {expected}"
+            );
+        }
     }
 
     #[gpui::test]

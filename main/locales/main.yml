@@ -1357,6 +1357,14 @@ Settings:
         en: Expose Redis inspection and command tools
         zh-CN: 暴露 Redis 查看和命令工具
         zh-HK: 暴露 Redis 查看和命令工具
+      mongo:
+        en: MongoDB Tools
+        zh-CN: MongoDB 工具
+        zh-HK: MongoDB 工具
+      mongo_desc:
+        en: Expose MongoDB database, collection, index, and document tools
+        zh-CN: 暴露 MongoDB 数据库、集合、索引和文档工具
+        zh-HK: 暴露 MongoDB 資料庫、集合、索引和文件工具
       database:
         en: Database Tools
         zh-CN: 数据库工具

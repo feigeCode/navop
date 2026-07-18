@@ -46,10 +46,7 @@ async fn loopback_server_handles_json_rpc_after_token_handshake() {
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
 
     assert_eq!(json!(1), response["id"]);
-    assert_eq!(
-        "navop-public-mcp",
-        response["result"]["serverInfo"]["name"]
-    );
+    assert_eq!("navop-public-mcp", response["result"]["serverInfo"]["name"]);
     assert!(
         response["result"]["instructions"]
             .as_str()

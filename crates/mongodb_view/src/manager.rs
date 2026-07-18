@@ -342,8 +342,8 @@ mod tests {
     #[test]
     fn build_connection_string_uses_raw_uri_when_host_is_empty() {
         let params = MongoDBParams {
-            connection_string:
-                "  mongodb://user:pass@localhost:27017/app?authSource=admin  ".to_string(),
+            connection_string: "  mongodb://user:pass@localhost:27017/app?authSource=admin  "
+                .to_string(),
             host: String::new(),
             port: None,
             database: None,

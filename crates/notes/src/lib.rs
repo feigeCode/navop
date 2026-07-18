@@ -29,6 +29,7 @@ mod storage_location;
 mod storage_support;
 mod syntax_highlighting;
 mod tree_state;
+mod theme_provider;
 
 #[cfg(test)]
 mod storage_tests;

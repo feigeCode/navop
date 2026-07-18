@@ -1,6 +1,7 @@
 use crate::notes_actions::CreateKind;
 use crate::notes_view::NotesLoadState;
 use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
+use crate::theme_provider::cditor_theme;
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
@@ -285,6 +286,29 @@ fn row_action_id(action: &str, row: &TreeRow) -> SharedString {
 
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme_changed = self.theme_provider.refresh(cditor_theme(
+            cx.theme().background,
+            cx.theme().foreground,
+            cx.theme().muted_foreground,
+            cx.theme().border,
+            cx.theme().primary,
+            cx.theme().danger,
+        ));
+        if theme_changed {
+            let mut editors = self
+                .editors
+                .values()
+                .map(|editor| editor.handle.clone())
+                .collect::<Vec<_>>();
+            editors.extend(
+                self.markdown_sessions
+                    .values()
+                    .map(|session| session.preview.clone()),
+            );
+            for editor in editors {
+                editor.entity().update(cx, |_view, cx| cx.notify());
+            }
+        }
         self.syntax_highlight_provider.refresh_theme(
             cx.theme().highlight_theme.clone(),
             cx.theme().background,

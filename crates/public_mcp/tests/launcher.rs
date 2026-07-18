@@ -114,10 +114,7 @@ async fn launcher_connects_from_discovery_and_completes_initialize() {
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
 
     assert_eq!(json!(1), response["id"]);
-    assert_eq!(
-        "navop-public-mcp",
-        response["result"]["serverInfo"]["name"]
-    );
+    assert_eq!("navop-public-mcp", response["result"]["serverInfo"]["name"]);
     assert_eq!(
         "Navop Public MCP",
         response["result"]["serverInfo"]["title"]

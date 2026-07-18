@@ -68,6 +68,7 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
             sftp: false,
             database: false,
             redis: false,
+            mongo: false,
             internal_functions: false,
         };
         cx.set_global(settings);
@@ -84,6 +85,7 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
     assert!(names.contains(&"internal_functions_call".to_string()));
     assert!(names.contains(&"db_query".to_string()));
     assert!(names.contains(&"redis_get".to_string()));
+    assert!(names.contains(&"mongo_find".to_string()));
     assert!(names.contains(&"sftp_read".to_string()));
 }
 
@@ -98,6 +100,7 @@ fn agent_runtime_tool_registry_respects_agent_tool_exposure(cx: &mut TestAppCont
             sftp: false,
             database: false,
             redis: false,
+            mongo: false,
             internal_functions: false,
             ..Default::default()
         };
@@ -115,6 +118,7 @@ fn agent_runtime_tool_registry_respects_agent_tool_exposure(cx: &mut TestAppCont
     assert!(!names.contains(&"internal_functions_call".to_string()));
     assert!(!names.contains(&"db_query".to_string()));
     assert!(!names.contains(&"redis_get".to_string()));
+    assert!(!names.contains(&"mongo_find".to_string()));
     assert!(!names.contains(&"sftp_read".to_string()));
 }
 
@@ -154,6 +158,41 @@ fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) 
     assert_tool_risk(&registry, "redis.keys", RiskLevel::Medium);
     assert_tool_risk(&registry, "redis.get", RiskLevel::Low);
     assert_tool_risk(&registry, "redis.set", RiskLevel::High);
+}
+
+#[gpui::test]
+fn agent_runtime_tool_registry_uses_rust_hosted_mongo_tools(cx: &mut TestAppContext) {
+    let registry = cx.update(|cx| {
+        register_connection_repository(cx);
+        let mut settings = AppSettings::default();
+        settings.tool_exposure.agent = ToolExposureToolsetSettings {
+            terminal: false,
+            connections: false,
+            mongo: true,
+            ..Default::default()
+        };
+        cx.set_global(settings);
+
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
+    });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"mongo_find".to_string()));
+    assert!(names.contains(&"mongo_aggregate".to_string()));
+    assert!(names.contains(&"mongo_insert".to_string()));
+    assert!(names.contains(&"mongo_delete".to_string()));
+    assert_agent_target_schema(
+        &registry,
+        "mongo.find",
+        serde_json::json!(["target", "database", "collection"]),
+    );
+    assert_tool_risk(&registry, "mongo.find", RiskLevel::Read);
+    assert_tool_risk(&registry, "mongo.insert", RiskLevel::High);
+    assert_tool_risk(&registry, "mongo.drop_database", RiskLevel::High);
 }
 
 #[gpui::test]

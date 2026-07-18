@@ -26,6 +26,7 @@ pub use manager::{GlobalMongoState, MongoManager};
 pub use mongo_form_window::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 pub use mongo_tab::MongoTabView;
 pub use mongo_tree_view::{MongoTreeView, MongoTreeViewEvent};
+pub use mongodb::{bson, options};
 pub use sidebar::{MongoSidebar, MongoSidebarEvent};
 pub use types::*;
 

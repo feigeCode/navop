@@ -1,6 +1,7 @@
 mod config;
 mod connection_sessions;
 mod internal_functions;
+mod mongo;
 mod redis;
 mod resource_pool;
 mod session;

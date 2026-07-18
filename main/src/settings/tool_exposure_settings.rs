@@ -62,28 +62,31 @@ enum ToolExposureItem {
     Connections,
     Sftp,
     Redis,
+    Mongo,
     Database,
     InternalFunctions,
 }
 
 impl ToolExposureItem {
-    const MCP_VISIBLE: [Self; 8] = [
+    const MCP_VISIBLE: [Self; 9] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
         Self::Connections,
         Self::Sftp,
         Self::Redis,
+        Self::Mongo,
         Self::Database,
         Self::InternalFunctions,
     ];
-    const AGENT_VISIBLE: [Self; 8] = [
+    const AGENT_VISIBLE: [Self; 9] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
         Self::Connections,
         Self::Sftp,
         Self::Redis,
+        Self::Mongo,
         Self::Database,
         Self::InternalFunctions,
     ];
@@ -97,6 +100,7 @@ impl ToolExposureItem {
             Self::Connections => "connections",
             Self::Sftp => "sftp",
             Self::Redis => "redis",
+            Self::Mongo => "mongo",
             Self::Database => "database",
             Self::InternalFunctions => "internal_functions",
         }
@@ -110,6 +114,7 @@ impl ToolExposureItem {
             Self::Connections => "Settings.General.ToolExposure.connections",
             Self::Sftp => "Settings.General.ToolExposure.sftp",
             Self::Redis => "Settings.General.ToolExposure.redis",
+            Self::Mongo => "Settings.General.ToolExposure.mongo",
             Self::Database => "Settings.General.ToolExposure.database",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions",
         }
@@ -123,6 +128,7 @@ impl ToolExposureItem {
             Self::Connections => "Settings.General.ToolExposure.connections_desc",
             Self::Sftp => "Settings.General.ToolExposure.sftp_desc",
             Self::Redis => "Settings.General.ToolExposure.redis_desc",
+            Self::Mongo => "Settings.General.ToolExposure.mongo_desc",
             Self::Database => "Settings.General.ToolExposure.database_desc",
             Self::InternalFunctions => "Settings.General.ToolExposure.internal_functions_desc",
         }
@@ -136,6 +142,7 @@ impl ToolExposureItem {
             Self::Connections => settings.connections,
             Self::Sftp => settings.sftp,
             Self::Redis => settings.redis,
+            Self::Mongo => settings.mongo,
             Self::Database => settings.database,
             Self::InternalFunctions => settings.internal_functions,
         }
@@ -149,6 +156,7 @@ impl ToolExposureItem {
             Self::Connections => settings.connections = enabled,
             Self::Sftp => settings.sftp = enabled,
             Self::Redis => settings.redis = enabled,
+            Self::Mongo => settings.mongo = enabled,
             Self::Database => settings.database = enabled,
             Self::InternalFunctions => settings.internal_functions = enabled,
         }
@@ -233,6 +241,7 @@ mod tests {
                 "connections",
                 "sftp",
                 "redis",
+                "mongo",
                 "database",
                 "internal_functions"
             ],
@@ -252,6 +261,7 @@ mod tests {
                 "connections",
                 "sftp",
                 "redis",
+                "mongo",
                 "database",
                 "internal_functions"
             ],
