@@ -195,15 +195,21 @@ fn remember_reconnect_state(
     latest_clipboard_text: &mut Option<String>,
 ) {
     match input {
-        RemoteDesktopInput::Resize { width, height } => {
+        RemoteDesktopInput::Resize {
+            width,
+            height,
+            scale_factor,
+        } => {
             if let HelperRequest::Connect {
                 width: connect_width,
                 height: connect_height,
+                scale_factor: connect_scale_factor,
                 ..
             } = connect
             {
                 *connect_width = *width;
                 *connect_height = *height;
+                *connect_scale_factor = *scale_factor;
             }
         }
         RemoteDesktopInput::ClipboardText { text } => {

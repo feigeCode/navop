@@ -16,8 +16,9 @@ pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, creat
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
 pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
+pub use framebuffer::RgbaFramebuffer;
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};
-pub use output::RemoteDesktopOutput;
+pub use output::{RemoteDesktopFrameRect, RemoteDesktopOutput};
 pub use provider::{
     PROVIDER_MANIFEST_FILE, RemoteDesktopProviderEntry, RemoteDesktopProviderManifest,
     RemoteDesktopProviderUi,

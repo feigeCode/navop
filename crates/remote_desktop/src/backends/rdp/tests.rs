@@ -1,5 +1,5 @@
-use crate::ResizeSupport;
 use crate::helper_protocol::HelperEvent;
+use crate::{RemoteDesktopFrameRect, ResizeSupport};
 
 use super::input::{coalesce_remote_inputs, reconnect_delay, reconnect_status_message};
 use super::transport::{
@@ -26,7 +26,7 @@ fn converts_helper_connected_event_to_rdp_capabilities() {
                 clipboard_text: true,
                 cursor_shape: false,
                 audio: false,
-                file_transfer: false,
+                file_transfer: true,
             }
         }
     );
@@ -120,6 +120,36 @@ fn reads_bgra_frame_event_from_helper_stream() {
             width: 2,
             height: 1,
             bgra: vec![3, 2, 1, 255, 6, 5, 4, 255],
+        },
+        output
+    );
+}
+
+#[test]
+fn reads_bgra_rectangles_from_helper_stream() {
+    let mut input = std::io::Cursor::new(
+        b"{\"type\":\"FrameBgraRects\",\"width\":2,\"height\":2,\"rects\":[{\"x\":1,\"y\":1,\"width\":1,\"height\":1,\"byte_len\":4}],\"bgra_len\":4}\n\
+          \x03\x02\x01\xff"
+            .to_vec(),
+    );
+
+    let output = read_helper_output(&mut input)
+        .expect("helper output reads")
+        .expect("helper output exists")
+        .output;
+
+    assert_eq!(
+        RemoteDesktopOutput::FrameBgraRects {
+            width: 2,
+            height: 2,
+            rects: vec![RemoteDesktopFrameRect {
+                x: 1,
+                y: 1,
+                width: 1,
+                height: 1,
+                byte_len: 4,
+            }],
+            bgra: vec![3, 2, 1, 255],
         },
         output
     );

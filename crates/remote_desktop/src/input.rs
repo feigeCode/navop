@@ -3,6 +3,7 @@ pub enum RemoteDesktopInput {
     Resize {
         width: u16,
         height: u16,
+        scale_factor: u32,
     },
     MouseMove {
         x: u16,
@@ -25,6 +26,9 @@ pub enum RemoteDesktopInput {
     },
     ClipboardText {
         text: String,
+    },
+    ClipboardFiles {
+        paths: Vec<String>,
     },
     Reconnect,
     Close,

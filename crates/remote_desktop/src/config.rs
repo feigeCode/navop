@@ -42,6 +42,7 @@ pub struct RemoteDesktopConnectionOptions {
 pub struct RemoteDesktopSize {
     pub width: u16,
     pub height: u16,
+    pub scale_factor: u32,
 }
 
 impl fmt::Debug for RemoteDesktopConnectionOptions {

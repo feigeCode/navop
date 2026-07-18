@@ -15,6 +15,16 @@ impl RgbaFramebuffer {
         }
     }
 
+    pub fn from_bgra(width: u16, height: u16, bgra: Vec<u8>) -> anyhow::Result<Self> {
+        let expected = usize::from(width) * usize::from(height) * 4;
+        anyhow::ensure!(bgra.len() == expected, "invalid framebuffer length");
+        Ok(Self {
+            width,
+            height,
+            rgba: bgra,
+        })
+    }
+
     pub fn width(&self) -> u16 {
         self.width
     }

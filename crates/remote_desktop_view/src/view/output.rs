@@ -9,6 +9,7 @@ impl RemoteDesktopView {
             .start(RemoteDesktopSize {
                 width: size.0,
                 height: size.1,
+                scale_factor: self.display_scale_factor,
             })
             .unwrap_or_else(failed_runtime);
         self.input_tx = Some(runtime.input_tx);
@@ -22,7 +23,12 @@ impl RemoteDesktopView {
             return;
         };
         let batch = output_rx.drain();
-        for output in batch.control.into_iter().chain(batch.latest_frame) {
+        for output in batch
+            .control
+            .into_iter()
+            .chain(batch.latest_frame)
+            .chain(batch.latest_delta)
+        {
             self.apply_output(output, cx);
         }
     }
@@ -47,7 +53,16 @@ impl RemoteDesktopView {
                 bgra,
             } => {
                 self.remote_size = Some((width, height));
-                self.install_frame(bgra_to_render_image(width, height, bgra));
+                self.install_bgra_frame(width, height, bgra);
+            }
+            RemoteDesktopOutput::FrameBgraRects {
+                width,
+                height,
+                rects,
+                bgra,
+            } => {
+                self.remote_size = Some((width, height));
+                self.apply_bgra_rects(width, height, &rects, bgra);
             }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
             RemoteDesktopOutput::ConnectionFailure(message)
@@ -66,12 +81,56 @@ impl RemoteDesktopView {
         }
     }
 
+    fn install_bgra_frame(&mut self, width: u16, height: u16, bgra: Vec<u8>) {
+        match RgbaFramebuffer::from_bgra(width, height, bgra) {
+            Ok(framebuffer) => {
+                let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
+                self.framebuffer = Some(framebuffer);
+                self.install_frame(image);
+            }
+            Err(error) => self.status = SharedString::from(error.to_string()),
+        }
+    }
+
+    fn apply_bgra_rects(
+        &mut self,
+        width: u16,
+        height: u16,
+        rects: &[RemoteDesktopFrameRect],
+        bgra: Vec<u8>,
+    ) {
+        let Some(framebuffer) = self.framebuffer.as_mut() else {
+            return;
+        };
+        if framebuffer.width() != width || framebuffer.height() != height {
+            return;
+        }
+        let mut offset: usize = 0;
+        for rect in rects {
+            let end = offset.saturating_add(rect.byte_len);
+            if end > bgra.len()
+                || framebuffer
+                    .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])
+                    .is_err()
+            {
+                return;
+            }
+            offset = end;
+        }
+        if offset != bgra.len() {
+            return;
+        }
+        let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
+        self.install_frame(image);
+    }
+
     fn apply_remote_clipboard(&mut self, text: String, cx: &mut Context<Self>) {
         if self.last_clipboard_text.as_deref() == Some(text.as_str()) {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         self.last_clipboard_text = Some(text);
+        self.last_clipboard_files = None;
         self.last_clipboard_sync_at = Some(Instant::now());
     }
 
@@ -86,13 +145,37 @@ impl RemoteDesktopView {
             return;
         }
         self.last_clipboard_sync_at = Some(Instant::now());
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        let files = item.entries().iter().find_map(|entry| match entry {
+            ClipboardEntry::ExternalPaths(paths) => {
+                let paths: Vec<String> = paths
+                    .paths()
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                (!paths.is_empty()).then_some(paths)
+            }
+            ClipboardEntry::Image(_) | ClipboardEntry::String(_) => None,
+        });
+        if let Some(paths) = files {
+            if self.last_clipboard_files.as_ref() == Some(&paths) {
+                return;
+            }
+            self.last_clipboard_files = Some(paths.clone());
+            self.last_clipboard_text = None;
+            self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
+            return;
+        }
+        let Some(text) = item.text() else {
             return;
         };
         if self.last_clipboard_text.as_deref() == Some(text.as_str()) {
             return;
         }
         self.last_clipboard_text = Some(text.clone());
+        self.last_clipboard_files = None;
         self.send_input(RemoteDesktopInput::ClipboardText { text });
     }
 
@@ -113,6 +196,7 @@ impl RemoteDesktopView {
         display_scale_factor: f32,
     ) {
         self.content_bounds = Some(bounds);
+        self.display_scale_factor = resize::scale_factor_percent(display_scale_factor);
         let Some(size) = resize::resize_dimensions(bounds, display_scale_factor) else {
             return;
         };
@@ -149,6 +233,7 @@ impl RemoteDesktopView {
         self.send_input(RemoteDesktopInput::Resize {
             width: size.0,
             height: size.1,
+            scale_factor: self.display_scale_factor,
         });
     }
 }

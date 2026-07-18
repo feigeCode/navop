@@ -41,6 +41,13 @@ pub(super) fn is_meaningful_delta(previous: Option<(u16, u16)>, next: (u16, u16)
         || previous.1.abs_diff(next.1) >= RESIZE_DELTA_THRESHOLD
 }
 
+pub(super) fn scale_factor_percent(display_scale_factor: f32) -> u32 {
+    if !display_scale_factor.is_finite() || display_scale_factor <= 0.0 {
+        return 100;
+    }
+    (display_scale_factor * 100.0).round().clamp(100.0, 300.0) as u32
+}
+
 fn pixels_to_f32(pixels: Pixels) -> f32 {
     pixels.into()
 }
@@ -77,5 +84,12 @@ mod tests {
         assert!(!is_meaningful_delta(Some((1280, 720)), (1284, 726)));
         assert!(is_meaningful_delta(Some((1280, 720)), (1300, 726)));
         assert!(is_meaningful_delta(None, (1280, 720)));
+    }
+
+    #[test]
+    fn converts_display_scale_to_rdp_percent() {
+        assert_eq!(100, super::scale_factor_percent(0.0));
+        assert_eq!(200, super::scale_factor_percent(2.0));
+        assert_eq!(300, super::scale_factor_percent(4.0));
     }
 }

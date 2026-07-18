@@ -1,6 +1,8 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 
+use crate::{RemoteDesktopFrameRect, helper_protocol::HelperFrameRect};
+
 use super::*;
 
 pub(super) enum BackendSignal {
@@ -129,12 +131,68 @@ pub(super) fn read_helper_output(
             height,
             bgra_len,
         } => read_binary_bgra_frame_output(reader, width, height, bgra_len).map(Some),
+        HelperEvent::FrameBgraRects {
+            width,
+            height,
+            rects,
+            bgra_len,
+        } => read_binary_bgra_rects_output(reader, width, height, rects, bgra_len).map(Some),
         event => Ok(Some(HelperOutput {
             output: helper_event_to_output(event)?,
             connected,
             disconnect_message,
         })),
     }
+}
+
+fn read_binary_bgra_rects_output<R>(
+    reader: &mut R,
+    width: u16,
+    height: u16,
+    rects: Vec<HelperFrameRect>,
+    bgra_len: usize,
+) -> anyhow::Result<HelperOutput>
+where
+    R: Read + ?Sized,
+{
+    let expected_len: usize = rects.iter().map(|rect| rect.byte_len).sum();
+    anyhow::ensure!(
+        bgra_len == expected_len,
+        "invalid BGRA rectangle payload length"
+    );
+    for rect in &rects {
+        anyhow::ensure!(rect.width > 0 && rect.height > 0, "BGRA rectangle is empty");
+        anyhow::ensure!(
+            rect.x.saturating_add(rect.width) <= width
+                && rect.y.saturating_add(rect.height) <= height,
+            "BGRA rectangle is outside framebuffer"
+        );
+        anyhow::ensure!(
+            rect.byte_len == usize::from(rect.width) * usize::from(rect.height) * 4,
+            "invalid BGRA rectangle byte length"
+        );
+    }
+    let mut bgra = vec![0; bgra_len];
+    reader.read_exact(&mut bgra)?;
+    Ok(HelperOutput {
+        output: RemoteDesktopOutput::FrameBgraRects {
+            width,
+            height,
+            rects: rects
+                .into_iter()
+                .map(|rect| RemoteDesktopFrameRect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    byte_len: rect.byte_len,
+                })
+                .collect(),
+            bgra,
+        },
+        connected: false,
+        disconnect_message: None,
+    })
 }
 
 fn read_binary_frame_output<R>(
@@ -234,7 +292,9 @@ pub(super) fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<Remot
             height,
             rgba: event.into_rgba()?,
         },
-        HelperEvent::FrameBytes { .. } | HelperEvent::FrameBgraBytes { .. } => {
+        HelperEvent::FrameBytes { .. }
+        | HelperEvent::FrameBgraBytes { .. }
+        | HelperEvent::FrameBgraRects { .. } => {
             anyhow::bail!("binary frame payload is missing")
         }
         HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
@@ -251,6 +311,7 @@ pub(super) fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<Remot
 fn rdp_capabilities() -> RemoteDesktopCapabilities {
     RemoteDesktopCapabilities {
         clipboard_text: true,
+        file_transfer: true,
         ..RemoteDesktopCapabilities::rdp_mvp()
     }
 }

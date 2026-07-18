@@ -5,9 +5,10 @@ use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
-    RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
-    RemoteDesktopProviderVersionError, RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey,
-    RemoteMouseButton, RemoteNamedKey, create_backend,
+    RemoteDesktopConnectionOptions, RemoteDesktopFrameRect, RemoteDesktopInput,
+    RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
+    RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
+    RgbaFramebuffer, create_backend,
 };
 use rust_i18n::t;
 
@@ -68,6 +69,7 @@ pub struct RemoteDesktopView {
     output_rx: Option<remote_desktop::output_mailbox::OutputMailboxReceiver>,
     focus_handle: FocusHandle,
     latest_frame: Option<Arc<RenderImage>>,
+    framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
@@ -77,7 +79,9 @@ pub struct RemoteDesktopView {
     last_resize_sent_at: Option<Instant>,
     modifiers: Modifiers,
     last_clipboard_text: Option<String>,
+    last_clipboard_files: Option<Vec<String>>,
     last_clipboard_sync_at: Option<Instant>,
+    display_scale_factor: u32,
     status: SharedString,
     tab_index: Option<usize>,
     _output_poll_task: Task<()>,
@@ -123,6 +127,7 @@ impl RemoteDesktopView {
             output_rx: None,
             focus_handle,
             latest_frame: None,
+            framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
             remote_size: None,
             content_bounds: None,
@@ -132,7 +137,9 @@ impl RemoteDesktopView {
             last_resize_sent_at: None,
             modifiers: Modifiers::default(),
             last_clipboard_text: None,
+            last_clipboard_files: None,
             last_clipboard_sync_at: None,
+            display_scale_factor: 100,
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             tab_index: config.tab_index,
             _output_poll_task: output_poll_task,

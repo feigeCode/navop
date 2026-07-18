@@ -19,10 +19,12 @@ pub enum HelperRequest {
         domain: Option<String>,
         width: u16,
         height: u16,
+        scale_factor: u32,
     },
     Resize {
         width: u16,
         height: u16,
+        scale_factor: u32,
     },
     MouseMove {
         x: u16,
@@ -51,6 +53,9 @@ pub enum HelperRequest {
     ClipboardText {
         text: String,
     },
+    ClipboardFiles {
+        paths: Vec<String>,
+    },
     Close,
 }
 
@@ -66,6 +71,7 @@ impl HelperRequest {
             domain: options.domain.clone(),
             width: size.width,
             height: size.height,
+            scale_factor: size.scale_factor,
         }
     }
 
@@ -78,9 +84,14 @@ impl HelperRequest {
         protocol: RemoteDesktopProtocol,
     ) -> Option<Self> {
         Some(match input {
-            RemoteDesktopInput::Resize { width, height } => Self::Resize {
+            RemoteDesktopInput::Resize {
+                width,
+                height,
+                scale_factor,
+            } => Self::Resize {
                 width: *width,
                 height: *height,
+                scale_factor: *scale_factor,
             },
             RemoteDesktopInput::MouseMove { x, y } => Self::MouseMove { x: *x, y: *y },
             RemoteDesktopInput::MouseButton { button, pressed } => Self::MouseButton {
@@ -96,6 +107,9 @@ impl HelperRequest {
             RemoteDesktopInput::ClipboardText { text } => {
                 Self::ClipboardText { text: text.clone() }
             }
+            RemoteDesktopInput::ClipboardFiles { paths } => Self::ClipboardFiles {
+                paths: paths.clone(),
+            },
             RemoteDesktopInput::Reconnect => return None,
             RemoteDesktopInput::Close => Self::Close,
         })
@@ -112,6 +126,7 @@ impl fmt::Debug for HelperRequest {
                 domain,
                 width,
                 height,
+                scale_factor,
             } => f
                 .debug_struct("Connect")
                 .field("destination", destination)
@@ -120,11 +135,17 @@ impl fmt::Debug for HelperRequest {
                 .field("domain", domain)
                 .field("width", width)
                 .field("height", height)
+                .field("scale_factor", scale_factor)
                 .finish(),
-            Self::Resize { width, height } => f
+            Self::Resize {
+                width,
+                height,
+                scale_factor,
+            } => f
                 .debug_struct("Resize")
                 .field("width", width)
                 .field("height", height)
+                .field("scale_factor", scale_factor)
                 .finish(),
             Self::MouseMove { x, y } => f
                 .debug_struct("MouseMove")
@@ -160,6 +181,10 @@ impl fmt::Debug for HelperRequest {
             Self::ClipboardText { text } => {
                 f.debug_struct("ClipboardText").field("text", text).finish()
             }
+            Self::ClipboardFiles { paths } => f
+                .debug_struct("ClipboardFiles")
+                .field("count", &paths.len())
+                .finish(),
             Self::Close => f.write_str("Close"),
         }
     }
@@ -211,6 +236,12 @@ pub enum HelperEvent {
         height: u16,
         bgra_len: usize,
     },
+    FrameBgraRects {
+        width: u16,
+        height: u16,
+        rects: Vec<HelperFrameRect>,
+        bgra_len: usize,
+    },
     CursorDefault,
     CursorHidden,
     CursorPosition {
@@ -242,12 +273,21 @@ impl HelperEvent {
             Self::Frame { rgba_base64, .. } => {
                 Ok(base64::engine::general_purpose::STANDARD.decode(rgba_base64.as_bytes())?)
             }
-            Self::FrameBytes { .. } | Self::FrameBgraBytes { .. } => {
+            Self::FrameBytes { .. } | Self::FrameBgraBytes { .. } | Self::FrameBgraRects { .. } => {
                 anyhow::bail!("binary frame payload is not in JSON event")
             }
             _ => anyhow::bail!("helper event is not a frame"),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelperFrameRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub byte_len: usize,
 }
 
 pub fn encode_request_line(request: &HelperRequest) -> anyhow::Result<String> {
@@ -425,6 +465,7 @@ mod tests {
             RemoteDesktopSize {
                 width: 1280,
                 height: 720,
+                scale_factor: 100,
             },
         );
         let debug = format!("{request:?}");
@@ -559,6 +600,20 @@ mod tests {
             HelperEvent::ClipboardText {
                 text: "remote 中文".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn clipboard_files_request_preserves_paths() {
+        let request = HelperRequest::from_remote_input(&RemoteDesktopInput::ClipboardFiles {
+            paths: vec!["/tmp/report.txt".to_string()],
+        });
+
+        assert_eq!(
+            Some(HelperRequest::ClipboardFiles {
+                paths: vec!["/tmp/report.txt".to_string()]
+            }),
+            request
         );
     }
 }
