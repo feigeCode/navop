@@ -1062,7 +1062,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1464,7 +1464,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1493,7 +1493,7 @@ dependencies = [
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "winx",
 ]
 
@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "async-channel",
  "serde",
@@ -1600,7 +1600,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1621,7 +1621,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1631,7 +1631,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1640,7 +1640,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1650,7 +1650,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -3087,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2#d1c8d7f35c6ccc5fc9dbd2b3ed70de46acb304c2"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=c3765221e81279edd233194893c77669cc6ae9f0#c3765221e81279edd233194893c77669cc6ae9f0"
 dependencies = [
  "gpui",
  "log",
@@ -3145,7 +3145,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3525,7 +3525,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3750,7 +3750,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3995,7 +3995,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5893,7 +5893,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
 dependencies = [
  "io-lifetimes",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7124,7 +7124,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7586,7 +7586,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9356,7 +9356,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10460,7 +10460,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10473,7 +10473,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -10595,7 +10595,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11424,7 +11424,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11592,7 +11592,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11984,7 +11984,7 @@ dependencies = [
  "fd-lock",
  "io-lifetimes",
  "rustix 0.38.44",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "winx",
 ]
 
@@ -12080,7 +12080,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -13168,7 +13168,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14624,7 +14624,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -15339,7 +15339,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.13.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
