@@ -31,7 +31,7 @@ impl EditorPersistence for MarkdownDocumentPersistence {
         let exported = request
             .document
             .export_markdown_bundle(
-                MarkdownExportMode::Strict,
+                MarkdownExportMode::BestEffort,
                 &MarkdownBundleOptions {
                     asset_directory: self.store.asset_directory().map_err(persistence_error)?,
                     ..MarkdownBundleOptions::default()

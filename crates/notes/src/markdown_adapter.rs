@@ -88,11 +88,19 @@ pub(crate) fn apply_markdown_source<C: AppContext>(
     Ok(imported)
 }
 
-pub(crate) fn export_markdown_strict<C: AppContext>(
+pub(crate) fn export_markdown_bundle<C: AppContext>(
     handle: &EditorHandle,
+    store: &MarkdownFileStore,
     cx: &C,
 ) -> Result<String> {
-    Ok(handle
-        .export_markdown(MarkdownExportMode::Strict, cx)?
-        .markdown)
+    let exported = handle.export_markdown_bundle(
+        MarkdownExportMode::BestEffort,
+        &cditor_app::MarkdownBundleOptions {
+            asset_directory: store.asset_directory()?,
+            ..cditor_app::MarkdownBundleOptions::default()
+        },
+        cx,
+    )?;
+    store.write_assets(&exported.assets)?;
+    Ok(exported.markdown)
 }

@@ -1,6 +1,6 @@
 use crate::markdown_adapter::{
     MarkdownProjectionConfig, apply_markdown_source, build_markdown_projection,
-    export_markdown_strict,
+    export_markdown_bundle,
 };
 use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
@@ -258,7 +258,7 @@ fn switch_to_source(
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> anyhow::Result<Option<String>> {
-    let markdown = export_markdown_strict(&session.preview, cx)?;
+    let markdown = export_markdown_bundle(&session.preview, &session.store, cx)?;
     session.source_editor.update(cx, |input, cx| {
         input.set_value(markdown.clone(), window, cx)
     });
