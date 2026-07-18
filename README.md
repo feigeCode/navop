@@ -61,6 +61,7 @@
 ## What's New in v0.8.0
 
 - **AI Agent and Function Calling** — AI agents can call tools to complete structured tasks, load skills through tools, and use improved resource pools, resource mentions, and catalog refreshes.
+- **Public MCP, CLI, and Agent Skill** — external Codex, Claude, and other MCP clients can connect to Navop's authenticated loopback runtime through `@navop/mcp`; tools, schemas, Tool Exposure, permissions, sessions, and approvals remain host-authoritative.
 - **HTML preview flow** — HTML code blocks can be opened in the browser or rendered in an in-app dialog, keeping chat content readable without intrusive inline previews.
 - **Database compare and sync** — improved schema/data compare windows, compare target loading, multi-table sync, and database compare sync stability.
 - **Terminal productivity** — added a terminal command history panel, SSH broadcast input across windows, and improved remote shell integration install, uninstall, and environment handling.
@@ -135,6 +136,51 @@ Use built-in server monitoring and native rendered charts to inspect remote mach
 ### AI Assistant
 
 Chat with AI inside the app. Navop supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. Navop also supports ACP (Agent Client Protocol), allowing external AI agents to connect through extensions; ACP extensions are currently available for Codex, Claude Code, and OpenCode. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
+
+### Public MCP, Navop CLI, and Agent Skill
+
+Navop includes an authenticated Public MCP runtime for external Codex, Claude, MCP clients, and automation. Enable it under **Settings > General > MCP > MCP Server**, select a permission profile, and expose only the tool groups you want under **Settings > General > Tool Exposure**.
+
+The runtime binds to a dynamic loopback-only port and requires the 64-character token stored in Navop's user-only discovery file. Navop remains the only tool implementation, security, permission, approval, connection/session, and audit boundary. The built-in Agent continues to call the internal Rust ToolRegistry directly; it does not reconnect to Navop through npm.
+
+External clients use the separately published [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package as a thin stdio bridge, host-driven CLI, and installable Agent Skill:
+
+```bash
+npx -y @navop/mcp@0.1.2 status --json
+npx -y @navop/mcp@0.1.2 tools --json
+npx -y @navop/mcp@0.1.2 schema <tool-name> --json
+npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@0.1.2 mcp
+```
+
+The npm version is the version of the external client, CLI, Skill, and stdio launcher—not the version of Navop's host tool registry. Tool names, descriptions, schemas, annotations, Tool Exposure groups, permission mode, sessions, and results come from the running Navop host through MCP `initialize`, `tools/list`, `tools/call`, and the read-only `navop.runtime_status` tool. Navop can therefore add or update host tools without requiring a synchronized npm release.
+
+Current Public MCP capability groups include:
+
+| Group | Current host capabilities |
+| --- | --- |
+| Runtime | compatibility metadata, permission guidance, Tool Exposure group states, live tools and schemas |
+| SSH | isolated command execution, session diagnostics, background command poll/output/cancel |
+| Visible terminal | bounded output reading, visible PTY execution, explicit interruption |
+| SQL databases | schema, tables, descriptions, sample rows, read-only query, write-capable execution |
+| Redis | active connections, command, keys, get, set |
+| MongoDB | databases, collections, find, aggregate, count, indexes, validation, CRUD, explain |
+| SFTP | list, stat, read, write, upload, download |
+| Connections | list, find, show, kinds, schema, validate, save, delete, test, open, sessions |
+| Workspaces | list and show |
+| Internal functions | list registered host functions and call them through their live schemas |
+
+Availability is always determined at runtime. A group disabled in Tool Exposure is not advertised as available, and connection/session-specific operations require a real resource id returned by Navop. Callers must not guess ids or bypass permission and approval decisions.
+
+Navop permission profiles map to Public MCP behavior:
+
+| Profile | Behavior |
+| --- | --- |
+| Safe / `deny` | read-only discovery is available; mutations are denied |
+| Confirm / `ask` | mutations require approval in the Navop UI |
+| Auto / `allow` | mutations run automatically; destructive intent must still be explicit |
+
+Navop can install and inspect exact-version Codex and Claude Code MCP configurations, copy a generic MCP JSON configuration, and install/update the bundled `navop` Skill for Codex or Agents-compatible clients. The Skill does not embed a static tool manual; it instructs Agents to obtain current methods from `navop status`, `tools/list`, and live tool schemas.
 
 ### Performance & Rendering
 

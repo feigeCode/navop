@@ -59,6 +59,7 @@
 ## v0.8.0 更新亮点
 
 - **AI Agent 与 Function Calling** — AI Agent 支持通过工具调用完成结构化任务，支持通过工具加载 skills，并优化资源池、资源 mention 和资源目录刷新体验。
+- **Public MCP、CLI 与 Agent Skill** — 外部 Codex、Claude 和其他 MCP 客户端可通过 `@navop/mcp` 连接 Navop 的认证 loopback runtime；工具、Schema、Tool Exposure、权限、会话与审批仍全部以宿主为准。
 - **HTML 预览流程** — HTML 代码块支持在浏览器中打开，也支持通过应用内弹窗进行渲染预览，避免在聊天内容中出现干扰阅读的内联预览。
 - **数据库比较与同步** — 优化 schema/data compare 窗口、比较目标加载、多表同步和数据库比较同步稳定性。
 - **终端效率提升** — 新增终端命令历史面板，支持 SSH 多窗口广播输入，并优化远程 shell integration 的安装、卸载和环境变量处理。
@@ -133,6 +134,51 @@
 ### AI 助手
 
 应用内直接与 AI 对话，支持自然语言生成 SQL、查询解释、BI 数据分析、图表生成、流式 LLM 响应、AI Agent 工作流，以及通过 Function Calling 调用工具完成任务。Navop 同时支持 ACP（Agent Client Protocol），可通过扩展接入不同的外部 AI Agent；目前提供 Codex、Claude Code 和 OpenCode 的 ACP 扩展。HTML 代码块可在浏览器中打开，也可通过应用内弹窗预览；AI 生成的终端命令可快速粘贴到终端会话中执行。
+
+### Public MCP、Navop CLI 与 Agent Skill
+
+Navop 内置经过认证的 Public MCP runtime，可供外部 Codex、Claude、MCP 客户端与自动化程序使用。请在 **设置 > 通用 > MCP > MCP Server** 中开启服务、选择权限档位，并在 **设置 > 通用 > Tool Exposure** 中只开放实际需要的工具组。
+
+runtime 只监听动态 loopback 端口，客户端必须使用 Navop 写入 user-only discovery 文件的 64 位十六进制 token 完成握手。Navop 始终是工具实现、安全、权限、审批、连接/会话与审计的唯一边界。内置 Agent 继续直接调用 Rust 内部 ToolRegistry，不会通过 npm 回连自身。
+
+外部客户端通过独立发布的 [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) 使用轻量 stdio bridge、宿主驱动 CLI 与可安装 Agent Skill：
+
+```bash
+npx -y @navop/mcp@0.1.2 status --json
+npx -y @navop/mcp@0.1.2 tools --json
+npx -y @navop/mcp@0.1.2 schema <tool-name> --json
+npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@0.1.2 mcp
+```
+
+npm 版本表示外部客户端、CLI、Skill 与 stdio launcher 的版本，不是 Navop 宿主工具 registry 的版本。工具名、描述、Schema、annotations、Tool Exposure 工具组、权限模式、会话和调用结果都来自运行中的 Navop 宿主，来源包括 MCP `initialize`、`tools/list`、`tools/call` 与只读工具 `navop.runtime_status`。因此 Navop 可以新增或更新宿主工具，而不要求 npm 包同步发版。
+
+当前 Public MCP 能力组包括：
+
+| 工具组 | 当前宿主能力 |
+| --- | --- |
+| Runtime | 兼容元数据、权限指引、Tool Exposure 工具组状态、实时工具与 Schema |
+| SSH | 隔离命令执行、会话诊断、后台命令轮询/输出/取消 |
+| 可见终端 | 有界输出读取、可见 PTY 执行、明确中断 |
+| SQL 数据库 | Schema、表、表结构、样例行、只读查询、可写执行 |
+| Redis | 活动连接、命令、Keys、Get、Set |
+| MongoDB | 数据库、集合、Find、Aggregate、Count、索引、校验规则、CRUD、Explain |
+| SFTP | List、Stat、Read、Write、Upload、Download |
+| 连接管理 | List、Find、Show、Kinds、Schema、Validate、Save、Delete、Test、Open、Sessions |
+| 工作区 | List 与 Show |
+| 内部函数 | 列出宿主注册函数，并按实时 Schema 调用 |
+
+实际可用性始终以运行时为准。Tool Exposure 中关闭的工具组不会被描述为可用；依赖连接或会话的操作必须使用 Navop 实际返回的资源 id。调用方不得猜测 id，也不得绕过权限或审批决定。
+
+Navop 权限档位对应 Public MCP 行为：
+
+| 权限档位 | 行为 |
+| --- | --- |
+| 安全 / `deny` | 允许只读发现；拒绝写操作 |
+| 确认 / `ask` | 写操作需要在 Navop UI 中审批 |
+| 自动 / `allow` | 写操作自动执行，但破坏性操作仍必须有明确用户意图 |
+
+Navop 可以安装并检查使用精确 npm 版本的 Codex 与 Claude Code MCP 配置、复制通用 MCP JSON 配置，并为 Codex 或兼容 Agents 的客户端安装/更新 `navop` Skill。Skill 不内置静态工具手册，而是要求 Agent 通过 `navop status`、`tools/list` 与实时工具 Schema 获取当前可用方法。
 
 ### 性能与渲染
 
