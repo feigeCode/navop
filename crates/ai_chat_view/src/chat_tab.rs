@@ -9,6 +9,7 @@ use gpui::{
 };
 use gpui_component::{Icon, IconName, Sizable, Size};
 use one_core::tab_container::{TabContent, TabContentEvent, TabItem};
+use rust_i18n::t;
 
 use crate::{ChatView, ChatViewState};
 
@@ -34,7 +35,7 @@ impl ChatTabContent {
         Self {
             view,
             focus_handle: cx.focus_handle(),
-            title: SharedString::from("AI 工作台"),
+            title: SharedString::from(t!("AgentUi.workbench").to_string()),
         }
     }
 

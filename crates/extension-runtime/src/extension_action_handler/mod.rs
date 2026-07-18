@@ -21,6 +21,7 @@ use extension_component::{ViewActionEvent, ViewSpec};
 use gpui::{App, AppContext, AsyncApp, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::{gpui_tokio::Tokio, popup_window::open_popup_window};
+use rust_i18n::t;
 
 use crate::{
     ExtensionRuntimeCatalog, GlobalExtensionRuntimeCatalog,
@@ -165,17 +166,28 @@ fn apply_action_outcome(
 ) {
     match outcome {
         Ok(views) if views.is_empty() => {
-            window.push_notification(Notification::info("扩展命令已执行").autohide(true), cx);
+            window.push_notification(
+                Notification::info(t!("ExtensionAction.executed").to_string()).autohide(true),
+                cx,
+            );
         }
         Ok(views) => open_views(views, window, cx),
-        Err(err) => push_error(window, format!("扩展命令执行失败: {err}"), cx),
+        Err(err) => push_error(
+            window,
+            t!("ExtensionAction.failed", error = err).to_string(),
+            cx,
+        ),
     }
 }
 
 fn open_views(views: Vec<PreparedExtensionView>, window: &mut Window, cx: &mut App) {
     for view in views {
         if let Err(err) = open_view(view, cx) {
-            push_error(window, format!("扩展 UI 渲染失败: {err:?}"), cx);
+            push_error(
+                window,
+                t!("ExtensionAction.render_failed", error = format!("{err:?}")).to_string(),
+                cx,
+            );
         }
     }
 }
@@ -234,7 +246,7 @@ fn view_action_handler(
             let outcome = match task.await {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(err)) => Err(format!("{err:?}")),
-                Err(err) => Err(format!("扩展表单提交失败: {err}")),
+                Err(err) => Err(t!("ExtensionAction.submit_failed", error = err).to_string()),
             };
             let _ = cx.update(|cx| {
                 let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -298,9 +310,16 @@ fn apply_submit_outcome(
 ) {
     match outcome {
         Ok(()) => {
-            window.push_notification(Notification::success("扩展表单已提交").autohide(true), cx);
+            window.push_notification(
+                Notification::success(t!("ExtensionAction.submitted").to_string()).autohide(true),
+                cx,
+            );
         }
-        Err(err) => push_error(window, format!("扩展表单提交失败: {err}"), cx),
+        Err(err) => push_error(
+            window,
+            t!("ExtensionAction.submit_failed", error = err).to_string(),
+            cx,
+        ),
     }
 }
 

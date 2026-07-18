@@ -17,6 +17,7 @@ mod error;
 mod error_tests;
 mod permission;
 mod provider;
+mod public_mcp_approval;
 mod state;
 mod translate;
 mod turn;
@@ -29,12 +30,23 @@ pub use config::{
 };
 pub use connection::{AcpConnectOutcome, AcpConnection, AcpPendingConnection};
 pub use error::{AcpError, AcpErrorKind, AcpRecoveryAction};
+pub(crate) use permission::{AcpPermissionEnvelope, AcpPermissionMessage, acp_permission_channel};
 pub use permission::{
     AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
-    AcpPermissionRequest, set_acp_permission_provider,
+    AcpPermissionRequest,
 };
+pub(crate) use provider::acquire_acp_permission_grant;
 pub use provider::{
-    build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
+    AcpPermissionGrant, build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
+    set_acp_agent_config_provider, set_acp_permission_grant_provider, set_acp_tool_mode_provider,
+    set_current_acp_tool_mode,
+};
+pub(crate) use public_mcp_approval::{
+    AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, acp_public_mcp_approval_channel,
+};
+pub use public_mcp_approval::{
+    AcpPublicMcpApprovalFuture, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
+    AcpPublicMcpApprovalRequest,
 };
 pub use state::AcpConnectionPhase;
 pub(crate) use state::AcpSessionState;

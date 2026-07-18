@@ -8,13 +8,12 @@ use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
 use gpui::AsyncApp;
 use one_core::gpui_tokio::Tokio;
+use rust_i18n::t;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::acp::client::{handle_read_text_file_request, handle_write_text_file_request};
 use crate::acp::config::AcpAgentConfig;
-use crate::acp::permission::{
-    AcpPermissionProvider, acp_permission_provider, resolve_acp_permission_request,
-};
+use crate::acp::permission::{AcpPermissionProvider, resolve_acp_permission_request};
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
 use crate::acp::{AcpError, AcpErrorKind};
@@ -57,9 +56,17 @@ pub(super) async fn connect(
     config: &AcpAgentConfig,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
-    let permission_provider = cx.update(|cx| acp_permission_provider(cx));
     let handle = cx.update(|cx| Tokio::handle(cx));
-    connect_with_parts(config, handle, permission_provider).await
+    connect_with_parts(config, handle, None).await
+}
+
+pub(super) async fn connect_with_permission_provider(
+    config: &AcpAgentConfig,
+    permission_provider: AcpPermissionProvider,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<AcpConnectOutcome> {
+    let handle = cx.update(|cx| Tokio::handle(cx));
+    connect_with_parts(config, handle, Some(permission_provider)).await
 }
 
 pub(super) async fn connect_with_runtime(
@@ -67,6 +74,14 @@ pub(super) async fn connect_with_runtime(
     handle: tokio::runtime::Handle,
 ) -> anyhow::Result<AcpConnectOutcome> {
     connect_with_parts(config, handle, None).await
+}
+
+pub(super) async fn connect_with_runtime_and_permission_provider(
+    config: &AcpAgentConfig,
+    handle: tokio::runtime::Handle,
+    permission_provider: AcpPermissionProvider,
+) -> anyhow::Result<AcpConnectOutcome> {
+    connect_with_parts(config, handle, Some(permission_provider)).await
 }
 
 async fn connect_with_parts(
@@ -208,7 +223,7 @@ fn handle_client_error(shared: &ConnectShared, protocol: agent_client_protocol::
         AcpErrorKind::ConnectionClosed,
         shared.config.id.to_string(),
         shared.config.name.to_string(),
-        "ACP 连接已结束",
+        t!("AgentUi.acp_connection_closed").to_string(),
     )
     .with_detail(protocol.to_string());
     transition_state(

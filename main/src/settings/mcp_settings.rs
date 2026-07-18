@@ -1,5 +1,6 @@
 use crate::public_mcp_runtime::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
 use crate::settings::mcp_client_config::mcp_client_config_items;
+use crate::settings::mcp_skill_install::mcp_skill_install_items;
 use crate::settings::mcp_status::mcp_runtime_status_item;
 use gpui::{App, SharedString};
 use gpui_component::setting::{SettingField, SettingGroup, SettingItem};
@@ -10,9 +11,11 @@ pub fn mcp_setting_group(default_settings: &McpSettings) -> SettingGroup {
     let mut items = mcp_server_items(default_settings);
     items.push(mcp_runtime_status_item());
     items.extend(mcp_client_config_items());
+    items.extend(mcp_skill_install_items());
 
     SettingGroup::new()
         .title(t!("Settings.General.Mcp.group_title"))
+        .description(t!("Settings.General.Mcp.group_desc"))
         .items(items)
 }
 
@@ -126,7 +129,7 @@ mod tests {
 
         assert_eq!(
             vec![
-                "mcp-install-helper",
+                "mcp-runtime-requirements",
                 "mcp-install-codex-config",
                 "mcp-install-claude-code-config",
                 "mcp-copy-agent-config"

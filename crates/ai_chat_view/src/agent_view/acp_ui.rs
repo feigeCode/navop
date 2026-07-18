@@ -1,12 +1,14 @@
 use super::acp_options::agent_selection_is_active;
 use super::*;
 use crate::AcpAgentConfig;
+use rust_i18n::t;
 
 impl AgentChatView {
     pub(super) fn select_local_backend(&mut self, cx: &mut Context<Self>) {
         if self.local_backend_is_idle() {
             return;
         }
+        self.reset_acp_permission_session(cx);
         self.acp = None;
         self.acp_pending = None;
         self.acp_auth_methods.clear();
@@ -38,15 +40,26 @@ impl AgentChatView {
         let Some(config) = self.ready_acp_config(&id) else {
             return;
         };
+        self.sync_acp_tool_mode_from_provider(cx);
         let config = config.with_skill_context(&self.skills.selected_context());
-        self.begin_acp_connect(&config, cx);
+        let permission_provider = self.begin_acp_connect(&config, cx);
         cx.spawn(async move |this, cx| {
-            let outcome = AcpConnection::connect(&config, cx).await;
+            let outcome =
+                AcpConnection::connect_with_permission_provider(&config, permission_provider, cx)
+                    .await;
             let _ = this.update(cx, |this, cx| {
                 this.finish_acp_connect(&config, outcome, cx);
             });
         })
         .detach();
+    }
+
+    pub(super) fn sync_acp_tool_mode_from_provider(&mut self, cx: &mut Context<Self>) {
+        let Some(mode) = current_acp_tool_mode(cx) else {
+            return;
+        };
+        self.selected_tool = tool_execution_mode_label(mode).into();
+        self.sync_composer(cx);
     }
 
     fn local_backend_is_idle(&self) -> bool {
@@ -63,7 +76,12 @@ impl AgentChatView {
             .and_then(|entry| entry.config.clone())
     }
 
-    fn begin_acp_connect(&mut self, config: &AcpAgentConfig, cx: &mut Context<Self>) {
+    fn begin_acp_connect(
+        &mut self,
+        config: &AcpAgentConfig,
+        cx: &mut Context<Self>,
+    ) -> AcpPermissionProvider {
+        let permission_provider = self.start_acp_permission_session(cx);
         self.acp_pending = None;
         self.acp_auth_methods.clear();
         self.acp_connecting = true;
@@ -71,11 +89,12 @@ impl AgentChatView {
         self.set_running(false, cx);
         self.transcript.clear();
         self.transcript
-            .set_acp_status(format!("正在启动 {}", config.name));
+            .set_acp_status(t!("AgentUi.starting_agent", name = config.name).to_string());
         self.input
             .update(cx, |input, cx| input.set_running(true, cx));
         self.sync_composer(cx);
         cx.notify();
+        permission_provider
     }
 
     fn finish_acp_connect(
@@ -123,7 +142,7 @@ impl AgentChatView {
         self.acp_connecting = false;
         self.acp_connecting_id = None;
         self.transcript
-            .set_acp_status(format!("{} 需要登录", config.name));
+            .set_acp_status(t!("AgentUi.login_required", name = config.name).to_string());
         self.sync_composer(cx);
         cx.notify();
     }
@@ -134,6 +153,7 @@ impl AgentChatView {
         source: anyhow::Error,
         cx: &mut Context<Self>,
     ) {
+        self.reset_acp_permission_session(cx);
         self.acp_connecting = false;
         self.acp_connecting_id = None;
         self.current_acp_id = Some(config.id.clone());
@@ -143,7 +163,7 @@ impl AgentChatView {
             AcpErrorKind::InitializeFailed,
             config.id.to_string(),
             config.name.to_string(),
-            "连接 ACP Agent 失败",
+            t!("AgentUi.connect_acp_failed").to_string(),
         )
         .with_detail(source.to_string())
         .with_recovery(AcpRecoveryAction::Retry);
@@ -164,7 +184,7 @@ impl AgentChatView {
         self.acp_connecting = true;
         self.acp_connecting_id = Some(agent_id.clone());
         self.transcript
-            .set_acp_status(format!("正在登录 {agent_name}"));
+            .set_acp_status(t!("AgentUi.logging_in", name = agent_name).to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.authenticate(method_id).await;
@@ -202,6 +222,7 @@ impl AgentChatView {
         error: AcpError,
         cx: &mut Context<Self>,
     ) {
+        self.reset_acp_permission_session(cx);
         self.current_acp_id = Some(agent_id);
         self.transcript.set_acp_error(&error);
         self.sync_composer(cx);
@@ -227,6 +248,7 @@ impl AgentChatView {
     }
 
     pub(super) fn cancel_acp_auth(&mut self, cx: &mut Context<Self>) {
+        self.reset_acp_permission_session(cx);
         self.acp_pending = None;
         self.acp_auth_methods.clear();
         self.current_acp_id = None;
@@ -276,7 +298,7 @@ fn auth_button(view: Entity<AgentChatView>, method: &str) -> Button {
     Button::new(SharedString::from(format!("acp-auth-{method}")))
         .small()
         .primary()
-        .child(format!("登录 ({method})"))
+        .child(t!("AgentUi.login_method", method = method).to_string())
         .on_click(move |_, _window, cx| {
             view.update(cx, |this, cx| this.authenticate_acp(method_id.clone(), cx));
         })
@@ -286,7 +308,7 @@ fn cancel_auth_button(view: Entity<AgentChatView>) -> Button {
     Button::new("acp-auth-cancel")
         .small()
         .outline()
-        .child("取消")
+        .child(t!("AgentUi.cancel").to_string())
         .on_click(move |_, _window, cx| {
             view.update(cx, |this, cx| this.cancel_acp_auth(cx));
         })

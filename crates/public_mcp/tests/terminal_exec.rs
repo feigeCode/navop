@@ -95,6 +95,7 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
                         .to_string()
                 }),
                 duration_ms: 12,
+                command_id: None,
             })
         })
     }
@@ -141,6 +142,10 @@ fn terminal_exec_descriptor_uses_target_and_command_schema() {
         json!(10_000),
         tool.input_schema["properties"]["ready_timeout_ms"]["maximum"]
     );
+    assert!(tool.description.contains("current visible terminal"));
+    assert!(tool.description.contains("activated virtual environment"));
+    assert!(tool.description.contains("Prefer ssh.exec"));
+    assert!(tool.description.contains("partial input"));
     assert!(!tool.annotations.read_only);
     assert!(tool.annotations.open_world);
 }

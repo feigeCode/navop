@@ -13,6 +13,7 @@ use gpui_component::{
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
+use rust_i18n::t;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TerminalToolDockLayout {
@@ -239,7 +240,7 @@ fn build_options_menu(
         )
         .separator()
         .item(
-            PopupMenuItem::new("Remove from Sidebar")
+            PopupMenuItem::new(t!("Sidebar.remove_from_sidebar").to_string())
                 .icon(IconName::Close)
                 .on_click(move |_, _, cx| {
                     remove_sidebar.update(cx, |sidebar, cx| {

@@ -1,5 +1,6 @@
 use agent_client_protocol::schema::{CancelNotification, ContentBlock, PromptRequest, TextContent};
 use agent_runtime::{RuntimeEvent, TurnId};
+use rust_i18n::t;
 
 use crate::acp::error::extract_rpc_error_detail;
 use crate::acp::state::AcpConnectionPhase;
@@ -12,7 +13,7 @@ impl AcpConnection {
     pub fn prompt(&self, text: String) {
         let turn_id = new_acp_turn_id();
         if !self.register_turn(turn_id.clone()) {
-            self.emit_turn_failure(turn_id, "ACP Agent 已有一轮正在运行");
+            self.emit_turn_failure(turn_id, t!("AgentUi.acp_turn_already_running").as_ref());
             return;
         }
         self.emit_turn_started(turn_id.clone());
@@ -92,7 +93,7 @@ impl AcpConnection {
 }
 
 fn responding_status_title(agent_name: &str) -> String {
-    format!("{agent_name} 正在响应…")
+    t!("AgentUi.acp_responding", name = agent_name).to_string()
 }
 
 struct PromptContext {
@@ -171,7 +172,7 @@ fn emit_protocol_error(
         AcpErrorKind::PromptFailed,
         &context.agent_id,
         &context.agent_name,
-        "ACP 请求失败",
+        t!("AgentUi.acp_prompt_failed").to_string(),
     )
     .with_detail(detail)
     .with_recovery(AcpRecoveryAction::Retry);
@@ -186,7 +187,7 @@ async fn emit_timeout(context: &PromptContext, turn_id: TurnId) {
         AcpErrorKind::PromptTimeout,
         &context.agent_id,
         &context.agent_name,
-        "ACP 请求超时",
+        t!("AgentUi.acp_prompt_timeout").to_string(),
     )
     .with_recovery(AcpRecoveryAction::Retry);
     emit_failed(context, turn_id, error);
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn responding_status_uses_visible_agent_name() {
         assert_eq!(
-            "Claude Code 正在响应…",
+            rust_i18n::t!("AgentUi.acp_responding", name = "Claude Code"),
             super::responding_status_title("Claude Code")
         );
     }

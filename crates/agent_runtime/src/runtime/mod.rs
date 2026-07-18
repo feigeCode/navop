@@ -33,6 +33,7 @@ use crate::model::ModelClient;
 use crate::resource::ResourceContext;
 use crate::tasks::{AgentTask, continue_after_tool_decision};
 use crate::tools::ToolRouter;
+use rust_i18n::t;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -192,12 +193,18 @@ impl Runtime {
         }
 
         let Some(pending) = session.take_pending_tool_approval() else {
-            return Err(RuntimeError::Other(anyhow::anyhow!("没有待审批的工具调用")));
+            return Err(RuntimeError::Other(anyhow::anyhow!(
+                t!("AgentRuntime.no_pending_tool").to_string()
+            )));
         };
         if &pending.call.call_id != call_id {
             session.restore_pending_tool_approval(pending);
             return Err(RuntimeError::Other(anyhow::anyhow!(
-                "待审批工具调用不匹配: {call_id}"
+                t!(
+                    "AgentRuntime.tool_approval_mismatch",
+                    call_id = call_id.as_str()
+                )
+                .to_string()
             )));
         }
 

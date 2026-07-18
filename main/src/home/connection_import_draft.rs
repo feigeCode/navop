@@ -1,5 +1,6 @@
 use connection_import_protocol::{ImportRecord, ImportRecordKind, PasswordImportStatus};
 use one_core::storage::StoredConnection;
+use rust_i18n::t;
 
 use super::connection_import_draft_conversion::{
     import_draft_duplicate_identity, import_draft_to_editor_connection,
@@ -147,13 +148,21 @@ impl EditableImportDraft {
         }
     }
 
-    pub(crate) fn password_status_text(&self) -> &'static str {
+    pub(crate) fn password_status_text(&self) -> String {
         match &self.payload {
             ImportDraftPayload::Record(record) => match record.password_status {
-                PasswordImportStatus::Included => "密码已导入",
-                PasswordImportStatus::Missing => "密码缺失",
-                PasswordImportStatus::Unsupported => "密码不支持导入",
-                PasswordImportStatus::PermissionDenied => "密码导入被拒绝",
+                PasswordImportStatus::Included => {
+                    t!("Home.ConnectionImport.password_included").to_string()
+                }
+                PasswordImportStatus::Missing => {
+                    t!("Home.ConnectionImport.password_missing").to_string()
+                }
+                PasswordImportStatus::Unsupported => {
+                    t!("Home.ConnectionImport.password_unsupported").to_string()
+                }
+                PasswordImportStatus::PermissionDenied => {
+                    t!("Home.ConnectionImport.password_permission_denied").to_string()
+                }
             },
         }
     }

@@ -61,6 +61,14 @@ Common:
 
 # 文件操作
 File:
+  items_count:
+    en: "%{count} items"
+    zh-CN: "%{count} 个项目"
+    zh-HK: "%{count} 個項目"
+  drop_files_here:
+    en: Drop files here
+    zh-CN: 将文件拖放到这里
+    zh-HK: 將檔案拖放到這裡
   new_file:
     en: New File
     zh-CN: 新建文件
@@ -123,6 +131,14 @@ Extract:
 
 # 占位符
 Placeholder:
+  path:
+    en: Enter path...
+    zh-CN: 输入路径...
+    zh-HK: 輸入路徑...
+  search:
+    en: Search...
+    zh-CN: 搜索...
+    zh-HK: 搜尋...
   filename:
     en: Filename
     zh-CN: 文件名
@@ -138,6 +154,10 @@ Placeholder:
 
 # 对话框
 Dialog:
+  error:
+    en: Error
+    zh-CN: 错误
+    zh-HK: 錯誤
   file_conflict:
     en: File Conflict
     zh-CN: 文件冲突
@@ -324,6 +344,18 @@ FavoritePath:
 
 # 提示信息
 Notification:
+  clipboard_upload_not_connected:
+    en: SFTP is not connected, so clipboard content cannot be uploaded
+    zh-CN: SFTP 未连接，无法上传剪贴板内容
+    zh-HK: SFTP 尚未連線，無法上傳剪貼簿內容
+  clipboard_read_failed:
+    en: "Failed to read clipboard: %{error}"
+    zh-CN: "读取剪贴板失败：%{error}"
+    zh-HK: "讀取剪貼簿失敗：%{error}"
+  clipboard_no_uploads:
+    en: The clipboard contains no files or images to upload
+    zh-CN: 剪贴板没有可上传的文件或图片
+    zh-HK: 剪貼簿沒有可上傳的檔案或圖片
   copied_filename:
     en: Filename copied
     zh-CN: 已复制文件名
@@ -351,6 +383,10 @@ Notification:
 
 # 错误信息
 Error:
+  sftp_not_connected:
+    en: SFTP client is not connected
+    zh-CN: SFTP 客户端未连接
+    zh-HK: SFTP 用戶端尚未連線
   read_dir_failed:
     en: "Failed to read directory: %{error}"
     zh-CN: "读取目录失败: %{error}"

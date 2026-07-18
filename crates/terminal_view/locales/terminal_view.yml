@@ -59,6 +59,10 @@ Theme:
 
 # 通用文本
 Common:
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存
   ok:
     en: OK
     zh-CN: 确定
@@ -406,6 +410,10 @@ SSH:
 
 # 连接表单
 ConnectionForm:
+  save_and_continue:
+    en: Save and Continue
+    zh-CN: 保存并继续
+    zh-HK: 儲存並繼續
   cloud_sync:
     en: Cloud Sync
     zh-CN: 云同步
@@ -800,6 +808,34 @@ TerminalAddon:
     zh-HK: "無法打開本地路徑: %{error}"
 
 TerminalView:
+  local_terminal_create_failed:
+    en: "Failed to create local terminal: %{error}"
+    zh-CN: "创建本地终端失败：%{error}"
+    zh-HK: "建立本機終端機失敗：%{error}"
+  clipboard_image_requires_ssh:
+    en: Clipboard images can only be uploaded from an SSH terminal
+    zh-CN: 当前终端不是 SSH 终端，无法上传剪贴板图片
+    zh-HK: 目前終端機不是 SSH 終端機，無法上傳剪貼簿圖片
+  clipboard_image_empty:
+    en: The clipboard image is empty and cannot be uploaded
+    zh-CN: 剪贴板图片为空，无法上传
+    zh-HK: 剪貼簿圖片是空的，無法上傳
+  clipboard_image_uploading:
+    en: Uploading clipboard image to the remote server...
+    zh-CN: 正在上传剪贴板图片到远程服务器...
+    zh-HK: 正在上傳剪貼簿圖片到遠端伺服器...
+  clipboard_image_uploaded:
+    en: "Clipboard image uploaded and path pasted: %{path}"
+    zh-CN: "已上传剪贴板图片并粘贴路径：%{path}"
+    zh-HK: "已上傳剪貼簿圖片並貼上路徑：%{path}"
+  clipboard_image_upload_failed:
+    en: "Failed to upload clipboard image: %{error}"
+    zh-CN: "上传剪贴板图片失败：%{error}"
+    zh-HK: "上傳剪貼簿圖片失敗：%{error}"
+  clipboard_image_task_failed:
+    en: "Clipboard image upload task failed: %{error}"
+    zh-CN: "上传剪贴板图片任务失败：%{error}"
+    zh-HK: "上傳剪貼簿圖片工作失敗：%{error}"
   terminal_size_changed:
     en: "Terminal size changed: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
     zh-CN: "终端尺寸变化: %{old} -> %{new}, cell_width=%{cell_width}, line_height=%{line_height}, bounds=%{bounds}"
@@ -894,6 +930,10 @@ LocalTerminalClose:
     zh-HK: 關閉後將終止該行程，未儲存的終端狀態可能會遺失。
 
 ServerMonitor:
+  per_core:
+    en: Per-core
+    zh-CN: 每核心
+    zh-HK: 每核心
   title:
     en: Server Monitor
     zh-CN: 服务器监控
@@ -964,6 +1004,110 @@ ServerMonitor:
     zh-HK: 暫不可用
 
 QuickCommand:
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  name_placeholder:
+    en: Enter a short name (optional)
+    zh-CN: 输入简短名称（可选）
+    zh-HK: 輸入簡短名稱（選填）
+  description:
+    en: Description
+    zh-CN: 说明
+    zh-HK: 說明
+  description_placeholder:
+    en: Enter notes or usage instructions (optional)
+    zh-CN: 输入备注或使用说明（可选）
+    zh-HK: 輸入備註或使用說明（選填）
+  group:
+    en: Group
+    zh-CN: 分组
+    zh-HK: 群組
+  group_placeholder:
+    en: Enter a group name (optional)
+    zh-CN: 输入分组名称（可选）
+    zh-HK: 輸入群組名稱（選填）
+  group_color:
+    en: Group Color
+    zh-CN: 分组颜色
+    zh-HK: 群組顏色
+  command:
+    en: Command
+    zh-CN: 命令
+    zh-HK: 命令
+  command_placeholder:
+    en: Enter command
+    zh-CN: 输入命令
+    zh-HK: 輸入命令
+  add:
+    en: Add Quick Command
+    zh-CN: 新增快捷命令
+    zh-HK: 新增快速命令
+  edit:
+    en: Edit Quick Command
+    zh-CN: 编辑快捷命令
+    zh-HK: 編輯快速命令
+  add_action:
+    en: Add
+    zh-CN: 新增
+    zh-HK: 新增
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  command_required:
+    en: Command is required
+    zh-CN: 命令不能为空
+    zh-HK: 命令不能為空
+  save_failed:
+    en: "Failed to save quick command: %{error}"
+    zh-CN: "保存快捷命令失败：%{error}"
+    zh-HK: "儲存快速命令失敗：%{error}"
+  rename_group:
+    en: Rename Group
+    zh-CN: 重命名分组
+    zh-HK: 重新命名群組
+  rename_group_placeholder:
+    en: Enter a new group name
+    zh-CN: 输入新的分组名称
+    zh-HK: 輸入新的群組名稱
+  delete_group:
+    en: Delete Group
+    zh-CN: 删除分组
+    zh-HK: 刪除群組
+  delete_group_confirm:
+    en: "Delete group “%{name}”? Its quick commands will be kept but become ungrouped."
+    zh-CN: "确定删除分组“%{name}”吗？该分组下的快捷命令会保留，但会变为未分组。"
+    zh-HK: "確定刪除群組「%{name}」嗎？群組中的快速命令會保留，但會變為未分組。"
+  color_option:
+    en: "Color: %{color}"
+    zh-CN: "颜色：%{color}"
+    zh-HK: "顏色：%{color}"
+  empty_group:
+    en: No commands in this group
+    zh-CN: 当前分组暂无命令
+    zh-HK: 目前群組沒有命令
+  no_matches:
+    en: No matching commands
+    zh-CN: 没有匹配的命令
+    zh-HK: 找不到符合的命令
+  add_command:
+    en: Add Command
+    zh-CN: 新增命令
+    zh-HK: 新增命令
+  loading:
+    en: Loading...
+    zh-CN: 加载中...
+    zh-HK: 載入中...
   copied:
     en: Command copied to clipboard
     zh-CN: 命令已复制到剪贴板
@@ -1016,6 +1160,60 @@ QuickCommand:
     en: Delete
     zh-CN: 删除
     zh-HK: 刪除
+
+HistoryCommand:
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  most_used:
+    en: Most Used
+    zh-CN: 最常使用
+    zh-HK: 最常使用
+  latest:
+    en: Latest
+    zh-CN: 最近使用
+    zh-HK: 最近使用
+  favorite:
+    en: Favorite
+    zh-CN: 收藏
+    zh-HK: 收藏
+  unfavorite:
+    en: Unfavorite
+    zh-CN: 取消收藏
+    zh-HK: 取消收藏
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  no_commands:
+    en: No commands
+    zh-CN: 暂无命令
+    zh-HK: 暫無命令
+
+RichInput:
+  command_placeholder:
+    en: Command
+    zh-CN: 命令
+    zh-HK: 命令
+  clear:
+    en: Clear
+    zh-CN: 清除
+    zh-HK: 清除
+  send:
+    en: Send
+    zh-CN: 发送
+    zh-HK: 傳送
+
+Sidebar:
+  remove_from_sidebar:
+    en: Remove from Sidebar
+    zh-CN: 从侧边栏移除
+    zh-HK: 從側邊欄移除
 
 # 串口连接
 Serial:
@@ -1137,6 +1335,26 @@ SshSession:
 
 # 文件管理器
 FileManager:
+  clipboard_upload_not_connected:
+    en: File Manager is not connected, so clipboard content cannot be uploaded
+    zh-CN: 文件管理器未连接，无法上传剪贴板内容
+    zh-HK: 檔案管理器尚未連線，無法上傳剪貼簿內容
+  clipboard_read_failed:
+    en: "Failed to read clipboard: %{error}"
+    zh-CN: "读取剪贴板失败：%{error}"
+    zh-HK: "讀取剪貼簿失敗：%{error}"
+  clipboard_no_uploads:
+    en: The clipboard contains no files or images to upload
+    zh-CN: 剪贴板没有可上传的文件或图片
+    zh-HK: 剪貼簿沒有可上傳的檔案或圖片
+  sftp_not_connected:
+    en: SFTP client is not connected
+    zh-CN: SFTP 客户端未连接
+    zh-HK: SFTP 用戶端尚未連線
+  panel_options:
+    en: Panel Options
+    zh-CN: 面板选项
+    zh-HK: 面板選項
   title:
     en: File Manager
     zh-CN: 文件管理

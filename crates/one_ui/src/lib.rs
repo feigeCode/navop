@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod edit_table;
 pub mod large_text_editor;
 pub mod resize_handle;

@@ -37,13 +37,20 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use one_core::sidebar_contribution::SidebarPlacement;
+use rust_i18n::t;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{
     AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
-    AcpRecoveryAction, AcpSessionState, build_acp_agent_entries,
+    AcpPermissionEnvelope, AcpPermissionMessage, AcpPermissionOutcome, AcpPermissionProvider,
+    AcpPublicMcpApprovalEnvelope, AcpPublicMcpApprovalMessage, AcpPublicMcpApprovalOutcome,
+    AcpPublicMcpApprovalProvider, AcpRecoveryAction, AcpSessionState, acp_permission_channel,
+    acp_public_mcp_approval_channel, acquire_acp_permission_grant, build_acp_agent_entries,
+    current_acp_tool_mode, set_current_acp_tool_mode,
 };
-use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
+use crate::agent_cards::{
+    ApproveToolCall, PlanCardData, RejectToolCall, SelectAcpPermissionOption, SubAgentCardData,
+};
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
@@ -155,7 +162,7 @@ fn build_sidebar_frame_options_menu(
     menu.min_w(px(220.0))
         .submenu_with_icon(
             Some(IconName::PanelRight.into()),
-            "Move to",
+            t!("AgentUi.move_to").to_string(),
             window,
             cx,
             move |submenu, _window, _cx| {
@@ -180,7 +187,7 @@ fn build_sidebar_frame_options_menu(
         )
         .separator()
         .item(
-            PopupMenuItem::new("Remove from Sidebar")
+            PopupMenuItem::new(t!("AgentUi.remove_from_sidebar").to_string())
                 .icon(IconName::Close)
                 .on_click(move |_, _, cx| {
                     close_view.update(cx, |_this, cx| {
@@ -190,16 +197,16 @@ fn build_sidebar_frame_options_menu(
         )
 }
 
-fn agent_history_title(show_archived: bool) -> &'static str {
+fn agent_history_title(show_archived: bool) -> String {
     if show_archived {
-        "已归档任务"
+        t!("AgentUi.archived_tasks").to_string()
     } else {
-        "历史任务"
+        t!("AgentUi.history_tasks").to_string()
     }
 }
 
-fn current_agent_task_title() -> &'static str {
-    "当前 Agent 任务"
+fn current_agent_task_title() -> String {
+    t!("AgentUi.current_agent_task").to_string()
 }
 
 fn themed_session_row_style(theme: &AgentChatTheme) -> SessionRowStyle {
@@ -390,7 +397,7 @@ impl AgentChatViewConfig {
             .find(|spec| spec.is_default)
             .or_else(|| specs.first())
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("没有可用模型配置"))?;
+            .ok_or_else(|| anyhow::anyhow!(t!("AgentUi.no_model_config").to_string()))?;
         let runtime = initial.build();
         let selected_model_id = selected_provider_model_id(&specs);
         let model_options = specs.iter().map(|spec| spec.option.clone()).collect();
@@ -507,6 +514,12 @@ pub struct AgentChatView {
     acp_connecting: bool,
     /// 正在连接的 ACP agent id,用于忽略已取消连接的异步回调。
     acp_connecting_id: Option<SharedString>,
+    /// 当前 ACP 连接尚未响应的权限请求。
+    pending_acp_permissions: HashMap<String, AcpPermissionEnvelope>,
+    /// 安全确认模式下，实际 Public MCP 调用尚未响应的二次审批。
+    pending_public_mcp_approvals: HashMap<String, AcpPublicMcpApprovalEnvelope>,
+    /// 把匹配的 Public MCP 审批请求路由回当前 ACP 消息流。
+    acp_public_mcp_approval_provider: Option<AcpPublicMcpApprovalProvider>,
     scroll_handle: ScrollHandle,
     auto_scroll: AutoScrollState,
     task_kind: TaskKind,
@@ -527,6 +540,10 @@ pub struct AgentChatView {
     /// 是否侧边栏模式。
     _subscriptions: Vec<Subscription>,
     _event_task: Task<()>,
+    /// 当前 ACP 连接的权限请求泵；切换连接时丢弃以隔离旧连接请求。
+    _acp_permission_task: Option<Task<()>>,
+    /// 当前 ACP 连接的 Public MCP 二次审批泵。
+    _acp_public_mcp_approval_task: Option<Task<()>>,
 }
 
 impl AgentChatView {
@@ -535,8 +552,13 @@ impl AgentChatView {
         model_options: Vec<ComposerModelOption>,
         selected_model_id: Option<SharedString>,
         runtime_factory: Option<AgentRuntimeFactory>,
+        tool_registry: agent_runtime::ToolRegistry,
         cx: &mut Context<Self>,
     ) {
+        self.runtime
+            .services()
+            .tools
+            .replace_registry(tool_registry);
         let previous_id = self.selected_model.as_ref().map(|model| model.id.clone());
         let (selected, retained) = refreshed_model_selection(
             previous_id.as_ref(),
@@ -618,9 +640,14 @@ impl AgentChatView {
         let selected_model = binding.selected_model;
         let runtime_factory = binding.runtime_factory;
         let input = cx.new(|cx| {
-            AgentInput::with_mentions(mentions, "描述目标，输入 @ 引用资源…", window, cx)
+            AgentInput::with_mentions(
+                mentions,
+                t!("AgentUi.input_placeholder").to_string(),
+                window,
+                cx,
+            )
         });
-        Self::register_tool_approval_actions(cx);
+        Self::register_approval_actions(cx);
         if let Some(theme) = theme.clone() {
             input.update(cx, |input, cx| input.set_theme(Some(theme), cx));
         }
@@ -700,6 +727,9 @@ impl AgentChatView {
             current_acp_id: None,
             acp_connecting: false,
             acp_connecting_id: None,
+            pending_acp_permissions: HashMap::new(),
+            pending_public_mcp_approvals: HashMap::new(),
+            acp_public_mcp_approval_provider: None,
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
             task_kind,
@@ -714,10 +744,12 @@ impl AgentChatView {
             code_block_actions: CodeBlockActionRegistry::new(),
             _subscriptions: subscriptions,
             _event_task: event_task,
+            _acp_permission_task: None,
+            _acp_public_mcp_approval_task: None,
         }
     }
 
-    fn register_tool_approval_actions(cx: &mut Context<Self>) {
+    fn register_approval_actions(cx: &mut Context<Self>) {
         let view = cx.weak_entity();
         let app: &mut App = cx;
         app.on_action(move |action: &ApproveToolCall, cx: &mut App| {
@@ -745,6 +777,21 @@ impl AgentChatView {
                 cx.propagate();
             }
         });
+
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &SelectAcpPermissionOption, cx: &mut App| {
+            let request_id = action.request_id.clone();
+            let option_id = action.option_id.clone();
+            let handled = view
+                .update(cx, |this, cx| {
+                    this.resolve_pending_acp_permission(request_id, option_id, cx)
+                })
+                .unwrap_or(false);
+            if !handled {
+                cx.propagate();
+            }
+        });
     }
 
     fn resolve_pending_tool_action(
@@ -753,11 +800,222 @@ impl AgentChatView {
         approved: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.pending_public_mcp_approvals.contains_key(&call_id) {
+            self.resolve_pending_public_mcp_approval(&call_id, approved, cx);
+            return true;
+        }
         if !self.transcript.has_pending_tool_confirm(&call_id) {
             return false;
         }
         self.resolve_tool_call(call_id, approved, cx);
         true
+    }
+
+    fn start_acp_permission_session(&mut self, cx: &mut Context<Self>) -> AcpPermissionProvider {
+        self.reset_acp_permission_session(cx);
+        let (provider, receiver) = acp_permission_channel();
+        let (public_mcp_provider, public_mcp_receiver) = acp_public_mcp_approval_channel();
+        self.acp_public_mcp_approval_provider = Some(public_mcp_provider);
+        self._acp_permission_task = Some(Self::spawn_acp_permission_pump(receiver, cx));
+        self._acp_public_mcp_approval_task = Some(Self::spawn_public_mcp_approval_pump(
+            public_mcp_receiver,
+            cx,
+        ));
+        provider
+    }
+
+    fn spawn_public_mcp_approval_pump(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AcpPublicMcpApprovalMessage>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            while let Some(message) = receiver.recv().await {
+                let updated = this.update(cx, |this, cx| match message {
+                    AcpPublicMcpApprovalMessage::Requested(envelope) => {
+                        this.receive_public_mcp_approval(envelope, cx)
+                    }
+                    AcpPublicMcpApprovalMessage::Expired { request_id } => {
+                        this.expire_public_mcp_approval(&request_id, cx)
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    fn spawn_acp_permission_pump(
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<AcpPermissionMessage>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            while let Some(message) = receiver.recv().await {
+                let updated = this.update(cx, |this, cx| match message {
+                    AcpPermissionMessage::Requested(envelope) => {
+                        this.receive_acp_permission(envelope, cx)
+                    }
+                    AcpPermissionMessage::Expired { request_id } => {
+                        this.expire_acp_permission(&request_id, cx)
+                    }
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+    }
+
+    fn receive_acp_permission(&mut self, envelope: AcpPermissionEnvelope, cx: &mut Context<Self>) {
+        let request = envelope.request().clone();
+        if self
+            .pending_acp_permissions
+            .contains_key(&request.request_id)
+        {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            return;
+        }
+        let requires_safety_confirmation = current_acp_tool_mode(cx)
+            .unwrap_or_else(|| tool_execution_mode_from_label(&self.selected_tool))
+            == ToolExecutionMode::Manual;
+        self.transcript
+            .push_acp_permission(&request, requires_safety_confirmation);
+        self.pending_acp_permissions
+            .insert(request.request_id, envelope);
+        self.request_scroll_to_bottom();
+        self.auto_scroll.request_settle();
+        cx.notify();
+    }
+
+    fn receive_public_mcp_approval(
+        &mut self,
+        envelope: AcpPublicMcpApprovalEnvelope,
+        cx: &mut Context<Self>,
+    ) {
+        let request = envelope.request().clone();
+        if self
+            .pending_public_mcp_approvals
+            .contains_key(&request.request_id)
+        {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            return;
+        }
+        self.transcript.push_public_mcp_approval(&request);
+        self.pending_public_mcp_approvals
+            .insert(request.request_id.clone(), envelope);
+        self.request_scroll_to_bottom();
+        self.auto_scroll.request_settle();
+        cx.notify();
+    }
+
+    fn resolve_pending_acp_permission(
+        &mut self,
+        request_id: String,
+        option_id: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(envelope) = self.pending_acp_permissions.remove(&request_id) else {
+            return false;
+        };
+        let Some(option) = envelope
+            .request()
+            .options
+            .iter()
+            .find(|option| option.option_id == option_id)
+            .cloned()
+        else {
+            self.pending_acp_permissions.insert(request_id, envelope);
+            return false;
+        };
+        let mut request = envelope.request().clone();
+        if let Some(arguments) = self
+            .transcript
+            .tool_call_arguments(&request.tool_call_id)
+            .cloned()
+        {
+            request.use_fallback_raw_input(arguments);
+        }
+        let grant = self
+            .acp_public_mcp_approval_provider
+            .clone()
+            .and_then(|provider| acquire_acp_permission_grant(cx, &request, &option, provider));
+        let delivered = envelope.resolve(AcpPermissionOutcome::Selected {
+            option_id: option.option_id.clone(),
+        });
+        if delivered {
+            if let Some(grant) = grant {
+                grant.commit();
+            }
+            self.transcript.resolve_acp_permission(&request_id, &option);
+        } else {
+            self.transcript.cancel_acp_permission(&request_id);
+        }
+        cx.notify();
+        true
+    }
+
+    fn resolve_pending_public_mcp_approval(
+        &mut self,
+        request_id: &str,
+        approved: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(envelope) = self.pending_public_mcp_approvals.remove(request_id) else {
+            return;
+        };
+        let delivered = envelope.resolve(if approved {
+            AcpPublicMcpApprovalOutcome::Approved
+        } else {
+            AcpPublicMcpApprovalOutcome::Denied
+        });
+        if delivered {
+            self.transcript.resolve_tool_confirm(request_id, approved);
+        } else {
+            self.transcript.resolve_tool_confirm(request_id, false);
+        }
+        cx.notify();
+    }
+
+    fn expire_public_mcp_approval(&mut self, request_id: &str, cx: &mut Context<Self>) {
+        if let Some(envelope) = self.pending_public_mcp_approvals.remove(request_id) {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            self.transcript.resolve_tool_confirm(request_id, false);
+            cx.notify();
+        }
+    }
+
+    fn expire_acp_permission(&mut self, request_id: &str, cx: &mut Context<Self>) {
+        if let Some(envelope) = self.pending_acp_permissions.remove(request_id) {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            self.transcript.cancel_acp_permission(request_id);
+            cx.notify();
+        }
+    }
+
+    fn cancel_pending_acp_permissions(&mut self, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_acp_permissions);
+        for (request_id, envelope) in pending {
+            envelope.resolve(AcpPermissionOutcome::Cancelled);
+            self.transcript.cancel_acp_permission(&request_id);
+        }
+        cx.notify();
+    }
+
+    fn reset_acp_permission_session(&mut self, cx: &mut Context<Self>) {
+        self.cancel_pending_acp_permissions(cx);
+        self.cancel_pending_public_mcp_approvals(cx);
+        self.acp_public_mcp_approval_provider = None;
+        self._acp_permission_task = None;
+        self._acp_public_mcp_approval_task = None;
+    }
+
+    fn cancel_pending_public_mcp_approvals(&mut self, cx: &mut Context<Self>) {
+        let pending = std::mem::take(&mut self.pending_public_mcp_approvals);
+        for (request_id, envelope) in pending {
+            envelope.resolve(AcpPublicMcpApprovalOutcome::Denied);
+            self.transcript.resolve_tool_confirm(&request_id, false);
+        }
+        cx.notify();
     }
 
     fn spawn_event_pump(
@@ -862,8 +1120,10 @@ impl AgentChatView {
         }
         // ACP 后端:直接把文本交给外部 agent;流式更新经事件泵回灌转录。
         if self.backend == Backend::Acp {
+            self.sync_acp_tool_mode_from_provider(cx);
             if self.acp.is_none() {
-                self.transcript.push_system("ACP agent 未连接");
+                self.transcript
+                    .push_system(t!("AgentUi.acp_not_connected").to_string());
                 cx.notify();
                 return;
             }
@@ -904,7 +1164,8 @@ impl AgentChatView {
                     Ok(result) => result,
                     Err(err) => {
                         let _ = this.update(cx, |this, cx| {
-                            this.transcript.push_system(format!("任务执行失败:{err}"));
+                            this.transcript
+                                .push_system(t!("AgentUi.task_failed", error = err).to_string());
                             this.set_running(false, cx);
                         });
                         return;
@@ -914,7 +1175,8 @@ impl AgentChatView {
 
             if let Err(err) = result {
                 let _ = this.update(cx, |this, cx| {
-                    this.transcript.push_system(format!("运行失败:{err}"));
+                    this.transcript
+                        .push_system(t!("AgentUi.run_failed", error = err).to_string());
                     this.set_running(false, cx);
                 });
             }
@@ -939,7 +1201,8 @@ impl AgentChatView {
             return;
         }
         if let Err(err) = self.runtime.interrupt(&self.session_id) {
-            self.transcript.push_system(format!("停止失败:{err}"));
+            self.transcript
+                .push_system(t!("AgentUi.stop_failed", error = err).to_string());
         }
         self.set_running(false, cx);
         cx.notify();
@@ -993,7 +1256,9 @@ impl AgentChatView {
                     Ok(result) => result,
                     Err(err) => {
                         let _ = this.update(cx, |this, cx| {
-                            this.transcript.push_system(format!("工具审批失败:{err}"));
+                            this.transcript.push_system(
+                                t!("AgentUi.approval_failed", error = err).to_string(),
+                            );
                             this.set_running(false, cx);
                         });
                         return;
@@ -1003,7 +1268,8 @@ impl AgentChatView {
 
             if let Err(err) = result {
                 let _ = this.update(cx, |this, cx| {
-                    this.transcript.push_system(format!("工具审批失败:{err}"));
+                    this.transcript
+                        .push_system(t!("AgentUi.approval_failed", error = err).to_string());
                     this.set_running(false, cx);
                 });
             }
@@ -1034,6 +1300,9 @@ impl AgentChatView {
         // 跟随流式输出 / 新卡片自动滚到底。
         self.request_scroll_to_bottom();
         if terminal {
+            if self.backend == Backend::Acp {
+                self.cancel_pending_acp_permissions(cx);
+            }
             self.auto_scroll.request_settle();
             self.set_running(false, cx);
             // 一轮结束:把会话快照落库(仅自研后端;ACP 会话由外部 agent 管理)。
@@ -1050,14 +1319,14 @@ impl AgentChatView {
             .clone()
             .unwrap_or_else(|| SharedString::from("acp"));
         let agent_name = self.acp_agent_name(&agent_id);
-        if reason.contains("没有返回任何内容") {
+        if reason.starts_with(t!("AgentUi.acp_empty_response_summary").as_ref()) {
             return AcpError::empty_response(agent_id.to_string(), agent_name.to_string());
         }
         AcpError::new(
             AcpErrorKind::PromptFailed,
             agent_id.to_string(),
             agent_name.to_string(),
-            "ACP 请求失败",
+            t!("AgentUi.acp_request_failed").to_string(),
         )
         .with_detail(reason)
         .with_recovery(AcpRecoveryAction::Retry)
@@ -1163,7 +1432,7 @@ impl AgentChatView {
             }
             Err(error) => {
                 self.transcript
-                    .push_system(format!("导入 Skill 失败:{error}"));
+                    .push_system(t!("AgentUi.import_skill_failed", error = error).to_string());
             }
         }
         cx.notify();
@@ -1235,6 +1504,21 @@ impl AgentChatView {
             return;
         }
         if let Some(opt) = self.tool_options.iter().find(|o| o.id.as_ref() == id) {
+            let mode = tool_execution_mode_from_label(&opt.label);
+            if self.backend == Backend::Acp
+                && let Err(error) = set_current_acp_tool_mode(cx, mode)
+            {
+                let message = t!(
+                    "AgentChat.acp_tool_mode_update_failed",
+                    error = error.to_string()
+                )
+                .to_string();
+                tracing::warn!(%error, "Failed to update ACP Public MCP permission mode");
+                self.transcript.push_system(message);
+                self.request_scroll_to_bottom();
+                cx.notify();
+                return;
+            }
             self.selected_tool = opt.label.clone();
             self.sync_composer(cx);
             cx.notify();
@@ -1260,12 +1544,14 @@ impl AgentChatView {
             }
             let Some(mut acp) = self.acp.take() else {
                 self.transcript.clear();
-                self.transcript.push_system("ACP agent 未连接");
+                self.transcript
+                    .push_system(t!("AgentUi.acp_not_connected").to_string());
                 cx.notify();
                 return;
             };
             self.transcript.clear();
-            self.transcript.push_system("正在创建 ACP 新会话…");
+            self.transcript
+                .push_system(t!("AgentUi.creating_acp_session").to_string());
             self.request_scroll_to_bottom();
             cx.notify();
             cx.spawn(async move |this, cx| {
@@ -1277,8 +1563,9 @@ impl AgentChatView {
                     match result {
                         Ok(_) => {}
                         Err(err) => {
-                            this.transcript
-                                .push_system(format!("创建 ACP 新会话失败:{err}"));
+                            this.transcript.push_system(
+                                t!("AgentUi.create_acp_session_failed", error = err).to_string(),
+                            );
                         }
                     }
                     this.request_scroll_to_bottom();
@@ -1455,7 +1742,7 @@ impl AgentChatView {
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(&current_name)
-                .placeholder("会话名称")
+                .placeholder(t!("AgentUi.session_name").to_string())
         });
         let view = cx.entity();
         let input = input_state.clone();
@@ -1464,13 +1751,13 @@ impl AgentChatView {
             let view_for_ok = view.clone();
             let uid = uid.clone();
             dialog
-                .title("重命名会话")
+                .title(t!("AgentUi.rename_session").to_string())
                 .w(px(360.0))
                 .confirm()
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("保存")
-                        .cancel_text("取消"),
+                        .ok_text(t!("AgentUi.save").to_string())
+                        .cancel_text(t!("AgentUi.cancel").to_string()),
                 )
                 .on_ok(move |_, _window, cx| {
                     let new_name = input_for_ok.read(cx).value().trim().to_string();
@@ -1482,7 +1769,11 @@ impl AgentChatView {
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(div().text_sm().child("输入新的会话名称"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(t!("AgentUi.enter_new_session_name").to_string()),
+                        )
                         .child(Input::new(&input).w_full()),
                 )
         });
@@ -1512,13 +1803,13 @@ impl AgentChatView {
             let view_for_ok = view.clone();
             let uid = uid.clone();
             dialog
-                .title("删除会话")
+                .title(t!("AgentUi.delete_session").to_string())
                 .w(px(360.0))
                 .confirm()
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("删除")
-                        .cancel_text("取消"),
+                        .ok_text(t!("AgentUi.delete").to_string())
+                        .cancel_text(t!("AgentUi.cancel").to_string()),
                 )
                 .on_ok(move |_, _window, cx| {
                     view_for_ok.update(cx, |this, cx| this.apply_delete(&uid, cx));
@@ -1527,7 +1818,7 @@ impl AgentChatView {
                 .child(
                     div()
                         .text_sm()
-                        .child(format!("确定删除会话「{name}」?此操作不可撤销。")),
+                        .child(t!("AgentUi.delete_session_confirm", name = name).to_string()),
                 )
         });
     }
@@ -1822,7 +2113,7 @@ impl AgentChatView {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("ACP 任务由外部 agent 管理,不在此持久化。"),
+                        .child(t!("AgentUi.acp_external_managed").to_string()),
                 )
                 .into_any_element()
         } else {
@@ -1935,7 +2226,7 @@ impl AgentChatView {
                             .icon(IconName::Plus)
                             .ghost()
                             .small()
-                            .tooltip("新建任务")
+                            .tooltip(t!("AgentUi.new_task").to_string())
                             .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                     )
                     .child(
@@ -1955,7 +2246,7 @@ impl AgentChatView {
                                     .icon(IconName::BookOpen)
                                     .ghost()
                                     .small()
-                                    .tooltip("历史任务"),
+                                    .tooltip(t!("AgentUi.history_tasks").to_string()),
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
                     )
@@ -1967,7 +2258,7 @@ impl AgentChatView {
                             .icon(IconName::Close)
                             .ghost()
                             .small()
-                            .tooltip("关闭面板")
+                            .tooltip(t!("AgentUi.close_panel").to_string())
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(AgentChatViewEvent::Close);
                             })),
@@ -2013,7 +2304,7 @@ impl AgentChatView {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("ACP 任务由外部 agent 管理,不在此持久化。"),
+                        .child(t!("AgentUi.acp_external_managed").to_string()),
                 )
                 .into_any_element();
         }
@@ -2054,7 +2345,7 @@ impl AgentChatView {
                                     .ghost()
                                     .xsmall()
                                     .selected(show_archived)
-                                    .tooltip("已归档")
+                                    .tooltip(t!("AgentUi.archived").to_string())
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.toggle_archived(cx)),
                                     ),
@@ -2064,7 +2355,7 @@ impl AgentChatView {
                                     .icon(IconName::Plus)
                                     .ghost()
                                     .xsmall()
-                                    .tooltip("新建对话")
+                                    .tooltip(t!("AgentUi.new_conversation").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             ),
                     ),
@@ -2076,9 +2367,9 @@ impl AgentChatView {
                     .text_sm()
                     .text_color(theme.muted_foreground)
                     .child(if show_archived {
-                        "暂无已归档会话"
+                        t!("AgentUi.no_archived_sessions").to_string()
                     } else {
-                        "暂无历史会话"
+                        t!("AgentUi.no_history_sessions").to_string()
                     })
                     .into_any_element()
             } else {
@@ -2114,7 +2405,7 @@ impl AgentChatView {
             .icon(IconName::Ellipsis)
             .ghost()
             .small()
-            .tooltip("面板选项")
+            .tooltip(t!("AgentUi.panel_options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_sidebar_frame_options_menu(menu, view.clone(), placement, window, cx)
             })
@@ -2300,29 +2591,41 @@ fn apply_acp_state_to_context(
         "acp-session",
         acp_state
             .and_then(AcpSessionState::title)
-            .unwrap_or("ACP Session"),
+            .map(str::to_string)
+            .unwrap_or_else(|| t!("AgentUi.acp_session").to_string()),
         "AI",
         "ACP",
         "Agent Client Protocol",
     ));
     context.scopes = acp_state.map(acp_scopes).unwrap_or_default();
-    context.capabilities = acp_state
-        .map(acp_capabilities)
-        .unwrap_or_else(|| vec![SharedString::from("ACP"), SharedString::from("Connecting")]);
+    context.capabilities = acp_state.map(acp_capabilities).unwrap_or_else(|| {
+        vec![
+            SharedString::from("ACP"),
+            SharedString::from(t!("AgentUi.connecting").to_string()),
+        ]
+    });
 }
 
 fn acp_scopes(state: &AcpSessionState) -> Vec<ComposerScope> {
     let mut scopes = Vec::new();
     if let Some(mode) = acp_mode_label(state) {
-        scopes.push(ComposerScope::new("acp-mode", "模式", mode));
+        scopes.push(ComposerScope::new(
+            "acp-mode",
+            t!("AgentUi.mode").to_string(),
+            mode,
+        ));
     }
     if let Some(updated_at) = state.updated_at() {
-        scopes.push(ComposerScope::new("acp-updated", "更新", updated_at));
+        scopes.push(ComposerScope::new(
+            "acp-updated",
+            t!("AgentUi.updated").to_string(),
+            updated_at,
+        ));
     }
     if let Some(usage) = state.usage() {
         scopes.push(ComposerScope::new(
             "acp-usage",
-            "用量",
+            t!("AgentUi.usage").to_string(),
             format!("{}/{} tokens", usage.used, usage.size),
         ));
     }
@@ -2334,13 +2637,15 @@ fn acp_capabilities(state: &AcpSessionState) -> Vec<SharedString> {
     labels.extend(acp_agent_capability_labels(state));
     if !state.available_commands().is_empty() {
         labels.push(SharedString::from(format!(
-            "命令:{}",
+            "{}:{}",
+            t!("AgentUi.commands"),
             state.available_commands().len()
         )));
     }
     if !state.config_options().is_empty() {
         labels.push(SharedString::from(format!(
-            "配置:{}",
+            "{}:{}",
+            t!("AgentUi.configuration"),
             state.config_options().len()
         )));
     }
@@ -2352,19 +2657,19 @@ fn acp_agent_capability_labels(state: &AcpSessionState) -> Vec<SharedString> {
     let session = &caps.session_capabilities;
     let mut labels = Vec::new();
     if caps.load_session {
-        labels.push(SharedString::from("Load Session"));
+        labels.push(SharedString::from(t!("AgentUi.load_session").to_string()));
     }
     if session.list.is_some() {
-        labels.push(SharedString::from("List Sessions"));
+        labels.push(SharedString::from(t!("AgentUi.list_sessions").to_string()));
     }
     if session.resume.is_some() {
-        labels.push(SharedString::from("Resume"));
+        labels.push(SharedString::from(t!("AgentUi.resume").to_string()));
     }
     if session.close.is_some() {
-        labels.push(SharedString::from("Close"));
+        labels.push(SharedString::from(t!("AgentUi.close_session").to_string()));
     }
     if session.delete.is_some() {
-        labels.push(SharedString::from("Delete"));
+        labels.push(SharedString::from(t!("AgentUi.delete").to_string()));
     }
     labels
 }
@@ -2401,7 +2706,7 @@ fn build_context(
     let capabilities = current
         .map(|r| {
             vec![
-                SharedString::from("目标"),
+                SharedString::from(t!("AgentUi.target").to_string()),
                 SharedString::from(r.kind.as_str().to_string()),
             ]
         })
@@ -2506,7 +2811,7 @@ fn render_agent_switcher_content(
                     .py_2()
                     .text_sm()
                     .text_color(muted)
-                    .child("无可用 Agent"),
+                    .child(t!("AgentUi.no_agents").to_string()),
             )
             .into_any_element();
     }
@@ -2606,7 +2911,7 @@ fn resource_pool_summary(resources: &ResourceContext) -> ComposerResourcePoolSum
         current.map(|resource| SharedString::from(resource.id.as_str().to_string())),
         current
             .map(|resource| resource.label.clone())
-            .unwrap_or_else(|| "无默认目标".to_string()),
+            .unwrap_or_else(|| t!("AgentUi.no_default_target").to_string()),
         resources.resources.len(),
     )
 }
@@ -2621,7 +2926,7 @@ fn resource_type_filters(resources: &ResourceContext) -> Vec<ComposerResourceTyp
 
     let mut filters = vec![ComposerResourceTypeFilter::new(
         "all",
-        "全部",
+        t!("AgentUi.all").to_string(),
         resources.resources.len(),
         true,
     )];
@@ -2657,9 +2962,24 @@ fn resource_source_options(
     let manual_selected = !current_selected && !all_selected && !type_selected;
 
     vec![
-        ComposerResourceSourceOption::new("current", "当前", current_count(pool), current_selected),
-        ComposerResourceSourceOption::new("pool", "资源池", pool.resources.len(), false),
-        ComposerResourceSourceOption::new("all", "全部", catalog.len(), all_selected),
+        ComposerResourceSourceOption::new(
+            "current",
+            t!("AgentUi.current").to_string(),
+            current_count(pool),
+            current_selected,
+        ),
+        ComposerResourceSourceOption::new(
+            "pool",
+            t!("AgentUi.resource_pool").to_string(),
+            pool.resources.len(),
+            false,
+        ),
+        ComposerResourceSourceOption::new(
+            "all",
+            t!("AgentUi.all").to_string(),
+            catalog.len(),
+            all_selected,
+        ),
         ComposerResourceSourceOption::new("ssh", "SSH", ssh_ids.len(), source_selected(&ssh_ids)),
         ComposerResourceSourceOption::new("db", "DB", db_ids.len(), source_selected(&db_ids)),
         ComposerResourceSourceOption::new(
@@ -2674,10 +2994,21 @@ fn resource_source_options(
             terminal_ids.len(),
             source_selected(&terminal_ids),
         ),
-        ComposerResourceSourceOption::new("manual", "手动", pool.resources.len(), manual_selected),
-        ComposerResourceSourceOption::new("workspace", "工作区", 0, false)
-            .disabled("暂无工作区资源来源"),
-        ComposerResourceSourceOption::new("tag", "标签", 0, false).disabled("暂无标签资源来源"),
+        ComposerResourceSourceOption::new(
+            "manual",
+            t!("AgentUi.manual").to_string(),
+            pool.resources.len(),
+            manual_selected,
+        ),
+        ComposerResourceSourceOption::new(
+            "workspace",
+            t!("AgentUi.workspace").to_string(),
+            0,
+            false,
+        )
+        .disabled(t!("AgentUi.no_workspace_source").to_string()),
+        ComposerResourceSourceOption::new("tag", t!("AgentUi.tag").to_string(), 0, false)
+            .disabled(t!("AgentUi.no_tag_source").to_string()),
     ]
 }
 
@@ -2753,12 +3084,16 @@ fn resource_primary_meta(resource: &ResourceRef) -> String {
         .unwrap_or_else(|| resource.kind.as_str().to_string())
 }
 
-fn resource_pool_status(in_pool: bool) -> &'static str {
-    if in_pool { "已加入" } else { "可添加" }
+fn resource_pool_status(in_pool: bool) -> String {
+    if in_pool {
+        t!("AgentUi.joined").to_string()
+    } else {
+        t!("AgentUi.available_to_add").to_string()
+    }
 }
 
-fn resource_default_reason(is_default: bool) -> Option<&'static str> {
-    is_default.then_some("默认目标")
+fn resource_default_reason(is_default: bool) -> Option<String> {
+    is_default.then(|| t!("AgentUi.default_target").to_string())
 }
 
 fn refresh_pool_resource_metadata(pool: &mut ResourceContext, catalog: &[ResourceRef]) -> bool {
@@ -2913,11 +3248,11 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
     }
 }
 
-fn task_kind_label(kind: TaskKind) -> &'static str {
+fn task_kind_label(kind: TaskKind) -> String {
     match kind {
-        TaskKind::Agent => "Auto Mode",
-        TaskKind::Ask => "Ask",
-        TaskKind::Plan => "Plan",
+        TaskKind::Agent => t!("AgentUi.auto_mode").to_string(),
+        TaskKind::Ask => t!("AgentUi.ask_mode").to_string(),
+        TaskKind::Plan => t!("AgentUi.plan_mode").to_string(),
     }
 }
 
@@ -2931,21 +3266,36 @@ fn task_kind_from_id(id: &str) -> Option<TaskKind> {
 }
 
 fn tool_execution_mode_from_label(label: &SharedString) -> ToolExecutionMode {
-    match label.as_ref() {
-        "只读" => ToolExecutionMode::ReadOnly,
-        "手动确认" => ToolExecutionMode::Manual,
-        _ => ToolExecutionMode::Auto,
+    if label.as_ref() == t!("AgentUi.readonly") {
+        ToolExecutionMode::ReadOnly
+    } else if label.as_ref() == t!("AgentUi.manual_confirmation") {
+        ToolExecutionMode::Manual
+    } else {
+        ToolExecutionMode::Auto
+    }
+}
+
+fn tool_execution_mode_label(mode: ToolExecutionMode) -> String {
+    match mode {
+        ToolExecutionMode::Auto => t!("AgentUi.auto").to_string(),
+        ToolExecutionMode::ReadOnly => t!("AgentUi.readonly").to_string(),
+        ToolExecutionMode::Manual => t!("AgentUi.manual_confirmation").to_string(),
     }
 }
 
 fn default_tool_label() -> SharedString {
-    SharedString::from("手动确认")
+    SharedString::from(t!("AgentUi.manual_confirmation").to_string())
 }
 
 fn static_runtime_model_option(runtime: &Runtime) -> ComposerModelOption {
     let model = runtime.services().model.model_name().to_string();
-    ComposerModelOption::new("runtime:current", "runtime", "当前 Runtime", model)
-        .with_hint("固定运行时")
+    ComposerModelOption::new(
+        "runtime:current",
+        "runtime",
+        t!("AgentUi.current_runtime").to_string(),
+        model,
+    )
+    .with_hint(t!("AgentUi.fixed_runtime").to_string())
 }
 
 fn selected_model_from_config(config: &AgentChatViewConfig) -> Option<ComposerModelOption> {
@@ -3024,8 +3374,9 @@ fn runtime_specs_for_provider_config(
                 model.clone(),
             )
             .with_hint(format!(
-                "{} · 正式模型",
-                config.provider_type.display_name()
+                "{} · {}",
+                config.provider_type.display_name(),
+                t!("AgentUi.official_model")
             ));
             RuntimeBuildSpec {
                 option,
@@ -3075,9 +3426,9 @@ fn selected_provider_model_id(specs: &[RuntimeBuildSpec]) -> Option<SharedString
 
 fn default_tool_options() -> Vec<ComposerMenuOption> {
     vec![
-        ComposerMenuOption::new("auto", "自动"),
-        ComposerMenuOption::new("readonly", "只读"),
-        ComposerMenuOption::new("manual", "手动确认"),
+        ComposerMenuOption::new("auto", t!("AgentUi.auto").to_string()),
+        ComposerMenuOption::new("readonly", t!("AgentUi.readonly").to_string()),
+        ComposerMenuOption::new("manual", t!("AgentUi.manual_confirmation").to_string()),
     ]
 }
 
@@ -3087,9 +3438,12 @@ fn default_task_kind() -> TaskKind {
 
 fn default_task_options() -> Vec<ComposerMenuOption> {
     vec![
-        ComposerMenuOption::new("agent", "Auto Mode").with_hint("按需回答、规划或调用工具"),
-        ComposerMenuOption::new("ask", "Ask").with_hint("直接问答"),
-        ComposerMenuOption::new("plan", "Plan").with_hint("先规划再执行"),
+        ComposerMenuOption::new("agent", t!("AgentUi.auto_mode").to_string())
+            .with_hint(t!("AgentUi.auto_mode_hint").to_string()),
+        ComposerMenuOption::new("ask", t!("AgentUi.ask_mode").to_string())
+            .with_hint(t!("AgentUi.ask_mode_hint").to_string()),
+        ComposerMenuOption::new("plan", t!("AgentUi.plan_mode").to_string())
+            .with_hint(t!("AgentUi.plan_mode_hint").to_string()),
     ]
 }
 
@@ -3103,8 +3457,14 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cards::{TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData};
-    use crate::{AcpAgentConfig, AcpConfigDiagnostic};
+    use crate::agent_cards::{
+        ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, TOOL_CARD,
+        TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData,
+    };
+    use crate::{
+        AcpAgentConfig, AcpConfigDiagnostic, AcpPermissionOption, AcpPermissionRequest,
+        AcpPublicMcpApprovalRequest,
+    };
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -3128,6 +3488,29 @@ mod tests {
 
     struct FixedSidebarHost {
         view: Entity<AgentChatView>,
+    }
+
+    fn test_acp_permission_request() -> AcpPermissionRequest {
+        AcpPermissionRequest {
+            request_id: "session:call".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "Write file".into(),
+            summary: "ACP Agent 请求执行工具：Write file".into(),
+            details: json!({"path": "/tmp/a"}),
+            options: vec![
+                AcpPermissionOption {
+                    option_id: "reject".into(),
+                    name: "拒绝".into(),
+                    kind: "reject_once".into(),
+                },
+                AcpPermissionOption {
+                    option_id: "allow".into(),
+                    name: "仅本次允许".into(),
+                    kind: "allow_once".into(),
+                },
+            ],
+        }
     }
 
     impl FixedSidebarHost {
@@ -3672,21 +4055,26 @@ mod tests {
     fn tool_label_maps_to_runtime_execution_mode() {
         assert_eq!(
             ToolExecutionMode::Auto,
-            tool_execution_mode_from_label(&SharedString::from("自动"))
+            tool_execution_mode_from_label(&SharedString::from(t!("AgentUi.auto").to_string()))
         );
         assert_eq!(
             ToolExecutionMode::ReadOnly,
-            tool_execution_mode_from_label(&SharedString::from("只读"))
+            tool_execution_mode_from_label(&SharedString::from(t!("AgentUi.readonly").to_string()))
         );
         assert_eq!(
             ToolExecutionMode::Manual,
-            tool_execution_mode_from_label(&SharedString::from("手动确认"))
+            tool_execution_mode_from_label(&SharedString::from(
+                t!("AgentUi.manual_confirmation").to_string()
+            ))
         );
     }
 
     #[test]
     fn default_tool_label_is_manual_confirmation() {
-        assert_eq!("手动确认", default_tool_label().as_ref());
+        assert_eq!(
+            t!("AgentUi.manual_confirmation").as_ref(),
+            default_tool_label().as_ref()
+        );
     }
 
     #[test]
@@ -3936,7 +4324,7 @@ mod tests {
         assert!(!agent_option_disabled(&options[0]));
         assert!(agent_option_disabled(&options[1]));
         assert_eq!(
-            "连接中...",
+            t!("AgentUi.connecting").as_ref(),
             current_agent_label(Backend::Local, &acp_agents, None, true).as_ref()
         );
     }
@@ -3975,7 +4363,7 @@ mod tests {
         let ctx = build_composer_context(
             &ResourceContext::new(),
             TaskKind::Ask,
-            &SharedString::from("自动"),
+            &SharedString::from(t!("AgentUi.auto").to_string()),
             None,
             None,
             &[],
@@ -3995,9 +4383,12 @@ mod tests {
         assert!(ctx.capabilities.contains(&SharedString::from("ACP")));
         assert!(
             ctx.capabilities
-                .contains(&SharedString::from("Load Session"))
+                .contains(&SharedString::from(t!("AgentUi.load_session").to_string()))
         );
-        assert!(ctx.capabilities.contains(&SharedString::from("命令:1")));
+        assert!(
+            ctx.capabilities
+                .contains(&SharedString::from(format!("{}:1", t!("AgentUi.commands"))))
+        );
     }
 
     #[gpui::test]
@@ -4116,6 +4507,403 @@ mod tests {
         run_gpui_until(cx, || model.request_count() >= 2);
 
         assert_eq!(2, model.request_count());
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_action_resolves_message_card_with_original_option_id(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        cx.dispatch_action(SelectAcpPermissionOption {
+            request_id: "session:call".into(),
+            option_id: "allow".into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPermissionOutcome::Selected {
+                option_id: "allow".into(),
+            },
+            outcome_rx.try_recv().expect("ACP permission response")
+        );
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!("approved", data.status);
+        assert_eq!("仅本次允许", data.selected_option_name);
+        assert_eq!(
+            t!(
+                "AgentUi.acp_safety_confirmation_notice",
+                summary = test_acp_permission_request().summary
+            ),
+            data.summary
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_card_omits_second_approval_notice_in_auto_mode(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request = test_acp_permission_request();
+        let (envelope, _outcome_rx) = AcpPermissionEnvelope::new(request.clone());
+
+        view.update(cx, |view, cx| {
+            view.selected_tool = SharedString::from(t!("AgentUi.auto").to_string());
+            view.receive_acp_permission(envelope, cx);
+        });
+
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!(request.summary, data.summary);
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_button_resolves_without_opening_dialog(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let granted = Arc::new(AtomicUsize::new(0));
+        let revoked = Arc::new(AtomicUsize::new(0));
+        let granted_arguments = Arc::new(std::sync::Mutex::new(None));
+        cx.update({
+            let granted = granted.clone();
+            let revoked = revoked.clone();
+            let granted_arguments = granted_arguments.clone();
+            move |cx| {
+                crate::set_acp_permission_grant_provider(
+                    cx,
+                    move |request, option, _public_mcp_provider| {
+                        if !option.kind.starts_with("allow") {
+                            return None;
+                        }
+                        granted.fetch_add(1, Ordering::SeqCst);
+                        *granted_arguments.lock().expect("granted arguments lock") =
+                            request.raw_input().cloned();
+                        let revoked = revoked.clone();
+                        Some(crate::AcpPermissionGrant::new(move || {
+                            revoked.fetch_add(1, Ordering::SeqCst);
+                        }))
+                    },
+                );
+            }
+        });
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| {
+            let _ = view.start_acp_permission_session(cx);
+            view.transcript.apply(&RuntimeEvent::ToolCallStarted {
+                session_id: view.session_id.clone(),
+                turn_id: agent_runtime::TurnId::from_string("turn"),
+                call_id: ToolCallId::from_string("call"),
+                tool_name: ToolName::new("terminal.exec"),
+                arguments: json!({
+                    "target": "haiwai comi",
+                    "command": "du -xhd1 /"
+                }),
+            });
+            view.receive_acp_permission(envelope, cx);
+        });
+        cx.run_until_parked();
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("ACP allow button should render in the message list");
+        cx.simulate_click(allow.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPermissionOutcome::Selected {
+                option_id: "allow".into(),
+            },
+            outcome_rx.try_recv().expect("ACP permission response")
+        );
+        assert_eq!(1, granted.load(Ordering::SeqCst));
+        assert_eq!(0, revoked.load(Ordering::SeqCst));
+        assert_eq!(
+            Some(json!({
+                "target": "haiwai comi",
+                "command": "du -xhd1 /"
+            })),
+            granted_arguments
+                .lock()
+                .expect("granted arguments lock")
+                .clone()
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_failed_acp_permission_delivery_revokes_public_mcp_grant(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let revoked = Arc::new(AtomicUsize::new(0));
+        cx.update({
+            let revoked = revoked.clone();
+            move |cx| {
+                crate::set_acp_permission_grant_provider(
+                    cx,
+                    move |_request, option, _public_mcp_provider| {
+                        if !option.kind.starts_with("allow") {
+                            return None;
+                        }
+                        let revoked = revoked.clone();
+                        Some(crate::AcpPermissionGrant::new(move || {
+                            revoked.fetch_add(1, Ordering::SeqCst);
+                        }))
+                    },
+                );
+            }
+        });
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+        drop(outcome_rx);
+
+        view.update(cx, |view, cx| {
+            let _ = view.start_acp_permission_session(cx);
+            view.receive_acp_permission(envelope, cx);
+        });
+        cx.run_until_parked();
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("ACP allow button should render in the message list");
+        cx.simulate_click(allow.center(), Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(1, revoked.load(Ordering::SeqCst));
+    }
+
+    #[gpui::test]
+    fn gpui_public_mcp_safety_confirmation_resolves_inside_message_flow(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request_id = "public-mcp:approval-1";
+        let (envelope, mut outcome_rx) =
+            AcpPublicMcpApprovalEnvelope::new(AcpPublicMcpApprovalRequest {
+                request_id: request_id.into(),
+                tool_name: "terminal.exec".into(),
+                summary: "Call Execute in terminal".into(),
+                details: json!({
+                    "requestArguments": {
+                        "target": "haiwai comi",
+                        "command": "du -xhd1 / 2>/dev/null | sort -h"
+                    }
+                }),
+            });
+
+        view.update(cx, |view, cx| {
+            view.receive_public_mcp_approval(envelope, cx)
+        });
+        cx.run_until_parked();
+
+        let data = view.read_with(cx, |view, _| {
+            view.transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(TOOL_CONFIRM_CARD))
+                .and_then(|message| ToolConfirmCardData::from_json(&message.content))
+                .expect("Public MCP confirmation card")
+        });
+        assert!(data.input_json.contains("haiwai comi"));
+        assert_eq!(
+            t!(
+                "AgentUi.public_mcp_safety_confirmation",
+                summary = "Call Execute in terminal"
+            ),
+            data.question
+        );
+
+        cx.dispatch_action(ApproveToolCall {
+            call_id: request_id.into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPublicMcpApprovalOutcome::Approved,
+            outcome_rx.try_recv().expect("Public MCP approval response")
+        );
+        assert!(!view.read_with(cx, |view, _| {
+            view.transcript.has_pending_tool_confirm(request_id)
+        }));
+    }
+
+    #[gpui::test]
+    fn gpui_public_mcp_safety_confirmation_can_be_rejected(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request_id = "public-mcp:approval-reject";
+        let (envelope, mut outcome_rx) =
+            AcpPublicMcpApprovalEnvelope::new(AcpPublicMcpApprovalRequest {
+                request_id: request_id.into(),
+                tool_name: "terminal.exec".into(),
+                summary: "Call Execute in terminal".into(),
+                details: json!({
+                    "requestArguments": {"command": "rm -rf /tmp/example"}
+                }),
+            });
+
+        view.update(cx, |view, cx| {
+            view.receive_public_mcp_approval(envelope, cx)
+        });
+        cx.dispatch_action(RejectToolCall {
+            call_id: request_id.into(),
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            AcpPublicMcpApprovalOutcome::Denied,
+            outcome_rx
+                .try_recv()
+                .expect("Public MCP rejection response")
+        );
+        assert!(!view.read_with(cx, |view, _| {
+            view.transcript.has_pending_tool_confirm(request_id)
+        }));
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_card_uses_full_width_details_and_compact_actions(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                ACP_PERMISSION_CARD,
+                AcpPermissionCardData {
+                    request_id: "session:call-layout".into(),
+                    session_id: "session".into(),
+                    tool_call_id: "call-layout".into(),
+                    tool_name: "ACP tool".into(),
+                    summary: "ACP Agent 请求执行工具：ACP tool".into(),
+                    details_json: r#"{
+  "tool": "terminal.exec",
+  "kind": "write",
+  "scope": "session"
+}"#
+                    .into(),
+                    options: vec![
+                        AcpPermissionOptionData {
+                            option_id: "allow".into(),
+                            name: "Allow".into(),
+                            kind: "allow_once".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "allow-session".into(),
+                            name: "Allow for This Session".into(),
+                            kind: "allow_for_session".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "allow-always".into(),
+                            name: "Allow and Don't Ask Again".into(),
+                            kind: "allow_always".into(),
+                        },
+                        AcpPermissionOptionData {
+                            option_id: "decline".into(),
+                            name: "Decline".into(),
+                            kind: "reject_once".into(),
+                        },
+                    ],
+                    status: "pending".into(),
+                    selected_option_name: String::new(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let details = cx
+            .debug_bounds("acp-permission-details")
+            .expect("ACP details should render");
+        let frame = cx
+            .debug_bounds("agent-tool-json-frame")
+            .expect("ACP details frame should render");
+        let input = cx
+            .debug_bounds("agent-tool-json-input-slot")
+            .expect("ACP details input should render");
+        for (name, bounds) in [("details", details), ("frame", frame), ("input", input)] {
+            assert!(
+                bounds.size.width > column.size.width * 0.75,
+                "ACP {name} should use the available message width: column={column:?}, bounds={bounds:?}"
+            );
+        }
+
+        let actions = cx
+            .debug_bounds("acp-permission-actions")
+            .expect("ACP actions should render");
+        let allow = cx
+            .debug_bounds("acp-permission-allow_once")
+            .expect("allow button should render");
+        let reject = cx
+            .debug_bounds("acp-permission-reject_once")
+            .expect("reject button should render");
+        let more = cx
+            .debug_bounds("acp-permission-more-options")
+            .expect("more-options trigger should render");
+        assert_eq!(allow.origin.y, reject.origin.y);
+        assert_eq!(allow.origin.y, more.origin.y);
+        assert!(actions.size.height <= allow.size.height + px(4.0));
+    }
+
+    #[gpui::test]
+    fn gpui_resetting_acp_connection_cancels_pending_permission_card(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
+
+        view.update(cx, |view, cx| {
+            view.receive_acp_permission(envelope, cx);
+            view.reset_acp_permission_session(cx);
+        });
+
+        assert_eq!(
+            AcpPermissionOutcome::Cancelled,
+            outcome_rx.try_recv().expect("cancelled ACP permission")
+        );
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!("cancelled", data.status);
+        assert!(data.selected_option_name.is_empty());
     }
 
     #[gpui::test]
@@ -4448,9 +5236,9 @@ mod tests {
 
     #[test]
     fn agent_history_labels_use_task_language() {
-        assert_eq!("历史任务", agent_history_title(false));
-        assert_eq!("已归档任务", agent_history_title(true));
-        assert_eq!("当前 Agent 任务", current_agent_task_title());
+        assert_eq!(t!("AgentUi.history_tasks"), agent_history_title(false));
+        assert_eq!(t!("AgentUi.archived_tasks"), agent_history_title(true));
+        assert_eq!(t!("AgentUi.current_agent_task"), current_agent_task_title());
     }
 
     #[gpui::test]
@@ -4502,6 +5290,9 @@ mod tests {
         let user_row = cx
             .debug_bounds("ai-chat-user-row")
             .expect("user row should render");
+        let user_bubble = cx
+            .debug_bounds("ai-chat-user-bubble")
+            .expect("user bubble should render");
 
         let expected_column_width = scroll.size.width - px(32.0);
         assert_eq!(
@@ -4515,6 +5306,15 @@ mod tests {
         assert_eq!(
             column.origin.x, user_row.origin.x,
             "user message row should not drift horizontally: column={column:?}, row={user_row:?}"
+        );
+        assert!(
+            user_bubble.size.width < px(240.0),
+            "short user message bubble should fit its content instead of filling the row: row={user_row:?}, bubble={user_bubble:?}"
+        );
+        assert_eq!(
+            user_row.origin.x + user_row.size.width,
+            user_bubble.origin.x + user_bubble.size.width,
+            "user message bubble should align to the right edge: row={user_row:?}, bubble={user_bubble:?}"
         );
     }
 

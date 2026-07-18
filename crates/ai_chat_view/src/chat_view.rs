@@ -11,8 +11,12 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
+use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
-pub const CHAT_TASK_SIDEBAR_TITLE: &str = "历史任务";
+
+pub fn chat_task_sidebar_title() -> String {
+    t!("AgentUi.history_tasks").to_string()
+}
 
 pub struct ChatView {
     state: ChatViewState,
@@ -224,7 +228,7 @@ impl ChatView {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(CHAT_TASK_SIDEBAR_TITLE),
+                                    .child(chat_task_sidebar_title()),
                             ),
                     )
                     .child(
@@ -236,7 +240,7 @@ impl ChatView {
                                     .icon(IconName::Plus)
                                     .ghost()
                                     .small()
-                                    .tooltip("新建任务")
+                                    .tooltip(t!("AgentUi.new_task").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             )
                             .child(
@@ -244,7 +248,7 @@ impl ChatView {
                                     .icon(IconName::Close)
                                     .ghost()
                                     .small()
-                                    .tooltip("关闭侧边栏")
+                                    .tooltip(t!("AgentUi.close_sidebar").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_sidebar_hidden(true, cx)
                                     })),
@@ -288,7 +292,7 @@ impl Render for ChatView {
                                     .icon(IconName::PanelLeftOpen)
                                     .ghost()
                                     .small()
-                                    .tooltip("打开侧边栏")
+                                    .tooltip(t!("AgentUi.open_sidebar").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_sidebar_hidden(false, cx)
                                     })),

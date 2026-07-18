@@ -742,7 +742,7 @@ impl DatabaseTabView {
                 div()
                     .text_xl()
                     .font_weight(FontWeight::BOLD)
-                    .child(format!("Database Connection: {}", conn_name)),
+                    .child(t!("Connection.connection_details", name = conn_name).to_string()),
             )
             .child(
                 v_flex()
@@ -753,26 +753,42 @@ impl DatabaseTabView {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Host:"))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{}:", t!("ConnectionForm.host"))),
+                            )
                             .child(conn_host),
                     )
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Port:"))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{}:", t!("ConnectionForm.port"))),
+                            )
                             .child(format!("{}", conn_port)),
                     )
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Username:"))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{}:", t!("ConnectionForm.username"))),
+                            )
                             .child(conn_username),
                     )
                     .when_some(conn_database, |this, db| {
                         this.child(
                             h_flex()
                                 .gap_2()
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Database:"))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(format!("{}:", t!("ConnectionForm.database"))),
+                                )
                                 .child(db),
                         )
                     }),

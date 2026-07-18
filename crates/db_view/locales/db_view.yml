@@ -34,6 +34,10 @@ Common:
     en: Save
     zh-CN: 保存
     zh-HK: 保存
+  preview:
+    en: Preview
+    zh-CN: 预览
+    zh-HK: 預覽
   cancel:
     en: Cancel
     zh-CN: 取消
@@ -98,11 +102,11 @@ Common:
     en: Default
     zh-CN: 默认
     zh-HK: 預設
-  yes:
+  "yes":
     en: "Yes"
     zh-CN: 是
     zh-HK: 是
-  no:
+  "no":
     en: "No"
     zh-CN: 否
     zh-HK: 否
@@ -165,6 +169,14 @@ Connection:
     en: No Database Connected
     zh-CN: 未连接数据库
     zh-HK: 未連接資料庫
+  save_and_continue:
+    en: Save and Continue
+    zh-CN: 保存并继续
+    zh-HK: 儲存並繼續
+  connection_details:
+    en: "Database Connection: %{name}"
+    zh-CN: "数据库连接：%{name}"
+    zh-HK: "資料庫連線：%{name}"
 
 # 连接表单
 ConnectionForm:
@@ -307,6 +319,34 @@ ConnectionForm:
     en: Application Name
     zh-CN: 应用名称
     zh-HK: 應用名稱
+  connection_name_placeholder:
+    en: "My %{kind} Database"
+    zh-CN: "我的 %{kind} 数据库"
+    zh-HK: "我的 %{kind} 資料庫"
+  enter_password:
+    en: Enter password
+    zh-CN: 输入密码
+    zh-HK: 輸入密碼
+  database_optional:
+    en: Database name (optional)
+    zh-CN: 数据库名称（可选）
+    zh-HK: 資料庫名稱（選填）
+  enter_ssh_password:
+    en: Enter SSH password
+    zh-CN: 输入 SSH 密码
+    zh-HK: 輸入 SSH 密碼
+  enter_key_passphrase:
+    en: Enter key passphrase
+    zh-CN: 输入私钥密码
+    zh-HK: 輸入私密金鑰密碼
+  service_name_placeholder:
+    en: ORCL (or use SID)
+    zh-CN: ORCL（或使用 SID）
+    zh-HK: ORCL（或使用 SID）
+  sid_placeholder:
+    en: orcl (or use Service Name)
+    zh-CN: orcl（或使用服务名称）
+    zh-HK: orcl（或使用服務名稱）
   proxy_enabled:
     en: Enable Proxy
     zh-CN: 启用代理
@@ -1265,6 +1305,18 @@ Query:
     en: SQL Statement
     zh-CN: SQL 语句
     zh-HK: SQL 語句
+  editor_placeholder:
+    en: Enter your SQL query here...
+    zh-CN: 在此输入 SQL 查询...
+    zh-HK: 在此輸入 SQL 查詢...
+  plugin_not_found:
+    en: The current database plugin was not found
+    zh-CN: 未找到当前数据库插件
+    zh-HK: 找不到目前的資料庫外掛程式
+  explain_query_only:
+    en: EXPLAIN is only supported for query statements
+    zh-CN: EXPLAIN 仅支持查询语句
+    zh-HK: EXPLAIN 僅支援查詢語句
 
 
 

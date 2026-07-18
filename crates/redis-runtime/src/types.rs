@@ -472,7 +472,7 @@ pub struct RedisNode {
     pub connection_id: String,
     /// 数据库索引
     pub db_index: u8,
-    /// 完整键名（仅对 Key 节点有效）
+    /// 完整键名或命名空间前缀（Key / Namespace 节点）
     pub full_key: Option<String>,
     /// 子节点
     pub children: Vec<RedisNode>,

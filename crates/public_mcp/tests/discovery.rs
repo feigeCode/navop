@@ -1,5 +1,6 @@
 use public_mcp::discovery::{
-    DiscoveryDocument, PublicMcpMode, read_discovery, remove_discovery, write_discovery,
+    DiscoveryDocument, PublicMcpMode, legacy_public_mcp_discovery_path_from,
+    public_mcp_discovery_path_from, read_discovery, remove_discovery, write_discovery,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -17,6 +18,7 @@ fn discovery_round_trips_and_remove_is_idempotent() {
     write_discovery(&path, &document).unwrap();
 
     let loaded = read_discovery(&path).unwrap();
+    assert_eq!("navop", loaded.app);
     assert_eq!(document.version, loaded.version);
     assert_eq!(document.app, loaded.app);
     assert_eq!(document.pid, loaded.pid);
@@ -28,6 +30,49 @@ fn discovery_round_trips_and_remove_is_idempotent() {
     remove_discovery(&path).unwrap();
     remove_discovery(&path).unwrap();
     assert!(!path.exists());
+}
+
+#[test]
+fn discovery_validation_accepts_navop_and_legacy_onetcli_apps() {
+    let mut document = DiscoveryDocument::new(
+        1,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+        "a".repeat(64),
+        PublicMcpMode::Persistent,
+    );
+    document.validate_for_stdio_bridge().unwrap();
+    document.app = "onetcli".to_string();
+    document.validate_for_stdio_bridge().unwrap();
+    document.app = "other".to_string();
+    assert!(document.validate_for_stdio_bridge().is_err());
+}
+
+#[test]
+fn legacy_compatible_discovery_preserves_endpoint_and_token() {
+    let document = DiscoveryDocument::new(
+        1,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+        "a".repeat(64),
+        PublicMcpMode::Persistent,
+    );
+    let legacy = document.legacy_compatible();
+    assert_eq!("onetcli", legacy.app);
+    assert_eq!(document.host, legacy.host);
+    assert_eq!(document.port, legacy.port);
+    assert_eq!(document.token, legacy.token);
+}
+
+#[test]
+fn discovery_paths_prefer_new_navop_brand_and_retain_legacy_path() {
+    let root = std::path::Path::new("/tmp/config");
+    assert_eq!(
+        root.join("navop/public-mcp.json"),
+        public_mcp_discovery_path_from(root)
+    );
+    assert_eq!(
+        root.join("onetcli/public-mcp.json"),
+        legacy_public_mcp_discovery_path_from(root)
+    );
 }
 
 #[cfg(unix)]

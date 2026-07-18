@@ -91,17 +91,13 @@ async fn runtime_updates_permission_mode_for_existing_client_connection() {
     );
     runtime.set_permission_mode(PermissionMode::Allow);
 
-    let still_requires_approval = client.remote_exec(21, "pwd").await;
+    let allowed = client.remote_exec(21, "pwd").await;
 
+    assert_eq!(Value::Null, allowed["result"]["structuredContent"]["code"]);
     assert_eq!(
-        "permission_denied",
-        still_requires_approval["result"]["structuredContent"]["code"]
+        &["pwd".to_string()],
+        executed_commands.lock().unwrap().as_slice()
     );
-    assert_eq!(
-        "no public MCP approval handler is configured",
-        still_requires_approval["result"]["structuredContent"]["message"]
-    );
-    assert!(executed_commands.lock().unwrap().is_empty());
 }
 
 async fn wait_for_client_count(runtime: &PublicMcpRuntime, expected: usize) {

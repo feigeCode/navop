@@ -24,6 +24,7 @@ mod acp;
 mod agent_cards;
 mod agent_skills;
 mod agent_tab;
+mod agent_tool_config;
 mod agent_tool_input;
 mod agent_transcript;
 mod agent_view;
@@ -66,13 +67,16 @@ mod workbench_tab_tests;
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
     AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
-    AcpPendingConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
-    AcpPermissionProvider, AcpPermissionRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
-    build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
-    set_acp_permission_provider,
+    AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant, AcpPermissionOption,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpPublicMcpApprovalFuture,
+    AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider, AcpPublicMcpApprovalRequest,
+    AcpRecoveryAction, AcpTimeoutConfig, AcpTransport, build_acp_agent_configs,
+    build_acp_agent_entries, current_acp_tool_mode, set_acp_agent_config_provider,
+    set_acp_permission_grant_provider, set_acp_tool_mode_provider, set_current_acp_tool_mode,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
+pub use agent_tool_config::emit_agent_tool_config_changed;
 pub use agent_transcript::AgentTranscript;
 pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
 pub use ask_ai::{
@@ -90,7 +94,7 @@ pub use chart_json::{
 };
 pub use chat_state::ChatViewState;
 pub use chat_tab::{CHAT_TAB_CONTENT_KEY, ChatTabContent};
-pub use chat_view::{CHAT_TASK_SIDEBAR_TITLE, ChatView};
+pub use chat_view::{ChatView, chat_task_sidebar_title};
 pub use code_block::{
     CodeBlockAction, CodeBlockActionBuilder, CodeBlockActionCallback, CodeBlockActionPreview,
     CodeBlockActionRegistry, FencedCodeBlock, LanguageMatcher, extract_fenced_code_blocks,
@@ -134,6 +138,7 @@ pub use theme::AgentChatTheme;
 /// 各业务模块可在自身 `init` 之后,通过 [`CardRegistry::register_global`] 把
 /// 自己的卡片注册进来。
 pub fn init(cx: &mut App) {
+    agent_tool_config::init(cx);
     CardRegistry::init_global(cx);
     cards::register_builtin_cards(cx);
     agent_cards::register_agent_cards(cx);

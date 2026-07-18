@@ -25,6 +25,8 @@ pub struct ContributesManifest {
     pub keybindings: Vec<KeybindingContrib>,
     #[serde(default, rename = "htmlPreviewTransforms")]
     pub html_preview_transforms: Vec<HtmlPreviewTransformContrib>,
+    #[serde(default, rename = "documentRenderers")]
+    pub document_renderers: Vec<DocumentRendererContrib>,
     #[serde(default, rename = "remoteFileEditors")]
     pub remote_file_editors: Vec<RemoteFileEditorContrib>,
     #[serde(default)]
@@ -60,6 +62,7 @@ impl ContributesManifest {
             + self.toolbars.len()
             + self.keybindings.len()
             + self.html_preview_transforms.len()
+            + self.document_renderers.len()
             + self.remote_file_editors.len()
             + self.views.len()
             + self.tasks.len()
@@ -121,6 +124,27 @@ pub struct HtmlPreviewTransformContrib {
 
 fn default_html_transform_function() -> String {
     "transform-html".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DocumentRendererContrib {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(default, rename = "runtimeId")]
+    pub runtime_id: String,
+    #[serde(default = "default_document_render_function")]
+    pub function: String,
+    #[serde(default, rename = "blockKinds")]
+    pub block_kinds: Vec<String>,
+    #[serde(default, rename = "outputMediaTypes")]
+    pub output_media_types: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+fn default_document_render_function() -> String {
+    "render-document".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

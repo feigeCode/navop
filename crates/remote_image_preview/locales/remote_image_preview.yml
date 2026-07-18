@@ -1,0 +1,19 @@
+_version: 2
+
+RemoteImagePreview:
+  loading:
+    en: Reading remote image...
+    zh-CN: 正在读取远程图片...
+    zh-HK: 正在讀取遠端圖片...
+  failed:
+    en: "Remote image preview failed: %{error}"
+    zh-CN: "远程图片预览失败：%{error}"
+    zh-HK: "遠端圖片預覽失敗：%{error}"
+  default_title:
+    en: Remote Image
+    zh-CN: 远程图片
+    zh-HK: 遠端圖片
+  clipboard_temp_write_failed:
+    en: "Failed to write clipboard image to temporary file %{path}"
+    zh-CN: "无法将剪贴板图片写入临时文件 %{path}"
+    zh-HK: "無法將剪貼簿圖片寫入暫存檔 %{path}"

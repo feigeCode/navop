@@ -15,10 +15,10 @@ pub use local_shell::local_config_from_settings;
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
-pub use terminal::TerminalScrollProxy;
+pub use terminal::{TerminalScrollProxy, TerminalTextSnapshot};
 pub use types::{
     LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
     TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,
-    TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput, TerminalExecRequest,
-    TerminalInputHandle, TerminalSize,
+    TerminalExecCompletion, TerminalExecHandle, TerminalExecObserver, TerminalExecOutput,
+    TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };

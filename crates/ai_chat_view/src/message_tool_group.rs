@@ -7,6 +7,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div,
 };
 use gpui_component::{Icon, IconName, Sizable, h_flex, v_flex};
+use rust_i18n::t;
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -141,10 +142,14 @@ pub(crate) fn render_tool_target_group(
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.muted_foreground)
                         .truncate()
-                        .child(format!(
-                            "{target_title} · {} 个工具结果",
-                            group.messages.len()
-                        )),
+                        .child(
+                            t!(
+                                "AgentUi.tool_results_count",
+                                target = target_title,
+                                count = group.messages.len()
+                            )
+                            .to_string(),
+                        ),
                 ),
         )
         .when(expanded, |this| this.children(children))

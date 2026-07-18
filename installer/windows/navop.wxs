@@ -42,6 +42,43 @@
       <Component Id="ApplicationExecutable" Guid="*">
         <File Id="NavopExecutable" Source="$(SourceDir)\navop.exe" KeyPath="yes" />
       </Component>
+      <Component Id="FileAssociationComponent" Guid="*">
+        <ProgId Id="Navop.SQLiteDatabase" Description="SQLite Database">
+          <Extension Id="db" ContentType="application/vnd.sqlite3">
+            <Verb
+              Id="open"
+              Command="Open with Navop"
+              TargetFile="NavopExecutable"
+              Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <ProgId Id="Navop.DuckDBDatabase" Description="DuckDB Database">
+          <Extension Id="duckdb" ContentType="application/x-duckdb">
+            <Verb
+              Id="open"
+              Command="Open with Navop"
+              TargetFile="NavopExecutable"
+              Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <ProgId Id="Navop.MarkdownDocument" Description="Markdown Document">
+          <Extension Id="md" ContentType="text/markdown">
+            <Verb
+              Id="open"
+              Command="Open with Navop"
+              TargetFile="NavopExecutable"
+              Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
+        <RegistryValue
+          Id="FileAssociationRegistry"
+          Root="HKCU"
+          Key="Software\Navop"
+          Name="FileAssociationsInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
       <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
         <Shortcut
           Id="StartMenuShortcut"

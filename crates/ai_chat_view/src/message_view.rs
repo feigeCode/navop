@@ -19,6 +19,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, v_flex,
 };
+use rust_i18n::t;
 
 pub fn render_messages(
     messages: &[ChatMessageUI],
@@ -195,6 +196,8 @@ fn render_user_message_themed<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     theme: &AgentChatTheme,
 ) -> AnyElement {
+    let bubble_width = user_message_bubble_width(&msg.content);
+
     h_flex()
         .debug_selector(|| "ai-chat-user-row".to_string())
         .w_full()
@@ -203,7 +206,7 @@ fn render_user_message_themed<E: MessageExtension>(
         .child(
             div()
                 .debug_selector(|| "ai-chat-user-bubble".to_string())
-                .w_full()
+                .w(bubble_width)
                 .max_w(px(720.0))
                 .min_w_0()
                 .px_3()
@@ -223,6 +226,31 @@ fn render_user_message_themed<E: MessageExtension>(
                 ),
         )
         .into_any_element()
+}
+
+fn user_message_bubble_width(content: &str) -> gpui::Pixels {
+    const MIN_WIDTH: f32 = 64.0;
+    const MAX_WIDTH: f32 = 720.0;
+    const HORIZONTAL_PADDING: f32 = 24.0;
+    const ASCII_CHAR_WIDTH: f32 = 7.0;
+    const WIDE_CHAR_WIDTH: f32 = 14.0;
+
+    let content_width = content
+        .lines()
+        .map(|line| {
+            line.chars()
+                .map(|character| {
+                    if character.is_ascii() {
+                        ASCII_CHAR_WIDTH
+                    } else {
+                        WIDE_CHAR_WIDTH
+                    }
+                })
+                .sum::<f32>()
+        })
+        .fold(0.0, f32::max);
+
+    px((content_width + HORIZONTAL_PADDING).clamp(MIN_WIDTH, MAX_WIDTH))
 }
 
 pub fn render_system_message<E: MessageExtension>(
@@ -380,7 +408,7 @@ fn render_thinking_themed(theme: &AgentChatTheme) -> AnyElement {
             div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child("思考中..."),
+                .child(t!("AgentUi.thinking").to_string()),
         )
         .into_any_element()
 }
@@ -401,19 +429,23 @@ fn render_card(
     if let Some(element) =
         with_agent_chat_theme(theme, || CardRegistry::render_global(&card_msg, window, cx))
     {
-        return div()
+        return v_flex()
             .w_full()
             .min_w_0()
+            .items_stretch()
             .overflow_hidden()
             .text_color(theme.foreground)
             .child(element)
             .into_any_element();
     }
-    render_placeholder_themed(format!("[未注册卡片: {kind}]"), theme)
+    render_placeholder_themed(
+        t!("AgentUi.unregistered_card", kind = kind).to_string(),
+        theme,
+    )
 }
 
 fn render_sql_result_placeholder(theme: &AgentChatTheme) -> AnyElement {
-    render_placeholder_themed("[SQL 结果卡片需要业务渲染器]", theme)
+    render_placeholder_themed(t!("AgentUi.sql_card_renderer_required").to_string(), theme)
 }
 
 fn render_placeholder_themed(text: impl Into<String>, theme: &AgentChatTheme) -> AnyElement {

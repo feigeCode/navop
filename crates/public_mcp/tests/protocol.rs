@@ -276,7 +276,7 @@ async fn remote_exec_uses_updated_permission_mode() {
     );
     permission.set(PermissionMode::Allow);
 
-    let still_requires_approval = client
+    let allowed = client
         .request(json!({
             "jsonrpc": "2.0",
             "id": 31,
@@ -291,15 +291,11 @@ async fn remote_exec_uses_updated_permission_mode() {
         }))
         .await;
 
+    assert_eq!(Value::Null, allowed["result"]["structuredContent"]["code"]);
     assert_eq!(
-        "permission_denied",
-        still_requires_approval["result"]["structuredContent"]["code"]
+        &["pwd".to_string()],
+        executed_commands.lock().unwrap().as_slice()
     );
-    assert_eq!(
-        "no public MCP approval handler is configured",
-        still_requires_approval["result"]["structuredContent"]["message"]
-    );
-    assert!(executed_commands.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

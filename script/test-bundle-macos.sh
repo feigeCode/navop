@@ -35,6 +35,9 @@ ONETCLI_VERSION="9.8.7" \
     "$PROJECT_DIR/script/bundle-macos.sh" "$TARGET"
 
 grep -q '<key>NSLocalNetworkUsageDescription</key>' "$APP_DIR/Contents/Info.plist"
+grep -q '<key>CFBundleDocumentTypes</key>' "$APP_DIR/Contents/Info.plist"
+grep -q '<string>duckdb</string>' "$APP_DIR/Contents/Info.plist"
+grep -q '<string>md</string>' "$APP_DIR/Contents/Info.plist"
 grep -q '<string>9.8.7</string>' "$APP_DIR/Contents/Info.plist"
 grep -q -- "--sign - $APP_DIR" "$CODESIGN_LOG"
 grep -q -- "--verify --deep --strict --verbose=2 $APP_DIR" "$CODESIGN_LOG"

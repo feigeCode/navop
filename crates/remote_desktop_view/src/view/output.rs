@@ -14,7 +14,7 @@ impl RemoteDesktopView {
         self.input_tx = Some(runtime.input_tx);
         self.output_rx = Some(runtime.output_rx);
         self.last_resize_size = Some(size);
-        self.status = SharedString::from("Connecting");
+        self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
     }
 
     pub(super) fn drain_output(&mut self, cx: &mut Context<Self>) {
@@ -31,7 +31,7 @@ impl RemoteDesktopView {
         match output {
             RemoteDesktopOutput::Connected { width, height, .. } => {
                 self.remote_size = Some((width, height));
-                self.status = SharedString::from("Connected");
+                self.status = SharedString::from(t!("RemoteDesktop.status_connected").to_string());
             }
             RemoteDesktopOutput::Frame {
                 width,
@@ -103,7 +103,7 @@ impl RemoteDesktopView {
 
     pub(super) fn request_reconnect(&mut self) {
         self.modifiers = Modifiers::default();
-        self.status = SharedString::from("reconnecting RDP session");
+        self.status = SharedString::from(t!("RemoteDesktop.status_reconnecting").to_string());
         self.send_input(RemoteDesktopInput::Reconnect);
     }
 

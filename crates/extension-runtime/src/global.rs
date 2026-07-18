@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 #[cfg(feature = "wasm-components")]
 use futures::FutureExt;
@@ -9,6 +12,7 @@ use super::catalog::ExtensionRuntimeCatalog;
 #[derive(Clone, Default)]
 pub struct GlobalExtensionRuntimeCatalog {
     catalog: Arc<RwLock<Option<Arc<ExtensionRuntimeCatalog>>>>,
+    revision: Arc<AtomicU64>,
 }
 
 impl gpui::Global for GlobalExtensionRuntimeCatalog {}
@@ -25,13 +29,19 @@ impl GlobalExtensionRuntimeCatalog {
     pub fn replace_arc(&self, catalog: Arc<ExtensionRuntimeCatalog>) {
         if let Ok(mut guard) = self.catalog.write() {
             *guard = Some(catalog);
+            self.revision.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     pub fn clear(&self) {
         if let Ok(mut guard) = self.catalog.write() {
             *guard = None;
+            self.revision.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Relaxed)
     }
 }
 
@@ -54,6 +64,19 @@ pub fn refresh_global_runtime_catalog(cx: &mut impl BorrowAppContext) {
             };
             #[cfg(not(feature = "wasm-components"))]
             let catalog = Arc::new(catalog);
+            #[cfg(feature = "wasm-components")]
+            {
+                let prewarm_catalog = catalog.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = prewarm_catalog.prewarm_document_renderers() {
+                        tracing::warn!(
+                            target: "extension_loader",
+                            %error,
+                            "预热文档渲染扩展失败"
+                        );
+                    }
+                });
+            }
             cx.update_default_global::<GlobalExtensionRuntimeCatalog, _>(|global, _| {
                 global.replace_arc(catalog);
             });

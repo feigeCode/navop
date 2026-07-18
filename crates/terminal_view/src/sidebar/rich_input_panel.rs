@@ -14,6 +14,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+use rust_i18n::t;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RichInputSubmit {
@@ -48,7 +49,7 @@ impl RichInputPanel {
             InputState::new(window, cx)
                 .multi_line(true)
                 .auto_grow(10, 18)
-                .placeholder("Command")
+                .placeholder(t!("RichInput.command_placeholder").to_string())
         });
 
         let input_entity = input_state.clone();
@@ -110,7 +111,7 @@ impl RichInputPanel {
             .child(
                 Button::new("rich-input-clear")
                     .icon(IconName::Remove)
-                    .label("Clear")
+                    .label(t!("RichInput.clear").to_string())
                     .ghost()
                     .small()
                     .disabled(!self.has_input)
@@ -121,7 +122,7 @@ impl RichInputPanel {
             .child(
                 Button::new("rich-input-send")
                     .icon(IconName::Paste)
-                    .label("Send")
+                    .label(t!("RichInput.send").to_string())
                     .primary()
                     .small()
                     .disabled(!self.has_input)

@@ -234,6 +234,7 @@ dependencies = [
  "chrono",
  "futures",
  "llm-connector",
+ "rust-i18n",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1586,6 +1587,76 @@ dependencies = [
  "jobserver",
  "libc",
  "shlex 2.0.1",
+]
+
+[[package]]
+name = "cditor-ai"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "async-channel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cditor-app"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "async-trait",
+ "cditor-ai",
+ "cditor-core",
+ "cditor-editor",
+ "cditor-runtime",
+ "cditor-storage",
+ "ding-board",
+ "gpui",
+ "image",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "cditor-core"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "cditor-editor"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "cditor-core",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "cditor-runtime"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "cditor-ai",
+ "cditor-core",
+ "cditor-editor",
+]
+
+[[package]]
+name = "cditor-storage"
+version = "0.2.6"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "async-trait",
+ "cditor-core",
+ "tokio",
 ]
 
 [[package]]
@@ -3016,6 +3087,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ding-board"
+version = "0.1.0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=69588e67b0be4113c39a3f3eb40b7480c24dfb5f#69588e67b0be4113c39a3f3eb40b7480c24dfb5f"
+dependencies = [
+ "gpui",
+ "log",
+ "serde",
+ "serde_json",
+ "ttf-parser",
+]
+
+[[package]]
 name = "directories-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3444,7 +3527,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3583,6 +3666,7 @@ dependencies = [
  "html-preview",
  "one-core",
  "remote_desktop",
+ "rust-i18n",
  "security-framework 3.7.0",
  "semver",
  "serde",
@@ -5442,7 +5526,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6721,7 +6805,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "main"
-version = "0.8.9"
+version = "0.8.10"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -6743,6 +6827,7 @@ dependencies = [
  "gpui_platform",
  "mongodb-runtime",
  "mongodb_view",
+ "notes",
  "one-core",
  "one-ui",
  "onetcli_runtime",
@@ -6773,6 +6858,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "windows 0.62.2",
  "winresource",
  "zed-font-kit 0.14.1-zed (git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5)",
@@ -7464,6 +7550,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "notes"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cditor-app",
+ "chrono",
+ "dirs 6.0.0",
+ "extension-runtime",
+ "extension-wasm",
+ "futures",
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "ropey",
+ "rust-i18n",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "notify"
 version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7994,6 +8106,7 @@ dependencies = [
  "gpui-component",
  "json5",
  "one-core",
+ "rust-i18n",
  "serde_json",
  "tracing",
 ]
@@ -9270,7 +9383,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.41",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9307,7 +9420,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -9867,6 +9980,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "rust-i18n",
  "sftp",
  "tokio",
 ]
@@ -10449,7 +10563,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -12056,7 +12170,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -14600,7 +14714,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

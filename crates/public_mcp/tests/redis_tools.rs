@@ -77,9 +77,7 @@ async fn redis_provider_executes_runtime_command() {
         Some(redis_command_result(json!(2))),
         result.structured_content
     );
-    let requests = approver.requests();
-    assert_eq!(1, requests.len());
-    assert_eq!("redis.command", requests[0].tool_name);
+    assert!(approver.requests().is_empty());
 }
 
 #[tokio::test]

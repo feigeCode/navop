@@ -54,6 +54,14 @@ Common:
     en: None
     zh-CN: 无
     zh-HK: 無
+  file_open_failed:
+    en: "Unable to open file: %{error}"
+    zh-CN: "无法打开文件：%{error}"
+    zh-HK: "無法開啟檔案：%{error}"
+  storage_unavailable:
+    en: Application storage is unavailable
+    zh-CN: 应用存储不可用
+    zh-HK: 應用程式儲存空間不可用
 
 # 应用退出
 Quit:
@@ -88,17 +96,6 @@ McpApproval:
     en: "%{count} more requests waiting"
     zh-CN: "还有 %{count} 个请求等待审批"
     zh-HK: "還有 %{count} 個請求等待審批"
-
-# ACP 审批
-AcpApproval:
-  dialog_title:
-    en: ACP Permission
-    zh-CN: ACP 权限请求
-    zh-HK: ACP 權限請求
-  pending_count:
-    en: "%{count} more requests waiting"
-    zh-CN: "还有 %{count} 个请求等待处理"
-    zh-HK: "還有 %{count} 個請求等待處理"
 
 # 首页
 Home:
@@ -150,6 +147,192 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+
+  ConnectionImport:
+    scan:
+      en: Scan
+      zh-CN: 扫描
+      zh-HK: 掃描
+    save_selected:
+      en: Save Selected
+      zh-CN: 保存所选
+      zh-HK: 儲存所選項目
+    scanning:
+      en: Scanning
+      zh-CN: 正在扫描
+      zh-HK: 正在掃描
+    preview_results:
+      en: Preview Results
+      zh-CN: 预览结果
+      zh-HK: 預覽結果
+    savable_count:
+      en: "%{savable} / %{total} can be saved"
+      zh-CN: "可保存 %{savable} / %{total} 条"
+      zh-HK: "可儲存 %{savable} / %{total} 筆"
+    sources:
+      en: Application Sources
+      zh-CN: 应用来源
+      zh-HK: 應用程式來源
+    loading_extensions:
+      en: Loading import extensions
+      zh-CN: 正在加载导入扩展
+      zh-HK: 正在載入匯入擴充功能
+    scanning_selected_sources:
+      en: Scanning selected import sources
+      zh-CN: 正在扫描选中的导入来源
+      zh-HK: 正在掃描所選的匯入來源
+    select_sources_hint:
+      en: Select a source, then click Scan
+      zh-CN: 选择来源后点击扫描
+      zh-HK: 選擇來源後點擊掃描
+    choose_import_file:
+      en: Choose Import File
+      zh-CN: 选择导入文件
+      zh-HK: 選擇匯入檔案
+    available_count:
+      en: "%{count} available"
+      zh-CN: "可导入 %{count} 条"
+      zh-HK: "可匯入 %{count} 筆"
+    available:
+      en: Available
+      zh-CN: 可导入
+      zh-HK: 可匯入
+    installed:
+      en: Installed
+      zh-CN: 已安装
+      zh-HK: 已安裝
+    not_installed:
+      en: Not Installed
+      zh-CN: 未安装
+      zh-HK: 未安裝
+    no_data:
+      en: No Data Found
+      zh-CN: 未发现数据
+      zh-HK: 未發現資料
+    permission_required:
+      en: Permission Required
+      zh-CN: 需要授权
+      zh-HK: 需要授權
+    unsupported_platform:
+      en: Unsupported on This Platform
+      zh-CN: 当前平台不支持
+      zh-HK: 目前平台不支援
+    kind_database:
+      en: Database
+      zh-CN: 数据库
+      zh-HK: 資料庫
+    kind_unsupported:
+      en: Not Supported Yet
+      zh-CN: 暂不支持
+      zh-HK: 暫不支援
+    status_pending:
+      en: Pending
+      zh-CN: 待保存
+      zh-HK: 待儲存
+    status_saving:
+      en: Saving
+      zh-CN: 保存中
+      zh-HK: 儲存中
+    status_saved:
+      en: Saved
+      zh-CN: 已保存
+      zh-HK: 已儲存
+    status_failed:
+      en: "Failed: %{error}"
+      zh-CN: "失败：%{error}"
+      zh-HK: "失敗：%{error}"
+    status_duplicate:
+      en: "Skipped duplicate: %{name}"
+      zh-CN: "已跳过重复：%{name}"
+      zh-HK: "已略過重複項目：%{name}"
+    password_included:
+      en: Password imported
+      zh-CN: 密码已导入
+      zh-HK: 密碼已匯入
+    password_missing:
+      en: Password missing
+      zh-CN: 密码缺失
+      zh-HK: 缺少密碼
+    password_unsupported:
+      en: Password import unsupported
+      zh-CN: 密码不支持导入
+      zh-HK: 不支援匯入密碼
+    password_permission_denied:
+      en: Password import denied
+      zh-CN: 密码导入被拒绝
+      zh-HK: 密碼匯入遭拒絕
+    scan_task_failed:
+      en: "Import scan task failed: %{error}"
+      zh-CN: "导入扫描任务失败：%{error}"
+      zh-HK: "匯入掃描工作失敗：%{error}"
+    file_parse_task_failed:
+      en: "Import file parsing task failed: %{error}"
+      zh-CN: "导入文件解析任务失败：%{error}"
+      zh-HK: "匯入檔案解析工作失敗：%{error}"
+    no_importable_connections:
+      en: No importable connections were found
+      zh-CN: 未解析到可导入连接
+      zh-HK: 未解析到可匯入的連線
+    extension_directory_unavailable:
+      en: Extension directory is unavailable
+      zh-CN: 扩展目录不可用
+      zh-HK: 擴充功能目錄不可用
+    no_import_extensions:
+      en: No connection import extensions are installed
+      zh-CN: 未安装连接导入扩展
+      zh-HK: 尚未安裝連線匯入擴充功能
+    load_extensions_failed:
+      en: "Failed to load connection import extensions: %{error}"
+      zh-CN: "加载连接导入扩展失败：%{error}"
+      zh-HK: "載入連線匯入擴充功能失敗：%{error}"
+    repository_unavailable:
+      en: Connection repository is unavailable
+      zh-CN: 连接仓库不可用
+      zh-HK: 連線儲存庫不可用
+    port_forwarding_save_unsupported:
+      en: Saving imported port forwarding records is not supported yet
+      zh-CN: 暂不支持直接保存端口转发导入记录
+      zh-HK: 暫不支援直接儲存連接埠轉送匯入記錄
+    port_forwarding_duplicate_unsupported:
+      en: Duplicate detection for imported port forwarding records is not supported yet
+      zh-CN: 暂不支持端口转发导入记录重复检测
+      zh-HK: 暫不支援連接埠轉送匯入記錄的重複偵測
+    ssh_config_missing:
+      en: Imported SSH record is missing its SSH configuration
+      zh-CN: SSH 导入记录缺少 SSH 配置
+      zh-HK: SSH 匯入記錄缺少 SSH 設定
+    database_config_missing:
+      en: Imported database record is missing its database configuration
+      zh-CN: 数据库导入记录缺少数据库配置
+      zh-HK: 資料庫匯入記錄缺少資料庫設定
+    private_key_missing:
+      en: Imported SSH record is missing private key content
+      zh-CN: SSH 导入记录缺少私钥内容
+      zh-HK: SSH 匯入記錄缺少私密金鑰內容
+    field_connection_name:
+      en: Connection name
+      zh-CN: 连接名称
+      zh-HK: 連線名稱
+    field_host:
+      en: Host
+      zh-CN: 主机
+      zh-HK: 主機
+    field_required:
+      en: "%{field} is required"
+      zh-CN: "%{field}不能为空"
+      zh-HK: "%{field}不能為空"
+    invalid_port:
+      en: Port must be between 1 and 65535
+      zh-CN: 端口必须是 1-65535
+      zh-HK: 連接埠必須介於 1 到 65535
+    port_required:
+      en: Port is required
+      zh-CN: 端口不能为空
+      zh-HK: 連接埠不能為空
+    database_file_required:
+      en: Database file path is required
+      zh-CN: 数据库文件路径不能为空
+      zh-HK: 資料庫檔案路徑不能為空
   card_view:
     en: Card View
     zh-CN: 卡片视图
@@ -310,6 +493,10 @@ Home:
     en: Extensions
     zh-CN: 扩展
     zh-HK: 擴展
+  notes:
+    en: Notes
+    zh-CN: 笔记
+    zh-HK: 筆記
   edit_connection:
     en: Edit Connection
     zh-CN: 编辑连接
@@ -960,6 +1147,33 @@ Settings:
         zh-CN: AI 工作台
         zh-HK: AI 工作台
 
+    # 笔记设置
+    Notes:
+      group_title:
+        en: Notes
+        zh-CN: 笔记
+        zh-HK: 筆記
+      path:
+        en: Notes Location
+        zh-CN: 笔记路径
+        zh-HK: 筆記路徑
+      path_desc:
+        en: Choose the local folder used to store notes. Reopen Notes after changing it.
+        zh-CN: 选择用于保存笔记的本地目录。修改后重新打开笔记即可生效。
+        zh-HK: 選擇用於儲存筆記的本機目錄。修改後重新開啟筆記即可生效。
+      select_directory:
+        en: Choose
+        zh-CN: 选择目录
+        zh-HK: 選擇目錄
+      path_saved:
+        en: Notes location updated. Reopen Notes to apply it.
+        zh-CN: 笔记路径已更新，重新打开笔记后生效。
+        zh-HK: 筆記路徑已更新，重新開啟筆記後生效。
+      path_save_failed:
+        en: "Failed to update notes location: %{error}"
+        zh-CN: 更新笔记路径失败：%{error}
+        zh-HK: 更新筆記路徑失敗：%{error}
+
     # 外观设置
     Appearance:
       group_title:
@@ -1277,10 +1491,18 @@ Settings:
         en: MCP Tool Exposure
         zh-CN: MCP 工具暴露
         zh-HK: MCP 工具暴露
+      mcp_group_desc:
+        en: Changes restart the MCP endpoint. Reconnect existing MCP or ACP sessions to use the new tool set.
+        zh-CN: 修改后会重启 MCP 端点；已连接的 MCP 或 ACP 会话需要重新连接后才能使用新的工具集合。
+        zh-HK: 修改後會重新啟動 MCP 端點；已連線的 MCP 或 ACP 工作階段需要重新連線後才能使用新的工具集合。
       agent_group_title:
         en: Agent Tool Exposure
         zh-CN: Agent 工具暴露
         zh-HK: Agent 工具暴露
+      agent_group_desc:
+        en: Changes apply to already-open built-in Agent sessions starting with the next turn.
+        zh-CN: 修改会从下一轮对话开始实时应用到已经打开的内置 Agent 会话。
+        zh-HK: 修改會從下一輪對話開始即時套用到已經開啟的內建 Agent 工作階段。
       terminal:
         en: Terminal Tools
         zh-CN: 终端工具
@@ -1329,6 +1551,14 @@ Settings:
         en: Expose Redis inspection and command tools
         zh-CN: 暴露 Redis 查看和命令工具
         zh-HK: 暴露 Redis 查看和命令工具
+      mongo:
+        en: MongoDB Tools
+        zh-CN: MongoDB 工具
+        zh-HK: MongoDB 工具
+      mongo_desc:
+        en: Expose MongoDB database, collection, index, and document tools
+        zh-CN: 暴露 MongoDB 数据库、集合、索引和文档工具
+        zh-HK: 暴露 MongoDB 資料庫、集合、索引和文件工具
       database:
         en: Database Tools
         zh-CN: 数据库工具
@@ -1350,6 +1580,10 @@ Settings:
         en: MCP
         zh-CN: MCP
         zh-HK: MCP
+      group_desc:
+        en: Server and tool-set changes may restart the MCP endpoint. Reconnect existing external MCP or ACP sessions afterward.
+        zh-CN: Server 或工具集合变更可能会重启 MCP 端点；已有的外部 MCP 或 ACP 会话需要随后重新连接。
+        zh-HK: Server 或工具集合變更可能會重新啟動 MCP 端點；現有的外部 MCP 或 ACP 工作階段需要隨後重新連線。
       server_enabled:
         en: Enable MCP Server
         zh-CN: 启用 MCP Server
@@ -1406,6 +1640,10 @@ Settings:
         en: Allow
         zh-CN: 允许
         zh-HK: 允許
+      acp_permission_env_override:
+        en: "ACP tool permission is overridden by ONETCLI_PUBLIC_MCP_PERMISSION=%{mode}"
+        zh-CN: "ACP 工具权限已被环境变量 ONETCLI_PUBLIC_MCP_PERMISSION=%{mode} 覆盖"
+        zh-HK: "ACP 工具權限已被環境變量 ONETCLI_PUBLIC_MCP_PERMISSION=%{mode} 覆蓋"
       status:
         en: Runtime Status
         zh-CN: 运行状态
@@ -1434,70 +1672,22 @@ Settings:
         en: Install
         zh-CN: 安装
         zh-HK: 安裝
-      install_helper:
-        en: Install MCP Helper
-        zh-CN: 安装 MCP Helper
-        zh-HK: 安裝 MCP Helper
-      install_helper_desc:
-        en: Download the public MCP helper from the extension marketplace before writing client configs
-        zh-CN: 从扩展市场下载 Public MCP helper，然后再写入客户端配置
-        zh-HK: 從擴展市場下載 Public MCP helper，然後再寫入客戶端配置
-      install_helper_button:
-        en: Download
-        zh-CN: 下载
-        zh-HK: 下載
-      install_helper_started:
-        en: Installing MCP helper from extension marketplace...
-        zh-CN: 正在从扩展市场安装 MCP helper...
-        zh-HK: 正在從擴展市場安裝 MCP helper...
-      install_helper_already_running:
-        en: MCP helper installation is already running
-        zh-CN: MCP helper 正在安装中
-        zh-HK: MCP helper 正在安裝中
-      install_helper_success:
-        en: "MCP helper installed: %{path}"
-        zh-CN: "MCP helper 已安装：%{path}"
-        zh-HK: "MCP helper 已安裝：%{path}"
-      install_helper_failed:
-        en: "Failed to install MCP helper: %{error}"
-        zh-CN: "MCP helper 安装失败：%{error}"
-        zh-HK: "MCP helper 安裝失敗：%{error}"
-      helper_status_installed:
-        en: "Installed at %{path}"
-        zh-CN: "已安装：%{path}"
-        zh-HK: "已安裝：%{path}"
-      helper_status_missing:
-        en: "Expected at %{path}"
-        zh-CN: "预期路径：%{path}"
-        zh-HK: "預期路徑：%{path}"
-      helper_status_unusable:
-        en: "MCP helper is not executable: %{path}"
-        zh-CN: "MCP helper 不可执行：%{path}"
-        zh-HK: "MCP helper 不可執行：%{path}"
-      helper_status_installing:
-        en: Installing from extension marketplace...
-        zh-CN: 正在从扩展市场安装...
-        zh-HK: 正在從擴展市場安裝...
-      helper_status_connecting:
-        en: Connecting to download source...
-        zh-CN: 正在连接下载源...
-        zh-HK: 正在連接下載源...
-      helper_status_downloading:
-        en: "Downloading MCP helper %{percent}%"
-        zh-CN: "正在下载 MCP helper %{percent}%"
-        zh-HK: "正在下載 MCP helper %{percent}%"
-      helper_status_downloading_unknown:
-        en: Downloading MCP helper...
-        zh-CN: 正在下载 MCP helper...
-        zh-HK: 正在下載 MCP helper...
-      helper_status_retrying:
-        en: Download source failed, retrying...
-        zh-CN: 下载源失败，正在重试...
-        zh-HK: 下載源失敗，正在重試...
-      helper_status_installing_package:
-        en: Installing MCP helper...
-        zh-CN: 正在安装 MCP helper...
-        zh-HK: 正在安裝 MCP helper...
+      runtime_requirements:
+        en: Node.js and Navop CLI
+        zh-CN: Node.js 与 Navop CLI
+        zh-HK: Node.js 與 Navop CLI
+      runtime_requirements_desc:
+        en: Navop clients launch the exact recommended @navop/mcp version through npx; it is downloaded and cached by npm, not installed from the extension marketplace
+        zh-CN: Navop 客户端通过 npx 启动精确的推荐 @navop/mcp 版本，由 npm 下载并缓存，不再从扩展市场安装
+        zh-HK: Navop 客戶端透過 npx 啟動精確的建議 @navop/mcp 版本，由 npm 下載並快取，不再從擴充功能市集安裝
+      runtime_requirements_ready:
+        en: "%{package} will run on demand through %{path}; no global npm install is required"
+        zh-CN: "%{package} 将通过 %{path} 按需下载运行，无需全局 npm 安装"
+        zh-HK: "%{package} 將透過 %{path} 按需下載執行，無需全域 npm 安裝"
+      runtime_requirements_missing:
+        en: "Node.js/npx is unavailable: %{error}"
+        zh-CN: "Node.js/npx 不可用：%{error}"
+        zh-HK: "Node.js/npx 無法使用：%{error}"
       install_codex_config:
         en: Install Codex MCP Config
         zh-CN: 安装 Codex MCP 配置
@@ -1542,6 +1732,46 @@ Settings:
         en: "Failed to copy MCP config: %{error}"
         zh-CN: "MCP 配置复制失败：%{error}"
         zh-HK: "MCP 配置複製失敗：%{error}"
+      install_codex_skill:
+        en: Install Navop Skill for Codex
+        zh-CN: 为 Codex 安装 Navop Skill
+        zh-HK: 為 Codex 安裝 Navop Skill
+      install_agents_skill:
+        en: Install Navop Skill for Agents
+        zh-CN: 为 Agents 安装 Navop Skill
+        zh-HK: 為 Agents 安裝 Navop Skill
+      install_skill_desc:
+        en: Install the Skill from the exact recommended npm package into the user skill directory; npm downloads it on demand and Navop does not use a shell
+        zh-CN: 从精确推荐版本的 npm 包安装到用户 Skill 目录；npm 按需下载，Navop 不通过 shell 执行
+        zh-HK: 從精確建議版本的 npm 套件安裝到使用者 Skill 目錄；npm 按需下載，Navop 不透過 shell 執行
+      skill_status_installed:
+        en: "Installed at %{path}; use Update to explicitly replace it with the recommended package copy"
+        zh-CN: "已安装到 %{path}；点击更新才会明确替换为推荐 npm 包中的版本"
+        zh-HK: "已安裝到 %{path}；點擊更新才會明確替換為建議 npm 套件中的版本"
+      skill_status_not_installed:
+        en: "Not installed; target path: %{path}"
+        zh-CN: "未安装；目标路径：%{path}"
+        zh-HK: "未安裝；目標路徑：%{path}"
+      skill_status_home_unavailable:
+        en: User home directory is unavailable
+        zh-CN: 无法确定用户主目录
+        zh-HK: 無法確定使用者主目錄
+      install_skill:
+        en: Install
+        zh-CN: 安装
+        zh-HK: 安裝
+      update_skill:
+        en: Update
+        zh-CN: 更新
+        zh-HK: 更新
+      install_skill_success:
+        en: Navop Skill installed successfully
+        zh-CN: Navop Skill 安装成功
+        zh-HK: Navop Skill 安裝成功
+      install_skill_failed:
+        en: "Failed to install Navop Skill: %{error}"
+        zh-CN: "Navop Skill 安装失败：%{error}"
+        zh-HK: "Navop Skill 安裝失敗：%{error}"
       install_client_config_success:
         en: "MCP client config installed: %{path}"
         zh-CN: "MCP 客户端配置已安装：%{path}"
@@ -1563,25 +1793,41 @@ Settings:
         zh-CN: "MCP 客户端配置卸载失败：%{error}"
         zh-HK: "MCP 客戶端配置卸載失敗：%{error}"
       client_config_status_up_to_date:
-        en: Up to date
-        zh-CN: 已是最新
-        zh-HK: 已是最新
+        en: "Up to date: %{package}"
+        zh-CN: "已是最新：%{package}"
+        zh-HK: "已是最新：%{package}"
       client_config_status_not_installed:
         en: Not installed
         zh-CN: 未安装
         zh-HK: 未安裝
       client_config_status_needs_repair:
-        en: Needs repair
-        zh-CN: 需要修复
-        zh-HK: 需要修復
-      client_config_status_missing_helper:
-        en: MCP helper not installed
-        zh-CN: MCP helper 未安装
-        zh-HK: MCP helper 未安裝
-      client_config_status_unusable_helper:
-        en: MCP helper is not executable
-        zh-CN: MCP helper 不可执行
-        zh-HK: MCP helper 不可執行
+        en: Managed entry is malformed or differs from the recommended command
+        zh-CN: 托管配置格式损坏或命令与推荐配置不一致
+        zh-HK: 託管配置格式損壞或命令與建議配置不一致
+      client_config_status_needs_migration:
+        en: Legacy onetcli/Rust helper config detected; migrate it to the Navop npm launcher
+        zh-CN: 检测到旧 onetcli/Rust helper 配置，需要迁移到 Navop npm 启动方式
+        zh-HK: 偵測到舊 onetcli/Rust helper 配置，需要遷移到 Navop npm 啟動方式
+      client_config_status_package_outdated:
+        en: "Package version is outdated; update the managed entry to %{package}"
+        zh-CN: "npm 包版本已过期，请将托管配置更新为 %{package}"
+        zh-HK: "npm 套件版本已過期，請將託管配置更新為 %{package}"
+      client_config_status_node_unavailable:
+        en: Node.js is unavailable; install Node.js 20 or newer and restart Navop
+        zh-CN: Node.js 不可用；请安装 Node.js 20 或更高版本并重启 Navop
+        zh-HK: Node.js 無法使用；請安裝 Node.js 20 或更高版本並重新啟動 Navop
+      client_config_status_npx_unavailable:
+        en: npx is unavailable; install an npm distribution that includes npx and restart Navop
+        zh-CN: npx 不可用；请安装包含 npx 的 npm 发行版并重启 Navop
+        zh-HK: npx 無法使用；請安裝包含 npx 的 npm 發行版並重新啟動 Navop
+      client_config_status_legacy_helper_missing:
+        en: Legacy bundled helper is missing; install the npm-based config to migrate
+        zh-CN: 旧版内置 helper 已缺失；请安装 npm 配置完成迁移
+        zh-HK: 舊版內建 helper 已缺失；請安裝 npm 配置完成遷移
+      client_config_status_legacy_helper_unusable:
+        en: Legacy bundled helper is unusable; replace it with the npm-based config
+        zh-CN: 旧版内置 helper 已不可用；请替换为 npm 配置
+        zh-HK: 舊版內建 helper 已無法使用；請替換為 npm 配置
     Log:
       group_title:
         en: Log
@@ -1871,6 +2117,146 @@ Settings:
       en: Redis CLI
       zh-CN: Redis CLI
       zh-HK: Redis CLI
+    notes_editor:
+      en: Notes Editor
+      zh-CN: 笔记编辑器
+      zh-HK: 筆記編輯器
+    notes_undo:
+      en: Undo
+      zh-CN: 撤销
+      zh-HK: 復原
+    notes_redo:
+      en: Redo
+      zh-CN: 重做
+      zh-HK: 重做
+    notes_select_all:
+      en: Select All
+      zh-CN: 全选
+      zh-HK: 全選
+    notes_delete_selection:
+      en: Delete Selection
+      zh-CN: 删除选中内容
+      zh-HK: 刪除選取內容
+    notes_bold:
+      en: Toggle Bold
+      zh-CN: 切换粗体
+      zh-HK: 切換粗體
+    notes_italic:
+      en: Toggle Italic
+      zh-CN: 切换斜体
+      zh-HK: 切換斜體
+    notes_underline:
+      en: Toggle Underline
+      zh-CN: 切换下划线
+      zh-HK: 切換底線
+    notes_strike:
+      en: Toggle Strikethrough
+      zh-CN: 切换删除线
+      zh-HK: 切換刪除線
+    notes_inline_code:
+      en: Toggle Inline Code
+      zh-CN: 切换行内代码
+      zh-HK: 切換行內程式碼
+    notes_paragraph:
+      en: Paragraph
+      zh-CN: 正文段落
+      zh-HK: 正文段落
+    notes_heading_1:
+      en: Heading 1
+      zh-CN: 一级标题
+      zh-HK: 一級標題
+    notes_heading_2:
+      en: Heading 2
+      zh-CN: 二级标题
+      zh-HK: 二級標題
+    notes_heading_3:
+      en: Heading 3
+      zh-CN: 三级标题
+      zh-HK: 三級標題
+    notes_heading_4:
+      en: Heading 4
+      zh-CN: 四级标题
+      zh-HK: 四級標題
+    notes_heading_5:
+      en: Heading 5
+      zh-CN: 五级标题
+      zh-HK: 五級標題
+    notes_heading_6:
+      en: Heading 6
+      zh-CN: 六级标题
+      zh-HK: 六級標題
+    notes_bullet_list:
+      en: Toggle Bullet List
+      zh-CN: 切换项目符号列表
+      zh-HK: 切換項目符號清單
+    notes_ordered_list:
+      en: Toggle Ordered List
+      zh-CN: 切换有序列表
+      zh-HK: 切換有序清單
+    notes_task_list:
+      en: Toggle Task List
+      zh-CN: 切换待办列表
+      zh-HK: 切換待辦清單
+    notes_quote:
+      en: Toggle Quote
+      zh-CN: 切换引用块
+      zh-HK: 切換引用區塊
+    notes_callout:
+      en: Toggle Callout
+      zh-CN: 切换提示块
+      zh-HK: 切換提示區塊
+    notes_toggle:
+      en: Toggle Collapsible Block
+      zh-CN: 切换折叠块
+      zh-HK: 切換摺疊區塊
+    notes_code_block:
+      en: Toggle Code Block
+      zh-CN: 切换代码块
+      zh-HK: 切換程式碼區塊
+    notes_math_block:
+      en: Toggle Math Block
+      zh-CN: 切换公式块
+      zh-HK: 切換公式區塊
+    notes_mermaid:
+      en: Toggle Mermaid Block
+      zh-CN: 切换 Mermaid 块
+      zh-HK: 切換 Mermaid 區塊
+    notes_todo_checked:
+      en: Toggle Task Checked
+      zh-CN: 切换待办完成状态
+      zh-HK: 切換待辦完成狀態
+    notes_insert_below:
+      en: Insert Paragraph Below
+      zh-CN: 在下方插入段落
+      zh-HK: 在下方插入段落
+    notes_indent:
+      en: Indent Block
+      zh-CN: 增加块缩进
+      zh-HK: 增加區塊縮排
+    notes_outdent:
+      en: Outdent Block
+      zh-CN: 减少块缩进
+      zh-HK: 減少區塊縮排
+    notes_delete_block:
+      en: Delete Current Block
+      zh-CN: 删除当前块
+      zh-HK: 刪除目前區塊
+    notes_delete_blocks:
+      en: Delete Selected Blocks
+      zh-CN: 删除选中的块
+      zh-HK: 刪除選取的區塊
+    notes_duplicate_blocks:
+      en: Duplicate Selected Blocks
+      zh-CN: 复制选中的块
+      zh-HK: 複製選取的區塊
+    notes_fold_heading:
+      en: Fold Heading
+      zh-CN: 折叠标题
+      zh-HK: 摺疊標題
+    notes_unfold_heading:
+      en: Unfold Heading
+      zh-CN: 展开标题
+      zh-HK: 展開標題
     minimize_window:
       en: Minimize / Activate Window
       zh-CN: 最小化 / 激活窗口

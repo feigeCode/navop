@@ -1,6 +1,8 @@
 mod config;
 mod connection_sessions;
+mod diagnostics;
 mod internal_functions;
+mod mongo;
 mod redis;
 mod resource_pool;
 mod session;
@@ -14,15 +16,18 @@ pub use config::{PublicMcpEnvOverride, PublicMcpStartConfig};
 pub use session::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
 pub use status::PublicMcpRuntimeStatus;
 
+use agent_runtime::ToolExecutionMode;
 use gpui::{App, AsyncApp, Global, Subscription};
 use one_core::gpui_tokio::Tokio;
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, McpPermissionMode};
 use public_mcp::approval::PublicMcpApprovalManager;
 use public_mcp::discovery::{
-    public_mcp_discovery_path, read_discovery, remove_discovery, write_discovery,
+    legacy_public_mcp_discovery_path, public_mcp_discovery_path, read_discovery, remove_discovery,
+    write_discovery,
 };
 use public_mcp::runtime::PublicMcpRuntime;
 use public_mcp::tools::InternalFunctionDefinition;
+use rust_i18n::t;
 use std::path::PathBuf;
 use tool_registry::{build_agent_tool_registry, build_tool_registry};
 
@@ -41,6 +46,7 @@ impl Drop for GlobalPublicMcpRuntime {
     fn drop(&mut self) {
         if self.runtime.is_some() {
             let _ = remove_discovery(&public_mcp_discovery_path());
+            let _ = remove_discovery(&legacy_public_mcp_discovery_path());
             tracing::debug!("Public MCP runtime stopped");
         }
     }
@@ -49,7 +55,36 @@ impl Drop for GlobalPublicMcpRuntime {
 pub fn init(cx: &mut App) {
     let discovery_path = public_mcp_discovery_path();
     let _ = remove_discovery(&discovery_path);
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
     ai_chat_view::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
+    ai_chat_view::set_acp_tool_mode_provider(
+        cx,
+        |cx| {
+            let settings = AppSettings::current(cx);
+            let config = PublicMcpStartConfig::from_settings_session_and_env(
+                &settings,
+                session::runtime_session_enabled(cx),
+                PublicMcpEnvOverride::from_env(),
+            );
+            Some(tool_execution_mode_for_permission(config.permission_mode))
+        },
+        |cx, mode| {
+            if let Some(override_mode) = PublicMcpEnvOverride::from_env().permission_mode {
+                anyhow::bail!(
+                    "{}",
+                    t!(
+                        "Settings.General.Mcp.acp_permission_env_override",
+                        mode = format!("{override_mode:?}")
+                    )
+                );
+            }
+            let permission_mode = mcp_permission_mode_for_tool_execution(mode);
+            AppSettings::update_and_save(cx, |settings| {
+                settings.mcp.permission_mode = permission_mode;
+            });
+            Ok(())
+        },
+    );
     internal_functions::ensure_registry(cx);
     for definition in internal_functions::builtin_definitions() {
         register_internal_function(cx, definition);
@@ -64,6 +99,24 @@ pub fn init(cx: &mut App) {
         _settings_subscription: settings_subscription,
     });
     reconcile_runtime(cx);
+}
+
+fn tool_execution_mode_for_permission(
+    mode: public_mcp::permissions::PermissionMode,
+) -> ToolExecutionMode {
+    match mode {
+        public_mcp::permissions::PermissionMode::Deny => ToolExecutionMode::ReadOnly,
+        public_mcp::permissions::PermissionMode::Ask => ToolExecutionMode::Manual,
+        public_mcp::permissions::PermissionMode::Allow => ToolExecutionMode::Auto,
+    }
+}
+
+fn mcp_permission_mode_for_tool_execution(mode: ToolExecutionMode) -> McpPermissionMode {
+    match mode {
+        ToolExecutionMode::ReadOnly => McpPermissionMode::Deny,
+        ToolExecutionMode::Manual => McpPermissionMode::Ask,
+        ToolExecutionMode::Auto => McpPermissionMode::Allow,
+    }
 }
 
 pub fn runtime_status(cx: &App) -> PublicMcpRuntimeStatus {
@@ -260,6 +313,7 @@ fn next_generation(cx: &mut App) -> u64 {
     state.active_config = None;
     state.status = state.status.clone().starting(state.generation);
     let _ = remove_discovery(&public_mcp_discovery_path());
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
     state.generation
 }
 
@@ -307,11 +361,25 @@ fn stop_runtime(cx: &mut App) {
     state.active_config = None;
     state.status = state.status.clone().disabled();
     let _ = remove_discovery(&public_mcp_discovery_path());
+    let _ = remove_discovery(&legacy_public_mcp_discovery_path());
 }
 
 fn publish_runtime_discovery(runtime: &PublicMcpRuntime) -> anyhow::Result<()> {
-    let document = read_discovery(runtime.discovery_path())?;
-    write_discovery(&public_mcp_discovery_path(), &document)?;
+    publish_discovery_documents(
+        runtime.discovery_path(),
+        &public_mcp_discovery_path(),
+        &legacy_public_mcp_discovery_path(),
+    )
+}
+
+fn publish_discovery_documents(
+    source: &std::path::Path,
+    canonical: &std::path::Path,
+    legacy: &std::path::Path,
+) -> anyhow::Result<()> {
+    let document = read_discovery(source)?;
+    write_discovery(canonical, &document)?;
+    write_discovery(legacy, &document.legacy_compatible())?;
     Ok(())
 }
 
@@ -322,10 +390,15 @@ fn staged_discovery_path(generation: u64) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalPublicMcpRuntime, PublicMcpRuntimeStatus, next_generation, staged_discovery_path,
+        GlobalPublicMcpRuntime, PublicMcpRuntimeStatus, mcp_permission_mode_for_tool_execution,
+        next_generation, publish_discovery_documents, staged_discovery_path,
+        tool_execution_mode_for_permission,
     };
+    use agent_runtime::ToolExecutionMode;
     use gpui::{Subscription, TestAppContext};
+    use one_core::settings::McpPermissionMode;
     use public_mcp::discovery::public_mcp_discovery_path;
+    use public_mcp::permissions::PermissionMode;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -339,6 +412,64 @@ mod tests {
         assert_eq!(
             Some("public-mcp-42.staging.json"),
             staged.file_name().and_then(|name| name.to_str())
+        );
+    }
+
+    #[test]
+    fn publishing_discovery_keeps_legacy_installed_helpers_working() {
+        use public_mcp::discovery::{
+            DiscoveryDocument, PublicMcpMode, read_discovery, write_discovery,
+        };
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("staged.json");
+        let canonical = dir.path().join("navop/public-mcp.json");
+        let legacy = dir.path().join("onetcli/public-mcp.json");
+        let document = DiscoveryDocument::new(
+            1,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 49152),
+            "a".repeat(64),
+            PublicMcpMode::Persistent,
+        );
+        write_discovery(&source, &document).unwrap();
+
+        publish_discovery_documents(&source, &canonical, &legacy).unwrap();
+
+        let current = read_discovery(&canonical).unwrap();
+        let old = read_discovery(&legacy).unwrap();
+        assert_eq!("navop", current.app);
+        assert_eq!("onetcli", old.app);
+        assert_eq!(current.port, old.port);
+        assert_eq!(current.token, old.token);
+    }
+
+    #[test]
+    fn acp_tool_modes_round_trip_to_mcp_permission_profiles() {
+        assert_eq!(
+            ToolExecutionMode::ReadOnly,
+            tool_execution_mode_for_permission(PermissionMode::Deny)
+        );
+        assert_eq!(
+            ToolExecutionMode::Manual,
+            tool_execution_mode_for_permission(PermissionMode::Ask)
+        );
+        assert_eq!(
+            ToolExecutionMode::Auto,
+            tool_execution_mode_for_permission(PermissionMode::Allow)
+        );
+
+        assert_eq!(
+            McpPermissionMode::Deny,
+            mcp_permission_mode_for_tool_execution(ToolExecutionMode::ReadOnly)
+        );
+        assert_eq!(
+            McpPermissionMode::Ask,
+            mcp_permission_mode_for_tool_execution(ToolExecutionMode::Manual)
+        );
+        assert_eq!(
+            McpPermissionMode::Allow,
+            mcp_permission_mode_for_tool_execution(ToolExecutionMode::Auto)
         );
     }
 

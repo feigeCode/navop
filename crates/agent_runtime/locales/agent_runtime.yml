@@ -1,0 +1,111 @@
+_version: 2
+
+AgentRuntime:
+  ask_mode_tools_unsupported:
+    en: Ask mode cannot call tools. Switch to Agent or Plan mode to use tools.
+    zh-CN: Ask 模式不支持工具调用，请切换到 Agent 或 Plan 模式后再使用工具。
+    zh-HK: Ask 模式不支援工具呼叫，請切換到 Agent 或 Plan 模式後再使用工具。
+  confirm_tool:
+    en: "Run tool `%{tool}`?"
+    zh-CN: "确认执行工具 `%{tool}` 吗？"
+    zh-HK: "確認執行工具 `%{tool}` 嗎？"
+  confirm_tools:
+    en: "Run %{count} tools?"
+    zh-CN: "确认执行 %{count} 个工具吗？"
+    zh-HK: "確認執行 %{count} 個工具嗎？"
+  context_compaction_complete:
+    en: Context compression complete
+    zh-CN: 上下文压缩完成
+    zh-HK: 上下文壓縮完成
+  context_compaction_failed:
+    en: "Context compression failed: %{error}"
+    zh-CN: "上下文压缩失败：%{error}"
+    zh-HK: "上下文壓縮失敗：%{error}"
+  context_compaction_running:
+    en: Compressing context...
+    zh-CN: 正在压缩上下文...
+    zh-HK: 正在壓縮上下文...
+  delegate_invalid_arguments:
+    en: "Invalid delegate_task arguments: %{error}"
+    zh-CN: "delegate_task 参数无效：%{error}"
+    zh-HK: "delegate_task 參數無效：%{error}"
+  delegate_name_required:
+    en: delegate_task.name cannot be empty
+    zh-CN: delegate_task.name 不能为空
+    zh-HK: delegate_task.name 不可為空
+  delegate_task_required:
+    en: delegate_task.task cannot be empty
+    zh-CN: delegate_task.task 不能为空
+    zh-HK: delegate_task.task 不可為空
+  max_iterations_exceeded:
+    en: "The turn did not complete after the maximum of %{count} iterations"
+    zh-CN: "超过单轮最大迭代次数（%{count}）仍未完成"
+    zh-HK: "超過單輪最大迭代次數（%{count}）仍未完成"
+  model_call_failed:
+    en: "Model call failed: %{error}"
+    zh-CN: "模型调用失败：%{error}"
+    zh-HK: "模型呼叫失敗：%{error}"
+  model_stream_failed:
+    en: "Model streaming failed: %{error}"
+    zh-CN: "模型流式输出失败：%{error}"
+    zh-HK: "模型串流輸出失敗：%{error}"
+  no_available_tools:
+    en: none
+    zh-CN: 无
+    zh-HK: 無
+  no_pending_tool:
+    en: There is no tool call awaiting approval
+    zh-CN: 没有待审批的工具调用
+    zh-HK: 沒有待審批的工具呼叫
+  plan_update_failed:
+    en: Could not parse update_plan arguments
+    zh-CN: update_plan 参数解析失败
+    zh-HK: update_plan 參數解析失敗
+  plan_updated:
+    en: "Task list updated (%{count} steps)"
+    zh-CN: "已更新任务清单（共 %{count} 步）"
+    zh-HK: "已更新工作清單（共 %{count} 步）"
+  rejected_tool:
+    en: "The user rejected tool `%{tool}`."
+    zh-CN: "用户拒绝执行工具 `%{tool}`。"
+    zh-HK: "使用者拒絕執行工具 `%{tool}`。"
+  subagent_cancelled:
+    en: Subagent task cancelled
+    zh-CN: 子代理任务已取消
+    zh-HK: 子代理工作已取消
+  subagent_complete:
+    en: "Subagent %{name} completed"
+    zh-CN: "子代理 %{name} 完成"
+    zh-HK: "子代理 %{name} 完成"
+  subagent_empty_response:
+    en: The subagent completed without returning text.
+    zh-CN: 子代理完成，但没有返回文本。
+    zh-HK: 子代理完成，但沒有傳回文字。
+  subagent_max_iterations_exceeded:
+    en: "The subagent did not complete after the maximum of %{count} tool iterations"
+    zh-CN: "子代理超过最大工具迭代次数（%{count}）仍未完成"
+    zh-HK: "子代理超過最大工具迭代次數（%{count}）仍未完成"
+  subagent_model_failed:
+    en: "Subagent model call failed: %{error}"
+    zh-CN: "子代理模型调用失败：%{error}"
+    zh-HK: "子代理模型呼叫失敗：%{error}"
+  subagent_stream_failed:
+    en: "Subagent streaming failed: %{error}"
+    zh-CN: "子代理流式输出失败：%{error}"
+    zh-HK: "子代理串流輸出失敗：%{error}"
+  subagent_tool_invalid_arguments:
+    en: "Invalid tool arguments: %{error}"
+    zh-CN: "工具参数无效：%{error}"
+    zh-HK: "工具參數無效：%{error}"
+  subagent_tool_unavailable:
+    en: "Subagent tool unavailable. Available tools: %{tools}"
+    zh-CN: "子代理工具不可用；可用工具：%{tools}"
+    zh-HK: "子代理工具不可用；可用工具：%{tools}"
+  tool_approval_mismatch:
+    en: "The pending tool call does not match %{call_id}"
+    zh-CN: "待审批工具调用与 %{call_id} 不匹配"
+    zh-HK: "待審批工具呼叫與 %{call_id} 不相符"
+  unavailable_tool:
+    en: "The model requested unregistered tool `%{tool}`. Available tools: %{available}. Do not call the generic pseudo-tool `tool`; use an available tool name and provide arguments as a valid JSON object."
+    zh-CN: "模型请求了未注册工具 `%{tool}`。可用工具：%{available}。不要调用名为 `tool` 的通用伪工具；请改用可用工具名，且 arguments 必须是合法 JSON object。"
+    zh-HK: "模型請求了未註冊工具 `%{tool}`。可用工具：%{available}。不要呼叫名為 `tool` 的通用偽工具；請改用可用工具名稱，且 arguments 必須是合法 JSON object。"

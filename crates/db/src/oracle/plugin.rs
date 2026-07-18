@@ -1417,18 +1417,19 @@ impl DatabasePlugin for OraclePlugin {
         }
 
         let columns = vec![
-            Column::new("name", "Schema").width(180.0),
-            Column::new("created", "Created").width(180.0),
-            Column::new("tablespace", "Tablespace").width(150.0),
-            Column::new("temp_tablespace", "Temp Tablespace").width(150.0),
-            Column::new("status", "Status").width(100.0),
+            Column::localized("name", "ObjectView.columns.schema").width(180.0),
+            Column::localized("created", "ObjectView.columns.created").width(180.0),
+            Column::localized("tablespace", "ObjectView.columns.tablespace").width(150.0),
+            Column::localized("temp_tablespace", "ObjectView.columns.temporary_tablespace")
+                .width(150.0),
+            Column::localized("status", "ObjectView.columns.status").width(100.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Schema,
-            title: "Schemas".to_string(),
+            title: t!("ObjectView.titles.schemas").to_string(),
         })
     }
 
@@ -1535,24 +1536,24 @@ impl DatabasePlugin for OraclePlugin {
             };
 
             let columns = vec![
-                Column::new("name", "Name").width(200.0),
-                Column::new("comment", "Comment").width(300.0),
-                Column::new("rows", "Rows").width(100.0),
-                Column::new("analyzed", "Last Analyzed").width(180.0),
+                Column::localized("name", "ObjectView.columns.name").width(200.0),
+                Column::localized("comment", "ObjectView.columns.comment").width(300.0),
+                Column::localized("rows", "ObjectView.columns.rows").width(100.0),
+                Column::localized("analyzed", "ObjectView.columns.last_analyzed").width(180.0),
             ];
 
             return Ok(ObjectView {
                 columns,
                 rows,
                 db_node_type: DbNodeType::Table,
-                title: "Tables".to_string(),
+                title: t!("ObjectView.titles.tables").to_string(),
             });
         }
         Ok(ObjectView {
             columns: vec![],
             rows: vec![],
             db_node_type: DbNodeType::Table,
-            title: "Tables".to_string(),
+            title: t!("ObjectView.titles.tables").to_string(),
         })
     }
 
@@ -1659,19 +1660,19 @@ impl DatabasePlugin for OraclePlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("nullable", "Nullable").width(60.0),
-            Column::new("pk", "PK").width(50.0),
-            Column::new("default", "Default").width(120.0),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(60.0),
+            Column::localized("pk", "ObjectView.columns.primary_key").width(50.0),
+            Column::localized("default", "ObjectView.columns.default").width(120.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Column,
-            title: format!("Columns - {}", table),
+            title: t!("ObjectView.named.columns", table = table).to_string(),
         })
     }
 
@@ -1766,17 +1767,17 @@ impl DatabasePlugin for OraclePlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("unique", "Unique").width(80.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Index,
-            title: format!("Indexes - {}", table),
+            title: t!("ObjectView.named.indexes", table = table).to_string(),
         })
     }
 
@@ -1862,15 +1863,15 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(250.0),
-            Column::new("comment", "Comment").width(400.0),
+            Column::localized("name", "ObjectView.columns.name").width(250.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(400.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::View,
-            title: "Views".to_string(),
+            title: t!("ObjectView.titles.views").to_string(),
         })
     }
 
@@ -1961,17 +1962,17 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(250.0),
-            Column::new("status", "Status").width(100.0),
-            Column::new("created", "Created").width(180.0),
-            Column::new("modified", "Modified").width(180.0),
+            Column::localized("name", "ObjectView.columns.name").width(250.0),
+            Column::localized("status", "ObjectView.columns.status").width(100.0),
+            Column::localized("created", "ObjectView.columns.created").width(180.0),
+            Column::localized("modified", "ObjectView.columns.modified").width(180.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Function,
-            title: "Functions".to_string(),
+            title: t!("ObjectView.titles.functions").to_string(),
         })
     }
 
@@ -2061,17 +2062,17 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(250.0),
-            Column::new("status", "Status").width(100.0),
-            Column::new("created", "Created").width(180.0),
-            Column::new("modified", "Modified").width(180.0),
+            Column::localized("name", "ObjectView.columns.name").width(250.0),
+            Column::localized("status", "ObjectView.columns.status").width(100.0),
+            Column::localized("created", "ObjectView.columns.created").width(180.0),
+            Column::localized("modified", "ObjectView.columns.modified").width(180.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Procedure,
-            title: "Procedures".to_string(),
+            title: t!("ObjectView.titles.procedures").to_string(),
         })
     }
 
@@ -2168,18 +2169,18 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("table", "Table").width(150.0),
-            Column::new("event", "Event").width(150.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("status", "Status").width(100.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("table", "ObjectView.columns.table").width(150.0),
+            Column::localized("event", "ObjectView.columns.event").width(150.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("status", "ObjectView.columns.status").width(100.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Trigger,
-            title: "Triggers".to_string(),
+            title: t!("ObjectView.titles.triggers").to_string(),
         })
     }
 
@@ -2299,20 +2300,20 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("min", "Min").width(100.0),
-            Column::new("max", "Max").width(100.0),
-            Column::new("increment", "Increment").width(100.0),
-            Column::new("last", "Last Value").width(100.0),
-            Column::new("cache", "Cache").width(80.0),
-            Column::new("cycle", "Cycle").width(60.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("min", "ObjectView.columns.minimum").width(100.0),
+            Column::localized("max", "ObjectView.columns.maximum").width(100.0),
+            Column::localized("increment", "ObjectView.columns.increment").width(100.0),
+            Column::localized("last", "ObjectView.columns.last_value").width(100.0),
+            Column::localized("cache", "ObjectView.columns.cache").width(80.0),
+            Column::localized("cycle", "ObjectView.columns.cycle").width(60.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Sequence,
-            title: "Sequences".to_string(),
+            title: t!("ObjectView.titles.sequences").to_string(),
         })
     }
 

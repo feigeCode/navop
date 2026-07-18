@@ -1,4 +1,4 @@
-use crate::{CHAT_TAB_CONTENT_KEY, CHAT_TASK_SIDEBAR_TITLE, ChatTabContent};
+use crate::{CHAT_TAB_CONTENT_KEY, ChatTabContent, chat_task_sidebar_title};
 use one_core::tab_container::TabContent;
 
 fn assert_tab_content<T: TabContent>() {}
@@ -11,5 +11,5 @@ fn chat_tab_content_is_a_tab_container_content() {
 
 #[test]
 fn chat_sidebar_uses_task_language() {
-    assert_eq!("历史任务", CHAT_TASK_SIDEBAR_TITLE);
+    assert_eq!("History", chat_task_sidebar_title());
 }

@@ -9,11 +9,14 @@ use agent_runtime::{
     StepStatus, ToolObservation,
     ids::{ToolCallId, TurnId},
 };
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 
+use crate::acp::{AcpPermissionOption, AcpPermissionRequest, AcpPublicMcpApprovalRequest};
 use crate::agent_cards::{
-    PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
-    ToolCardData, ToolConfirmCardData, ToolConfirmItemData,
+    ACP_PERMISSION_CARD, AcpPermissionCardData, AcpPermissionOptionData, PlanCardData,
+    PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData,
+    ToolConfirmCardData, ToolConfirmItemData,
 };
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
@@ -53,6 +56,8 @@ pub struct AgentTranscript {
     active_subagents: Vec<SubAgentCardData>,
     /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
     resource_labels: HashMap<String, String>,
+    /// 当前会话工具调用的原始入参；用于把精简 ACP permission 与实际 MCP 调用精确关联。
+    tool_inputs: HashMap<String, serde_json::Value>,
     /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
     terminal_events: HashSet<TerminalEventKey>,
 }
@@ -79,6 +84,7 @@ impl AgentTranscript {
         self.acp_status_id = None;
         self.latest_plan = None;
         self.active_subagents.clear();
+        self.tool_inputs.clear();
         self.terminal_events.clear();
     }
 
@@ -96,6 +102,85 @@ impl AgentTranscript {
     pub fn has_pending_tool_confirm(&self, call_id: &str) -> bool {
         self.find_confirm_card(call_id)
             .is_some_and(|data| data.status == "pending")
+    }
+
+    /// 是否存在等待用户处理的 ACP 权限请求。
+    pub fn has_pending_acp_permission(&self, request_id: &str) -> bool {
+        self.find_acp_permission_card(request_id)
+            .is_some_and(|data| data.status == "pending")
+    }
+
+    /// 把当前 ACP 连接收到的权限请求追加到消息流。
+    pub(crate) fn push_acp_permission(
+        &mut self,
+        request: &AcpPermissionRequest,
+        requires_safety_confirmation: bool,
+    ) {
+        if self.has_pending_acp_permission(&request.request_id) {
+            return;
+        }
+        self.finish_active_status();
+        self.close_streaming_segment();
+        let summary = if requires_safety_confirmation {
+            t!(
+                "AgentUi.acp_safety_confirmation_notice",
+                summary = request.summary
+            )
+            .to_string()
+        } else {
+            request.summary.clone()
+        };
+        let data = AcpPermissionCardData {
+            request_id: request.request_id.clone(),
+            session_id: request.session_id.clone(),
+            tool_call_id: request.tool_call_id.clone(),
+            tool_name: request.tool_name.clone(),
+            summary,
+            details_json: serde_json::to_string_pretty(&request.details)
+                .unwrap_or_else(|_| request.details.to_string()),
+            options: request
+                .options
+                .iter()
+                .map(|option| AcpPermissionOptionData {
+                    option_id: option.option_id.clone(),
+                    name: option.name.clone(),
+                    kind: option.kind.clone(),
+                })
+                .collect(),
+            status: "pending".into(),
+            selected_option_name: String::new(),
+        };
+        self.messages
+            .push(ChatMessageUI::card(ACP_PERMISSION_CARD, data.to_json()));
+    }
+
+    /// 将 ACP 权限卡更新为用户已经选择的终态。
+    pub(crate) fn resolve_acp_permission(
+        &mut self,
+        request_id: &str,
+        option: &AcpPermissionOption,
+    ) {
+        let Some(mut data) = self.find_acp_permission_card(request_id) else {
+            return;
+        };
+        data.status = if option.kind.starts_with("reject") {
+            "rejected"
+        } else {
+            "approved"
+        }
+        .into();
+        data.selected_option_name = option.name.clone();
+        self.replace_acp_permission_card(request_id, data);
+    }
+
+    /// 将未决 ACP 权限卡更新为取消态。
+    pub(crate) fn cancel_acp_permission(&mut self, request_id: &str) {
+        let Some(mut data) = self.find_acp_permission_card(request_id) else {
+            return;
+        };
+        data.status = "cancelled".into();
+        data.selected_option_name.clear();
+        self.replace_acp_permission_card(request_id, data);
     }
 
     /// 用持久化的历史条目重建转录(切换 / 恢复会话时调用)。
@@ -120,9 +205,14 @@ impl AgentTranscript {
                 HistoryItem::ContextSummary {
                     text,
                     original_items,
-                } => self.push_system(format!(
-                    "上下文摘要（压缩 {original_items} 条历史）:\n{text}"
-                )),
+                } => self.push_system(
+                    t!(
+                        "AgentUi.context_summary",
+                        count = original_items,
+                        text = text
+                    )
+                    .to_string(),
+                ),
                 HistoryItem::ToolCall(call) => {
                     if !self.push_delegate_task_from_history(call) {
                         self.push_tool_call(
@@ -153,7 +243,12 @@ impl AgentTranscript {
     /// 追加用户消息(提交时由视图调用;`image_count` 用于提示附带图片)。
     pub fn push_user(&mut self, text: &str, image_count: usize) {
         let content = if image_count > 0 {
-            format!("{text}\n\n[附带 {image_count} 张图片]")
+            t!(
+                "AgentUi.message_with_images",
+                text = text,
+                count = image_count
+            )
+            .to_string()
         } else {
             text.to_string()
         };
@@ -289,17 +384,48 @@ impl AgentTranscript {
             .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
     }
 
+    pub(crate) fn push_public_mcp_approval(&mut self, request: &AcpPublicMcpApprovalRequest) {
+        if self.has_pending_tool_confirm(&request.request_id) {
+            return;
+        }
+        self.finish_active_status();
+        self.close_streaming_segment();
+        let arguments = request
+            .arguments()
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let input = build_tool_input_display(&request.tool_name, &arguments);
+        let data = ToolConfirmCardData {
+            call_id: request.request_id.clone(),
+            tool_name: request.tool_name.clone(),
+            items: Vec::new(),
+            input_summary: input.summary,
+            input_json: input.json,
+            question: t!(
+                "AgentUi.public_mcp_safety_confirmation",
+                summary = request.summary
+            )
+            .to_string(),
+            status: "pending".into(),
+        };
+        self.messages
+            .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+    }
+
     fn apply_terminal_event(&mut self, event: &RuntimeEvent) {
         self.finish_active_status();
         match event {
             RuntimeEvent::TurnFailed { reason, .. } => {
                 self.streaming_id = None;
-                self.messages
-                    .push(ChatMessageUI::system(format!("⚠️ 任务失败:{reason}")));
+                self.messages.push(ChatMessageUI::system(
+                    t!("AgentUi.task_failed_warning", error = reason).to_string(),
+                ));
             }
             RuntimeEvent::TurnCancelled { .. } => {
                 self.close_streaming_segment();
-                self.messages.push(ChatMessageUI::system("任务已取消"));
+                self.messages.push(ChatMessageUI::system(
+                    t!("AgentUi.task_cancelled").to_string(),
+                ));
             }
             RuntimeEvent::TurnCompleted { .. } => self.close_streaming_segment(),
             _ => unreachable!("non-terminal event routed to apply_terminal_event"),
@@ -403,6 +529,8 @@ impl AgentTranscript {
     fn push_tool_call(&mut self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
         self.finish_active_status();
         self.close_streaming_segment();
+        self.tool_inputs
+            .insert(call_id.to_string(), arguments.clone());
         let input = build_tool_input_display(tool_name, arguments);
         let data = ToolCardData {
             call_id: call_id.to_string(),
@@ -460,6 +588,7 @@ impl AgentTranscript {
     }
 
     fn finish_tool_call(&mut self, call_id: &str, success: bool) {
+        self.tool_inputs.remove(call_id);
         if let Some(mut data) = self.find_tool_card(call_id) {
             data.running = false;
             data.success = Some(success);
@@ -467,7 +596,11 @@ impl AgentTranscript {
         }
     }
 
-    fn resolve_tool_confirm(&mut self, call_id: &str, approved: bool) {
+    pub(crate) fn tool_call_arguments(&self, call_id: &str) -> Option<&serde_json::Value> {
+        self.tool_inputs.get(call_id)
+    }
+
+    pub(crate) fn resolve_tool_confirm(&mut self, call_id: &str, approved: bool) {
         let Some(mut data) = self.find_confirm_card(call_id) else {
             return;
         };
@@ -553,6 +686,27 @@ impl AgentTranscript {
                 && ToolConfirmCardData::from_json(&m.content).is_some_and(|d| d.call_id == call_id)
         }) {
             msg.content = json;
+        }
+    }
+
+    fn find_acp_permission_card(&self, request_id: &str) -> Option<AcpPermissionCardData> {
+        self.messages.iter().find_map(|message| {
+            if !matches!(message.variant, MessageVariant::Card { ref kind } if kind == ACP_PERMISSION_CARD)
+            {
+                return None;
+            }
+            AcpPermissionCardData::from_json(&message.content)
+                .filter(|data| data.request_id == request_id)
+        })
+    }
+
+    fn replace_acp_permission_card(&mut self, request_id: &str, data: AcpPermissionCardData) {
+        if let Some(message) = self.messages.iter_mut().find(|message| {
+            matches!(message.variant, MessageVariant::Card { ref kind } if kind == ACP_PERMISSION_CARD)
+                && AcpPermissionCardData::from_json(&message.content)
+                    .is_some_and(|current| current.request_id == request_id)
+        }) {
+            message.content = data.to_json();
         }
     }
 
@@ -928,11 +1082,9 @@ mod tests {
         transcript.set_acp_error(&crate::AcpError::empty_response("opencode", "OpenCode"));
 
         assert_eq!(0, transcript.pending_status_count());
-        assert!(
-            transcript
-                .last_message_content()
-                .is_some_and(|content| content.contains("没有返回任何内容"))
-        );
+        assert!(transcript.last_message_content().is_some_and(|content| {
+            content.contains(t!("AgentUi.acp_empty_response_summary").as_ref())
+        }));
     }
 
     #[test]
@@ -972,7 +1124,7 @@ mod tests {
         assert_eq!(2, tr.messages.len());
         assert_eq!("部分回答", tr.messages[0].content);
         assert!(!tr.messages[0].is_streaming);
-        assert_eq!("任务已取消", tr.messages[1].content);
+        assert_eq!(t!("AgentUi.task_cancelled"), tr.messages[1].content);
         assert!(!tr.messages[1].content.contains("失败"));
     }
 
@@ -1236,6 +1388,113 @@ mod tests {
         assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn public_mcp_safety_confirmation_renders_full_arguments_and_mode_hint() {
+        let mut tr = AgentTranscript::new();
+        tr.push_public_mcp_approval(&AcpPublicMcpApprovalRequest {
+            request_id: "public-mcp-approval-1".into(),
+            tool_name: "terminal.exec".into(),
+            summary: "Call Execute in terminal".into(),
+            details: serde_json::json!({
+                "requestArguments": {
+                    "target": "haiwai comi",
+                    "command": "du -xhd1 / 2>/dev/null | sort -h"
+                }
+            }),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!(Some(TOOL_CONFIRM_CARD), tr.messages[0].variant.card_kind());
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.call_id, "public-mcp-approval-1");
+        assert_eq!(data.tool_name, "terminal.exec");
+        assert_eq!(data.input_summary, "du -xhd1 / 2>/dev/null | sort -h");
+        assert!(data.input_json.contains("haiwai comi"));
+        assert_eq!(
+            t!(
+                "AgentUi.public_mcp_safety_confirmation",
+                summary = "Call Execute in terminal"
+            ),
+            data.question
+        );
+    }
+
+    #[test]
+    fn acp_permission_request_renders_and_resolves_inside_message_flow() {
+        use crate::acp::{AcpPermissionOption, AcpPermissionRequest};
+        use crate::agent_cards::{ACP_PERMISSION_CARD, AcpPermissionCardData};
+
+        let request = AcpPermissionRequest {
+            request_id: "session:call".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "Write file".into(),
+            summary: "ACP Agent 请求执行工具：Write file".into(),
+            details: serde_json::json!({"path": "/tmp/a"}),
+            options: vec![
+                AcpPermissionOption {
+                    option_id: "reject".into(),
+                    name: "Reject".into(),
+                    kind: "reject_once".into(),
+                },
+                AcpPermissionOption {
+                    option_id: "allow".into(),
+                    name: "Allow once".into(),
+                    kind: "allow_once".into(),
+                },
+            ],
+        };
+        let mut transcript = AgentTranscript::new();
+
+        transcript.push_acp_permission(&request, true);
+
+        assert_eq!(1, transcript.messages.len());
+        assert_eq!(
+            Some(ACP_PERMISSION_CARD),
+            transcript.messages[0].variant.card_kind()
+        );
+        assert!(transcript.has_pending_acp_permission(&request.request_id));
+
+        transcript.resolve_acp_permission(&request.request_id, &request.options[1]);
+        let data = AcpPermissionCardData::from_json(&transcript.messages[0].content).unwrap();
+        assert_eq!(
+            t!(
+                "AgentUi.acp_safety_confirmation_notice",
+                summary = request.summary
+            ),
+            data.summary
+        );
+        assert_eq!("approved", data.status);
+        assert_eq!("Allow once", data.selected_option_name);
+        assert!(!transcript.has_pending_acp_permission(&request.request_id));
+    }
+
+    #[test]
+    fn acp_permission_card_does_not_claim_second_approval_in_auto_mode() {
+        use crate::acp::{AcpPermissionOption, AcpPermissionRequest};
+        use crate::agent_cards::AcpPermissionCardData;
+
+        let request = AcpPermissionRequest {
+            request_id: "session:auto-call".into(),
+            session_id: "session".into(),
+            tool_call_id: "auto-call".into(),
+            tool_name: "Execute command".into(),
+            summary: "ACP Agent 请求执行工具：Execute command".into(),
+            details: serde_json::json!({"command": "pwd"}),
+            options: vec![AcpPermissionOption {
+                option_id: "allow".into(),
+                name: "Allow once".into(),
+                kind: "allow_once".into(),
+            }],
+        };
+        let mut transcript = AgentTranscript::new();
+
+        transcript.push_acp_permission(&request, false);
+
+        let data = AcpPermissionCardData::from_json(&transcript.messages[0].content).unwrap();
+        assert_eq!(request.summary, data.summary);
     }
 
     #[test]

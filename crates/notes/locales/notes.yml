@@ -1,0 +1,187 @@
+_version: 2
+
+Notes:
+  title:
+    en: Notes
+    zh-CN: 笔记
+    zh-HK: 筆記
+  markdown_source:
+    en: Source
+    zh-CN: 源码
+    zh-HK: 原始碼
+  markdown_confirm_adjustment:
+    en: Confirm changes and edit
+    zh-CN: 确认调整并编辑
+    zh-HK: 確認調整並編輯
+  markdown_waiting_autosave:
+    en: Waiting to save...
+    zh-CN: 等待自动保存…
+    zh-HK: 等待自動保存…
+  markdown_saving:
+    en: Saving…
+    zh-CN: 正在保存…
+    zh-HK: 正在保存…
+  markdown_adjustment_required:
+    en: Confirm formatting changes before editing (%{count} notice(s))
+    zh-CN: 切换编辑前需要确认格式调整（%{count} 项提示）
+    zh-HK: 切換編輯前需要確認格式調整（%{count} 項提示）
+  markdown_source_only:
+    en: This content can only be edited in Source mode (%{count} issue(s))
+    zh-CN: 当前内容只能在源码中编辑（%{count} 项问题）
+    zh-HK: 當前內容只能在原始碼中編輯（%{count} 項問題）
+  markdown_save_failed:
+    en: "Failed to save note: %{error}"
+    zh-CN: 保存笔记失败：%{error}
+    zh-HK: 保存筆記失敗：%{error}
+  markdown_external_change:
+    en: The file was changed by another program and was not overwritten
+    zh-CN: 文件已被其他程序修改，未覆盖
+    zh-HK: 文件已被其他程式修改，未覆蓋
+  operation_failed:
+    en: "Operation failed: %{error}"
+    zh-CN: 操作失败：%{error}
+    zh-HK: 操作失敗：%{error}
+  unsaved_documents_delete:
+    en: Wait for all documents to finish saving before deleting
+    zh-CN: 包含未保存文档，请等待自动保存完成后再删除
+    zh-HK: 包含未保存文件，請等待自動保存完成後再刪除
+  unsaved_markdown_close:
+    en: Some changes could not be saved. Resolve the conflict before closing
+    zh-CN: 存在无法保存的 Markdown 修改，请解决冲突后再关闭
+    zh-HK: 存在無法保存的 Markdown 修改，請解決衝突後再關閉
+  unsaved_rich_text_conversion:
+    en: Wait for the rich text document to finish saving before converting
+    zh-CN: 富文本文档尚未保存，请等待自动保存完成后再转换
+    zh-HK: 富文字文件尚未保存，請等待自動保存完成後再轉換
+  notebook_path:
+    en: Notes location
+    zh-CN: 笔记路径
+    zh-HK: 筆記路徑
+  notebook_path_placeholder:
+    en: Select a notes location
+    zh-CN: 请选择笔记路径
+    zh-HK: 請選擇筆記路徑
+  select_path:
+    en: Choose
+    zh-CN: 选择路径
+    zh-HK: 選擇路徑
+  select_notebook_directory:
+    en: Select the notes directory
+    zh-CN: 选择笔记目录
+    zh-HK: 選擇筆記目錄
+  notebook_path_required:
+    en: Select a notes location first
+    zh-CN: 请先选择笔记路径
+    zh-HK: 請先選擇筆記路徑
+  location_dialog_title:
+    en: Set notes location
+    zh-CN: 设置笔记路径
+    zh-HK: 設定筆記路徑
+  location_dialog_description:
+    en: Notes are stored locally in this folder. You can use the default or choose another folder.
+    zh-CN: 笔记将保存在此文件夹中。你可以直接使用默认路径，也可以选择其他目录。
+    zh-HK: 筆記將儲存在此資料夾中。你可以直接使用預設路徑，也可以選擇其他目錄。
+  location_not_configured:
+    en: Notes location is not configured
+    zh-CN: 尚未设置笔记路径
+    zh-HK: 尚未設定筆記路徑
+  location_setup_description:
+    en: Choose a local folder before using Notes.
+    zh-CN: 使用笔记前，请先选择一个本地目录。
+    zh-HK: 使用筆記前，請先選擇一個本機目錄。
+  configure_location:
+    en: Set location
+    zh-CN: 设置路径
+    zh-HK: 設定路徑
+  ai_provider_unavailable:
+    en: AI provider state is unavailable
+    zh-CN: AI 提供方状态不可用
+    zh-HK: AI 提供方狀態不可用
+  ai_model_not_selected:
+    en: No AI model is selected
+    zh-CN: 尚未选择 AI 模型
+    zh-HK: 尚未選擇 AI 模型
+  ai_model_unavailable:
+    en: The selected AI model is no longer available
+    zh-CN: 选择的 AI 模型已不可用
+    zh-HK: 選擇的 AI 模型已不可用
+  directory_name:
+    en: Directory name
+    zh-CN: 目录名称
+    zh-HK: 目錄名稱
+  document_name:
+    en: Document name
+    zh-CN: 文档名称
+    zh-HK: 文件名稱
+  new_name:
+    en: New name
+    zh-CN: 新名称
+    zh-HK: 新名稱
+  rename:
+    en: Rename
+    zh-CN: 重命名
+    zh-HK: 重新命名
+  enter_new_name:
+    en: Enter a new name
+    zh-CN: 输入新的名称
+    zh-HK: 輸入新的名稱
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_confirmation:
+    en: "Delete “%{name}”? Directories are deleted recursively. This action cannot be undone."
+    zh-CN: "确定删除“%{name}”？目录会被递归删除，此操作不可撤销。"
+    zh-HK: "確定刪除「%{name}」？目錄會被遞迴刪除，此操作無法復原。"
+  new_directory:
+    en: New Directory
+    zh-CN: 新建目录
+    zh-HK: 新增目錄
+  new_rich_text:
+    en: New Rich Text Document
+    zh-CN: 新建富文本
+    zh-HK: 新增富文字文件
+  new_markdown:
+    en: New Markdown Document
+    zh-CN: 新建 Markdown
+    zh-HK: 新增 Markdown 文件
+  enter_name:
+    en: Enter a name
+    zh-CN: 请输入名称
+    zh-HK: 請輸入名稱
+  empty_title:
+    en: No notes yet
+    zh-CN: 还没有笔记
+    zh-HK: 尚未有筆記
+  empty_hint:
+    en: Use the buttons above or right-click here to create one
+    zh-CN: 使用顶部按钮或在这里右键新建
+    zh-HK: 使用上方按鈕或在此按右鍵新增
+  select_or_create:
+    en: Select or create a document
+    zh-CN: 选择或新建一个文档
+    zh-HK: 選擇或新增一份文件
+  new_rich_text_document:
+    en: New Rich Text Document
+    zh-CN: 新建富文本文档
+    zh-HK: 新增富文字文件
+  new_markdown_document:
+    en: New Markdown Document
+    zh-CN: 新建 Markdown 文档
+    zh-HK: 新增 Markdown 文件
+  new_folder:
+    en: New Folder
+    zh-CN: 新建文件夹
+    zh-HK: 新增資料夾
+  refresh_list:
+    en: Refresh notes list
+    zh-CN: 刷新笔记列表
+    zh-HK: 重新整理筆記清單
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  convert_to_markdown:
+    en: Convert to Markdown (keep original document)
+    zh-CN: 转换为 Markdown（保留原文档）
+    zh-HK: 轉換為 Markdown（保留原始文件）

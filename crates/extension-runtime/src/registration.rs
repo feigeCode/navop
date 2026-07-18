@@ -12,10 +12,10 @@ use crate::extension::manifest::{
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
-    RegisteredKeybindingContribution, RegisteredRemoteFileEditorCommand,
-    RegisteredRemoteFileEditorContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
-    slot_item_from_menu,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentRenderer,
+    RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
+    RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
+    command_descriptor, runtime_key, slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -27,6 +27,7 @@ impl ExtensionRuntimeCatalog {
     ) -> Result<(), ExtensionRuntimeError> {
         self.register_wasm_runtimes(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
+        self.register_document_renderers(&manifest)?;
         self.register_commands(&manifest)?;
         self.register_menu_slots(&manifest);
         self.register_toolbar_slots(&manifest);
@@ -49,12 +50,10 @@ impl ExtensionRuntimeCatalog {
             #[cfg(not(feature = "wasm-components"))]
             let module_path_for_log = runtime.module.clone();
             #[cfg(feature = "wasm-components")]
-            let base_config = extension_wasm::WasmRuntimeConfig::default();
-            #[cfg(feature = "wasm-components")]
             let config = extension_wasm::WasmRuntimeConfig {
                 max_memory_mb: runtime.max_memory_mb,
                 fuel_per_call: runtime.fuel_per_call,
-                ..base_config
+                timeout_ms: runtime.timeout_ms,
             };
             tracing::debug!(
                 target: "extension_loader",
@@ -136,6 +135,32 @@ impl ExtensionRuntimeCatalog {
                     languages: transform.languages.clone(),
                     assets_root,
                 });
+        }
+        Ok(())
+    }
+
+    fn register_document_renderers(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<(), ExtensionRuntimeError> {
+        for renderer in &manifest.contributes.document_renderers {
+            let runtime_id = runtime_key(&manifest.id, &renderer.runtime_id);
+            if !self.wasm_runtimes.contains_key(&runtime_id) {
+                return Err(ExtensionRuntimeError::UnknownRuntime {
+                    command_id: renderer.id.clone(),
+                    runtime_id: renderer.runtime_id.clone(),
+                });
+            }
+            self.document_renderers.push(RegisteredDocumentRenderer {
+                extension_id: manifest.id.clone(),
+                id: renderer.id.clone(),
+                display_name: renderer.display_name.clone(),
+                runtime_id,
+                function: renderer.function.clone(),
+                block_kinds: renderer.block_kinds.clone(),
+                output_media_types: renderer.output_media_types.clone(),
+                priority: renderer.priority,
+            });
         }
         Ok(())
     }

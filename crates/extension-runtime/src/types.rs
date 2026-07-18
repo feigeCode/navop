@@ -58,6 +58,18 @@ pub struct RegisteredHtmlPreviewTransform {
     pub assets_root: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredDocumentRenderer {
+    pub extension_id: String,
+    pub id: String,
+    pub display_name: String,
+    pub runtime_id: String,
+    pub function: String,
+    pub block_kinds: Vec<String>,
+    pub output_media_types: Vec<String>,
+    pub priority: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct WasmRuntimeBinding {
     #[cfg(feature = "wasm-components")]

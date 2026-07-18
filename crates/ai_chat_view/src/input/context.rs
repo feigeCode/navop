@@ -11,6 +11,7 @@
 //! - 工具模式 / 任务模式的下拉项用 [`ComposerMenuOption`] 表达。
 
 use gpui::SharedString;
+use rust_i18n::t;
 
 use super::skill::{ComposerSkillItem, ComposerSkillSummary};
 
@@ -59,7 +60,7 @@ impl Default for ComposerResourcePoolSummary {
     fn default() -> Self {
         Self {
             default_target_id: None,
-            default_label: SharedString::from("无默认目标"),
+            default_label: SharedString::from(t!("AgentUi.no_default_target").to_string()),
             total_resources: 0,
         }
     }
@@ -393,7 +394,7 @@ impl ComposerAgentOption {
         Self {
             id: None,
             label: label.into(),
-            subtitle: SharedString::from("内置 Agent"),
+            subtitle: SharedString::from(t!("AgentUi.built_in_agent").to_string()),
             selected,
             connecting,
             enabled: true,
@@ -520,7 +521,10 @@ mod tests {
     fn resource_pool_summary_defaults_to_empty_pool() {
         let summary = ComposerResourcePoolSummary::default();
 
-        assert_eq!(summary.default_label.as_ref(), "无默认目标");
+        assert_eq!(
+            summary.default_label.as_ref(),
+            t!("AgentUi.no_default_target").as_ref()
+        );
         assert_eq!(summary.total_resources, 0);
         assert_eq!(summary.default_target_id, None);
     }

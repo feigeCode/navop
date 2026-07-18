@@ -92,7 +92,9 @@ impl ConnectionImportWindow {
                 });
                 match task.await {
                     Ok(result) => result,
-                    Err(error) => Err(format!("导入扫描任务失败: {error}")),
+                    Err(error) => {
+                        Err(t!("Home.ConnectionImport.scan_task_failed", error = error).to_string())
+                    }
                 }
             };
             let _ = this.update(cx, |this, cx| {
@@ -147,7 +149,11 @@ impl ConnectionImportWindow {
                 });
                 match task.await {
                     Ok(result) => result,
-                    Err(error) => Err(format!("导入文件解析任务失败: {error}")),
+                    Err(error) => Err(t!(
+                        "Home.ConnectionImport.file_parse_task_failed",
+                        error = error
+                    )
+                    .to_string()),
                 }
             };
             let _ = this.update(cx, |this, cx| {
@@ -156,7 +162,9 @@ impl ConnectionImportWindow {
                     Ok(records) => {
                         let is_empty = records.is_empty();
                         this.model.apply_preview_records(records);
-                        this.status_message = is_empty.then(|| "未解析到可导入连接".to_string());
+                        this.status_message = is_empty.then(|| {
+                            t!("Home.ConnectionImport.no_importable_connections").to_string()
+                        });
                     }
                     Err(error) => this.status_message = Some(error),
                 }
@@ -199,16 +207,20 @@ impl Focusable for ConnectionImportWindow {
 
 fn load_importer_descriptors() -> (Vec<ImporterDescriptor>, Option<String>) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
-        return (Vec::new(), Some("扩展目录不可用".to_string()));
+        return (
+            Vec::new(),
+            Some(t!("Home.ConnectionImport.extension_directory_unavailable").to_string()),
+        );
     };
     let composite_root =
         root.join(extension_runtime::extension::ExtensionKind::Composite.dir_name());
     match extension_runtime::connection_import_provider::list_manifest_connection_importers(
         &composite_root,
     ) {
-        Ok(importers) if importers.is_empty() => {
-            (Vec::new(), Some("未安装连接导入扩展".to_string()))
-        }
+        Ok(importers) if importers.is_empty() => (
+            Vec::new(),
+            Some(t!("Home.ConnectionImport.no_import_extensions").to_string()),
+        ),
         Ok(importers) => (
             importers
                 .into_iter()
@@ -216,7 +228,16 @@ fn load_importer_descriptors() -> (Vec<ImporterDescriptor>, Option<String>) {
                 .collect(),
             None,
         ),
-        Err(error) => (Vec::new(), Some(format!("加载连接导入扩展失败: {error}"))),
+        Err(error) => (
+            Vec::new(),
+            Some(
+                t!(
+                    "Home.ConnectionImport.load_extensions_failed",
+                    error = error
+                )
+                .to_string(),
+            ),
+        ),
     }
 }
 

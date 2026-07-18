@@ -1,4 +1,4 @@
-use crate::onetcli_app::GlobalHomePage;
+use crate::{app_init::resolve_navop_window, onetcli_app::GlobalHomePage};
 use gpui::{App, AsyncApp};
 use gpui_component::WindowExt;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -40,7 +40,7 @@ pub(super) fn connection_session_opener(
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(request) = rx.recv().await {
             let result = cx
-                .update(|cx| open_connection_on_active_window(request.connection, open_mode, cx))
+                .update(|cx| open_connection_on_navop_window(request.connection, open_mode, cx))
                 .map_err(|error| error.to_string());
             let _ = request.reply.send(result);
         }
@@ -113,14 +113,13 @@ fn emit_connection_save_event(event: ConnectionSaveEvent, cx: &mut App) {
     });
 }
 
-fn open_connection_on_active_window(
+fn open_connection_on_navop_window(
     connection: StoredConnection,
     open_mode: TabOpenMode,
     cx: &mut App,
 ) -> Result<Value, String> {
-    let active_window = cx
-        .active_window()
-        .ok_or_else(|| "no active Navop window is available".to_string())?;
+    let target_window =
+        resolve_navop_window(cx).ok_or_else(|| "no Navop window is available".to_string())?;
     let home_page = cx
         .try_global::<GlobalHomePage>()
         .ok_or_else(|| "home page is not initialized".to_string())?
@@ -130,7 +129,7 @@ fn open_connection_on_active_window(
     let connection_name = connection.name.clone();
     let connection_type = connection.connection_type.label().to_string();
 
-    active_window
+    target_window
         .update(cx, |_, window, cx| {
             if open_mode == TabOpenMode::Activate && window.has_active_dialog(cx) {
                 window.close_all_dialogs(cx);
@@ -142,7 +141,7 @@ fn open_connection_on_active_window(
         .map_err(|error| error.to_string())?;
 
     Ok(json!({
-        "target": "active_window",
+        "target": "navop_window",
         "connection_id": connection_id,
         "connection_name": connection_name,
         "connection_type": connection_type,

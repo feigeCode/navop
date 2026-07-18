@@ -1,0 +1,12 @@
+package onet:extension;
+
+interface document-render {
+    record theme { dark: bool, background: u32, foreground: u32, border: u32, muted: u32, accent: u32, danger: u32, font-family: string }
+    record request { renderer: string, source: string, theme: theme, available-width: f32, scale-factor: f32 }
+    record artifact { media-type: string, bytes: list<u8>, intrinsic-width: option<f32>, intrinsic-height: option<f32> }
+}
+
+world document-renderer {
+    use document-render.{request, artifact};
+    export render-document: func(input: request) -> result<artifact, string>;
+}

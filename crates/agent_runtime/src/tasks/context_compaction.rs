@@ -5,12 +5,14 @@ use crate::model::ModelRequest;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::{RuntimeServices, Session};
 use llm_connector::types::Message;
+use rust_i18n::t;
 use tokio_util::sync::CancellationToken;
 
-const DEFAULT_TRIGGER_CHARS: usize = 48_000;
+const DEFAULT_TRIGGER_CHARS: usize = 96_000;
 const DEFAULT_KEEP_LAST_ITEMS: usize = 32;
 const DEFAULT_MAX_SUMMARY_TOKENS: u32 = 1200;
 const FALLBACK_SUMMARY_MAX_CHARS: usize = 12_000;
+const COMPACTION_ITEM_COOLDOWN_MULTIPLIER: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContextCompactionPolicy {
@@ -40,22 +42,54 @@ pub(crate) async fn compact_session_context_if_needed(
         return Err(RuntimeError::Cancelled);
     }
     let history = session.history_snapshot();
-    if estimated_history_chars(&history) < policy.trigger_chars {
+    if !should_compact(&history, policy) {
         return Ok(false);
     }
     let Some(prefix) = history.compaction_prefix(policy.keep_last_items) else {
         return Ok(false);
     };
-    emit_compaction_status(session, turn_id, "正在压缩上下文...", false);
+    emit_compaction_status(
+        session,
+        turn_id,
+        t!("AgentRuntime.context_compaction_running").as_ref(),
+        false,
+    );
     let summary = summarize_prefix(prefix, services, policy, cancellation).await?;
     if cancellation.is_cancelled() {
         return Err(RuntimeError::Cancelled);
     }
     let compacted = session.compact_history(summary, policy.keep_last_items);
     if compacted {
-        emit_compaction_status(session, turn_id, "上下文压缩完成", true);
+        emit_compaction_status(
+            session,
+            turn_id,
+            t!("AgentRuntime.context_compaction_complete").as_ref(),
+            true,
+        );
     }
     Ok(compacted)
+}
+
+fn should_compact(history: &RuntimeHistory, policy: ContextCompactionPolicy) -> bool {
+    if estimated_history_chars(history) < policy.trigger_chars {
+        return false;
+    }
+
+    // 压缩发生在每一轮模型请求之前。压缩后保留的最近条目仍可能超过总字符
+    // 阈值；如果下一轮立即再次压缩，会在一个工具链中反复调用摘要模型。只有
+    // 在上次摘要之后又积累了至少两批保留数量的历史条目时才允许再次压缩。
+    let Some(summary_index) = history
+        .items()
+        .iter()
+        .rposition(|item| matches!(item, HistoryItem::ContextSummary { .. }))
+    else {
+        return true;
+    };
+    let items_after_summary = history.items().len().saturating_sub(summary_index + 1);
+    items_after_summary
+        >= policy
+            .keep_last_items
+            .saturating_mul(COMPACTION_ITEM_COOLDOWN_MULTIPLIER)
 }
 
 fn emit_compaction_status(session: &Session, turn_id: &TurnId, title: &str, is_done: bool) {
@@ -272,6 +306,47 @@ mod tests {
             }
             other => panic!("expected fallback context summary, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn does_not_recompact_same_history_on_every_agent_iteration() {
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("摘要")]));
+        let runtime = Runtime::new(RuntimeServices::new(
+            model.clone(),
+            Arc::new(ToolRouter::new(ToolRegistry::new())),
+        ));
+        let session = runtime.create_session(ResourceContext::new());
+        session.record_user_input("旧上下文 ".repeat(32));
+        session.record_user_input("最近消息");
+        let policy = ContextCompactionPolicy {
+            trigger_chars: 16,
+            keep_last_items: 1,
+            max_summary_tokens: 256,
+        };
+
+        assert!(
+            compact_session_context_if_needed(
+                &session,
+                &TurnId::new(),
+                runtime.services(),
+                policy,
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("first compaction should run")
+        );
+        assert!(
+            !compact_session_context_if_needed(
+                &session,
+                &TurnId::new(),
+                runtime.services(),
+                policy,
+                &CancellationToken::new(),
+            )
+            .await
+            .expect("second compaction should be skipped")
+        );
+        assert_eq!(1, model.received_requests().len());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use rust_i18n::t;
 use serde_json::Value;
 
 const MAX_DETAIL_CHARS: usize = 8 * 1024;
@@ -84,9 +85,9 @@ impl AcpError {
             AcpErrorKind::EmptyResponse,
             agent_id,
             agent_name,
-            "ACP Agent 没有返回任何内容",
+            t!("AgentUi.acp_empty_response_summary").to_string(),
         )
-        .with_detail("请求正常结束，但没有收到文本、推理、工具调用或计划更新")
+        .with_detail(t!("AgentUi.acp_empty_response_detail"))
         .with_recovery(AcpRecoveryAction::Authenticate)
     }
 }

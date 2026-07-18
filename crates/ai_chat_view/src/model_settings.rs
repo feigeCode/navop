@@ -8,6 +8,7 @@ use gpui_component::{
     slider::{Slider, SliderEvent, SliderState},
     v_flex,
 };
+use rust_i18n::t;
 
 #[derive(Clone, Debug)]
 pub struct ModelSettings {
@@ -76,14 +77,14 @@ pub struct ModelSettingsLabels {
 impl Default for ModelSettingsLabels {
     fn default() -> Self {
         Self {
-            title: "模型设置".to_string(),
-            temperature_label: "温度".to_string(),
-            temperature_desc: "控制输出随机性".to_string(),
-            history_label: "历史记录".to_string(),
-            history_desc: "携带的历史消息数".to_string(),
-            max_tokens_label: "最大 Token".to_string(),
-            max_tokens_desc: "单次回复 token 上限".to_string(),
-            footer_notice: "设置会应用到后续请求".to_string(),
+            title: t!("AgentUi.model_settings").to_string(),
+            temperature_label: t!("AgentUi.temperature").to_string(),
+            temperature_desc: t!("AgentUi.temperature_description").to_string(),
+            history_label: t!("AgentUi.history").to_string(),
+            history_desc: t!("AgentUi.history_description").to_string(),
+            max_tokens_label: t!("AgentUi.max_tokens").to_string(),
+            max_tokens_desc: t!("AgentUi.max_tokens_description").to_string(),
+            footer_notice: t!("AgentUi.settings_apply_later").to_string(),
         }
     }
 }

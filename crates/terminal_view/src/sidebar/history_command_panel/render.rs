@@ -12,6 +12,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::storage::{TerminalCommandHistory, TerminalCommandHistorySort};
+use rust_i18n::t;
 use std::ops::Range;
 
 use super::HistoryCommandPanel;
@@ -51,18 +52,26 @@ impl HistoryCommandPanel {
             .items_center()
             .border_b_1()
             .border_color(self.colors.border)
-            .child(self.render_sort_button("Most used", TerminalCommandHistorySort::MostUsed, cx))
-            .child(self.render_sort_button("Latest", TerminalCommandHistorySort::Latest, cx))
+            .child(self.render_sort_button(
+                t!("HistoryCommand.most_used").to_string(),
+                TerminalCommandHistorySort::MostUsed,
+                cx,
+            ))
+            .child(self.render_sort_button(
+                t!("HistoryCommand.latest").to_string(),
+                TerminalCommandHistorySort::Latest,
+                cx,
+            ))
     }
 
     fn render_sort_button(
         &self,
-        label: &'static str,
+        label: impl Into<SharedString>,
         sort: TerminalCommandHistorySort,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         Button::new(SharedString::from(format!("history-sort-{sort:?}")))
-            .label(label)
+            .label(label.into())
             .xsmall()
             .when(self.sort == sort, |button| button.primary())
             .when(self.sort != sort, |button| button.ghost())
@@ -213,7 +222,11 @@ impl HistoryCommandPanel {
             })
             .ghost()
             .xsmall()
-            .tooltip(if favorite { "Unfavorite" } else { "Favorite" })
+            .tooltip(if favorite {
+                t!("HistoryCommand.unfavorite").to_string()
+            } else {
+                t!("HistoryCommand.favorite").to_string()
+            })
             .when(favorite, |button| button.text_color(favorite_color))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_favorite(id, cx);
@@ -230,7 +243,7 @@ impl HistoryCommandPanel {
             .icon(IconName::Paste)
             .ghost()
             .xsmall()
-            .tooltip("Paste")
+            .tooltip(t!("HistoryCommand.paste").to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.paste_command(command.clone(), cx);
             }))
@@ -246,7 +259,7 @@ impl HistoryCommandPanel {
             .icon(IconName::Delete)
             .ghost()
             .xsmall()
-            .tooltip("Delete")
+            .tooltip(t!("HistoryCommand.delete").to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.delete_command(id, cx);
             }))
@@ -262,7 +275,7 @@ impl HistoryCommandPanel {
                 div()
                     .text_sm()
                     .text_color(self.colors.muted_foreground)
-                    .child("No commands"),
+                    .child(t!("HistoryCommand.no_commands").to_string()),
             )
     }
 }

@@ -50,6 +50,25 @@ fn pick_toggle_target<T: Copy>(
         .or(fallback)
 }
 
+fn pick_navop_window<T: Copy>(
+    active: Option<T>,
+    registered: Option<T>,
+    stacked: Option<&[T]>,
+) -> Option<T> {
+    active
+        .or(registered)
+        .or_else(|| stacked.and_then(|stack| stack.first().copied()))
+}
+
+pub(crate) fn resolve_navop_window(cx: &App) -> Option<AnyWindowHandle> {
+    let window_stack = cx.window_stack();
+    pick_navop_window(
+        cx.active_window(),
+        MAIN_WINDOW_HANDLE.get().copied(),
+        window_stack.as_deref(),
+    )
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 mod system_hotkey {
     use super::*;
@@ -325,6 +344,21 @@ mod tests {
             Some(2_u8)
         );
         assert_eq!(pick_toggle_target(None, None, Some(9_u8)), Some(9_u8));
+    }
+
+    #[test]
+    fn pick_navop_window_prefers_active_and_falls_back_to_registered_main_window() {
+        let stack = [2_u8, 3_u8];
+
+        assert_eq!(
+            Some(9_u8),
+            pick_navop_window(Some(9_u8), Some(1_u8), Some(&stack))
+        );
+        assert_eq!(
+            Some(1_u8),
+            pick_navop_window(None, Some(1_u8), Some(&stack))
+        );
+        assert_eq!(Some(2_u8), pick_navop_window(None, None, Some(&stack)));
     }
 
     #[test]

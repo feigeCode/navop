@@ -9,6 +9,7 @@ anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 one-core = { workspace = true }
+rust-i18n = { workspace = true }
 sftp = { workspace = true }
 tokio = { workspace = true }
 

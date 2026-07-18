@@ -1,0 +1,69 @@
+_version: 2
+
+DriverInstall:
+  title:
+    en: Installing Database Driver
+    zh-CN: 正在安装数据库驱动
+    zh-HK: 正在安裝資料庫驅動程式
+  description:
+    en: "Connection “%{connection}” requires the “%{driver}” database driver."
+    zh-CN: "连接“%{connection}”需要安装“%{driver}”数据库驱动。"
+    zh-HK: "連線「%{connection}」需要安裝「%{driver}」資料庫驅動程式。"
+  preparing:
+    en: Preparing driver download...
+    zh-CN: 准备下载驱动...
+    zh-HK: 準備下載驅動程式...
+  connecting_source:
+    en: Connecting to download source...
+    zh-CN: 正在连接下载源...
+    zh-HK: 正在連線下載來源...
+  downloading:
+    en: "Downloading driver %{progress}%"
+    zh-CN: "正在下载驱动 %{progress}%"
+    zh-HK: "正在下載驅動程式 %{progress}%"
+  installing:
+    en: Installing driver...
+    zh-CN: 正在安装驱动...
+    zh-HK: 正在安裝驅動程式...
+  finished:
+    en: Installation complete. Opening connection...
+    zh-CN: 安装完成，正在打开连接...
+    zh-HK: 安裝完成，正在開啟連線...
+  checksum_failed_retrying:
+    en: The current download source failed verification. Switching to the next source...
+    zh-CN: 当前下载源校验失败，正在切换到下一个源...
+    zh-HK: 目前下載來源驗證失敗，正在切換到下一個來源...
+  checksum_failed:
+    en: Download source verification failed. Please try again later.
+    zh-CN: 下载源校验失败，请稍后重试。
+    zh-HK: 下載來源驗證失敗，請稍後重試。
+  source_failed_retrying:
+    en: The current download source failed. Switching to the next source...
+    zh-CN: 当前下载源失败，正在切换到下一个源...
+    zh-HK: 目前下載來源失敗，正在切換到下一個來源...
+  source_failed:
+    en: Download source failed. Please try again later.
+    zh-CN: 下载源失败，请稍后重试。
+    zh-HK: 下載來源失敗，請稍後重試。
+
+ExtensionAction:
+  executed:
+    en: Extension command executed
+    zh-CN: 扩展命令已执行
+    zh-HK: 擴充功能命令已執行
+  failed:
+    en: "Extension command failed: %{error}"
+    zh-CN: "扩展命令执行失败：%{error}"
+    zh-HK: "擴充功能命令執行失敗：%{error}"
+  render_failed:
+    en: "Failed to render extension UI: %{error}"
+    zh-CN: "扩展 UI 渲染失败：%{error}"
+    zh-HK: "擴充功能 UI 轉譯失敗：%{error}"
+  submitted:
+    en: Extension form submitted
+    zh-CN: 扩展表单已提交
+    zh-HK: 擴充功能表單已提交
+  submit_failed:
+    en: "Failed to submit extension form: %{error}"
+    zh-CN: "扩展表单提交失败：%{error}"
+    zh-HK: "擴充功能表單提交失敗：%{error}"

@@ -70,6 +70,19 @@ mod tests {
         }
     }
 
+    fn runtime_request() -> PublicMcpApprovalRequest {
+        PublicMcpApprovalRequest {
+            operation: PublicMcpOperationKind::CallToolRuntimeTool,
+            tool_name: "ssh.exec".to_string(),
+            summary: "Call Execute remote command".to_string(),
+            details: json!({
+                "tool": "ssh.exec",
+                "requestArguments": { "target": "ssh-1" },
+                "arguments": { "target": "ssh-1" },
+            }),
+        }
+    }
+
     #[tokio::test]
     async fn channel_approver_resolves_with_queue_response() {
         let (approver, mut receiver) = channel_approver_for_tests();
@@ -97,6 +110,34 @@ mod tests {
                 reason: Some("public MCP approval queue is not available".to_string())
             },
             outcome
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_request_uses_dialog_for_final_safety_confirmation() {
+        let (approver, mut receiver) = channel_approver_for_tests();
+        let approval = tokio::spawn({
+            let approver = approver.clone();
+            async move { approver.request_approval(runtime_request()).await }
+        });
+        let envelope = receiver
+            .recv()
+            .await
+            .expect("ACP Public MCP request should enter the dialog queue");
+        assert_eq!("ssh.exec", envelope.request.tool_name);
+        assert_eq!(
+            Some("ssh-1"),
+            envelope
+                .request
+                .details
+                .get("requestArguments")
+                .and_then(|arguments| arguments.get("target"))
+                .and_then(serde_json::Value::as_str)
+        );
+        envelope.approve();
+        assert_eq!(
+            PublicMcpApprovalOutcome::Approved,
+            approval.await.expect("approval future should finish")
         );
     }
 }

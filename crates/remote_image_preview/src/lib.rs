@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 use anyhow::Context as _;
 use gpui::{
     AnyWindowHandle, App, AsyncApp, ClipboardEntry, ClipboardItem, Context, Image, ImageFormat,
@@ -6,6 +8,7 @@ use gpui::{
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -109,7 +112,7 @@ pub fn open_remote_image_preview<T: 'static>(
     });
 
     window.push_notification(
-        Notification::info("正在读取远程图片...".to_string()).autohide(true),
+        Notification::info(t!("RemoteImagePreview.loading").to_string()).autohide(true),
         cx,
     );
 
@@ -171,10 +174,11 @@ fn image_format_extension(format: ImageFormat) -> &'static str {
 fn write_clipboard_image_to_temp_file(image: &Image) -> anyhow::Result<PathBuf> {
     let path = temp_clipboard_image_path(image.format);
     std::fs::write(&path, &image.bytes).with_context(|| {
-        format!(
-            "failed to write clipboard image to temporary file {}",
-            path.display()
+        t!(
+            "RemoteImagePreview.clipboard_temp_write_failed",
+            path = path.display()
         )
+        .to_string()
     })?;
     Ok(path)
 }
@@ -205,8 +209,8 @@ fn open_remote_image_preview_window(
         .rsplit('/')
         .next()
         .filter(|name| !name.is_empty())
-        .unwrap_or("Remote Image")
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| t!("RemoteImagePreview.default_title").to_string());
     let title = format!("{title} · {}", format_image_preview_size(bytes.len()));
     let image = Image::from_bytes(format, bytes);
 
@@ -227,7 +231,8 @@ fn notify_remote_image_preview_error(
 ) {
     let _ = cx.update_window(window_handle, |_, window, cx| {
         window.push_notification(
-            Notification::error(format!("远程图片预览失败：{message}")).autohide(true),
+            Notification::error(t!("RemoteImagePreview.failed", error = message).to_string())
+                .autohide(true),
             cx,
         );
     });

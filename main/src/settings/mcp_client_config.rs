@@ -1,9 +1,9 @@
 use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item;
 #[cfg(test)]
 use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item_id;
-use crate::settings::mcp_helper_install::mcp_helper_install_item;
+use crate::settings::mcp_helper_install::mcp_runtime_requirements_item;
 #[cfg(test)]
-use crate::settings::mcp_helper_install::mcp_helper_install_item_id;
+use crate::settings::mcp_helper_install::mcp_runtime_requirements_item_id;
 use anyhow::{Result, bail};
 use gpui::{App, ParentElement, Styled, Window, div};
 use gpui_component::{
@@ -15,8 +15,8 @@ use gpui_component::{
     v_flex,
 };
 use public_mcp::client_config::{
-    ClientConfigHealth, ClientConfigInstall, claude_code_config_path, codex_config_path,
-    helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
+    ClientConfigHealth, ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION, claude_code_config_path,
+    codex_config_path, helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
     install_claude_code_config, install_codex_config, uninstall_claude_code_config,
     uninstall_codex_config,
 };
@@ -24,7 +24,7 @@ use rust_i18n::t;
 use std::path::PathBuf;
 
 pub fn mcp_client_config_items() -> Vec<SettingItem> {
-    vec![mcp_helper_install_item()]
+    vec![mcp_runtime_requirements_item()]
         .into_iter()
         .chain(
             [
@@ -112,13 +112,30 @@ fn client_config_item_view_model(
 ) -> McpClientConfigItemViewModel {
     match inspected {
         Ok((_, health)) => McpClientConfigItemViewModel {
-            status: t!(client_config_health_label_key(*health)).to_string(),
+            status: client_config_health_label(*health),
             action_enabled: client_config_action_enabled(*health),
         },
         Err(error) => McpClientConfigItemViewModel {
             status: error.to_string(),
             action_enabled: false,
         },
+    }
+}
+
+fn client_config_health_label(health: ClientConfigHealth) -> String {
+    let package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}");
+    match health {
+        ClientConfigHealth::UpToDate => t!(
+            "Settings.General.Mcp.client_config_status_up_to_date",
+            package = package
+        )
+        .to_string(),
+        ClientConfigHealth::PackageVersionOutdated => t!(
+            "Settings.General.Mcp.client_config_status_package_outdated",
+            package = package
+        )
+        .to_string(),
+        _ => t!(client_config_health_label_key(health)).to_string(),
     }
 }
 
@@ -260,11 +277,23 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
             "Settings.General.Mcp.client_config_status_not_installed"
         }
         ClientConfigHealth::NeedsRepair => "Settings.General.Mcp.client_config_status_needs_repair",
+        ClientConfigHealth::NeedsMigration => {
+            "Settings.General.Mcp.client_config_status_needs_migration"
+        }
+        ClientConfigHealth::PackageVersionOutdated => {
+            "Settings.General.Mcp.client_config_status_package_outdated"
+        }
+        ClientConfigHealth::NodeUnavailable => {
+            "Settings.General.Mcp.client_config_status_node_unavailable"
+        }
+        ClientConfigHealth::NpxUnavailable => {
+            "Settings.General.Mcp.client_config_status_npx_unavailable"
+        }
         ClientConfigHealth::MissingHelper => {
-            "Settings.General.Mcp.client_config_status_missing_helper"
+            "Settings.General.Mcp.client_config_status_legacy_helper_missing"
         }
         ClientConfigHealth::UnusableHelper => {
-            "Settings.General.Mcp.client_config_status_unusable_helper"
+            "Settings.General.Mcp.client_config_status_legacy_helper_unusable"
         }
     }
 }
@@ -272,7 +301,10 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
 fn client_config_action_enabled(health: ClientConfigHealth) -> bool {
     !matches!(
         health,
-        ClientConfigHealth::MissingHelper | ClientConfigHealth::UnusableHelper
+        ClientConfigHealth::MissingHelper
+            | ClientConfigHealth::UnusableHelper
+            | ClientConfigHealth::NodeUnavailable
+            | ClientConfigHealth::NpxUnavailable
     )
 }
 
@@ -287,7 +319,7 @@ fn client_config_action_label(health: ClientConfigHealth) -> String {
 
 #[cfg(test)]
 pub(crate) fn mcp_client_config_item_ids() -> Vec<&'static str> {
-    std::iter::once(mcp_helper_install_item_id())
+    std::iter::once(mcp_runtime_requirements_item_id())
         .chain(
             [
                 McpClientConfigTarget::Codex,

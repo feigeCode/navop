@@ -19,7 +19,7 @@ use std::{
     },
 };
 
-const SERVER_NAME: &str = "onetcli-public-mcp";
+const SERVER_NAME: &str = "navop-public-mcp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
@@ -105,13 +105,12 @@ impl PublicMcpServer {
 
 impl ServerHandler for PublicMcpServer {
     fn get_info(&self) -> ServerInfo {
+        let permission_mode = self.permission_mode.get();
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
                 Implementation::new(SERVER_NAME, SERVER_VERSION).with_title("Navop Public MCP"),
             )
-            .with_instructions(
-                "Expose only currently connected Navop SSH terminal sessions.".to_string(),
-            )
+            .with_instructions(server_instructions(permission_mode))
     }
 
     fn list_tools(
@@ -145,6 +144,26 @@ impl ServerHandler for PublicMcpServer {
         let arguments = request.arguments;
         async move { tool_registry.call_tool(&name, arguments, context).await }
     }
+}
+
+fn server_instructions(mode: PermissionMode) -> String {
+    let (id, approval) = match mode {
+        PermissionMode::Deny => (
+            "deny",
+            "mutating tools are denied; enable confirmation or automatic mode in Navop when the user wants writes",
+        ),
+        PermissionMode::Ask => (
+            "ask",
+            "mutating tools require approval in Navop; preserve rejections and never bypass them",
+        ),
+        PermissionMode::Allow => (
+            "allow",
+            "mutating tools run automatically; confirm user intent before destructive operations",
+        ),
+    };
+    format!(
+        "Navop Public MCP permission_mode={id}: {approval}. Available tools also depend on Navop Tool Exposure settings and active connection sessions. If a tool is missing, ask the user to enable its tool group and open the relevant connection/session."
+    )
 }
 
 fn permission_mode_to_u8(mode: PermissionMode) -> u8 {

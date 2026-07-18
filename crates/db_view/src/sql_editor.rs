@@ -1382,7 +1382,7 @@ impl SqlEditor {
                     hard_tabs: false,
                 })
                 .soft_wrap(false)
-                .placeholder("Enter your SQL query here...");
+                .placeholder(t!("Query.editor_placeholder").to_string());
 
             // Defaults: completion + hover + actions
             let default_schema = SqlSchema::default();

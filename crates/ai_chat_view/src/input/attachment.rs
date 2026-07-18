@@ -9,6 +9,7 @@ use std::sync::Arc;
 use agent_runtime::InputImage;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use gpui::{App, ClipboardEntry, Image, ImageFormat};
+use rust_i18n::t;
 use uuid::Uuid;
 
 /// 一张图片附件。
@@ -63,7 +64,7 @@ impl ImageAttachment {
         for entry in item.into_entries() {
             match entry {
                 ClipboardEntry::Image(image) => {
-                    out.push(Self::new("粘贴的图片", image));
+                    out.push(Self::new(t!("AgentUi.pasted_image"), image));
                 }
                 ClipboardEntry::ExternalPaths(paths) => {
                     for path in paths.paths() {

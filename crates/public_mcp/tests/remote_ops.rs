@@ -143,6 +143,10 @@ fn ssh_exec_schema_uses_terminal_target_input() {
         "string",
         exec.input_schema["properties"]["session_id"]["type"]
     );
+    assert!(exec.description.contains("default choice"));
+    assert!(exec.description.contains("isolated SSH channel"));
+    assert!(exec.description.contains("does not inherit"));
+    assert!(exec.description.contains("terminal.exec"));
 }
 
 #[test]

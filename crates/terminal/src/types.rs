@@ -132,13 +132,40 @@ impl TerminalExecHandle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct TerminalExecRequest {
     pub command: String,
     pub submit: bool,
     pub wait_for_output: bool,
     pub ready_timeout: Duration,
     pub timeout: Duration,
+    pub observer: Option<TerminalExecObserver>,
+}
+
+#[derive(Clone)]
+pub struct TerminalExecObserver {
+    publish_fn: Arc<dyn Fn(TerminalExecProgress) + Send + Sync>,
+}
+
+impl TerminalExecObserver {
+    pub fn new(publish: impl Fn(TerminalExecProgress) + Send + Sync + 'static) -> Self {
+        Self {
+            publish_fn: Arc::new(publish),
+        }
+    }
+
+    pub(crate) fn publish(&self, progress: TerminalExecProgress) {
+        (self.publish_fn)(progress);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalExecProgress {
+    pub output: String,
+    pub completion: TerminalExecCompletion,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    pub is_final: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,6 +267,7 @@ mod tests {
                     wait_for_output: false,
                     ready_timeout: Duration::ZERO,
                     timeout: Duration::from_millis(1),
+                    observer: None,
                 },
                 CancellationToken::new(),
             )
@@ -269,6 +297,7 @@ mod tests {
                     wait_for_output: true,
                     ready_timeout: Duration::ZERO,
                     timeout: Duration::from_secs(30),
+                    observer: None,
                 },
                 cancellation,
             )

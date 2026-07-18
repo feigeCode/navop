@@ -40,9 +40,7 @@ impl ToolHandler for TerminalExecRuntime {
         ToolDescriptor {
             id: "terminal.exec".to_string(),
             title: "Execute in terminal".to_string(),
-            description:
-                "Insert a command into an active visible terminal session and optionally submit it."
-                    .to_string(),
+            description: "Run input in the current visible terminal PTY. Use only when the user explicitly wants visible execution or the command must inherit that terminal's current cwd, activated virtual environment, shell aliases/functions, or temporary environment variables. Prefer ssh.exec for routine Agent-owned automation, diagnostics, structured stdout/stderr, isolation, or concurrent work. At an empty prompt the command is submitted directly; Ctrl+C is used only to clear detected unsubmitted partial input. It never replaces or interrupts a running terminal command and returns Busy instead. A wait timeout returns command_id for ssh.command.poll/output; use terminal.control to explicitly interrupt the visible process.".to_string(),
             input_schema: exec_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),

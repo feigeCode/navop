@@ -1899,7 +1899,7 @@ impl Render for SshFormWindow {
                             Button::new("save-continue")
                                 .small()
                                 .outline()
-                                .label("保存并继续")
+                                .label(t!("ConnectionForm.save_and_continue").to_string())
                                 .disabled(is_busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.on_save_and_continue(window, cx);

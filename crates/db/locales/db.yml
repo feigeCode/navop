@@ -591,3 +591,265 @@ ConnectionForm:
     en: HTTPS
     zh-CN: HTTPS
     zh-HK: HTTPS
+
+ObjectView:
+  titles:
+    databases:
+      en: Databases
+      zh-CN: 数据库
+      zh-HK: 資料庫
+    schemas:
+      en: Schemas
+      zh-CN: 模式
+      zh-HK: 結構描述
+    tables:
+      en: Tables
+      zh-CN: 表
+      zh-HK: 資料表
+    columns:
+      en: Columns
+      zh-CN: 列
+      zh-HK: 欄位
+    data_skipping_indexes:
+      en: Data Skipping Indexes
+      zh-CN: 数据跳过索引
+      zh-HK: 資料略過索引
+    views:
+      en: Views
+      zh-CN: 视图
+      zh-HK: 檢視
+    user_defined_functions:
+      en: User Defined Functions
+      zh-CN: 用户自定义函数
+      zh-HK: 使用者自訂函式
+    functions:
+      en: Functions
+      zh-CN: 函数
+      zh-HK: 函式
+    stored_procedures:
+      en: Stored Procedures
+      zh-CN: 存储过程
+      zh-HK: 預存程序
+    procedures:
+      en: Procedures
+      zh-CN: 过程
+      zh-HK: 程序
+    triggers:
+      en: Triggers
+      zh-CN: 触发器
+      zh-HK: 觸發程序
+    sequences:
+      en: Sequences
+      zh-CN: 序列
+      zh-HK: 序列
+  counts:
+    databases:
+      en: "%{count} database(s)"
+      zh-CN: "%{count} 个数据库"
+      zh-HK: "%{count} 個資料庫"
+    schemas:
+      en: "%{count} schema(s)"
+      zh-CN: "%{count} 个模式"
+      zh-HK: "%{count} 個結構描述"
+    tables:
+      en: "%{count} table(s)"
+      zh-CN: "%{count} 张表"
+      zh-HK: "%{count} 張資料表"
+    columns:
+      en: "%{count} column(s)"
+      zh-CN: "%{count} 列"
+      zh-HK: "%{count} 個欄位"
+    indexes:
+      en: "%{count} index(es)"
+      zh-CN: "%{count} 个索引"
+      zh-HK: "%{count} 個索引"
+    views:
+      en: "%{count} view(s)"
+      zh-CN: "%{count} 个视图"
+      zh-HK: "%{count} 個檢視"
+    functions:
+      en: "%{count} function(s)"
+      zh-CN: "%{count} 个函数"
+      zh-HK: "%{count} 個函式"
+    procedures:
+      en: "%{count} procedure(s)"
+      zh-CN: "%{count} 个过程"
+      zh-HK: "%{count} 個程序"
+    triggers:
+      en: "%{count} trigger(s)"
+      zh-CN: "%{count} 个触发器"
+      zh-HK: "%{count} 個觸發程序"
+    sequences:
+      en: "%{count} sequence(s)"
+      zh-CN: "%{count} 个序列"
+      zh-HK: "%{count} 個序列"
+  named:
+    columns:
+      en: "Columns - %{table}"
+      zh-CN: "列 - %{table}"
+      zh-HK: "欄位 - %{table}"
+    indexes:
+      en: "Indexes - %{table}"
+      zh-CN: "索引 - %{table}"
+      zh-HK: "索引 - %{table}"
+  columns:
+    cache:
+      en: Cache
+      zh-CN: 缓存
+      zh-HK: 快取
+    charset:
+      en: Charset
+      zh-CN: 字符集
+      zh-HK: 字元集
+    collation:
+      en: Collation
+      zh-CN: 排序规则
+      zh-HK: 定序
+    columns:
+      en: Columns
+      zh-CN: 列
+      zh-HK: 欄位
+    comment:
+      en: Comment
+      zh-CN: 注释
+      zh-HK: 註解
+    compatibility_level:
+      en: Compat Level
+      zh-CN: 兼容级别
+      zh-HK: 相容性層級
+    created:
+      en: Created
+      zh-CN: 创建时间
+      zh-HK: 建立時間
+    current:
+      en: Current
+      zh-CN: 当前值
+      zh-HK: 目前值
+    cycle:
+      en: Cycle
+      zh-CN: 循环
+      zh-HK: 循環
+    default:
+      en: Default
+      zh-CN: 默认值
+      zh-HK: 預設值
+    definition:
+      en: Definition
+      zh-CN: 定义
+      zh-HK: 定義
+    description:
+      en: Description
+      zh-CN: 描述
+      zh-HK: 描述
+    encoding:
+      en: Encoding
+      zh-CN: 编码
+      zh-HK: 編碼
+    engine:
+      en: Engine
+      zh-CN: 引擎
+      zh-HK: 引擎
+    event:
+      en: Event
+      zh-CN: 事件
+      zh-HK: 事件
+    expression:
+      en: Expression
+      zh-CN: 表达式
+      zh-HK: 運算式
+    increment:
+      en: Increment
+      zh-CN: 增量
+      zh-HK: 增量
+    key:
+      en: Key
+      zh-CN: 键
+      zh-HK: 鍵
+    last_analyzed:
+      en: Last Analyzed
+      zh-CN: 上次分析
+      zh-HK: 上次分析
+    last_value:
+      en: Last Value
+      zh-CN: 上一个值
+      zh-HK: 上一個值
+    maximum:
+      en: Max
+      zh-CN: 最大值
+      zh-HK: 最大值
+    minimum:
+      en: Min
+      zh-CN: 最小值
+      zh-HK: 最小值
+    modified:
+      en: Modified
+      zh-CN: 修改时间
+      zh-HK: 修改時間
+    name:
+      en: Name
+      zh-CN: 名称
+      zh-HK: 名稱
+    nullable:
+      en: Nullable
+      zh-CN: 可为空
+      zh-HK: 可為空
+    owner:
+      en: Owner
+      zh-CN: 所有者
+      zh-HK: 擁有者
+    primary_key:
+      en: Primary Key
+      zh-CN: 主键
+      zh-HK: 主鍵
+    return_type:
+      en: Return Type
+      zh-CN: 返回类型
+      zh-HK: 傳回類型
+    rows:
+      en: Rows
+      zh-CN: 行数
+      zh-HK: 資料列數
+    schema:
+      en: Schema
+      zh-CN: 模式
+      zh-HK: 結構描述
+    size:
+      en: Size
+      zh-CN: 大小
+      zh-HK: 大小
+    start:
+      en: Start
+      zh-CN: 起始值
+      zh-HK: 起始值
+    status:
+      en: Status
+      zh-CN: 状态
+      zh-HK: 狀態
+    table:
+      en: Table
+      zh-CN: 表
+      zh-HK: 資料表
+    tables:
+      en: Tables
+      zh-CN: 表数量
+      zh-HK: 資料表數量
+    tablespace:
+      en: Tablespace
+      zh-CN: 表空间
+      zh-HK: 資料表空間
+    temporary_tablespace:
+      en: Temp Tablespace
+      zh-CN: 临时表空间
+      zh-HK: 暫存資料表空間
+    timing:
+      en: Timing
+      zh-CN: 时机
+      zh-HK: 時機
+    type:
+      en: Type
+      zh-CN: 类型
+      zh-HK: 類型
+    unique:
+      en: Unique
+      zh-CN: 唯一
+      zh-HK: 唯一

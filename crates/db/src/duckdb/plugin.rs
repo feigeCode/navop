@@ -2,6 +2,7 @@ use crate::types::ObjectViewColumn as Column;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -922,8 +923,8 @@ impl DatabasePlugin for DuckDbPlugin {
         let tables = self.list_tables(connection, database, schema).await?;
 
         let columns = vec![
-            Column::new("schema", "Schema").width(160.0),
-            Column::new("name", "Name").width(220.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(160.0),
+            Column::localized("name", "ObjectView.columns.name").width(220.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -933,7 +934,7 @@ impl DatabasePlugin for DuckDbPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Table,
-            title: format!("{} table(s)", tables.len()),
+            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
             columns,
             rows,
         })
@@ -1033,11 +1034,11 @@ impl DatabasePlugin for DuckDbPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(160.0),
-            Column::new("nullable", "Nullable").width(90.0),
-            Column::new("primary", "Primary").width(90.0),
-            Column::new("default", "Default").width(200.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(160.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(90.0),
+            Column::localized("primary", "ObjectView.columns.primary_key").width(90.0),
+            Column::localized("default", "ObjectView.columns.default").width(200.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1055,7 +1056,7 @@ impl DatabasePlugin for DuckDbPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Column,
-            title: format!("{} column(s)", columns_data.len()),
+            title: t!("ObjectView.counts.columns", count = columns_data.len()).to_string(),
             columns,
             rows,
         })
@@ -1125,9 +1126,9 @@ impl DatabasePlugin for DuckDbPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("unique", "Unique").width(80.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1143,7 +1144,7 @@ impl DatabasePlugin for DuckDbPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Index,
-            title: format!("{} index(es)", indexes.len()),
+            title: t!("ObjectView.counts.indexes", count = indexes.len()).to_string(),
             columns,
             rows,
         })
@@ -1207,9 +1208,9 @@ impl DatabasePlugin for DuckDbPlugin {
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("schema", "Schema").width(160.0),
-            Column::new("name", "Name").width(180.0),
-            Column::new("definition", "Definition").width(320.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(160.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(320.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1225,7 +1226,7 @@ impl DatabasePlugin for DuckDbPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
-            title: format!("{} view(s)", views.len()),
+            title: t!("ObjectView.counts.views", count = views.len()).to_string(),
             columns,
             rows,
         })

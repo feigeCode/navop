@@ -7,6 +7,7 @@ use gpui_component::{
     IconName, Sizable, Size,
     button::{Button, ButtonVariants},
 };
+use rust_i18n::t;
 
 #[derive(Clone, Debug)]
 pub enum AskAiEvent {
@@ -105,7 +106,7 @@ impl IntoElement for AskAiButton {
 
         Button::new(self.id)
             .icon(IconName::AI.color())
-            .label("Ask AI")
+            .label(t!("AgentUi.ask_ai").to_string())
             .ghost()
             .with_size(self.size)
             .on_click(move |_event, _window, cx| {

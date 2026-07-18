@@ -93,8 +93,9 @@ pub struct PublicMcpEnvOverride {
 impl PublicMcpEnvOverride {
     pub fn from_env() -> Self {
         Self {
-            enabled: bool_env("ONETCLI_PUBLIC_MCP"),
-            permission_mode: permission_env("ONETCLI_PUBLIC_MCP_PERMISSION"),
+            enabled: bool_env("NAVOP_PUBLIC_MCP").or_else(|| bool_env("ONETCLI_PUBLIC_MCP")),
+            permission_mode: permission_env("NAVOP_PUBLIC_MCP_PERMISSION")
+                .or_else(|| permission_env("ONETCLI_PUBLIC_MCP_PERMISSION")),
         }
     }
 }

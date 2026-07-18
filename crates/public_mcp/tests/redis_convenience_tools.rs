@@ -103,7 +103,7 @@ async fn redis_get_resolves_target_with_redis_resource_kind() {
 }
 
 #[tokio::test]
-async fn redis_set_requests_approval_before_calling_runtime() {
+async fn redis_set_runs_without_approval_in_allow_mode() {
     let runtime = Arc::new(RecordingRedisRuntime::new());
     let approver = Arc::new(RecordingApprover::approved());
     let registry = registry(runtime.clone());
@@ -122,13 +122,13 @@ async fn redis_set_requests_approval_before_calling_runtime() {
             },
         )
         .await
-        .expect("redis.set should run after approval");
+        .expect("redis.set should run in auto mode");
 
     assert_eq!(
         Some(result_for("SET user:1 Ada")),
         result.structured_content
     );
-    assert_eq!("redis.set", approver.requests()[0].tool_name);
+    assert!(approver.requests().is_empty());
     assert_eq!(
         vec![RecordedCommand::new("redis-a", None, "SET user:1 Ada")],
         runtime.commands()

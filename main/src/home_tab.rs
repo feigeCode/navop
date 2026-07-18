@@ -3177,6 +3177,21 @@ impl HomePage {
                         )
                     })
                     .child(
+                        Button::new("open_notes")
+                            .icon(IconName::NotesColor.color())
+                            .tooltip(t!("Home.notes").to_string())
+                            .when(collapsed, |button| button.ghost().small())
+                            .when(!collapsed, |button| {
+                                button
+                                    .label(t!("Home.notes").to_string())
+                                    .w_full()
+                                    .justify_start()
+                            })
+                            .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                this.add_notes_tab(window, cx);
+                            })),
+                    )
+                    .child(
                         Button::new("open_extensions")
                             .icon(IconName::ExtensionsColor.color())
                             .tooltip(t!("Home.extensions").to_string())

@@ -15,6 +15,26 @@ use one_core::gpui_tokio::Tokio;
 use one_core::tab_container::{TabContainer, TabItem};
 use rust_i18n::t;
 
+fn namespace_scan_pattern(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 2);
+    for ch in prefix.chars() {
+        if matches!(ch, '*' | '?' | '[' | ']' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push_str(":*");
+    pattern
+}
+
+fn initial_key_for_create(node: &RedisNode) -> Option<String> {
+    if matches!(node.node_type, RedisNodeType::Namespace) {
+        node.full_key.as_ref().map(|prefix| format!("{prefix}:"))
+    } else {
+        None
+    }
+}
+
 /// Redis 事件处理器
 pub struct RedisEventHandler {
     _tree_subscription: Subscription,
@@ -93,6 +113,17 @@ impl RedisEventHandler {
                     RedisTreeViewEvent::DeleteKey { node_id } => {
                         if let Some(node) = get_node(node_id, cx) {
                             Self::handle_delete_key(
+                                node,
+                                tree_view.clone(),
+                                global_state.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    RedisTreeViewEvent::DeleteNamespaceKeys { node_id } => {
+                        if let Some(node) = get_node(node_id, cx) {
+                            Self::handle_delete_namespace_keys(
                                 node,
                                 tree_view.clone(),
                                 global_state.clone(),
@@ -446,6 +477,136 @@ impl RedisEventHandler {
         });
     }
 
+    fn handle_delete_namespace_keys(
+        node: RedisNode,
+        tree_view: Entity<RedisTreeView>,
+        global_state: GlobalRedisState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        use gpui_component::{WindowExt, v_flex};
+
+        if !matches!(node.node_type, RedisNodeType::Namespace) {
+            return;
+        }
+        let Some(namespace) = node.full_key.clone() else {
+            return;
+        };
+
+        let connection_id = node.connection_id.clone();
+        let db_index = node.db_index;
+        let db_node_id = format!("{}:db{}", connection_id, db_index);
+        let pattern = namespace_scan_pattern(&namespace);
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let namespace = namespace.clone();
+            let connection_id = connection_id.clone();
+            let db_node_id = db_node_id.clone();
+            let pattern = pattern.clone();
+            let tree_view = tree_view.clone();
+            let global_state = global_state.clone();
+
+            dialog
+                .overlay(false)
+                .title(t!("RedisTree.confirm_batch_delete_title").to_string())
+                .confirm()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            t!(
+                                "RedisTree.confirm_batch_delete_keys",
+                                namespace = namespace.clone()
+                            )
+                            .to_string(),
+                        )
+                        .child(t!("RedisTree.irreversible").to_string()),
+                )
+                .on_ok(move |_, _window, cx: &mut App| {
+                    let connection_id = connection_id.clone();
+                    let db_node_id = db_node_id.clone();
+                    let pattern = pattern.clone();
+                    let tree_view = tree_view.clone();
+                    let global_state = global_state.clone();
+
+                    let task = Tokio::spawn_result(cx, async move {
+                        let conn = global_state
+                            .get_connection(&connection_id)
+                            .ok_or_else(|| anyhow::anyhow!(t!("RedisTree.connection_missing")))?;
+                        let guard = conn.read().await;
+                        let mut cursor = 0;
+                        let mut keys = Vec::new();
+
+                        loop {
+                            let result = guard
+                                .scan_in_db(db_index, cursor, &pattern, 500)
+                                .await
+                                .map_err(anyhow::Error::new)?;
+                            keys.extend(result.keys);
+                            if result.finished {
+                                break;
+                            }
+                            cursor = result.cursor;
+                        }
+
+                        let mut deleted = 0i64;
+                        for chunk in keys.chunks(500) {
+                            let key_refs = chunk.iter().map(String::as_str).collect::<Vec<_>>();
+                            deleted += guard
+                                .del_in_db(db_index, &key_refs)
+                                .await
+                                .map_err(anyhow::Error::new)?;
+                        }
+
+                        Ok::<i64, anyhow::Error>(deleted)
+                    });
+
+                    cx.spawn(async move |cx: &mut gpui::AsyncApp| match task.await {
+                        Ok(count) => {
+                            let _ = cx.update(|cx| {
+                                tree_view.update(cx, |tree, cx| {
+                                    tree.clear_node_loaded(&db_node_id, cx);
+                                    tree.refresh_keys(db_node_id.clone(), cx);
+                                });
+                                if let Some(window) = cx.active_window() {
+                                    _ = window.update(cx, |_, window, cx| {
+                                        window.push_notification(
+                                            Notification::success(
+                                                t!(
+                                                    "RedisTree.batch_delete_succeeded",
+                                                    count = count
+                                                )
+                                                .to_string(),
+                                            )
+                                            .autohide(true),
+                                            cx,
+                                        );
+                                    });
+                                }
+                            });
+                        }
+                        Err(error) => {
+                            let error = format!("{error:#}");
+                            let _ = cx.update(|cx| {
+                                if let Some(window) = cx.active_window() {
+                                    _ = window.update(cx, |_, window, cx| {
+                                        Self::show_error(
+                                            window,
+                                            t!("RedisTree.batch_delete_failed", error = error)
+                                                .to_string(),
+                                            cx,
+                                        );
+                                    });
+                                }
+                            });
+                        }
+                    })
+                    .detach();
+                    true
+                })
+        });
+    }
+
     /// 处理创建键事件
     fn handle_create_key(
         node: RedisNode,
@@ -464,7 +625,9 @@ impl RedisEventHandler {
         };
 
         // 创建对话框 UI 状态
-        let create_key_dialog = cx.new(|cx| CreateKeyDialog::new(db_index, window, cx));
+        let initial_key = initial_key_for_create(&node);
+        let create_key_dialog =
+            cx.new(|cx| CreateKeyDialog::new_with_initial_key(db_index, initial_key, window, cx));
 
         let tree = tree_view.clone();
         let state = global_state.clone();
@@ -757,6 +920,42 @@ impl RedisEventHandler {
                     true
                 })
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{initial_key_for_create, namespace_scan_pattern};
+    use crate::{RedisNode, RedisNodeType};
+
+    #[test]
+    fn issue_9_namespace_scan_pattern_matches_only_descendant_keys() {
+        assert_eq!("auth:user:*", namespace_scan_pattern("auth:user"));
+    }
+
+    #[test]
+    fn issue_9_namespace_scan_pattern_escapes_redis_glob_metacharacters() {
+        assert_eq!(
+            r"literal\*\?\[x\]\\path:*",
+            namespace_scan_pattern(r"literal*?[x]\path")
+        );
+    }
+
+    #[test]
+    fn issue_9_create_key_under_namespace_prefills_the_full_prefix() {
+        let node = RedisNode::new(
+            "namespace",
+            "user",
+            RedisNodeType::Namespace,
+            "connection",
+            0,
+        )
+        .with_full_key("auth:user");
+
+        assert_eq!(
+            Some("auth:user:".to_string()),
+            initial_key_for_create(&node)
+        );
     }
 }
 

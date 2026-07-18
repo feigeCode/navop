@@ -6,6 +6,7 @@ use crate::runtime::{RuntimeServices, Session};
 use crate::tools::{ToolCall, ToolDispatchContext, ToolName, ToolObservation, ToolSpec};
 use futures::StreamExt;
 use llm_connector::types::{Message, MessageBlock, Role, ToolCall as LlmToolCall, ToolChoice};
+use rust_i18n::t;
 use tokio_util::sync::CancellationToken;
 
 const MAX_SUBAGENT_ITERATIONS: usize = 6;
@@ -54,9 +55,11 @@ pub(super) async fn run_subagent_model(
         )
         .await;
     }
-    Err(format!(
-        "子代理超过最大工具迭代次数({MAX_SUBAGENT_ITERATIONS})仍未完成"
-    ))
+    Err(t!(
+        "AgentRuntime.subagent_max_iterations_exceeded",
+        count = MAX_SUBAGENT_ITERATIONS
+    )
+    .to_string())
 }
 
 struct SubagentToolContext<'a> {
@@ -119,9 +122,13 @@ async fn sample_subagent_response(
 ) -> Result<ModelResponse, String> {
     let mut stream = tokio::select! {
         biased;
-        _ = cancellation.cancelled() => return Err("子代理任务已取消".to_string()),
+        _ = cancellation.cancelled() => {
+            return Err(t!("AgentRuntime.subagent_cancelled").to_string())
+        },
         result = services.model.complete_stream(request) => {
-            result.map_err(|err| format!("子代理模型调用失败:{err}"))?
+            result.map_err(|error| {
+                t!("AgentRuntime.subagent_model_failed", error = error).to_string()
+            })?
         }
     };
     collect_subagent_response(&mut stream, cancellation).await
@@ -135,9 +142,11 @@ async fn collect_subagent_response(
     let mut completed: Option<ModelResponse> = None;
     while let Some(event) = stream.next().await {
         if cancellation.is_cancelled() {
-            return Err("子代理任务已取消".to_string());
+            return Err(t!("AgentRuntime.subagent_cancelled").to_string());
         }
-        match event.map_err(|err| format!("子代理流式输出失败:{err}"))? {
+        match event
+            .map_err(|error| t!("AgentRuntime.subagent_stream_failed", error = error).to_string())?
+        {
             ModelStreamEvent::TextDelta(delta) => text.push_str(&delta),
             ModelStreamEvent::ReasoningDelta(_) | ModelStreamEvent::ToolCall(_) => {}
             ModelStreamEvent::Completed(response) => completed = Some(response),
@@ -165,7 +174,11 @@ async fn dispatch_subagent_tool(
     let call = match ToolCall::from_llm(llm_call) {
         Ok(call) => call,
         Err(err) => {
-            return ToolObservation::failure(call_id, tool_name, format!("工具参数无效:{err}"));
+            return ToolObservation::failure(
+                call_id,
+                tool_name,
+                t!("AgentRuntime.subagent_tool_invalid_arguments", error = err).to_string(),
+            );
         }
     };
     services
@@ -205,7 +218,7 @@ fn unavailable_subagent_tool(
     specs: &[ToolSpec],
 ) -> ToolObservation {
     let available = if specs.is_empty() {
-        "无".to_string()
+        t!("AgentRuntime.no_available_tools").to_string()
     } else {
         specs
             .iter()
@@ -216,7 +229,7 @@ fn unavailable_subagent_tool(
     ToolObservation::failure(
         call_id,
         tool_name,
-        format!("子代理工具不可用;可用工具:{available}"),
+        t!("AgentRuntime.subagent_tool_unavailable", tools = available).to_string(),
     )
 }
 

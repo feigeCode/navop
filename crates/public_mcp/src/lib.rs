@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod approval_grants;
 pub mod client_config;
 pub mod command_store;
 pub mod discovery;
@@ -11,4 +12,5 @@ pub mod runtime;
 pub mod server;
 pub mod terminal_control;
 pub mod terminal_exec;
+pub mod terminal_read;
 pub mod tools;

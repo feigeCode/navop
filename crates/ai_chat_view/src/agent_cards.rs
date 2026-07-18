@@ -13,16 +13,18 @@ use crate::card::{CardMessage, CardRegistry, ChatCard};
 use crate::theme::{active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    Action, Anchor, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
     v_flex,
 };
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -45,6 +47,8 @@ pub const TOOL_CARD: &str = "agent.tool";
 pub const SUBAGENT_CARD: &str = "agent.subagent";
 /// 工具确认卡片的 `kind`。
 pub const TOOL_CONFIRM_CARD: &str = "agent.confirm";
+/// ACP 协议权限请求卡片的 `kind`。
+pub const ACP_PERMISSION_CARD: &str = "acp.permission";
 
 // ============================================================================
 // 数据契约(reducer 写入 / 卡片读取共用)
@@ -147,6 +151,31 @@ pub struct ToolConfirmItemData {
     pub input_json: String,
 }
 
+/// ACP 权限请求卡片数据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AcpPermissionCardData {
+    pub request_id: String,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub summary: String,
+    #[serde(default)]
+    pub details_json: String,
+    pub options: Vec<AcpPermissionOptionData>,
+    #[serde(default = "default_tool_confirm_status")]
+    pub status: String,
+    #[serde(default)]
+    pub selected_option_name: String,
+}
+
+/// ACP 协议原样提供的权限选项。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AcpPermissionOptionData {
+    pub option_id: String,
+    pub name: String,
+    pub kind: String,
+}
+
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
 #[action(namespace = ai_chat_view, no_json)]
 pub struct ApproveToolCall {
@@ -157,6 +186,13 @@ pub struct ApproveToolCall {
 #[action(namespace = ai_chat_view, no_json)]
 pub struct RejectToolCall {
     pub call_id: String,
+}
+
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct SelectAcpPermissionOption {
+    pub request_id: String,
+    pub option_id: String,
 }
 
 impl PlanCardData {
@@ -201,6 +237,16 @@ impl ToolConfirmCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
+impl AcpPermissionCardData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
     pub fn from_json(s: &str) -> Option<Self> {
         serde_json::from_str(s).ok()
     }
@@ -315,9 +361,9 @@ impl ChatCard for ToolCard {
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .child(if expanded {
-                                    "收起详情"
+                                    t!("AgentUi.collapse_details").to_string()
                                 } else {
-                                    "展开详情"
+                                    t!("AgentUi.expand_details").to_string()
                                 }),
                         )
                     }),
@@ -325,7 +371,7 @@ impl ChatCard for ToolCard {
 
         if expanded && !data.input_json.is_empty() {
             card = card.child(tool_card_json_block(
-                "input",
+                t!("AgentUi.input").to_string(),
                 SharedString::from(format!("agent-tool-input-{}", data.call_id)),
                 data.input_json.clone(),
                 window,
@@ -337,7 +383,7 @@ impl ChatCard for ToolCard {
             let terminal_output = terminal_exec_output_text(&data);
             if !terminal_output.is_empty() {
                 card = card.child(tool_card_text_block(
-                    "output",
+                    t!("AgentUi.output").to_string(),
                     SharedString::from(format!("agent-tool-output-{}", data.call_id)),
                     terminal_output,
                     window,
@@ -347,7 +393,7 @@ impl ChatCard for ToolCard {
                 let output = distinct_tool_output_json(&data);
                 if !output.is_empty() {
                     card = card.child(tool_card_json_block(
-                        "output",
+                        t!("AgentUi.output").to_string(),
                         SharedString::from(format!("agent-tool-output-{}", data.call_id)),
                         output,
                         window,
@@ -445,6 +491,7 @@ impl ChatCard for ToolConfirmCard {
         let mut card = v_flex()
             .w_full()
             .min_w_0()
+            .items_stretch()
             .gap_2()
             .p_3()
             .rounded_lg()
@@ -513,7 +560,7 @@ impl ChatCard for ToolConfirmCard {
 
         if !data.input_json.is_empty() {
             card = card.child(tool_card_json_block(
-                "待执行入参",
+                t!("AgentUi.pending_input").to_string(),
                 SharedString::from(format!("agent-tool-confirm-input-{}", msg.id)),
                 data.input_json.clone(),
                 window,
@@ -532,7 +579,7 @@ impl ChatCard for ToolConfirmCard {
                             .debug_selector(|| "agent-tool-reject".to_string())
                             .with_size(Size::Small)
                             .danger()
-                            .label("拒绝")
+                            .label(t!("AgentUi.reject").to_string())
                             .on_click(move |_, window, cx| {
                                 window.dispatch_action(
                                     Box::new(RejectToolCall {
@@ -547,7 +594,7 @@ impl ChatCard for ToolConfirmCard {
                             .debug_selector(|| "agent-tool-approve".to_string())
                             .with_size(Size::Small)
                             .primary()
-                            .label("执行")
+                            .label(t!("AgentUi.execute").to_string())
                             .on_click(move |_, window, cx| {
                                 window.dispatch_action(
                                     Box::new(ApproveToolCall {
@@ -571,6 +618,193 @@ impl ChatCard for ToolConfirmCard {
 
         card.into_any_element()
     }
+}
+
+struct AcpPermissionCard;
+
+impl ChatCard for AcpPermissionCard {
+    fn kind(&self) -> &'static str {
+        ACP_PERMISSION_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
+        let Some(data) = AcpPermissionCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+        let pending = data.status == "pending";
+        let mut card = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().warning.opacity(0.35))
+            .bg(theme.panel)
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_lg().text_color(cx.theme().warning).child("?"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child(t!("AgentUi.acp_permission_request").to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(acp_permission_status_color(&data.status, cx))
+                            .child(acp_permission_status_label(&data)),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(data.summary.clone()),
+            );
+
+        if !data.details_json.is_empty() {
+            card = card.child(
+                div()
+                    .debug_selector(|| "acp-permission-details".to_string())
+                    .w_full()
+                    .min_w_0()
+                    .self_stretch()
+                    .child(tool_card_json_block(
+                        t!("AgentUi.request_details").to_string(),
+                        SharedString::from(format!("acp-permission-details-{}", msg.id)),
+                        data.details_json.clone(),
+                        window,
+                        cx,
+                    )),
+            );
+        }
+
+        if pending {
+            card = card.child(render_acp_permission_actions(&data));
+        } else {
+            card = card.child(
+                h_flex().w_full().justify_end().child(
+                    Button::new(SharedString::from(format!(
+                        "resolved-acp-permission-{}",
+                        data.request_id
+                    )))
+                    .with_size(Size::Small)
+                    .disabled(true)
+                    .label(acp_permission_status_label(&data)),
+                ),
+            );
+        }
+
+        card.into_any_element()
+    }
+}
+
+fn render_acp_permission_actions(data: &AcpPermissionCardData) -> AnyElement {
+    let allow = preferred_acp_permission_option(&data.options, "allow_once", "allow");
+    let reject = preferred_acp_permission_option(&data.options, "reject_once", "reject");
+    let primary_ids = [allow, reject]
+        .into_iter()
+        .flatten()
+        .map(|option| option.option_id.as_str())
+        .collect::<HashSet<_>>();
+    let additional = data
+        .options
+        .iter()
+        .filter(|option| !primary_ids.contains(option.option_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut actions = h_flex()
+        .debug_selector(|| "acp-permission-actions".to_string())
+        .w_full()
+        .min_w_0()
+        .justify_end()
+        .gap_2();
+
+    if let Some(option) = reject {
+        actions = actions.child(acp_permission_option_button(&data.request_id, option).danger());
+    }
+    if let Some(option) = allow {
+        actions = actions.child(acp_permission_option_button(&data.request_id, option).success());
+    }
+    if !additional.is_empty() {
+        let request_id = data.request_id.clone();
+        actions = actions.child(
+            Button::new(SharedString::from(format!(
+                "acp-permission-more-{}",
+                data.request_id
+            )))
+            .debug_selector(|| "acp-permission-more-options".to_string())
+            .with_size(Size::Small)
+            .compact()
+            .label(t!("AgentUi.more_options").to_string())
+            .dropdown_caret(true)
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
+                for option in &additional {
+                    menu = menu.item(PopupMenuItem::new(option.name.clone()).action(Box::new(
+                        SelectAcpPermissionOption {
+                            request_id: request_id.clone(),
+                            option_id: option.option_id.clone(),
+                        },
+                    )));
+                }
+                menu
+            }),
+        );
+    }
+
+    actions.into_any_element()
+}
+
+fn preferred_acp_permission_option<'a>(
+    options: &'a [AcpPermissionOptionData],
+    preferred_kind: &str,
+    kind_prefix: &str,
+) -> Option<&'a AcpPermissionOptionData> {
+    options
+        .iter()
+        .find(|option| option.kind == preferred_kind)
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| option.kind.starts_with(kind_prefix))
+        })
+}
+
+fn acp_permission_option_button(request_id: &str, option: &AcpPermissionOptionData) -> Button {
+    let action_request_id = request_id.to_string();
+    let option_id = option.option_id.clone();
+    Button::new(SharedString::from(format!(
+        "acp-permission-option-{request_id}-{option_id}"
+    )))
+    .debug_selector({
+        let kind = option.kind.clone();
+        move || format!("acp-permission-{kind}")
+    })
+    .with_size(Size::Small)
+    .compact()
+    .label(option.name.clone())
+    .on_click(move |_, window, cx| {
+        window.dispatch_action(
+            Box::new(SelectAcpPermissionOption {
+                request_id: action_request_id.clone(),
+                option_id: option_id.clone(),
+            }),
+            cx,
+        );
+    })
 }
 
 // ============================================================================
@@ -610,20 +844,20 @@ fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
         .or_else(|| data.target_id.as_deref().filter(|id| !id.is_empty()))
 }
 
-fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
+fn confirm_card_header(data: &ToolConfirmCardData) -> String {
     if data.items.len() > 1 {
-        return "批量工具执行确认";
+        return t!("AgentUi.batch_tool_confirmation").to_string();
     }
     if is_terminal_exec_tool(&data.tool_name) {
-        "终端执行确认"
+        t!("AgentUi.terminal_execution_confirmation").to_string()
     } else {
-        "工具执行确认"
+        t!("AgentUi.tool_execution_confirmation").to_string()
     }
 }
 
 fn confirm_card_title(data: &ToolConfirmCardData) -> String {
     if data.items.len() > 1 {
-        return format!("工具 · {} 个待执行", data.items.len());
+        return t!("AgentUi.pending_tools", count = data.items.len()).to_string();
     }
     let prefix = tool_card_prefix(&data.tool_name);
     if data.input_summary.is_empty() || !data.input_json.is_empty() {
@@ -670,11 +904,11 @@ fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElemen
         .into_any_element()
 }
 
-fn tool_card_prefix(tool_name: &str) -> &'static str {
+fn tool_card_prefix(tool_name: &str) -> String {
     if is_terminal_exec_tool(tool_name) {
-        "终端执行"
+        t!("AgentUi.terminal_execution").to_string()
     } else {
-        "工具"
+        t!("AgentUi.tool").to_string()
     }
 }
 
@@ -743,7 +977,7 @@ fn wrapped_output_matches_input_summary(input_summary: &str, output_json: &str) 
 }
 
 fn tool_card_json_block(
-    label: &'static str,
+    label: impl Into<SharedString>,
     id: SharedString,
     content: String,
     window: &mut Window,
@@ -756,19 +990,23 @@ fn tool_card_json_block(
         .debug_selector(|| "agent-tool-json-block".to_string())
         .w_full()
         .min_w_0()
+        .self_stretch()
+        .items_stretch()
         .gap_1()
         .px_1()
         .child(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(label),
+                .child(label.into()),
         )
         .child(
             h_flex()
                 .debug_selector(|| "agent-tool-json-frame".to_string())
                 .w_full()
                 .min_w_0()
+                .self_stretch()
+                .items_stretch()
                 .h(height)
                 .rounded(cx.theme().radius)
                 .border_1()
@@ -779,12 +1017,15 @@ fn tool_card_json_block(
                     div()
                         .debug_selector(|| "agent-tool-json-input-slot".to_string())
                         .flex_1()
+                        .w_full()
                         .min_w_0()
+                        .self_stretch()
                         .h_full()
                         .child(
                             Input::new(&input)
                                 .bare()
                                 .flex_1()
+                                .w_full()
                                 .min_w_0()
                                 .h_full()
                                 .appearance(false)
@@ -798,7 +1039,7 @@ fn tool_card_json_block(
 }
 
 fn tool_card_text_block(
-    label: &'static str,
+    label: impl Into<SharedString>,
     id: SharedString,
     content: String,
     window: &mut Window,
@@ -816,7 +1057,7 @@ fn tool_card_text_block(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(label),
+                .child(label.into()),
         )
         .child(
             div()
@@ -932,7 +1173,7 @@ fn fallback(content: &str, cx: &App) -> AnyElement {
         .child(
             themed_markdown(
                 SharedString::from("agent-card-fallback"),
-                format!("[无法解析的 Agent 卡片] {content}"),
+                t!("AgentUi.unparseable_agent_card", content = content).to_string(),
                 &theme,
             )
             .text_xs()
@@ -941,21 +1182,21 @@ fn fallback(content: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn tool_status_label(data: &ToolCardData) -> &'static str {
+fn tool_status_label(data: &ToolCardData) -> String {
     if data.running {
-        "执行中…"
+        t!("AgentUi.running").to_string()
     } else if data.success == Some(false) {
-        "失败"
+        t!("AgentUi.failed").to_string()
     } else {
-        "已完成"
+        t!("AgentUi.completed_state").to_string()
     }
 }
 
-fn confirm_status_label(status: &str) -> &'static str {
+fn confirm_status_label(status: &str) -> String {
     match status {
-        "approved" => "已批准",
-        "rejected" => "已拒绝",
-        _ => "待确认",
+        "approved" => t!("AgentUi.approved").to_string(),
+        "rejected" => t!("AgentUi.rejected").to_string(),
+        _ => t!("AgentUi.pending_confirmation").to_string(),
     }
 }
 
@@ -963,6 +1204,28 @@ fn confirm_status_color(status: &str, cx: &App) -> gpui::Hsla {
     match status {
         "approved" => cx.theme().success,
         "rejected" => cx.theme().danger,
+        _ => cx.theme().warning,
+    }
+}
+
+fn acp_permission_status_label(data: &AcpPermissionCardData) -> String {
+    match data.status.as_str() {
+        "approved" | "rejected" if !data.selected_option_name.is_empty() => t!(
+            "AgentUi.selected_option",
+            option = data.selected_option_name
+        )
+        .to_string(),
+        "approved" => t!("AgentUi.allowed").to_string(),
+        "rejected" => t!("AgentUi.rejected").to_string(),
+        "cancelled" => t!("AgentUi.cancelled").to_string(),
+        _ => t!("AgentUi.awaiting_approval").to_string(),
+    }
+}
+
+fn acp_permission_status_color(status: &str, cx: &App) -> gpui::Hsla {
+    match status {
+        "approved" => cx.theme().success,
+        "rejected" | "cancelled" => cx.theme().danger,
         _ => cx.theme().warning,
     }
 }
@@ -1056,7 +1319,7 @@ fn subagent_title(data: &SubAgentCardData, cx: &App) -> AnyElement {
         .text_sm()
         .text_color(theme.foreground)
         .truncate()
-        .child(format!("子代理 · {}", data.name))
+        .child(t!("AgentUi.subagent_name", name = data.name).to_string())
         .into_any_element()
 }
 
@@ -1083,13 +1346,13 @@ fn subagent_status_style(data: &SubAgentCardData, cx: &App) -> (&'static str, gp
     }
 }
 
-fn subagent_status_label(data: &SubAgentCardData) -> &'static str {
+fn subagent_status_label(data: &SubAgentCardData) -> String {
     if data.running {
-        "执行中…"
+        t!("AgentUi.running").to_string()
     } else if data.success == Some(false) {
-        "失败"
+        t!("AgentUi.failed").to_string()
     } else {
-        "已完成"
+        t!("AgentUi.completed_state").to_string()
     }
 }
 
@@ -1110,7 +1373,7 @@ fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
                     .child(
                         themed_markdown(
                             SharedString::from(format!("agent-subagent-task-{}", data.subagent_id)),
-                            format!("**用途**\n\n{}", data.task),
+                            t!("AgentUi.purpose_markdown", value = data.task).to_string(),
                             &theme,
                         )
                         .selectable(true),
@@ -1147,7 +1410,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
         return text.to_string();
     }
     let mut out: String = text.chars().take(max_chars).collect();
-    out.push_str("…（已截断）");
+    out.push_str(t!("AgentUi.truncated_suffix").as_ref());
     out
 }
 
@@ -1156,6 +1419,7 @@ pub fn register_agent_cards(cx: &mut App) {
     CardRegistry::register_global(cx, Arc::new(ToolCard::new()));
     CardRegistry::register_global(cx, Arc::new(SubAgentCard::new()));
     CardRegistry::register_global(cx, Arc::new(ToolConfirmCard));
+    CardRegistry::register_global(cx, Arc::new(AcpPermissionCard));
 }
 
 #[cfg(test)]
@@ -1221,7 +1485,7 @@ mod tests {
         };
 
         assert_eq!(
-            "工具 · ssh.exec · @prod-b · df -h",
+            format!("{} · ssh.exec · @prod-b · df -h", t!("AgentUi.tool")),
             tool_card_title_text(&data)
         );
     }
@@ -1265,6 +1529,44 @@ mod tests {
     }
 
     #[test]
+    fn acp_permission_card_data_roundtrips_all_protocol_options() {
+        let data = AcpPermissionCardData {
+            request_id: "session:call".into(),
+            session_id: "session".into(),
+            tool_call_id: "call".into(),
+            tool_name: "Write file".into(),
+            summary: "ACP agent requests permission for Write file".into(),
+            details_json: "{\"path\":\"/tmp/a\"}".into(),
+            options: vec![
+                AcpPermissionOptionData {
+                    option_id: "reject".into(),
+                    name: "Reject".into(),
+                    kind: "reject_once".into(),
+                },
+                AcpPermissionOptionData {
+                    option_id: "allow-once".into(),
+                    name: "Allow once".into(),
+                    kind: "allow_once".into(),
+                },
+                AcpPermissionOptionData {
+                    option_id: "allow-always".into(),
+                    name: "Always allow".into(),
+                    kind: "allow_always".into(),
+                },
+            ],
+            status: "pending".into(),
+            selected_option_name: String::new(),
+        };
+
+        let back = AcpPermissionCardData::from_json(&data.to_json()).expect("parse");
+        assert_eq!(ACP_PERMISSION_CARD, "acp.permission");
+        assert_eq!("session:call", back.request_id);
+        assert_eq!(3, back.options.len());
+        assert_eq!("allow_always", back.options[2].kind);
+        assert_eq!("pending", back.status);
+    }
+
+    #[test]
     fn batch_tool_confirm_card_data_roundtrips_and_titles_as_batch() {
         let data = ToolConfirmCardData {
             call_id: "call_a".into(),
@@ -1292,8 +1594,14 @@ mod tests {
 
         assert_eq!(2, back.items.len());
         assert_eq!("call_b", back.items[1].call_id);
-        assert_eq!("批量工具执行确认", confirm_card_header(&back));
-        assert_eq!("工具 · 2 个待执行", confirm_card_title(&back));
+        assert_eq!(
+            t!("AgentUi.batch_tool_confirmation"),
+            confirm_card_header(&back)
+        );
+        assert_eq!(
+            t!("AgentUi.pending_tools", count = 2),
+            confirm_card_title(&back)
+        );
     }
 
     #[test]
@@ -1308,7 +1616,10 @@ mod tests {
             status: "pending".into(),
         };
 
-        assert_eq!("工具 · db_schema", confirm_card_title(&data));
+        assert_eq!(
+            format!("{} · db_schema", t!("AgentUi.tool")),
+            confirm_card_title(&data)
+        );
     }
 
     #[test]
@@ -1323,7 +1634,10 @@ mod tests {
             status: "pending".into(),
         };
 
-        assert_eq!("工具 · db_schema · show tables", confirm_card_title(&data));
+        assert_eq!(
+            format!("{} · db_schema · show tables", t!("AgentUi.tool")),
+            confirm_card_title(&data)
+        );
     }
 
     #[test]
@@ -1338,19 +1652,28 @@ mod tests {
             status: "pending".into(),
         };
 
-        assert_eq!("终端执行确认", confirm_card_header(&data));
         assert_eq!(
-            "终端执行 · terminal_exec · df -h",
+            t!("AgentUi.terminal_execution_confirmation"),
+            confirm_card_header(&data)
+        );
+        assert_eq!(
+            format!(
+                "{} · terminal_exec · df -h",
+                t!("AgentUi.terminal_execution")
+            ),
             confirm_card_title(&data)
         );
-        assert_eq!("终端执行", tool_card_prefix("terminal.exec"));
+        assert_eq!(
+            t!("AgentUi.terminal_execution"),
+            tool_card_prefix("terminal.exec")
+        );
     }
 
     #[test]
     fn truncate_adds_marker() {
         let s = "a".repeat(10);
         assert_eq!(truncate_chars(&s, 100), s);
-        assert!(truncate_chars(&s, 3).contains("已截断"));
+        assert!(truncate_chars(&s, 3).contains(t!("AgentUi.truncated_suffix").as_ref()));
     }
 
     #[test]
@@ -1436,7 +1759,7 @@ mod tests {
         let rendered = terminal_exec_output_text(&data);
 
         assert_eq!(MAX_TOOL_OUTPUT_JSON_CHARS + 100, rendered.len());
-        assert!(!rendered.contains("已截断"));
+        assert!(!rendered.contains(t!("AgentUi.truncated_suffix").as_ref()));
     }
 
     #[test]

@@ -369,6 +369,39 @@ async fn agent_simple_question_answers_without_plan() {
 }
 
 #[tokio::test]
+async fn agent_loop_supports_more_than_sixteen_tool_round_trips() {
+    let mut responses = (0..17)
+        .map(|index| {
+            ModelResponse::tool_call(function_tool_call(
+                format!("call_{index}"),
+                "echo",
+                json!({"message": format!("step {index}")}).to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    responses.push(ModelResponse::text("复杂任务完成。"));
+    let model = Arc::new(MockModelClient::new(responses));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "执行复杂任务".into(), TaskKind::Agent)
+        .await
+        .expect("agent loop should finish beyond sixteen round trips");
+
+    assert!(matches!(
+        outcome,
+        TaskOutcome::Completed { answer: Some(answer) } if answer == "复杂任务完成。"
+    ));
+    assert_eq!(18, model.request_count());
+}
+
+#[tokio::test]
 async fn agent_loop_compacts_large_history_before_model_request() {
     let model = Arc::new(MockModelClient::new([
         ModelResponse::text("摘要: 旧上下文说明用户要部署 Java 项目。"),
@@ -380,7 +413,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
     ));
     let session = runtime.create_session(ResourceContext::new());
     let mut rx = runtime.subscribe();
-    session.record_user_input("旧上下文 ".repeat(7000));
+    session.record_user_input("旧上下文 ".repeat(9000));
 
     runtime
         .run_turn_blocking(session.id(), "继续".into(), TaskKind::Agent)
@@ -415,7 +448,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
                 title,
                 is_done: false,
                 ..
-            } if title == "正在压缩上下文..."
+            } if title == "Compressing context..."
         )
     }));
     assert!(events.iter().any(|event| {
@@ -425,7 +458,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
                 title,
                 is_done: true,
                 ..
-            } if title == "上下文压缩完成"
+            } if title == "Context compression complete"
         )
     }));
 }
@@ -733,7 +766,7 @@ async fn agent_delegate_task_runs_isolated_subagent_and_emits_events() {
             item,
             agent_runtime::HistoryItem::Observation(observation)
                 if observation.tool_name.as_str() == "delegate_task"
-                    && observation.summary.contains("子代理 reviewer 完成")
+                    && observation.summary.contains("Subagent reviewer completed")
         )
     }));
 }
@@ -1385,7 +1418,7 @@ async fn manual_tool_mode_rejects_pending_tool_and_continues_followup() {
         matches!(
             event,
             RuntimeEvent::ObservationAdded { observation, .. }
-                if !observation.success && observation.summary.contains("用户拒绝执行工具")
+                if !observation.success && observation.summary.contains("The user rejected tool")
         )
     }));
     assert!(
@@ -1495,6 +1528,11 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
                     "terminal.control",
                     "Control a visible terminal.",
                     RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.read",
+                    "Read recent visible terminal output.",
+                    RiskLevel::Read,
                 ))),
         )),
     ));
@@ -1522,6 +1560,15 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     assert!(system.contains("submit=true"));
     assert!(system.contains("不要声称有 exit code"));
     assert!(system.contains("不要用 `ssh_exec` 替代"));
+    assert!(system.contains("默认优先"));
+    assert!(system.contains("当前工作目录"));
+    assert!(system.contains("虚拟环境"));
+    assert!(system.contains("alias"));
+    assert!(system.contains("独立 SSH channel"));
+    assert!(system.contains("terminal_read"));
+    assert!(system.contains("PTY 现场"));
+    assert!(system.contains("不要为了重新获得输出而重复执行命令"));
+    assert!(system.contains("最少行数"));
     assert!(system.contains("Ctrl+C"));
     assert!(system.contains("取消对话不会中断终端任务"));
     assert!(system.contains("\\u0003"));

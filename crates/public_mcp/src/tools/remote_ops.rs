@@ -222,7 +222,7 @@ fn command_poll_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.command.poll",
         title: "Poll remote command",
-        description: "Check the status of a background SSH command previously started by ssh.exec with mode=\"background\". Returns running/exited/failed state, exit code when available, elapsed duration, and stdout/stderr byte counts.",
+        description: "Check the status of a background SSH command or a foreground ssh.exec call that detached after its wait timeout. Returns running/exited/failed state, exit code when available, elapsed duration, and stdout/stderr byte counts.",
         schema: poll_schema_value,
         read_only: true,
         open_world: false,
@@ -233,7 +233,7 @@ fn command_output_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.command.output",
         title: "Read remote command output",
-        description: "Read buffered stdout and stderr from a background SSH command by command_id. Use stdout_offset and stderr_offset from the previous response to page through output without rereading old bytes.",
+        description: "Read buffered stdout and stderr incrementally from a background SSH command or a foreground command that detached after timeout. Use stdout_offset and stderr_offset from the previous response to page through output without rereading old bytes.",
         schema: output_schema_value,
         read_only: true,
         open_world: false,
@@ -244,7 +244,7 @@ fn command_cancel_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.command.cancel",
         title: "Cancel remote command",
-        description: "Request cancellation of a background SSH command by command_id. Use signal=\"sigint\" for graceful interrupt or signal=\"sigterm\" for termination. This only applies to commands started in background mode.",
+        description: "Request cancellation of a tracked SSH command by command_id. Use signal=\"sigint\" for graceful interrupt or signal=\"sigterm\" for termination.",
         schema: cancel_schema_value,
         read_only: false,
         open_world: false,
@@ -255,7 +255,7 @@ fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.exec",
         title: "Execute remote command",
-        description: "Run a non-interactive shell command on an active SSH target. The command should be the same shell line a user would type in the terminal. It returns structured stdout, stderr, exit_code, duration_ms, and timeout state. For remote file read/write, use sftp.read or sftp.write instead of shell commands.",
+        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It does not inherit the current visible terminal's cwd, activated virtual environment, shell aliases/functions, or temporary environment variables unless cwd/env/command setup is supplied explicitly. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel. Use sftp.read/write for file contents.",
         schema: exec_schema_value,
         read_only: false,
         open_world: true,

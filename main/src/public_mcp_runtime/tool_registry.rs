@@ -1,11 +1,11 @@
-use super::{internal_functions, redis, resource_pool};
+use super::{diagnostics, internal_functions, mongo, redis, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
     internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
-    terminal_exec_tool_registry,
+    terminal_exec_tool_registry, terminal_read_tool_registry,
 };
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ fn build_tool_registry_for_surface(
     surface: ToolRegistrySurface,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
-    let mut runtime_registries = Vec::new();
+    let mut runtime_registries = vec![diagnostics::runtime_status_tool_registry(toolsets)];
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
             if toolsets.terminal_ssh_exec {
@@ -52,6 +52,7 @@ fn build_tool_registry_for_surface(
             }
             if toolsets.terminal_exec {
                 runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_control_tool_registry(registry));
             }
         } else {
@@ -137,6 +138,11 @@ fn build_tool_registry_for_surface(
     }
     if toolsets.redis {
         runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
+            cx,
+        )));
+    }
+    if toolsets.mongo {
+        runtime_registries.push(tool_runtime::ToolRegistry::new(mongo::mongo_tool_handlers(
             cx,
         )));
     }
@@ -245,6 +251,49 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "redis.keys"));
         assert!(tools.iter().any(|tool| tool.name == "redis.get"));
         assert!(tools.iter().any(|tool| tool.name == "redis.set"));
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_includes_mongo_tools(cx: &mut TestAppContext) {
+        let toolsets = ToolExposureToolsetSettings {
+            terminal: false,
+            connections: false,
+            mongo: true,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            cx.set_global(mongodb_view::GlobalMongoState::new());
+            build_tool_registry(cx, &toolsets)
+                .expect("MongoDB registry should build")
+                .tools()
+        });
+
+        for expected in [
+            "mongo.list_connections",
+            "mongo.list_databases",
+            "mongo.list_collections",
+            "mongo.find",
+            "mongo.aggregate",
+            "mongo.count",
+            "mongo.list_indexes",
+            "mongo.create_index",
+            "mongo.drop_index",
+            "mongo.create_collection",
+            "mongo.drop_database",
+            "mongo.get_validation",
+            "mongo.set_validation",
+            "mongo.insert",
+            "mongo.replace",
+            "mongo.update",
+            "mongo.delete",
+            "mongo.explain",
+        ] {
+            assert!(
+                tools.iter().any(|tool| tool.name == expected),
+                "missing {expected}"
+            );
+        }
     }
 
     #[gpui::test]
@@ -501,6 +550,7 @@ mod tests {
 
         assert!(!tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.read"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
     }
 
@@ -738,6 +788,7 @@ mod tests {
                     target: request.target,
                     command: request.command,
                     submitted: request.submit,
+                    command_id: None,
                     completion: TerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),

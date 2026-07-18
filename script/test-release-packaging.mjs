@@ -16,9 +16,41 @@ test("release packaging uses the navop executable on every platform", () => {
   assert.doesNotMatch(bundle, /generate-macos-icon\.sh/);
   assert.match(bundle, /Error: Icon file not found/);
   assert.match(plist, /<key>CFBundleExecutable<\/key>\s*<string>navop<\/string>/);
-  assert.match(desktop, /^Exec=navop$/m);
+  assert.match(desktop, /^Exec=navop %F$/m);
   assert.match(desktop, /^Icon=navop$/m);
   assert.match(desktop, /^StartupWMClass=navop$/m);
+});
+
+test("installers register database and Markdown file associations", () => {
+  const release = read(".github/workflows/release.yml");
+  const plist = read("resources/macos/Info.plist");
+  const desktop = read("resources/linux/navop.desktop");
+  const wix = read("installer/windows/navop.wxs");
+  const mimePath = "resources/linux/navop.xml";
+
+  assert.match(plist, /<key>CFBundleDocumentTypes<\/key>/);
+  for (const extension of ["db", "duckdb", "md"]) {
+    assert.match(plist, new RegExp(`<string>${extension}<\\/string>`));
+    assert.match(wix, new RegExp(`<Extension[^>]*Id="${extension}"`));
+  }
+
+  assert.match(
+    desktop,
+    /^MimeType=.*application\/vnd\.sqlite3;.*application\/x-duckdb;.*text\/markdown;/m,
+  );
+  assert.ok(fs.existsSync(mimePath), `${mimePath} must exist`);
+  const mime = read(mimePath);
+  assert.match(mime, /type="application\/vnd\.sqlite3"/);
+  assert.match(mime, /pattern="\*\.db"/);
+  assert.match(mime, /type="application\/x-duckdb"/);
+  assert.match(mime, /pattern="\*\.duckdb"/);
+  assert.match(mime, /type="text\/markdown"/);
+  assert.match(mime, /pattern="\*\.md"/);
+  assert.match(release, /package\/usr\/share\/mime\/packages/);
+  assert.match(release, /resources\/linux\/navop\.xml/);
+  assert.match(release, /\/usr\/share\/mime\/packages\/navop\.xml/);
+  assert.match(release, /update-mime-database \/usr\/share\/mime/);
+  assert.match(release, /update-desktop-database \/usr\/share\/applications/);
 });
 
 test("renamed Linux packages replace legacy onetcli installations", () => {
@@ -237,15 +269,18 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(validator, /\$value = \[string\]\$record\.StringData\(1\)/);
 });
 
-test("release builds use cached-friendly thin LTO", () => {
-  for (const workflowPath of [
-    ".github/workflows/release.yml",
-    ".github/workflows/build-windows-msi.yml",
-  ]) {
-    const workflow = read(workflowPath);
-    assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO: thin/);
-    assert.match(workflow, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
-  }
+test("release builds keep size-optimized Cargo profile defaults", () => {
+  const release = read(".github/workflows/release.yml");
+  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_LTO:/);
+  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS:/);
+
+  const cargo = read("Cargo.toml");
+  assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "fat"/);
+  assert.match(cargo, /\[profile\.release\][\s\S]*?codegen-units = 1/);
+
+  const manualWindows = read(".github/workflows/build-windows-msi.yml");
+  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_LTO: thin/);
+  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

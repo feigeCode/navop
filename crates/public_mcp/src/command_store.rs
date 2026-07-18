@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use uuid::Uuid;
 
 /// background 命令的退出信号。drop 它或 send `true` 即通知任务应停止。
@@ -46,6 +46,7 @@ struct CommandState {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     cancel_handle: Option<CommandCancelHandle>,
+    finished_notify: Arc<Notify>,
 }
 
 impl CommandEntry {
@@ -53,7 +54,7 @@ impl CommandEntry {
         command_id: String,
         session_id: String,
         command: String,
-        cancel_handle: CommandCancelHandle,
+        cancel_handle: Option<CommandCancelHandle>,
     ) -> Self {
         Self {
             command_id,
@@ -66,7 +67,8 @@ impl CommandEntry {
                 finished: None,
                 stdout: Vec::new(),
                 stderr: Vec::new(),
-                cancel_handle: Some(cancel_handle),
+                cancel_handle,
+                finished_notify: Arc::new(Notify::new()),
             }),
         }
     }
@@ -86,6 +88,14 @@ impl CommandEntry {
         }
     }
 
+    pub fn replace_stdout(&self, data: &[u8]) {
+        let mut state = self.state.lock().expect("command state lock poisoned");
+        state.stdout.clear();
+        state
+            .stdout
+            .extend_from_slice(&data[..data.len().min(MAX_COMMAND_BUFFER_BYTES)]);
+    }
+
     /// 标记命令完成。由执行桥在收到 ExitStatus/ExitSignal/EOF 时调用。
     pub fn complete(&self, status: RemoteCommandStatus, exit_code: Option<i32>) {
         let mut state = self.state.lock().expect("command state lock poisoned");
@@ -94,6 +104,39 @@ impl CommandEntry {
         state.finished = Some(Instant::now());
         // 完成后不再需要取消句柄。
         state.cancel_handle = None;
+        state.finished_notify.notify_waiters();
+    }
+
+    pub async fn wait_for_completion(&self, timeout: std::time::Duration) -> bool {
+        if self.is_finished() {
+            return true;
+        }
+        let notify = {
+            self.state
+                .lock()
+                .expect("command state lock poisoned")
+                .finished_notify
+                .clone()
+        };
+        tokio::time::timeout(timeout, async {
+            loop {
+                let notified = notify.notified();
+                if self.is_finished() {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    fn is_finished(&self) -> bool {
+        self.state
+            .lock()
+            .expect("command state lock poisoned")
+            .finished
+            .is_some()
     }
 
     fn snapshot(&self) -> CommandSnapshot {
@@ -164,7 +207,7 @@ fn slice_output(buffer: &[u8], offset: usize, limit: usize) -> (Vec<u8>, usize, 
     if offset >= buffer.len() {
         return (Vec::new(), buffer.len(), false);
     }
-    let end = (offset + limit).min(buffer.len());
+    let end = offset.saturating_add(limit).min(buffer.len());
     let truncated = end - offset == limit && end < buffer.len();
     (buffer[offset..end].to_vec(), end, truncated)
 }
@@ -189,13 +232,32 @@ impl RemoteCommandStore {
             command_id.clone(),
             session_id.to_string(),
             command.to_string(),
-            cancel_handle,
+            Some(cancel_handle),
         ));
         self.commands
             .lock()
             .expect("command store lock poisoned")
             .insert(command_id.clone(), entry.clone());
         (command_id, entry, cancel_rx)
+    }
+
+    pub fn register_observed(
+        &self,
+        session_id: &str,
+        command: &str,
+    ) -> (String, Arc<CommandEntry>) {
+        let command_id = format!("cmd_{}", Uuid::new_v4().simple());
+        let entry = Arc::new(CommandEntry::new(
+            command_id.clone(),
+            session_id.to_string(),
+            command.to_string(),
+            None,
+        ));
+        self.commands
+            .lock()
+            .expect("command store lock poisoned")
+            .insert(command_id.clone(), entry.clone());
+        (command_id, entry)
     }
 
     pub fn poll_by_id(&self, command_id: &str) -> Result<RemoteCommandPollResult> {
@@ -249,6 +311,13 @@ impl RemoteCommandStore {
         self.entry(command_id)
             .ok()
             .map(|entry| entry.command.clone())
+    }
+
+    pub fn remove(&self, command_id: &str) {
+        self.commands
+            .lock()
+            .expect("command store lock poisoned")
+            .remove(command_id);
     }
 
     fn entry(&self, command_id: &str) -> Result<Arc<CommandEntry>> {
@@ -355,6 +424,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(RemoteCommandStatus::Exited, result.status);
+    }
+
+    #[tokio::test]
+    async fn observed_command_can_be_read_after_wait_timeout() {
+        let store = RemoteCommandStore::default();
+        let (id, entry) = store.register_observed("ssh-1", "sleep 1");
+
+        assert!(
+            !entry
+                .wait_for_completion(std::time::Duration::from_millis(1))
+                .await
+        );
+        entry.push_stdout(b"still running\n");
+        let output = store
+            .output(&RemoteCommandOutputRequest {
+                command_id: id.clone(),
+                stdout_offset: 0,
+                stderr_offset: 0,
+                limit_bytes: None,
+            })
+            .unwrap();
+        assert_eq!("still running\n", output.stdout);
+        assert_eq!(
+            RemoteCommandStatus::Running,
+            store.poll_by_id(&id).unwrap().status
+        );
+
+        entry.complete(RemoteCommandStatus::Exited, Some(0));
+        assert!(
+            entry
+                .wait_for_completion(std::time::Duration::from_secs(1))
+                .await
+        );
     }
 
     #[test]

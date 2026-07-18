@@ -710,11 +710,11 @@ impl DragTab {
         }
     }
 
-    fn is_external(&self) -> bool {
+    pub fn is_external(&self) -> bool {
         self.external_source.is_some()
     }
 
-    fn take_external_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem> {
+    pub fn take_external_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem> {
         self.external_source.as_ref()?.take_tab(window, cx)
     }
 }
@@ -2459,7 +2459,7 @@ impl TabContainer {
         .icon(IconName::EyeOff)
         .ghost()
         .compact()
-        .tooltip("Hide panel")
+        .tooltip(t!("Sidebar.hide_panel").to_string())
         .on_click(move |_, window, cx| {
             if let Some(close) = contribution.actions.close.as_ref() {
                 close(window, cx);
@@ -2516,7 +2516,7 @@ impl TabContainer {
                 .icon(Icon::new(contribution.icon.clone()).text_color(text_color))
                 .ghost()
                 .compact()
-                .tooltip("Show panel")
+                .tooltip(t!("Sidebar.show_panel").to_string())
                 .on_click({
                     let container = container.clone();
                     move |_, _, cx| {

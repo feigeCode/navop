@@ -3,6 +3,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, button::Button, h_flex, v_flex};
+use rust_i18n::t;
 
 use crate::theme::{AgentChatTheme, active_agent_chat_theme};
 
@@ -120,7 +121,7 @@ pub(super) fn render_skill_mode_content(
                 .py_2()
                 .text_sm()
                 .text_color(muted)
-                .child("暂无 Skill"),
+                .child(t!("AgentUi.no_skills").to_string()),
         );
     }
     for item in items {
@@ -135,7 +136,7 @@ fn import_skill_button(view: Entity<AgentInput>, theme: &AgentChatTheme) -> Butt
         .debug_selector(|| "agent-import-skill".to_string())
         .icon(IconName::Plus)
         .small()
-        .label("导入技能")
+        .label(t!("AgentUi.import_skill").to_string())
         .bg(theme.panel)
         .border_color(theme.border)
         .text_color(theme.foreground)
@@ -149,7 +150,7 @@ fn prompt_import_skill(cx: &mut Context<AgentInput>) {
         files: false,
         directories: true,
         multiple: false,
-        prompt: Some("选择 Skill 目录".into()),
+        prompt: Some(t!("AgentUi.choose_skill_directory").to_string().into()),
     });
     cx.spawn(async move |this, cx| {
         let Ok(Ok(Some(paths))) = rx.await else {

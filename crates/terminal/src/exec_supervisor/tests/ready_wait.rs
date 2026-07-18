@@ -20,12 +20,12 @@ fn bounded_ready_wait_sends_no_bytes_until_fresh_input_start() {
     assert!(matches!(
         supervisor.on_osc(&OscEvent::InputStart).as_slice(),
         [ExecEffect::Write {
-            source: TerminalInputSource::AgentPreflight,
+            source: TerminalInputSource::AgentCommand,
             data,
         }, ExecEffect::ArmTimeout {
-            phase: ExecPhase::ClearingInput,
+            phase: ExecPhase::Observing,
             ..
-        }] if data == &[0x03]
+        }] if data == b"pwd\n"
     ));
 }
 

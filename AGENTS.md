@@ -359,6 +359,13 @@
 - **验证方式**：用 `nc -vz <private-ip> 22` 与 `route -n get <private-ip>` 区分系统路由和应用权限；检查 `codesign -dv --verbose=4 Navop.app` 显示预期 Bundle Identifier、已绑定 `Info.plist` 和 sealed resources，并运行 macOS bundle 脚本测试及 SSH 错误提示测试。
 - **适用范围**：`resources/macos/Info.plist`、`script/bundle-macos.sh`、macOS Release/DMG 流程，以及 SSH、SFTP、数据库、远程桌面、端口转发等局域网 TCP 连接入口。
 
+- **标题**：安装器文件关联变更必须覆盖只替换二进制的应用内更新
+- **触发信号**：新版 MSI/DEB/RPM/`.app` 已声明新的文件类型，但旧用户通过应用内更新后，系统“打开方式”中仍没有 Navop，或双击文件仍无法交给新版本。
+- **根因 / 约束**：Windows/Linux 应用内更新只替换可执行文件，不会重新运行 MSI 注册表组件、复制 desktop/MIME 资源或刷新桌面缓存；macOS 虽替换整个 `.app`，同路径覆盖后 LaunchServices 也可能尚未重新扫描。现代系统还会保护用户已有的默认应用选择，不能依赖静默覆盖 `UserChoice`。
+- **正确做法**：把关联定义同时用于安装器和应用内启动迁移。新版本首次启动时在后台幂等执行：Windows 写入当前用户 `Software\Classes` 的 ProgID、`OpenWithProgids` 和绝对打开命令并发送 `SHCNE_ASSOCCHANGED`；Linux 将嵌入的 desktop/MIME 模板写入 `XDG_DATA_HOME`、刷新缓存，并只在当前 MIME 没有默认应用时设置 Navop；macOS 对当前 `.app` 执行 `lsregister -f`。用包含 schema 与 executable path 的 stamp 避免重复迁移，应用移动后应自动重跑。
+- **验证方式**：用纯 contract 覆盖三种扩展、绝对路径/desktop `Exec` 转义、不写 `UserChoice`、已有默认应用不覆盖、stamp 幂等和 `.app` 推导；运行 main 测试与 check，并在 Windows CI 验证条件编译、在 Linux 包环境验证用户级 desktop/MIME 文件和缓存刷新。
+- **适用范围**：`main/src/file_association.rs`、`main/src/main.rs`、`main/src/update/*`、`resources/{macos,linux}`、Windows WiX 和所有新增文件关联/URL scheme 的发布迁移。
+
 - **标题**：macOS GUI 编辑器不要直接依赖 Bundle 内部 executable 处理重复打开
 - **触发信号**：第一次能打开外部编辑器，但编辑器已运行时再次打开远程文件没有反应、产生第二个无效进程，或编辑器随 OnetCli 生命周期收到 `SIGHUP`。
 - **根因 / 约束**：部分 macOS 应用（例如 Notepad--）依赖 LaunchServices 的 `QEvent::FileOpen` 向已有实例交付文件；直接执行 `.app/Contents/MacOS/*` 会绕过该机制。编辑器安装检测仍应检查真实 executable，不能简单把 `/usr/bin/open` 当作可用性候选。
@@ -383,8 +390,8 @@
 - **标题**：可见终端执行不能用 EOF 绑定 Agent 取消与命令完成
 - **触发信号**：`terminal.exec` 执行 `command &`、`npm run dev &` 或 `nohup command &` 后一直 pending；点击 Agent 的 × 后对话仍显示运行中；或取消 Agent 时误向终端发送 Ctrl+C、终止仍在运行的命令。
 - **根因 / 约束**：后台进程会继承 PTY/stdout/stderr，shell leader 退出不代表 reader 能收到 EOF。Agent turn、tool waiter 与终端命令若共用同一个 future，进程或 FD 清理就会反向阻塞对话终态。可见终端命令由用户终端拥有，Agent 取消无权终止它。
-- **正确做法**：用 OSC 133 supervisor 独立管理 readiness、safe-replace、命令 epoch、observer 与 timeout。只有 `Ready` 才能发送 ETX，收到 fresh `InputStart` 后再提交命令；提交动作必须立即把 readiness 悲观切到 `SubmissionPending`，即使 `wait_for_output=false`。命令完成以 `CommandFinished` 或新 prompt epoch 为边界，不依赖 EOF。取消前未开始的调用零写入；提交后的取消只 detach waiter，后台 supervisor 继续有界清理，并停止缓存无人消费的输出。Agent turn 同时立即发出 `TurnCancelled`，旧 turn 的迟到写入按 turn id 丢弃。
-- **验证方式**：覆盖 busy/unknown 零写入、半行输入清理、fresh prompt 握手、`wait_for_output=false` 立即 busy、预取消不排队、取消后不发送控制字符、detached output 不增长、background/nohup 不等 EOF、旧 turn 不清理或污染新 turn；再运行 terminal/tool-runtime/agent-runtime/UI 的定向测试、check 与 clippy。
+- **正确做法**：用 OSC 133 supervisor 独立管理 readiness、safe-replace、命令 epoch、observer 与 timeout。fresh `InputStart` 后将提示符标记为空；空 `Ready` 提示符直接提交 Agent 命令，只有 supervisor 已观测到用户或 insert-only 调用留下的未提交输入时，才发送一次 ETX 清理并等待新的 `InputStart`，避免每次执行都机械触发 Ctrl+C。提交动作必须立即把 readiness 悲观切到 `SubmissionPending`，即使 `wait_for_output=false`。命令完成以 `CommandFinished` 或新 prompt epoch 为边界，不依赖 EOF。取消前未开始的调用零写入；提交后的取消只 detach waiter，后台 supervisor 继续有界清理，并停止缓存无人消费的输出。Agent turn 同时立即发出 `TurnCancelled`，旧 turn 的迟到写入按 turn id 丢弃。诊断用户手动执行或超时后留在可见终端中的现场时，使用有界只读的 `terminal.read(lines=N)` 读取 live PTY/scrollback 尾部，不要为了重新拿输出而重复执行命令。
+- **验证方式**：覆盖空提示符直接提交且零 ETX、半行输入与 insert-only 输入才清理、busy/unknown 零写入、fresh prompt 握手、`wait_for_output=false` 立即 busy、预取消不排队、取消后不发送控制字符、detached output 不增长、background/nohup 不等 EOF、`terminal.read` 行数/字符上限与滚屏 tail、旧 turn 不清理或污染新 turn；再运行 terminal/tool-runtime/agent-runtime/UI 的定向测试、check 与 clippy。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、SSH terminal actor、`terminal.exec` Public MCP/Agent adapter、`agent_runtime` turn cancellation 与 `ai_chat_view` 终态处理。
 
 - **标题**：显式终端 Ctrl+C 必须走 supervisor control，不能复用 Agent 取消或任意输入接口
@@ -400,6 +407,13 @@
 - **正确做法**：`requires_tool_approval` 对 Auto 始终返回 false；Agent runtime adapter 保持 `PermissionProfile::Auto` 标识，同时将 `high_risk_policy` 覆盖为 `Allow`。Manual 继续确认所有非 Read 业务工具，ReadOnly 只暴露 Read 工具。
 - **验证方式**：覆盖 Auto 的 High、Critical、同轮多个 High 直接执行且无 `NeedUserInput`；覆盖 Manual 非 Read 仍审批、ReadOnly 仍过滤写工具；验证 Agent Auto permission policy 的 `mode=Auto` 且 `high_risk_policy=Allow`。
 - **适用范围**：`crates/agent_runtime/src/tasks/agent.rs`、`crates/agent_runtime/src/tools/runtime_adapter.rs`、Agent 工具模式 UI 与相关审批测试。
+
+- **标题**：ACP 安全确认保留 Dialog，并在权限卡解释二次审批
+- **触发信号**：ACP 权限卡允许后又弹出 Public MCP 安全确认 Dialog，用户误以为发生了无意义的重复审批；或者自动执行模式仍显示二次审批提示、High/Critical 工具仍继续请求确认。
+- **根因 / 约束**：ACP `request_permission` 与实际 Public MCP `tools/call` 是两个独立安全边界。安全确认模式需要用强制可见的 Dialog 承担最终审批，但如果消息卡不解释模式来源，用户会把它理解为异常重复；Auto 模式则不应保留确认语义。
+- **正确做法**：在“手动确认/安全确认”模式的 ACP 权限卡中明确说明：允许 ACP 后，实际工具执行还会弹出一次安全确认窗口；如不需要二次审批，可将 MCP 权限模式切换为“自动执行”。Public MCP Ask 统一进入全局 Dialog，不再通过 ACP 一次性路由替换成第二张可操作消息卡。自动执行模式不显示上述提示，且 High/Critical 一并直接执行。
+- **验证方式**：覆盖手动确认卡片包含“安全确认、二次审批、自动执行”说明，自动执行卡片不含误导提示，ACP 后续 Public MCP 请求进入 Dialog 队列并展示完整脱敏参数，以及 Auto High/Critical 直接执行。
+- **适用范围**：`crates/ai_chat_view/src/acp/*`、`agent_transcript.rs`、`agent_view.rs`、`crates/public_mcp/src/permissions.rs`、`main/src/public_mcp_approval*`。
 
 - **标题**：macOS 自定义标题栏中的可拖元素必须由应用显式接管标题栏拖动
 - **触发信号**：透明标题栏或 tab 栏中，按钮、输入框或 tab 的拖动被解释为窗口移动；为了规避问题出现 `allow_tab_drag = !is_macos` 一类平台禁用逻辑。
@@ -421,6 +435,13 @@
 - **正确做法**：值详情读取使用 `Vec<u8>` 保留原始内容；合法 UTF-8 继续按文本展示和编辑，非法 UTF-8 使用转义 Raw、Hex 或 Binary 展示，并在没有字节安全编辑/写回 contract 时保持只读。原始命令结果同样应映射为显式 Binary 类型。
 - **验证方式**：用 Java 序列化头 `AC ED 00 05` 覆盖连接层原始字节保留、Raw/Hex/Binary 格式化和非 UTF-8 只读保护；同时验证普通中文/JSON 文本仍可正常显示编辑。
 - **适用范围**：`crates/redis_view/src/connection.rs`、`key_value_view.rs`、`types.rs`，以及 Redis String、集合成员、Hash/Stream 字段等所有可能承载二进制 bulk string 的读取链路。
+
+- **标题**：过滤树的自动展开必须与用户显式折叠分开建模
+- **触发信号**：输入搜索词后匹配路径会自动展开，但点击展开箭头无法收起，或收起后下一次重建扁平列表又立即展开。
+- **根因 / 约束**：搜索态通常需要派生“自动展开匹配路径”的可见性；若遍历逻辑在搜索时无条件忽略普通展开集合，就无法区分“尚未手动操作”和“用户明确要求折叠”。单一 `expanded_nodes` 集合不足以表达这两个来源。
+- **正确做法**：保留普通 `expanded_nodes` 作为搜索结束后的持久状态，并增加仅在当前搜索词下有效的显式折叠 override；渲染箭头、点击切换和子树遍历统一读取同一个 effective expansion contract。搜索词变化时清空 override，用户在搜索中展开/折叠时同步更新普通状态以决定退出搜索后的结果。
+- **验证方式**：纯 contract 覆盖搜索自动展开、显式折叠优先、非搜索态遵循普通展开状态；真实树测试确认搜索中箭头可反复收起/展开，修改搜索词后重新自动展示匹配路径，清空搜索后保留用户最后的普通展开选择。
+- **适用范围**：`crates/redis_view/src/redis_tree_view.rs`，以及数据库树、文件树、资源树等同时支持过滤和层级展开的 GPUI 树视图。
 
 ### 执行原则
 

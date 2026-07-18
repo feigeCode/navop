@@ -6,6 +6,7 @@ use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use async_trait::async_trait;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
@@ -1113,12 +1114,16 @@ impl DatabasePlugin for PostgresPlugin {
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("charset", "Encoding").width(120.0),
-            Column::new("collation", "Collation").width(180.0),
-            Column::new("size", "Size").width(100.0).text_right(),
-            Column::new("tables", "Tables").width(80.0).text_right(),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("charset", "ObjectView.columns.encoding").width(120.0),
+            Column::localized("collation", "ObjectView.columns.collation").width(180.0),
+            Column::localized("size", "ObjectView.columns.size")
+                .width(100.0)
+                .text_right(),
+            Column::localized("tables", "ObjectView.columns.tables")
+                .width(80.0)
+                .text_right(),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -1139,7 +1144,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Database,
-            title: format!("{} database(s)", databases.len()),
+            title: t!("ObjectView.counts.databases", count = databases.len()).to_string(),
             columns,
             rows,
         })
@@ -1253,10 +1258,12 @@ impl DatabasePlugin for PostgresPlugin {
 
         if let SqlResult::Query(query_result) = result {
             let columns = vec![
-                Column::new("name", "Name").width(180.0),
-                Column::new("owner", "Owner").width(120.0),
-                Column::new("tables", "Tables").width(80.0).text_right(),
-                Column::new("description", "Description").width(300.0),
+                Column::localized("name", "ObjectView.columns.name").width(180.0),
+                Column::localized("owner", "ObjectView.columns.owner").width(120.0),
+                Column::localized("tables", "ObjectView.columns.tables")
+                    .width(80.0)
+                    .text_right(),
+                Column::localized("description", "ObjectView.columns.description").width(300.0),
             ];
 
             let rows: Vec<Vec<String>> = query_result
@@ -1276,7 +1283,7 @@ impl DatabasePlugin for PostgresPlugin {
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Schema,
-                title: format!("{} schema(s)", rows.len()),
+                title: t!("ObjectView.counts.schemas", count = rows.len()).to_string(),
                 columns,
                 rows,
             })
@@ -1353,11 +1360,15 @@ impl DatabasePlugin for PostgresPlugin {
         let tables = self.list_tables(connection, database, schema).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("owner", "Owner").width(100.0),
-            Column::new("rows", "Rows").width(100.0).text_right(),
-            Column::new("size", "Size").width(100.0).text_right(),
-            Column::new("comment", "Comment").width(300.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("owner", "ObjectView.columns.owner").width(100.0),
+            Column::localized("rows", "ObjectView.columns.rows")
+                .width(100.0)
+                .text_right(),
+            Column::localized("size", "ObjectView.columns.size")
+                .width(100.0)
+                .text_right(),
+            Column::localized("comment", "ObjectView.columns.comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -1378,7 +1389,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Table,
-            title: format!("{} table(s)", tables.len()),
+            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
             columns,
             rows,
         })
@@ -1466,12 +1477,12 @@ impl DatabasePlugin for PostgresPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("nullable", "Nullable").width(80.0),
-            Column::new("key", "Key").width(80.0),
-            Column::new("default", "Default").width(200.0),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(80.0),
+            Column::localized("key", "ObjectView.columns.key").width(80.0),
+            Column::localized("default", "ObjectView.columns.default").width(200.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1490,7 +1501,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Column,
-            title: format!("{} column(s)", columns_data.len()),
+            title: t!("ObjectView.counts.columns", count = columns_data.len()).to_string(),
             columns,
             rows,
         })
@@ -1568,10 +1579,10 @@ impl DatabasePlugin for PostgresPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("unique", "Unique").width(80.0),
-            Column::new("type", "Type").width(120.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
+            Column::localized("type", "ObjectView.columns.type").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1588,7 +1599,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Index,
-            title: format!("{} index(es)", indexes.len()),
+            title: t!("ObjectView.counts.indexes", count = indexes.len()).to_string(),
             columns,
             rows,
         })
@@ -1682,8 +1693,8 @@ impl DatabasePlugin for PostgresPlugin {
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("definition", "Definition").width(400.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1698,7 +1709,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
-            title: format!("{} view(s)", views.len()),
+            title: t!("ObjectView.counts.views", count = views.len()).to_string(),
             columns,
             rows,
         })
@@ -1743,8 +1754,8 @@ impl DatabasePlugin for PostgresPlugin {
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("return_type", "Return Type").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("return_type", "ObjectView.columns.return_type").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1759,7 +1770,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Function,
-            title: format!("{} function(s)", functions.len()),
+            title: t!("ObjectView.counts.functions", count = functions.len()).to_string(),
             columns,
             rows,
         })
@@ -1803,7 +1814,7 @@ impl DatabasePlugin for PostgresPlugin {
     ) -> Result<ObjectView> {
         let procedures = self.list_procedures(connection, database).await?;
 
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         let rows: Vec<Vec<String>> = procedures
             .iter()
@@ -1812,7 +1823,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
-            title: format!("{} procedure(s)", procedures.len()),
+            title: t!("ObjectView.counts.procedures", count = procedures.len()).to_string(),
             columns,
             rows,
         })
@@ -1860,10 +1871,10 @@ impl DatabasePlugin for PostgresPlugin {
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("table", "Table").width(150.0),
-            Column::new("event", "Event").width(100.0),
-            Column::new("timing", "Timing").width(100.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("table", "ObjectView.columns.table").width(150.0),
+            Column::localized("event", "ObjectView.columns.event").width(100.0),
+            Column::localized("timing", "ObjectView.columns.timing").width(100.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -1880,7 +1891,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Trigger,
-            title: format!("{} trigger(s)", triggers.len()),
+            title: t!("ObjectView.counts.triggers", count = triggers.len()).to_string(),
             columns,
             rows,
         })
@@ -1945,13 +1956,19 @@ impl DatabasePlugin for PostgresPlugin {
         let sequences = self.list_sequences(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("start", "Start").width(100.0).text_right(),
-            Column::new("increment", "Increment")
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("start", "ObjectView.columns.start")
                 .width(100.0)
                 .text_right(),
-            Column::new("min", "Min").width(120.0).text_right(),
-            Column::new("max", "Max").width(120.0).text_right(),
+            Column::localized("increment", "ObjectView.columns.increment")
+                .width(100.0)
+                .text_right(),
+            Column::localized("min", "ObjectView.columns.minimum")
+                .width(120.0)
+                .text_right(),
+            Column::localized("max", "ObjectView.columns.maximum")
+                .width(120.0)
+                .text_right(),
         ];
 
         let rows: Vec<Vec<String>> = sequences
@@ -1977,7 +1994,7 @@ impl DatabasePlugin for PostgresPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
-            title: format!("{} sequence(s)", sequences.len()),
+            title: t!("ObjectView.counts.sequences", count = sequences.len()).to_string(),
             columns,
             rows,
         })

@@ -1,20 +1,18 @@
 use anyhow::{Result, anyhow};
-use public_mcp::command_store::RemoteCommandStore;
+use public_mcp::command_store::{CommandEntry, RemoteCommandStore};
 use public_mcp::registry::{ConnectionState, RemoteOpsSessionHandle, TerminalSessionSnapshot};
 use public_mcp::remote_ops::{
-    RemoteCommandMode, RemoteCommandStatus, RemoteExecRequest, RemoteExecResult,
-    RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
+    RemoteCommandMode, RemoteCommandOutputRequest, RemoteCommandStatus, RemoteExecRequest,
+    RemoteExecResult, RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
     SessionDiagnosticsResult,
 };
 use sha2::{Digest, Sha256};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::runtime::Handle;
 
-/// SSH exec 收集 stdout/stderr 的最大缓冲。超出后截断并标记（避免单次 exec OOM）。
-const MAX_EXEC_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// SSH channel 事件的默认 exec 超时，单位毫秒。
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
@@ -72,6 +70,12 @@ pub struct SshRemoteOpsHandle {
     command_store: RemoteCommandStore,
 }
 
+struct SpawnedRemoteCommand {
+    command_id: String,
+    entry: Arc<CommandEntry>,
+    started_at_ms: i64,
+}
+
 impl SshRemoteOpsHandle {
     pub fn new(
         session_manager: Arc<SshSessionManager>,
@@ -102,14 +106,12 @@ impl SshRemoteOpsHandle {
         *self.state.lock().expect("remote ops state lock poisoned") = snapshot;
     }
 
-    /// 启动 background 命令：注册到 command store，spawn tokio task 异步执行，
-    /// 立即返回 command_id。poll/output/cancel 由 command store 驱动。
-    fn spawn_background(
+    fn spawn_command(
         &self,
         full_command: String,
         env: BTreeMap<String, String>,
-        timeout_ms: u64,
-    ) -> Result<RemoteExecResult> {
+        hard_timeout_ms: Option<u64>,
+    ) -> Result<SpawnedRemoteCommand> {
         let session_id = self
             .state
             .lock()
@@ -126,16 +128,15 @@ impl SshRemoteOpsHandle {
                 &session_manager,
                 &full_command,
                 &env,
-                timeout_ms,
+                hard_timeout_ms,
                 &mut cancel_rx,
+                &entry_clone,
             )
             .await;
 
             match result {
-                Ok(exec_result) => {
-                    entry_clone.push_stdout(exec_result.stdout.as_bytes());
-                    entry_clone.push_stderr(exec_result.stderr.as_bytes());
-                    entry_clone.complete(exec_result.status, exec_result.exit_code);
+                Ok((status, exit_code)) => {
+                    entry_clone.complete(status, exit_code);
                 }
                 Err(error) => {
                     entry_clone.push_stderr(error.to_string().as_bytes());
@@ -145,8 +146,50 @@ impl SshRemoteOpsHandle {
         });
 
         let started_at_ms = chrono::Utc::now().timestamp_millis();
-        Ok(RemoteExecResult::background(command_id, started_at_ms))
+        Ok(SpawnedRemoteCommand {
+            command_id,
+            entry,
+            started_at_ms,
+        })
     }
+
+    fn spawn_background(
+        &self,
+        full_command: String,
+        env: BTreeMap<String, String>,
+        timeout_ms: u64,
+    ) -> Result<RemoteExecResult> {
+        let spawned = self.spawn_command(full_command, env, Some(timeout_ms))?;
+        Ok(RemoteExecResult::background(
+            spawned.command_id,
+            spawned.started_at_ms,
+        ))
+    }
+}
+
+fn command_result(
+    command_store: &RemoteCommandStore,
+    command_id: &str,
+    started_at_ms: i64,
+    timed_out: bool,
+) -> Result<RemoteExecResult> {
+    let poll = command_store.poll_by_id(command_id)?;
+    let output = command_store.output(&RemoteCommandOutputRequest {
+        command_id: command_id.to_string(),
+        stdout_offset: 0,
+        stderr_offset: 0,
+        limit_bytes: Some(usize::MAX),
+    })?;
+    Ok(RemoteExecResult {
+        status: poll.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        exit_code: poll.exit_code,
+        duration_ms: poll.duration_ms,
+        timed_out,
+        command_id: timed_out.then(|| command_id.to_string()),
+        started_at_ms: timed_out.then_some(started_at_ms),
+    })
 }
 
 impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
@@ -166,11 +209,18 @@ impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
             return self.spawn_background(full_command, env, timeout_ms);
         }
 
-        let result = block_on_async(async {
-            run_exec(&self.session_manager, &full_command, &env, timeout_ms).await
-        })??;
-
-        Ok(result)
+        let spawned = self.spawn_command(full_command, env, None)?;
+        let completed = block_on_async(
+            spawned
+                .entry
+                .wait_for_completion(Duration::from_millis(timeout_ms)),
+        )?;
+        command_result(
+            &self.command_store,
+            &spawned.command_id,
+            spawned.started_at_ms,
+            !completed,
+        )
     }
 
     fn write_file(&self, request: RemoteFileWriteRequest) -> Result<RemoteFileWriteResult> {
@@ -211,7 +261,18 @@ impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
             mode: public_mcp::remote_ops::RemoteCommandMode::Foreground,
         };
 
-        let result = self.exec(exec_request)?;
+        let full_command = build_full_command(&exec_request);
+        let env = merged_env(&exec_request.env);
+        let spawned = self.spawn_command(full_command, env, Some(DEFAULT_TIMEOUT_MS))?;
+        let completed = block_on_async(spawned.entry.wait_for_completion(Duration::from_millis(
+            DEFAULT_TIMEOUT_MS.saturating_add(1_000),
+        )))?;
+        let result = command_result(
+            &self.command_store,
+            &spawned.command_id,
+            spawned.started_at_ms,
+            !completed,
+        )?;
         if result.exit_code == Some(17) {
             return Err(anyhow!("file already exists: {}", request.path));
         }
@@ -259,106 +320,16 @@ impl RemoteOpsSessionHandle for SshRemoteOpsHandle {
     }
 }
 
-/// 在 SSH session 上执行单条命令，收集完整 stdout/stderr/exit code。
-async fn run_exec(
-    session_manager: &SshSessionManager,
-    command: &str,
-    env: &BTreeMap<String, String>,
-    timeout_ms: u64,
-) -> Result<RemoteExecResult> {
-    let started = Instant::now();
-    let mut channel = session_manager.open_channel().await?;
-
-    // 先设置环境变量，再 exec。set_env 在 exec 前发送，命令执行时即可继承。
-    for (key, value) in env {
-        let _ = channel.set_env(key, value).await;
-    }
-    channel.exec(command).await?;
-
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut exit_code: Option<i32> = None;
-    let mut timed_out = false;
-
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        tokio::select! {
-            biased;
-            _ = tokio::time::sleep_until(deadline), if exit_code.is_none() => {
-                timed_out = true;
-                let _ = channel.eof().await;
-                let _ = channel.close().await;
-                break;
-            }
-            event = channel.recv() => {
-                match event {
-                    Some(ChannelEvent::Data(data)) => {
-                        if stdout.len() + data.len() <= MAX_EXEC_OUTPUT_BYTES {
-                            stdout.extend_from_slice(&data);
-                        }
-                    }
-                    Some(ChannelEvent::ExtendedData { ext, data }) => {
-                        if ext == 1 && stderr.len() + data.len() <= MAX_EXEC_OUTPUT_BYTES {
-                            stderr.extend_from_slice(&data);
-                        }
-                    }
-                    Some(ChannelEvent::ExitStatus(code)) => {
-                        exit_code = Some(code as i32);
-                    }
-                    Some(ChannelEvent::ExitSignal { signal_name, error_message }) => {
-                        exit_code = Some(130);
-                        if !error_message.is_empty() {
-                            stderr.extend_from_slice(error_message.as_bytes());
-                        }
-                        if !signal_name.is_empty() {
-                            stderr.extend_from_slice(format!("\nsignal: {signal_name}").as_bytes());
-                        }
-                    }
-                    Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
-                        break;
-                    }
-
-                }
-            }
-        }
-    }
-
-    let _ = channel.eof().await;
-    let _ = channel.close().await;
-
-    let status = if timed_out {
-        RemoteCommandStatus::TimedOut
-    } else if exit_code.map(|code| code == 0).unwrap_or(false) {
-        RemoteCommandStatus::Exited
-    } else if exit_code.is_some() {
-        RemoteCommandStatus::Failed
-    } else {
-        RemoteCommandStatus::Exited
-    };
-
-    let stdout = String::from_utf8_lossy(&stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr).into_owned();
-
-    Ok(RemoteExecResult::foreground(
-        status,
-        stdout,
-        stderr,
-        exit_code,
-        started.elapsed().as_millis() as u64,
-        timed_out,
-    ))
-}
-
-/// background 命令执行：与 `run_exec` 共用 SSH channel 收集逻辑，
-/// 额外监听取消信号并实时把输出 push 到 command entry。
+/// SSH channel 收集逻辑。每个数据事件立即写入 command entry，
+/// 因此 background 与 foreground 超时脱离后的命令都能增量读取输出。
 async fn run_exec_with_cancel(
     session_manager: &SshSessionManager,
     command: &str,
     env: &BTreeMap<String, String>,
-    timeout_ms: u64,
+    hard_timeout_ms: Option<u64>,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
-) -> Result<RemoteExecResult> {
-    let started = Instant::now();
+    entry: &CommandEntry,
+) -> Result<(RemoteCommandStatus, Option<i32>)> {
     let mut channel = session_manager.open_channel().await?;
 
     for (key, value) in env {
@@ -366,13 +337,12 @@ async fn run_exec_with_cancel(
     }
     channel.exec(command).await?;
 
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
     let mut exit_code: Option<i32> = None;
-    let mut timed_out = false;
     let mut cancelled = false;
+    let mut timed_out = false;
 
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+    let deadline = hard_timeout_ms
+        .map(|timeout_ms| tokio::time::Instant::now() + Duration::from_millis(timeout_ms));
     loop {
         tokio::select! {
             biased;
@@ -384,7 +354,13 @@ async fn run_exec_with_cancel(
                     break;
                 }
             }
-            _ = tokio::time::sleep_until(deadline), if exit_code.is_none() => {
+            _ = async {
+                if let Some(deadline) = deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if exit_code.is_none() => {
                 timed_out = true;
                 let _ = channel.eof().await;
                 let _ = channel.close().await;
@@ -393,13 +369,11 @@ async fn run_exec_with_cancel(
             event = channel.recv() => {
                 match event {
                     Some(ChannelEvent::Data(data)) => {
-                        if stdout.len() + data.len() <= MAX_EXEC_OUTPUT_BYTES {
-                            stdout.extend_from_slice(&data);
-                        }
+                        entry.push_stdout(&data);
                     }
                     Some(ChannelEvent::ExtendedData { ext, data }) => {
-                        if ext == 1 && stderr.len() + data.len() <= MAX_EXEC_OUTPUT_BYTES {
-                            stderr.extend_from_slice(&data);
+                        if ext == 1 {
+                            entry.push_stderr(&data);
                         }
                     }
                     Some(ChannelEvent::ExitStatus(code)) => {
@@ -408,10 +382,10 @@ async fn run_exec_with_cancel(
                     Some(ChannelEvent::ExitSignal { signal_name, error_message }) => {
                         exit_code = Some(130);
                         if !error_message.is_empty() {
-                            stderr.extend_from_slice(error_message.as_bytes());
+                            entry.push_stderr(error_message.as_bytes());
                         }
                         if !signal_name.is_empty() {
-                            stderr.extend_from_slice(format!("\nsignal: {signal_name}").as_bytes());
+                            entry.push_stderr(format!("\nsignal: {signal_name}").as_bytes());
                         }
                     }
                     Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
@@ -437,17 +411,7 @@ async fn run_exec_with_cancel(
         RemoteCommandStatus::Exited
     };
 
-    let stdout = String::from_utf8_lossy(&stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&stderr).into_owned();
-
-    Ok(RemoteExecResult::foreground(
-        status,
-        stdout,
-        stderr,
-        exit_code,
-        started.elapsed().as_millis() as u64,
-        timed_out,
-    ))
+    Ok((status, exit_code))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -537,5 +501,18 @@ mod tests {
     #[test]
     fn shell_quote_escapes_single_quotes() {
         assert_eq!("'it'\"'\"'s'", shell_quote("it's"));
+    }
+
+    #[tokio::test]
+    async fn timed_out_foreground_result_keeps_incremental_command_output() {
+        let store = RemoteCommandStore::default();
+        let (id, entry) = store.register_observed("ssh-1", "long-command");
+        entry.push_stdout(b"first\n");
+        let result = command_result(&store, &id, 123, true).expect("tracked result");
+
+        assert_eq!(RemoteCommandStatus::Running, result.status);
+        assert_eq!(Some(id), result.command_id);
+        assert!(result.timed_out);
+        assert_eq!("first\n", result.stdout);
     }
 }

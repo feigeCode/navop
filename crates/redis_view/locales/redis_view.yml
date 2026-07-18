@@ -613,6 +613,14 @@ RedisTree:
     en: "New Key"
     zh-CN: "新建 Key"
     zh-HK: "新建 Key"
+  menu_copy_path:
+    en: "Copy namespace path"
+    zh-CN: "复制路径"
+    zh-HK: "複製路徑"
+  menu_batch_delete_keys:
+    en: "Delete namespace keys"
+    zh-CN: "批量删除键"
+    zh-HK: "批量刪除鍵"
   menu_disconnect:
     en: "Disconnect"
     zh-CN: "断开连接"
@@ -633,6 +641,14 @@ RedisTree:
     en: 'Delete key "%{key}"?'
     zh-CN: '确定要删除键 "%{key}" 吗？'
     zh-HK: '確定要刪除鍵 "%{key}" 嗎？'
+  confirm_batch_delete_title:
+    en: "Confirm batch delete"
+    zh-CN: "确认批量删除"
+    zh-HK: "確認批量刪除"
+  confirm_batch_delete_keys:
+    en: 'Delete all keys under namespace "%{namespace}"?'
+    zh-CN: '确定要删除命名空间“%{namespace}”下的所有键吗？'
+    zh-HK: '確定要刪除命名空間「%{namespace}」下的所有鍵嗎？'
   irreversible:
     en: "This action cannot be undone."
     zh-CN: "此操作不可恢复。"
@@ -641,6 +657,14 @@ RedisTree:
     en: "Failed to delete key: %{error}"
     zh-CN: "删除键失败：%{error}"
     zh-HK: "刪除鍵失敗：%{error}"
+  batch_delete_succeeded:
+    en: "Deleted %{count} keys."
+    zh-CN: "已删除 %{count} 个键。"
+    zh-HK: "已刪除 %{count} 個鍵。"
+  batch_delete_failed:
+    en: "Failed to delete namespace keys: %{error}"
+    zh-CN: "批量删除键失败：%{error}"
+    zh-HK: "批量刪除鍵失敗：%{error}"
   create_key_title:
     en: "Create Key"
     zh-CN: "添加新键"

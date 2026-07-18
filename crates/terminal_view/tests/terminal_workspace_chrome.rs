@@ -46,13 +46,13 @@ fn active_terminal_pane_keeps_a_highlight_border() {
 }
 
 #[test]
-fn terminal_tab_drop_region_declares_the_group_used_by_its_overlay() {
+fn terminal_tab_drop_region_renders_direct_zones_above_terminal_content() {
     let tab_drag = workspace_source("tab_drag.rs");
 
-    assert!(tab_drag.contains("const TAB_DROP_GROUP"));
     assert!(tab_drag.contains(".id((\"terminal-tab-drop-region\""));
-    assert!(tab_drag.contains(".group(TAB_DROP_GROUP)"));
-    assert!(tab_drag.contains("group_drag_over::<DragTab>(TAB_DROP_GROUP"));
+    assert!(tab_drag.contains("self.render_tab_drop_zone"));
+    assert!(tab_drag.contains(".drag_over::<DragTab>"));
+    assert!(tab_drag.contains("show_drop_highlight"));
 }
 
 #[test]
@@ -82,6 +82,16 @@ fn floating_title_has_stable_width_and_can_drag_a_pane_back_to_tabs() {
     assert!(tool.contains("DragTab::from_external"));
     assert!(transfer.contains("impl ExternalTabDragSource"));
     assert!(transfer.contains("detach_pane_as_tab"));
+}
+
+#[test]
+fn floating_title_drag_does_not_select_terminal_content() {
+    let tool = workspace_source("pane_tool.rs");
+
+    assert!(tool.contains(".on_mouse_down(MouseButton::Left"));
+    assert!(tool.contains(".on_mouse_move("));
+    assert!(tool.matches("window.prevent_default();").count() >= 3);
+    assert!(tool.matches("cx.stop_propagation();").count() >= 3);
 }
 
 #[test]

@@ -7,6 +7,7 @@ use logic::{
     JsonEditorSyncMode, active_editor_text, editor_values_for_text, normalize_commit_text,
 };
 pub use logic::{LargeTextEditorTab, large_text_values_equivalent};
+use rust_i18n::t;
 use tracing::error;
 
 #[derive(Clone, Debug)]
@@ -262,8 +263,8 @@ fn build_editor(
         })
         .soft_wrap(true)
         .placeholder(match tab {
-            LargeTextEditorTab::Text => "Enter your text here...",
-            LargeTextEditorTab::Json => "Enter JSON here...",
+            LargeTextEditorTab::Text => t!("LargeTextEditor.text_placeholder").to_string(),
+            LargeTextEditorTab::Json => t!("LargeTextEditor.json_placeholder").to_string(),
         })
 }
 

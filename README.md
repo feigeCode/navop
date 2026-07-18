@@ -16,7 +16,7 @@
   <p>
     <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
     <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
-    <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Supplementary-blue?style=for-the-badge" alt="License" /></a>
+    <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20GPL%20component-blue?style=for-the-badge" alt="License: Apache-2.0 plus GPL component" /></a>
     <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ Group 860670605" /></a>
     <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="Join WeChat Group" /></a>
   </p>
@@ -58,17 +58,15 @@
   </p>
 </div>
 
-## What's New in v0.8.0
+## What's New in v0.8.10
 
-- **AI Agent and Function Calling** — AI agents can call tools to complete structured tasks, load skills through tools, and use improved resource pools, resource mentions, and catalog refreshes.
-- **HTML preview flow** — HTML code blocks can be opened in the browser or rendered in an in-app dialog, keeping chat content readable without intrusive inline previews.
-- **Database compare and sync** — improved schema/data compare windows, compare target loading, multi-table sync, and database compare sync stability.
-- **Terminal productivity** — added a terminal command history panel, SSH broadcast input across windows, and improved remote shell integration install, uninstall, and environment handling.
-- **Connection import** — added an entry for importing connections from other applications, with a refined home sidebar layout.
-- **Team entry point** — added a team management entry controlled by feature flags.
-- **Extensions and language bundles** — added language bundle extension support with detection and installation.
-- **Rendering and font fixes** — fixed font fallback/rendering issues that could cause garbled text, and reduced render-process blocking that could make connection lists and data lists stutter while scrolling.
-- **Settings and UI polish** — API key fields now support reveal/hide toggling, input components support local theme styling, and window/selector layouts have been refined.
+- **Notes workspace** — added local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, configurable document locations, editor shortcuts, and a Cditor AI Provider.
+- **Document rendering** — added Tree-sitter syntax highlighting, Mermaid and math rendering, extension-provided renderers, renderer prewarming, caching, and theme synchronization.
+- **Terminal workspaces** — added native draggable splits, cross-workspace tab transfers, grouped quick commands, broadcast input, and clearer drag-and-drop placement feedback.
+- **Terminal diagnostics** — added bounded `terminal.read` scrollback inspection and safer command preflight handling for visible and background terminal workflows.
+- **Public MCP and Agent integrations** — completed the Navop npm runtime migration, added MongoDB tools and host-authoritative capability discovery, and improved ACP and Public MCP approval flows.
+- **Redis and file workflows** — added a dedicated Redis tools view, multi-database connections, server-side key pagination, binary-safe String inspection, and associated database/Markdown file opening.
+- **Extension and release reliability** — added renderer resource and execution limits, preserved the size-optimized release profile, and fixed cross-platform release builds under `-D warnings`.
 
 
 ## Why Navop?
@@ -110,11 +108,15 @@ Work with a SQL editor backed by syntax tooling, schema-aware browsing, table st
 
 ### Redis & MongoDB
 
-Use the dedicated Redis viewer for key browsing, value inspection, and cluster connections. Explore MongoDB collections, inspect documents, and run queries from the same workspace.
+Use the dedicated Redis viewer for multi-database key browsing, server-side pagination, binary-safe String inspection, and cluster connections. Explore MongoDB collections, inspect documents, run queries, and expose host-authoritative MongoDB tools through Public MCP from the same workspace.
+
+### Notes
+
+The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Document locations, editor shortcuts, and AI Providers are configurable, while extension-provided renderers can add or update document formats independently.
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes command history, SSH broadcast input across windows, and remote shell integration management. The built-in SFTP sidebar supports drag-and-drop uploads, files copied from the system file manager can be uploaded by pasting, and path favorites provide quick jumps to frequently used directories. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The built-in SFTP sidebar supports drag-and-drop uploads, files copied from the system file manager can be uploaded by pasting, and path favorites provide quick jumps to frequently used directories. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
 
 ### Port Forwarding
 
@@ -135,6 +137,51 @@ Use built-in server monitoring and native rendered charts to inspect remote mach
 ### AI Assistant
 
 Chat with AI inside the app. Navop supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. Navop also supports ACP (Agent Client Protocol), allowing external AI agents to connect through extensions; ACP extensions are currently available for Codex, Claude Code, and OpenCode. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
+
+### Public MCP, Navop CLI, and Agent Skill
+
+Navop includes an authenticated Public MCP runtime for external Codex, Claude, MCP clients, and automation. Enable it under **Settings > General > MCP > MCP Server**, select a permission profile, and expose only the tool groups you want under **Settings > General > Tool Exposure**.
+
+The runtime binds to a dynamic loopback-only port and requires the 64-character token stored in Navop's user-only discovery file. Navop remains the only tool implementation, security, permission, approval, connection/session, and audit boundary. The built-in Agent continues to call the internal Rust ToolRegistry directly; it does not reconnect to Navop through npm.
+
+External clients use the separately published [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package as a thin stdio bridge, host-driven CLI, and installable Agent Skill:
+
+```bash
+npx -y @navop/mcp@0.1.2 status --json
+npx -y @navop/mcp@0.1.2 tools --json
+npx -y @navop/mcp@0.1.2 schema <tool-name> --json
+npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@0.1.2 mcp
+```
+
+The npm version is the version of the external client, CLI, Skill, and stdio launcher—not the version of Navop's host tool registry. Tool names, descriptions, schemas, annotations, Tool Exposure groups, permission mode, sessions, and results come from the running Navop host through MCP `initialize`, `tools/list`, `tools/call`, and the read-only `navop.runtime_status` tool. Navop can therefore add or update host tools without requiring a synchronized npm release.
+
+Current Public MCP capability groups include:
+
+| Group | Current host capabilities |
+| --- | --- |
+| Runtime | compatibility metadata, permission guidance, Tool Exposure group states, live tools and schemas |
+| SSH | isolated command execution, session diagnostics, background command poll/output/cancel |
+| Visible terminal | bounded output reading, visible PTY execution, explicit interruption |
+| SQL databases | schema, tables, descriptions, sample rows, read-only query, write-capable execution |
+| Redis | active connections, command, keys, get, set |
+| MongoDB | databases, collections, find, aggregate, count, indexes, validation, CRUD, explain |
+| SFTP | list, stat, read, write, upload, download |
+| Connections | list, find, show, kinds, schema, validate, save, delete, test, open, sessions |
+| Workspaces | list and show |
+| Internal functions | list registered host functions and call them through their live schemas |
+
+Availability is always determined at runtime. A group disabled in Tool Exposure is not advertised as available, and connection/session-specific operations require a real resource id returned by Navop. Callers must not guess ids or bypass permission and approval decisions.
+
+Navop permission profiles map to Public MCP behavior:
+
+| Profile | Behavior |
+| --- | --- |
+| Safe / `deny` | read-only discovery is available; mutations are denied |
+| Confirm / `ask` | mutations require approval in the Navop UI |
+| Auto / `allow` | mutations run automatically; destructive intent must still be explicit |
+
+Navop can install and inspect exact-version Codex and Claude Code MCP configurations, copy a generic MCP JSON configuration, and install/update the bundled `navop` Skill for Codex or Agents-compatible clients. The Skill does not embed a static tool manual; it instructs Agents to obtain current methods from `navop status`, `tools/list`, and live tool schemas.
 
 ### Performance & Rendering
 
@@ -292,7 +339,7 @@ Use the GitHub [Releases](https://github.com/feigeCode/navop/releases/latest) pa
 <details>
 <summary><strong>Is Navop free?</strong></summary>
 
-All features are available without sponsorship. The source is licensed under Apache License 2.0, and distribution or product use is also subject to the Navop Supplementary License.
+All features are available without sponsorship. Navop-authored source is licensed under Apache License 2.0 and the Navop Supplementary License, while the Notes workspace includes the GPL-licensed Cditor dependency. Distributions must comply with all applicable third-party license terms.
 </details>
 
 <details>
@@ -322,9 +369,11 @@ ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-f
 
 ## License
 
-Licensed under [Apache License 2.0](LICENSE-APACHE).
+Navop source code is licensed under [Apache License 2.0](LICENSE-APACHE).
 
-The distribution and use of the Navop application are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds the following restrictions on top of Apache 2.0:
+The Notes workspace includes [Cditor](https://github.com/feigeCode/Cditor), a GPL-licensed dependency. The Cditor component and any distribution that contains it must comply with the applicable GNU GPL terms and the license notices provided by Cditor.
+
+Navop-authored portions are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds the following restrictions on top of Apache 2.0. These supplementary terms do not replace or limit the licenses that apply to third-party components such as Cditor:
 
 - No redistribution, resale, or repackaging as a standalone product
 - No creating competing products or services based on this software

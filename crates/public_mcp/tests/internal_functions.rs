@@ -71,7 +71,7 @@ async fn writable_internal_function_calls_follow_permission_mode() {
     assert_eq!(
         Some(json!({
             "code": "permission_denied",
-            "message": "tool runtime call denied by permission mode"
+            "message": "tool runtime call denied by permission mode; set MCP Permission Profile to Confirm or Auto"
         })),
         denied.structured_content
     );

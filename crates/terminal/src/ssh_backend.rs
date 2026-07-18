@@ -1944,6 +1944,7 @@ mod tests {
             wait_for_output: true,
             ready_timeout: Duration::ZERO,
             timeout: Duration::from_secs(30),
+            observer: None,
         }
     }
 }

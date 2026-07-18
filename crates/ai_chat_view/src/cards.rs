@@ -10,6 +10,7 @@ use crate::{ChartJsonBlock, ChartType, parse_chart_json_block};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
 use gpui_component::{h_flex, v_flex};
+use rust_i18n::t;
 use std::sync::Arc;
 
 /// 示例卡片：把消息内容当作 JSON 美化后逐行展示。
@@ -53,7 +54,7 @@ impl ChatCard for JsonCard {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("JSON 卡片(示例)"),
+                    .child(t!("AgentUi.json_card_example").to_string()),
             )
             .child(v_flex().w_full().min_w_0().children(lines))
             .into_any_element()
@@ -203,7 +204,7 @@ fn invalid_chart_card(content: &str, cx: &mut App) -> AnyElement {
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("无效 chart-json 卡片"),
+                .child(t!("AgentUi.invalid_chart_card").to_string()),
         )
         .child(div().text_sm().child(content.to_string()))
         .into_any_element()

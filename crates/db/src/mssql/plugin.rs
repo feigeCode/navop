@@ -5,6 +5,7 @@ use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use regex::Regex;
+use rust_i18n::t;
 use tracing::info;
 
 use crate::connection::{DbConnection, DbError};
@@ -981,18 +982,19 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("owner", "Owner").width(120.0),
-            Column::new("created", "Created").width(180.0),
-            Column::new("compat_level", "Compat Level").width(100.0),
-            Column::new("collation", "Collation").width(200.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("owner", "ObjectView.columns.owner").width(120.0),
+            Column::localized("created", "ObjectView.columns.created").width(180.0),
+            Column::localized("compat_level", "ObjectView.columns.compatibility_level")
+                .width(100.0),
+            Column::localized("collation", "ObjectView.columns.collation").width(200.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Database,
-            title: "Databases".to_string(),
+            title: t!("ObjectView.titles.databases").to_string(),
         })
     }
 
@@ -1117,9 +1119,11 @@ impl DatabasePlugin for MsSqlPlugin {
 
         if let SqlResult::Query(query_result) = result {
             let columns = vec![
-                Column::new("name", "Name").width(180.0),
-                Column::new("owner", "Owner").width(120.0),
-                Column::new("tables", "Tables").width(80.0).text_right(),
+                Column::localized("name", "ObjectView.columns.name").width(180.0),
+                Column::localized("owner", "ObjectView.columns.owner").width(120.0),
+                Column::localized("tables", "ObjectView.columns.tables")
+                    .width(80.0)
+                    .text_right(),
             ];
 
             let rows: Vec<Vec<String>> = query_result
@@ -1138,7 +1142,7 @@ impl DatabasePlugin for MsSqlPlugin {
 
             Ok(ObjectView {
                 db_node_type: DbNodeType::Schema,
-                title: format!("{} schema(s)", rows.len()),
+                title: t!("ObjectView.counts.schemas", count = rows.len()).to_string(),
                 columns,
                 rows,
             })
@@ -1261,17 +1265,17 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("schema", "Schema").width(100.0),
-            Column::new("comment", "Comment").width(250.0),
-            Column::new("created", "Created").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(100.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
+            Column::localized("created", "ObjectView.columns.created").width(150.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Table,
-            title: "Tables".to_string(),
+            title: t!("ObjectView.titles.tables").to_string(),
         })
     }
 
@@ -1382,18 +1386,18 @@ impl DatabasePlugin for MsSqlPlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(120.0),
-            Column::new("nullable", "Null").width(60.0),
-            Column::new("default", "Default").width(120.0),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(120.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(60.0),
+            Column::localized("default", "ObjectView.columns.default").width(120.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Column,
-            title: format!("Columns - {}", table),
+            title: t!("ObjectView.named.columns", table = table).to_string(),
         })
     }
 
@@ -1486,17 +1490,17 @@ impl DatabasePlugin for MsSqlPlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("unique", "Unique").width(80.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Index,
-            title: format!("Indexes - {}", table),
+            title: t!("ObjectView.named.indexes", table = table).to_string(),
         })
     }
 
@@ -1602,17 +1606,17 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("schema", "Schema").width(100.0),
-            Column::new("comment", "Comment").width(250.0),
-            Column::new("created", "Created").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(100.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
+            Column::localized("created", "ObjectView.columns.created").width(150.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::View,
-            title: "Views".to_string(),
+            title: t!("ObjectView.titles.views").to_string(),
         })
     }
 
@@ -1725,17 +1729,17 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("schema", "Schema").width(100.0),
-            Column::new("type", "Type").width(120.0),
-            Column::new("created", "Created").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(100.0),
+            Column::localized("type", "ObjectView.columns.type").width(120.0),
+            Column::localized("created", "ObjectView.columns.created").width(150.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Function,
-            title: "Functions".to_string(),
+            title: t!("ObjectView.titles.functions").to_string(),
         })
     }
 
@@ -1833,17 +1837,17 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("schema", "Schema").width(100.0),
-            Column::new("created", "Created").width(150.0),
-            Column::new("modified", "Modified").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("schema", "ObjectView.columns.schema").width(100.0),
+            Column::localized("created", "ObjectView.columns.created").width(150.0),
+            Column::localized("modified", "ObjectView.columns.modified").width(150.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Procedure,
-            title: "Stored Procedures".to_string(),
+            title: t!("ObjectView.titles.stored_procedures").to_string(),
         })
     }
 
@@ -1932,16 +1936,16 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(250.0),
-            Column::new("table", "Table").width(200.0),
-            Column::new("status", "Status").width(100.0),
+            Column::localized("name", "ObjectView.columns.name").width(250.0),
+            Column::localized("table", "ObjectView.columns.table").width(200.0),
+            Column::localized("status", "ObjectView.columns.status").width(100.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Trigger,
-            title: "Triggers".to_string(),
+            title: t!("ObjectView.titles.triggers").to_string(),
         })
     }
 
@@ -2044,18 +2048,18 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("type", "Type").width(100.0),
-            Column::new("start", "Start").width(100.0),
-            Column::new("increment", "Increment").width(100.0),
-            Column::new("current", "Current").width(100.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("type", "ObjectView.columns.type").width(100.0),
+            Column::localized("start", "ObjectView.columns.start").width(100.0),
+            Column::localized("increment", "ObjectView.columns.increment").width(100.0),
+            Column::localized("current", "ObjectView.columns.current").width(100.0),
         ];
 
         Ok(ObjectView {
             columns,
             rows,
             db_node_type: DbNodeType::Sequence,
-            title: "Sequences".to_string(),
+            title: t!("ObjectView.titles.sequences").to_string(),
         })
     }
 

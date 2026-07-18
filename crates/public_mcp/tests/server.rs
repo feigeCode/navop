@@ -46,9 +46,12 @@ async fn loopback_server_handles_json_rpc_after_token_handshake() {
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
 
     assert_eq!(json!(1), response["id"]);
-    assert_eq!(
-        "onetcli-public-mcp",
-        response["result"]["serverInfo"]["name"]
+    assert_eq!("navop-public-mcp", response["result"]["serverInfo"]["name"]);
+    assert!(
+        response["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("permission_mode=allow")
     );
     assert_eq!("2025-11-25", response["result"]["protocolVersion"]);
 }

@@ -2,6 +2,7 @@ use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use async_trait::async_trait;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -704,13 +705,13 @@ impl DatabasePlugin for SqlitePlugin {
     }
 
     async fn list_databases_view(&self, _connection: &dyn DbConnection) -> Result<ObjectView> {
-        let columns = vec![Column::new("name", "Name").width(180.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(180.0)];
 
         let rows = vec![vec!["main".to_string()]];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Database,
-            title: "1 database(s)".to_string(),
+            title: t!("ObjectView.counts.databases", count = 1).to_string(),
             columns,
             rows,
         })
@@ -783,7 +784,7 @@ impl DatabasePlugin for SqlitePlugin {
     ) -> Result<ObjectView> {
         let tables = self.list_tables(connection, database, None).await?;
 
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         let rows: Vec<Vec<String>> = tables
             .iter()
@@ -792,7 +793,7 @@ impl DatabasePlugin for SqlitePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Table,
-            title: format!("{} table(s)", tables.len()),
+            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
             columns,
             rows,
         })
@@ -862,11 +863,11 @@ impl DatabasePlugin for SqlitePlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("nullable", "Nullable").width(80.0),
-            Column::new("key", "Key").width(80.0),
-            Column::new("default", "Default").width(120.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(80.0),
+            Column::localized("key", "ObjectView.columns.key").width(80.0),
+            Column::localized("default", "ObjectView.columns.default").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -884,7 +885,7 @@ impl DatabasePlugin for SqlitePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Column,
-            title: format!("{} column(s)", columns_data.len()),
+            title: t!("ObjectView.counts.columns", count = columns_data.len()).to_string(),
             columns,
             rows,
         })
@@ -960,9 +961,9 @@ impl DatabasePlugin for SqlitePlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("unique", "Unique").width(80.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -978,7 +979,7 @@ impl DatabasePlugin for SqlitePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Index,
-            title: format!("{} index(es)", indexes.len()),
+            title: t!("ObjectView.counts.indexes", count = indexes.len()).to_string(),
             columns,
             rows,
         })
@@ -1021,8 +1022,8 @@ impl DatabasePlugin for SqlitePlugin {
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("definition", "Definition").width(400.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1037,7 +1038,7 @@ impl DatabasePlugin for SqlitePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
-            title: format!("{} view(s)", views.len()),
+            title: t!("ObjectView.counts.views", count = views.len()).to_string(),
             columns,
             rows,
         })
@@ -1056,11 +1057,11 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Function,
-            title: "0 function(s)".to_string(),
+            title: t!("ObjectView.counts.functions", count = 0).to_string(),
             columns,
             rows: vec![],
         })
@@ -1079,11 +1080,11 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
-            title: "0 procedure(s)".to_string(),
+            title: t!("ObjectView.counts.procedures", count = 0).to_string(),
             columns,
             rows: vec![],
         })
@@ -1127,8 +1128,8 @@ impl DatabasePlugin for SqlitePlugin {
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("table", "Table").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("table", "ObjectView.columns.table").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -1138,7 +1139,7 @@ impl DatabasePlugin for SqlitePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Trigger,
-            title: format!("{} trigger(s)", triggers.len()),
+            title: t!("ObjectView.counts.triggers", count = triggers.len()).to_string(),
             columns,
             rows,
         })
@@ -1158,11 +1159,11 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
-            title: "0 sequence(s)".to_string(),
+            title: t!("ObjectView.counts.sequences", count = 0).to_string(),
             columns,
             rows: vec![],
         })

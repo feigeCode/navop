@@ -133,7 +133,7 @@ impl RemoteDesktopView {
             modifiers: Modifiers::default(),
             last_clipboard_text: None,
             last_clipboard_sync_at: None,
-            status: SharedString::from("Waiting for layout"),
+            status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             tab_index: config.tab_index,
             _output_poll_task: output_poll_task,
         }

@@ -34,12 +34,14 @@ use crate::tools::{ObservationData, ToolCall, ToolDispatchContext, ToolName, Too
 use async_trait::async_trait;
 use futures::StreamExt;
 use llm_connector::types::{Message, ToolCall as LlmToolCall, ToolChoice};
+use rust_i18n::t;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// 单轮内模型 / 工具往返的最大迭代次数,防止失控。
-const MAX_ITERATIONS: usize = 16;
+/// 复杂任务可能需要逐个检查多个资源，16 次会过早截断；保留有界保护并提高到 64 次。
+const MAX_ITERATIONS: usize = 64;
 const DEBUG_PREVIEW_CHARS: usize = 1200;
 
 /// codex 风格的统一 Agent 任务。
@@ -164,7 +166,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             Err(RuntimeError::Cancelled) => return TaskOutcome::Cancelled,
             Err(error) => {
                 return TaskOutcome::Failed {
-                    reason: format!("上下文压缩失败:{error}"),
+                    reason: t!("AgentRuntime.context_compaction_failed", error = error).to_string(),
                 };
             }
         }
@@ -236,7 +238,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
 
         if ctx.task_kind == TaskKind::Ask {
             return TaskOutcome::Failed {
-                reason: "Ask 模式不支持工具调用;请切换到 Agent 或 Plan 模式后再使用工具。".into(),
+                reason: t!("AgentRuntime.ask_mode_tools_unsupported").to_string(),
             };
         }
 
@@ -366,7 +368,11 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
     }
 
     TaskOutcome::Failed {
-        reason: format!("超过单轮最大迭代次数({MAX_ITERATIONS})仍未完成"),
+        reason: t!(
+            "AgentRuntime.max_iterations_exceeded",
+            count = MAX_ITERATIONS
+        )
+        .to_string(),
     }
 }
 
@@ -441,7 +447,7 @@ fn rejected_tool_observation(call: &ToolCall) -> ToolObservation {
     ToolObservation::failure(
         call.call_id.clone(),
         call.tool_name.clone(),
-        format!("用户拒绝执行工具 `{}`。", call.tool_name),
+        t!("AgentRuntime.rejected_tool", tool = call.tool_name.as_str()).to_string(),
     )
 }
 
@@ -470,9 +476,13 @@ fn requires_tool_approval(
 
 fn approval_question(pending: &PendingToolApproval) -> String {
     if pending.call_count() == 1 {
-        return format!("确认执行工具 `{}` 吗?", pending.call.tool_name);
+        return t!(
+            "AgentRuntime.confirm_tool",
+            tool = pending.call.tool_name.as_str()
+        )
+        .to_string();
     }
-    format!("确认执行 {} 个工具吗?", pending.call_count())
+    t!("AgentRuntime.confirm_tools", count = pending.call_count()).to_string()
 }
 
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。
@@ -494,7 +504,9 @@ async fn sample(
         biased;
         _ = cancellation.cancelled() => return Ok(None),
         result = services.model.complete_stream(request) => {
-            result.map_err(|e| format!("模型调用失败: {e}"))?
+            result.map_err(|error| {
+                t!("AgentRuntime.model_call_failed", error = error).to_string()
+            })?
         }
     };
 
@@ -505,7 +517,9 @@ async fn sample(
         if cancellation.is_cancelled() {
             return Ok(None);
         }
-        match event.map_err(|e| format!("模型流式输出失败: {e}"))? {
+        match event
+            .map_err(|error| t!("AgentRuntime.model_stream_failed", error = error).to_string())?
+        {
             ModelStreamEvent::TextDelta(delta) => {
                 text.push_str(&delta);
                 session.emit_assistant_delta(turn_id, delta);
@@ -752,8 +766,8 @@ fn handle_update_plan(
         Some((plan, explanation)) => {
             let step_count = plan.steps.len();
             session.update_plan(turn_id, plan);
-            let summary =
-                explanation.unwrap_or_else(|| format!("已更新任务清单(共 {step_count} 步)"));
+            let summary = explanation
+                .unwrap_or_else(|| t!("AgentRuntime.plan_updated", count = step_count).to_string());
             ToolObservation::success(
                 call.call_id.clone(),
                 call.tool_name.clone(),
@@ -764,7 +778,9 @@ fn handle_update_plan(
         None => ToolObservation::from_error(
             call.call_id.clone(),
             call.tool_name.clone(),
-            &crate::error::ToolError::InvalidArguments("update_plan 参数解析失败".into()),
+            &crate::error::ToolError::InvalidArguments(
+                t!("AgentRuntime.plan_update_failed").to_string(),
+            ),
         ),
     }
 }
@@ -777,11 +793,12 @@ fn unavailable_tool_observation(
     ToolObservation::failure(
         call_id,
         tool_name.clone(),
-        format!(
-            "模型请求了未注册工具 `{}`。可用工具: {}。不要调用名为 `tool` 的通用伪工具;请改用可用工具名,且 arguments 必须是合法 JSON object。",
-            tool_name,
-            available_tool_names(tool_specs)
-        ),
+        t!(
+            "AgentRuntime.unavailable_tool",
+            tool = tool_name.as_str(),
+            available = available_tool_names(tool_specs)
+        )
+        .to_string(),
     )
 }
 

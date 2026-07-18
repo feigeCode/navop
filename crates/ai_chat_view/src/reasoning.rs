@@ -7,6 +7,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
+use rust_i18n::t;
 
 pub fn render_reasoning_block<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
@@ -52,9 +53,9 @@ fn reasoning_header<E: MessageExtension>(
         IconName::ChevronRight
     };
     let tooltip = if is_expanded {
-        "收起思考"
+        t!("AgentUi.collapse_reasoning").to_string()
     } else {
-        "展开思考"
+        t!("AgentUi.expand_reasoning").to_string()
     };
 
     h_flex()
@@ -83,7 +84,7 @@ fn reasoning_header<E: MessageExtension>(
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .truncate()
-                .child("思考过程"),
+                .child(t!("AgentUi.reasoning_process").to_string()),
         )
         .into_any_element()
 }

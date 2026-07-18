@@ -466,7 +466,7 @@ fn build_frame_options_menu(
         )
         .separator()
         .item(
-            PopupMenuItem::new("Remove from Sidebar")
+            PopupMenuItem::new(t!("Sidebar.remove_from_sidebar").to_string())
                 .icon(IconName::Close)
                 .on_click(move |_, _, cx| {
                     close_panel.update(cx, |_this, cx| {
@@ -2662,7 +2662,7 @@ impl FileManagerPanel {
     fn paste_upload_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.connection_state != ConnectionState::Connected {
             window.push_notification(
-                Notification::warning("文件管理器未连接，无法上传剪贴板内容".to_string())
+                Notification::warning(t!("FileManager.clipboard_upload_not_connected").to_string())
                     .autohide(true),
                 cx,
             );
@@ -2677,7 +2677,10 @@ impl FileManagerPanel {
             Ok(upload_paths) => upload_paths.paths,
             Err(error) => {
                 window.push_notification(
-                    Notification::error(format!("读取剪贴板失败：{error}")).autohide(true),
+                    Notification::error(
+                        t!("FileManager.clipboard_read_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
                     cx,
                 );
                 return;
@@ -2686,7 +2689,8 @@ impl FileManagerPanel {
 
         if upload_paths.is_empty() {
             window.push_notification(
-                Notification::info("剪贴板没有可上传的文件或图片".to_string()).autohide(true),
+                Notification::info(t!("FileManager.clipboard_no_uploads").to_string())
+                    .autohide(true),
                 cx,
             );
             return;
@@ -3355,7 +3359,7 @@ impl FileManagerPanel {
         if image_format_for_path(&full_path).is_some() {
             let Some(client) = self.sftp_client.clone() else {
                 window.push_notification(
-                    Notification::error("SFTP client is not connected".to_string()),
+                    Notification::error(t!("FileManager.sftp_not_connected").to_string()),
                     cx,
                 );
                 return;
@@ -3369,7 +3373,7 @@ impl FileManagerPanel {
     fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
-                Notification::error("SFTP client is not connected".to_string()),
+                Notification::error(t!("FileManager.sftp_not_connected").to_string()),
                 cx,
             );
             return;
@@ -3387,7 +3391,7 @@ impl FileManagerPanel {
         let (full_path, editor_key) = selection;
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
-                Notification::error("SFTP client is not connected".to_string()),
+                Notification::error(t!("FileManager.sftp_not_connected").to_string()),
                 cx,
             );
             return;
@@ -3745,7 +3749,7 @@ impl FileManagerPanel {
             .ghost()
             .small()
             .icon(IconName::Ellipsis)
-            .tooltip("面板选项")
+            .tooltip(t!("FileManager.panel_options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_frame_options_menu(menu, panel.clone(), placement, window, cx)
             })
@@ -4919,8 +4923,8 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
-        build_new_file_target_path, build_retry_reset_plan, clear_remote_listing_state,
-        frame_move_options, should_apply_directory_result, should_refresh_after_upload,
+        build_retry_reset_plan, clear_remote_listing_state, frame_move_options,
+        should_apply_directory_result, should_refresh_after_upload,
     };
     use one_core::sidebar_contribution::SidebarPlacement;
     use std::collections::HashSet;

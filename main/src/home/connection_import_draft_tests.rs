@@ -99,7 +99,7 @@ fn sqlite_database_draft_without_file_path_can_open_editor_prefill() {
     let draft = EditableImportDraft::new(sqlite_import("DBeaver Sample Database (SQLite)", None));
 
     assert_eq!(
-        "数据库文件路径不能为空",
+        rust_i18n::t!("Home.ConnectionImport.database_file_required"),
         draft.to_stored_connection().unwrap_err()
     );
 

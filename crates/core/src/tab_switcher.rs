@@ -8,6 +8,7 @@ use gpui_component::list::{List, ListDelegate, ListState};
 use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex,
 };
+use rust_i18n::t;
 
 const SWITCHER_WIDTH: f32 = 640.0;
 const SWITCHER_MAX_HEIGHT: f32 = 420.0;
@@ -58,14 +59,14 @@ pub fn open_tab_switcher_dialog(
             .w(px(SWITCHER_WIDTH))
             .margin_top(px(72.0))
             .close_button(false)
-            .title("Tabs")
+            .title(t!("TabSwitcher.title").to_string())
             .content({
                 let list = dialog_list.clone();
                 move |content, _window, _cx| {
                     content.p_0().child(
                         div().id("tab-switcher-dialog").child(
                             List::new(&list)
-                                .search_placeholder("Search tabs")
+                                .search_placeholder(t!("TabSwitcher.search").to_string())
                                 .with_size(Size::Large)
                                 .max_h(px(SWITCHER_MAX_HEIGHT)),
                         ),

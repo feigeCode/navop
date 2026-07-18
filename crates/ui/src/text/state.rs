@@ -6,6 +6,7 @@ use gpui::{
     ListState, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Task, Window,
     prelude::FluentBuilder as _, px,
 };
+use rust_i18n::t;
 
 use crate::{
     ActiveTheme, ElementExt,
@@ -296,7 +297,7 @@ impl Render for TextViewState {
                 Some(err) => this.child(
                     v_flex()
                         .gap_1()
-                        .child("Failed to parse content")
+                        .child(t!("Text.failed_to_parse").to_string())
                         .child(err.to_string()),
                 ),
             })

@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use one_core::{
@@ -12,8 +12,9 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 
 use super::registration::load_installed_composite_manifests;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
-    RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentRenderer,
+    RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
+    RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -27,6 +28,10 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) menu_slots: SlotRegistry,
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
     pub(super) html_preview_transforms: Vec<RegisteredHtmlPreviewTransform>,
+    pub(super) document_renderers: Vec<RegisteredDocumentRenderer>,
+    #[cfg(feature = "wasm-components")]
+    pub(super) document_renderer_runtimes:
+        Mutex<HashMap<String, Arc<extension_wasm::DocumentRendererRuntime>>>,
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
 }
 
@@ -55,6 +60,9 @@ impl ExtensionRuntimeCatalog {
             menu_slots: SlotRegistry::default(),
             keybindings: Vec::new(),
             html_preview_transforms: Vec::new(),
+            document_renderers: Vec::new(),
+            #[cfg(feature = "wasm-components")]
+            document_renderer_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
         }
     }
@@ -131,6 +139,74 @@ impl ExtensionRuntimeCatalog {
 
     pub fn remote_file_editors(&self) -> &[RegisteredRemoteFileEditorContribution] {
         &self.remote_file_editors
+    }
+
+    pub fn document_renderer_for_kind(
+        &self,
+        block_kind: &str,
+    ) -> Option<&RegisteredDocumentRenderer> {
+        self.document_renderers
+            .iter()
+            .filter(|renderer| {
+                renderer
+                    .block_kinds
+                    .iter()
+                    .any(|kind| kind.eq_ignore_ascii_case(block_kind))
+            })
+            .max_by_key(|renderer| renderer.priority)
+    }
+
+    #[cfg(feature = "wasm-components")]
+    fn document_renderer_runtime(
+        &self,
+        renderer: &RegisteredDocumentRenderer,
+    ) -> extension_wasm::WasmResult<Arc<extension_wasm::DocumentRendererRuntime>> {
+        let Some(binding) = self.wasm_runtimes.get(&renderer.runtime_id) else {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                renderer.runtime_id.clone(),
+            ));
+        };
+        if binding.kind != WasmRuntimeKind::Component {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                renderer.runtime_id.clone(),
+            ));
+        }
+        let mut runtimes = self
+            .document_renderer_runtimes
+            .lock()
+            .map_err(|error| extension_wasm::WasmError::ComponentLoad(error.to_string()))?;
+        if let Some(runtime) = runtimes.get(&renderer.runtime_id) {
+            return Ok(runtime.clone());
+        }
+        let runtime = Arc::new(
+            extension_wasm::DocumentRendererRuntime::from_file_with_config(
+                renderer.id.clone(),
+                &binding.module_path,
+                binding.config.clone(),
+            )?,
+        );
+        runtimes.insert(renderer.runtime_id.clone(), runtime.clone());
+        Ok(runtime)
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub fn prewarm_document_renderers(&self) -> extension_wasm::WasmResult<()> {
+        for renderer in &self.document_renderers {
+            self.document_renderer_runtime(renderer)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub async fn render_document(
+        &self,
+        request: extension_wasm::DocumentRenderRequest,
+    ) -> extension_wasm::WasmResult<Option<extension_wasm::DocumentRenderArtifact>> {
+        let Some(renderer) = self.document_renderer_for_kind(&request.renderer) else {
+            return Ok(None);
+        };
+        let runtime = self.document_renderer_runtime(renderer)?;
+        runtime.render(request).await.map(Some)
     }
 
     #[cfg(feature = "wasm-components")]

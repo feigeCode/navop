@@ -26,7 +26,7 @@ args = ["--discovery", "/old/discovery.json"]
     let text = std::fs::read_to_string(config_path).unwrap();
     assert!(text.contains(r#"model = "gpt-5.4""#));
     assert!(!text.contains("/old/helper"));
-    assert!(text.contains("[mcp_servers.onetcli]"));
+    assert!(text.contains("[mcp_servers.navop]"));
     assert!(text.contains(
         r#"command = "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp""#
     ));
@@ -43,7 +43,7 @@ fn codex_config_install_creates_parent_directory() {
     assert!(
         std::fs::read_to_string(config_path)
             .unwrap()
-            .contains("[mcp_servers.onetcli]")
+            .contains("[mcp_servers.navop]")
     );
 }
 
@@ -74,11 +74,11 @@ fn claude_config_install_merges_onetcli_server_and_preserves_existing_servers() 
     );
     assert_eq!(
         "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",
-        json["mcpServers"]["onetcli"]["command"]
+        json["mcpServers"]["navop"]["command"]
     );
     assert_eq!(
         serde_json::json!(["--discovery", "/tmp/onetcli/public-mcp.json"]),
-        json["mcpServers"]["onetcli"]["args"]
+        json["mcpServers"]["navop"]["args"]
     );
 }
 
@@ -93,7 +93,7 @@ fn claude_config_install_creates_missing_config() {
         serde_json::from_str(&std::fs::read_to_string(config_path).unwrap()).unwrap();
     assert_eq!(
         "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",
-        json["mcpServers"]["onetcli"]["command"]
+        json["mcpServers"]["navop"]["command"]
     );
 }
 
@@ -136,7 +136,7 @@ args = ["--discovery", "/old/discovery.json"]
     .unwrap();
 
     assert_eq!(
-        ClientConfigHealth::NeedsRepair,
+        ClientConfigHealth::NeedsMigration,
         inspect_codex_config(&config_path, &install_with_helper(&helper)).unwrap()
     );
 }
@@ -166,7 +166,7 @@ fn claude_config_inspection_reports_health_states() {
     )
     .unwrap();
     assert_eq!(
-        ClientConfigHealth::NeedsRepair,
+        ClientConfigHealth::NeedsMigration,
         inspect_claude_desktop_config(&config_path, &install).unwrap()
     );
 }
@@ -201,15 +201,23 @@ fn client_config_inspection_reports_unusable_helper_for_non_executable_file() {
 }
 
 #[test]
-fn helper_install_path_uses_stable_component_directory() {
+fn helper_install_path_resolves_npx_instead_of_a_bundled_helper() {
     let path = helper_install_path_from_data_dir("/Users/me/.config/one-hub");
+    assert!(path.ends_with("npx"));
+}
 
-    assert_eq!(
-        std::path::PathBuf::from(
-            "/Users/me/.config/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp"
-        ),
-        path
-    );
+#[test]
+fn npx_install_uses_exact_package_version_and_navop_server_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let npx = dir.path().join("npx");
+    write_usable_helper(&npx);
+    let install = ClientConfigInstall::from_npx_path(&npx, "/tmp/navop/public-mcp.json", "0.1.0");
+    let config_path = dir.path().join("config.toml");
+    install_codex_config(&config_path, &install).unwrap();
+    let text = std::fs::read_to_string(config_path).unwrap();
+    assert!(text.contains("[mcp_servers.navop]"));
+    assert!(text.contains("@navop/mcp@0.1.0"));
+    assert!(!text.contains("latest"));
 }
 
 #[test]
@@ -228,18 +236,14 @@ fn install_from_helper_path_is_independent_from_app_bundle() {
 }
 
 fn install() -> ClientConfigInstall {
-    ClientConfigInstall {
-        launcher_path: "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp"
-            .into(),
-        discovery_path: "/tmp/onetcli/public-mcp.json".into(),
-    }
+    ClientConfigInstall::from_helper_path(
+        "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",
+        "/tmp/onetcli/public-mcp.json",
+    )
 }
 
 fn install_with_helper(helper: &std::path::Path) -> ClientConfigInstall {
-    ClientConfigInstall {
-        launcher_path: helper.into(),
-        discovery_path: "/tmp/onetcli/public-mcp.json".into(),
-    }
+    ClientConfigInstall::from_helper_path(helper, "/tmp/onetcli/public-mcp.json")
 }
 
 fn write_usable_helper(path: &std::path::Path) {

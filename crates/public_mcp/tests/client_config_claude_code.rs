@@ -13,11 +13,11 @@ fn claude_code_config_install_writes_user_config_shape() {
     let json = read_json(&config_path);
     assert_eq!(
         "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",
-        json["mcpServers"]["onetcli"]["command"]
+        json["mcpServers"]["navop"]["command"]
     );
     assert_eq!(
         serde_json::json!(["--discovery", "/tmp/onetcli/public-mcp.json"]),
-        json["mcpServers"]["onetcli"]["args"]
+        json["mcpServers"]["navop"]["args"]
     );
 }
 
@@ -46,7 +46,7 @@ fn claude_code_config_inspection_reports_health_states() {
     )
     .unwrap();
     assert_eq!(
-        ClientConfigHealth::NeedsRepair,
+        ClientConfigHealth::NeedsMigration,
         inspect_claude_code_config(&config_path, &install).unwrap()
     );
 }
@@ -62,7 +62,7 @@ fn agent_mcp_config_json_returns_portable_mcp_servers_block() {
             "command": "/opt/one-hub/extensions/mcp_helpers/onetcli-public-mcp/onetcli-public-mcp",
             "args": ["--discovery", "/tmp/onetcli/public-mcp.json"]
         }),
-        json["mcpServers"]["onetcli"]
+        json["mcpServers"]["navop"]
     );
 }
 

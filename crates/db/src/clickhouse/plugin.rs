@@ -1,6 +1,7 @@
 use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -732,10 +733,12 @@ impl DatabasePlugin for ClickHousePlugin {
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("engine", "Engine").width(120.0),
-            Column::new("tables", "Tables").width(80.0).text_right(),
-            Column::new("comment", "Comment").width(300.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("engine", "ObjectView.columns.engine").width(120.0),
+            Column::localized("tables", "ObjectView.columns.tables")
+                .width(80.0)
+                .text_right(),
+            Column::localized("comment", "ObjectView.columns.comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -754,7 +757,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Database,
-            title: "Databases".to_string(),
+            title: t!("ObjectView.titles.databases").to_string(),
             columns,
             rows,
         })
@@ -858,9 +861,9 @@ impl DatabasePlugin for ClickHousePlugin {
         let tables = self.list_tables(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("engine", "Engine").width(150.0),
-            Column::new("comment", "Comment").width(300.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("engine", "ObjectView.columns.engine").width(150.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -876,7 +879,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Table,
-            title: "Tables".to_string(),
+            title: t!("ObjectView.titles.tables").to_string(),
             columns,
             rows,
         })
@@ -957,11 +960,11 @@ impl DatabasePlugin for ClickHousePlugin {
             .await?;
 
         let column_defs = vec![
-            Column::new("name", "Name").width(150.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("nullable", "Nullable").width(80.0),
-            Column::new("default", "Default").width(150.0),
-            Column::new("comment", "Comment").width(200.0),
+            Column::localized("name", "ObjectView.columns.name").width(150.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(80.0),
+            Column::localized("default", "ObjectView.columns.default").width(150.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(200.0),
         ];
 
         let rows: Vec<Vec<String>> = columns
@@ -979,7 +982,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Column,
-            title: "Columns".to_string(),
+            title: t!("ObjectView.titles.columns").to_string(),
             columns: column_defs,
             rows,
         })
@@ -1048,9 +1051,9 @@ impl DatabasePlugin for ClickHousePlugin {
         let indexes = self.list_indexes(connection, database, None, table).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(150.0),
-            Column::new("type", "Type").width(200.0),
-            Column::new("columns", "Expression").width(300.0),
+            Column::localized("name", "ObjectView.columns.name").width(150.0),
+            Column::localized("type", "ObjectView.columns.type").width(200.0),
+            Column::localized("columns", "ObjectView.columns.expression").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1066,7 +1069,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Index,
-            title: "Data Skipping Indexes".to_string(),
+            title: t!("ObjectView.titles.data_skipping_indexes").to_string(),
             columns,
             rows,
         })
@@ -1118,8 +1121,8 @@ impl DatabasePlugin for ClickHousePlugin {
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("definition", "Definition").width(600.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(600.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1134,7 +1137,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
-            title: "Views".to_string(),
+            title: t!("ObjectView.titles.views").to_string(),
             columns,
             rows,
         })
@@ -1185,8 +1188,8 @@ impl DatabasePlugin for ClickHousePlugin {
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("definition", "Definition").width(400.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1201,7 +1204,7 @@ impl DatabasePlugin for ClickHousePlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Function,
-            title: "User Defined Functions".to_string(),
+            title: t!("ObjectView.titles.user_defined_functions").to_string(),
             columns,
             rows,
         })
@@ -1226,8 +1229,8 @@ impl DatabasePlugin for ClickHousePlugin {
     ) -> Result<ObjectView> {
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
-            title: "Procedures".to_string(),
-            columns: vec![Column::new("name", "Name").width(200.0)],
+            title: t!("ObjectView.titles.procedures").to_string(),
+            columns: vec![Column::localized("name", "ObjectView.columns.name").width(200.0)],
             rows: Vec::new(),
         })
     }
@@ -1249,8 +1252,8 @@ impl DatabasePlugin for ClickHousePlugin {
     ) -> Result<ObjectView> {
         Ok(ObjectView {
             db_node_type: DbNodeType::Trigger,
-            title: "Triggers".to_string(),
-            columns: vec![Column::new("name", "Name").width(200.0)],
+            title: t!("ObjectView.titles.triggers").to_string(),
+            columns: vec![Column::localized("name", "ObjectView.columns.name").width(200.0)],
             rows: Vec::new(),
         })
     }
@@ -1273,8 +1276,8 @@ impl DatabasePlugin for ClickHousePlugin {
     ) -> Result<ObjectView> {
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
-            title: "Sequences".to_string(),
-            columns: vec![Column::new("name", "Name").width(200.0)],
+            title: t!("ObjectView.titles.sequences").to_string(),
+            columns: vec![Column::localized("name", "ObjectView.columns.name").width(200.0)],
             rows: Vec::new(),
         })
     }

@@ -1,6 +1,7 @@
 use crate::default_panel::{
-    DefaultAgentChatPanelMode, build_sidebar_config, build_workbench_config,
-    enabled_provider_configs, panel_title_for_mode, should_refresh_resource_catalog,
+    DefaultAgentChatPanelMode, ProviderRefreshAction, build_sidebar_config, build_workbench_config,
+    enabled_provider_configs, panel_title_for_mode, provider_refresh_action,
+    should_refresh_resource_catalog,
 };
 use crate::{AcpAgentConfig, AcpAgentEntry, AgentChatViewConfig};
 use agent_runtime::model::{MockModelClient, ModelClient};
@@ -33,6 +34,20 @@ fn enabled_provider_configs_filters_disabled_entries() {
 
     assert_eq!(1, configs.len());
     assert_eq!("enabled", configs[0].name);
+}
+
+#[test]
+fn provider_change_rebuilds_panel_when_initial_provider_load_failed() {
+    assert_eq!(
+        ProviderRefreshAction::RebuildView,
+        provider_refresh_action(false),
+        "a panel without an AgentChatView must retry construction after providers change"
+    );
+    assert_eq!(
+        ProviderRefreshAction::RefreshModels,
+        provider_refresh_action(true),
+        "an initialized panel should refresh its existing model list"
+    );
 }
 
 #[test]
@@ -91,11 +106,11 @@ fn workbench_config_uses_full_view_task_history_sidebar() {
 #[test]
 fn workbench_mode_uses_workbench_tab_title() {
     assert_eq!(
-        "AI 工作台",
+        rust_i18n::t!("AgentUi.workbench"),
         panel_title_for_mode(DefaultAgentChatPanelMode::Workbench)
     );
     assert_eq!(
-        "AI Chat",
+        rust_i18n::t!("AgentUi.ai_chat"),
         panel_title_for_mode(DefaultAgentChatPanelMode::Sidebar)
     );
 }

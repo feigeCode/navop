@@ -4,20 +4,25 @@ Common:
   none:
     en: None
     zh-CN: 无
+    zh-HK: 無
   cancel:
     en: Cancel
     zh-CN: 取消
+    zh-HK: 取消
   ok:
     en: OK
     zh-CN: 确定
+    zh-HK: 確定
 
 ConnectionForm:
   cloud_sync:
     en: Cloud Sync
     zh-CN: 云同步
+    zh-HK: 雲端同步
   cloud_sync_desc:
     en: Sync this connection after saving.
     zh-CN: 保存后同步此连接。
+    zh-HK: 儲存後同步此連線。
     
 Home:
   sync_tooltip:
@@ -29,158 +34,210 @@ PortForwarding:
   new:
     en: New Port Forwarding
     zh-CN: 新建端口转发
+    zh-HK: 新增連接埠轉送
   edit:
     en: Edit Port Forwarding
     zh-CN: 编辑端口转发
+    zh-HK: 編輯連接埠轉送
   name:
     en: Name
     zh-CN: 名称
+    zh-HK: 名稱
   name_placeholder:
     en: Optional display name
     zh-CN: 可选显示名称
+    zh-HK: 選填顯示名稱
   ssh_connection:
     en: SSH Server
     zh-CN: SSH 服务器
+    zh-HK: SSH 伺服器
   ssh_connection_placeholder:
     en: Select an SSH/SFTP server
     zh-CN: 选择 SSH/SFTP 服务器
+    zh-HK: 選擇 SSH/SFTP 伺服器
   kind:
     en: Type
     zh-CN: 类型
+    zh-HK: 類型
   bind_host:
     en: Bind Host
     zh-CN: 绑定地址
+    zh-HK: 綁定位址
   bind_port:
     en: Bind Port
     zh-CN: 绑定端口
+    zh-HK: 綁定連接埠
   target_host:
     en: Target Host
     zh-CN: 目标地址
+    zh-HK: 目標位址
   target_port:
     en: Target Port
     zh-CN: 目标端口
+    zh-HK: 目標連接埠
   workspace:
     en: Workspace
     zh-CN: 工作区
+    zh-HK: 工作區
   remark:
     en: Remark
     zh-CN: 备注
+    zh-HK: 備註
   remark_placeholder:
     en: Optional notes
     zh-CN: 可选备注
+    zh-HK: 選填備註
   validation_ssh:
     en: Select an SSH server.
     zh-CN: 请选择 SSH 服务器。
+    zh-HK: 請選擇 SSH 伺服器。
   validation_bind_host:
     en: Bind host is required.
     zh-CN: 绑定地址不能为空。
+    zh-HK: 綁定位址不能為空。
   validation_target_host:
     en: Target host is required for local forwarding.
     zh-CN: 本地转发需要填写目标地址。
+    zh-HK: 本機轉送需要填寫目標位址。
   validation_target_port:
     en: Target port is required for local forwarding.
     zh-CN: 本地转发需要填写目标端口。
+    zh-HK: 本機轉送需要填寫目標連接埠。
   validation_number:
     en: "%{field} must be a valid port number."
     zh-CN: "%{field} 必须是有效端口。"
+    zh-HK: "%{field} 必須是有效連接埠。"
 
 PortForwardingTab:
   local_title:
     en: Local Port Forwarding
     zh-CN: 本地端口转发
+    zh-HK: 本機連接埠轉送
   dynamic_title:
     en: Dynamic SOCKS Forwarding
     zh-CN: 动态 SOCKS 转发
+    zh-HK: 動態 SOCKS 轉送
   route:
     en: FORWARDING ROUTE
     zh-CN: 转发链路
+    zh-HK: 轉送路徑
   local_endpoint:
     en: Local Listener
     zh-CN: 本机监听
+    zh-HK: 本機監聽
   ssh_tunnel:
     en: SSH Tunnel
     zh-CN: SSH 隧道
+    zh-HK: SSH 通道
   remote_target:
     en: Remote Target
     zh-CN: 远端目标
+    zh-HK: 遠端目標
   dynamic_target:
     en: Dynamic Target
     zh-CN: 动态目标
+    zh-HK: 動態目標
   ssh_server:
     en: SSH SERVER
     zh-CN: SSH 服务器
+    zh-HK: SSH 伺服器
   bind_address:
     en: BIND ADDRESS
     zh-CN: 监听地址
+    zh-HK: 監聽位址
   uptime:
     en: UPTIME
     zh-CN: 运行时间
+    zh-HK: 執行時間
   status:
     en: STATUS
     zh-CN: 状态
+    zh-HK: 狀態
   activity:
     en: Activity
     zh-CN: 活动记录
+    zh-HK: 活動記錄
   starting:
     en: Starting
     zh-CN: 正在启动
+    zh-HK: 正在啟動
   running:
     en: Running
     zh-CN: 运行中
+    zh-HK: 執行中
   stopping:
     en: Stopping
     zh-CN: 正在停止
+    zh-HK: 正在停止
   failed:
     en: Failed
     zh-CN: 失败
+    zh-HK: 失敗
   stopped:
     en: Stopped
     zh-CN: 已停止
+    zh-HK: 已停止
   stop:
     en: Stop Forwarding
     zh-CN: 停止转发
+    zh-HK: 停止轉送
   retry:
     en: Retry
     zh-CN: 重新尝试
+    zh-HK: 重試
   close_title:
     en: Stop port forwarding?
     zh-CN: 停止端口转发？
+    zh-HK: 停止連接埠轉送？
   close_warning:
     en: Connections still using this port will be interrupted immediately.
     zh-CN: 仍在使用该端口的连接将立即中断。
+    zh-HK: 仍在使用此連接埠的連線將立即中斷。
   stop_and_close:
     en: Stop and Close
     zh-CN: 停止转发并关闭
+    zh-HK: 停止轉送並關閉
   event_starting:
     en: Starting port forwarding
     zh-CN: 开始启动端口转发
+    zh-HK: 開始啟動連接埠轉送
   event_started:
     en: Forwarding started on %{addr}
     zh-CN: 转发已启动，监听 %{addr}
+    zh-HK: 轉送已啟動，監聽 %{addr}
   event_start_failed:
     en: "Start failed: %{error}"
     zh-CN: "启动失败：%{error}"
+    zh-HK: "啟動失敗：%{error}"
   event_start_finished:
     en: "Start finished: %{error}"
     zh-CN: "启动已结束：%{error}"
+    zh-HK: "啟動已結束：%{error}"
   event_retry:
     en: Retrying port forwarding
     zh-CN: 重新尝试启动转发
+    zh-HK: 正在重試啟動轉送
   event_stopping:
     en: Stopping port forwarding
     zh-CN: 正在停止转发
+    zh-HK: 正在停止轉送
   event_stopped:
     en: Port forwarding stopped
     zh-CN: 转发已停止
+    zh-HK: 轉送已停止
   event_stop_failed:
     en: "Stop failed: %{error}"
     zh-CN: "停止失败：%{error}"
+    zh-HK: "停止失敗：%{error}"
   event_connection_opened:
     en: "Connection %{source} opened to %{target}"
     zh-CN: "连接 %{source} 已转发到 %{target}"
+    zh-HK: "連線 %{source} 已轉送到 %{target}"
   event_connection_closed:
     en: "Connection %{source} closed"
     zh-CN: "连接 %{source} 已关闭"
+    zh-HK: "連線 %{source} 已關閉"
   event_connection_failed:
     en: "Connection %{source} failed: %{error}"
     zh-CN: "连接 %{source} 失败：%{error}"
+    zh-HK: "連線 %{source} 失敗：%{error}"

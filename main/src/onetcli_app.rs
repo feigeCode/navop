@@ -620,7 +620,6 @@ pub fn init(cx: &mut App) {
     one_core::init(cx);
     ai_chat_view::init(cx);
     crate::public_mcp_approval::init(cx);
-    crate::ai_chat_acp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
     one_ui::init(cx);
     db_view::search_shortcut::init(cx);
@@ -704,6 +703,7 @@ pub fn refresh_keybindings(cx: &mut App) {
     remote_desktop_view::refresh_keybindings(cx);
     one_ui::refresh_keybindings(cx);
     remote_file_editor::refresh_keybindings(cx);
+    notes::refresh_keybindings(cx);
 }
 
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
@@ -1206,7 +1206,12 @@ mod tests {
 
     #[test]
     fn shortcut_label_formats_configured_shortcut() {
-        assert_eq!("⌃⌘T", super::shortcut_label("ctrl-cmd-t"));
+        #[cfg(target_os = "macos")]
+        let expected = "⌃⌘T";
+        #[cfg(not(target_os = "macos"))]
+        let expected = "Ctrl+Win+T";
+
+        assert_eq!(expected, super::shortcut_label("ctrl-cmd-t"));
     }
 
     #[test]

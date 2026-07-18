@@ -1122,9 +1122,9 @@ impl TerminalSidebar {
     }
 
     /// 添加快捷命令（外部调用）
-    pub fn add_quick_command(&self, command: String, cx: &mut Context<Self>) {
+    pub fn add_quick_command(&self, command: String, window: &mut Window, cx: &mut Context<Self>) {
         self.quick_command_panel.update(cx, |panel, cx| {
-            panel.add_command_external(command, cx);
+            panel.add_command_external(command, window, cx);
         });
     }
 
@@ -1216,15 +1216,15 @@ impl TerminalSidebar {
             .bg(muted_bg)
             .border_l_1()
             .border_color(border_color)
-            .items_center()
-            .py_2()
-            .gap_1()
-            .children(
-                self.tool_dock
-                    .panels
-                    .iter()
-                    .copied()
-                    .map(|panel| self.render_toolbar_button(panel, window, cx)),
+            .justify_between()
+            .child(
+                v_flex().items_center().py_2().gap_1().children(
+                    self.tool_dock
+                        .panels
+                        .iter()
+                        .copied()
+                        .map(|panel| self.render_toolbar_button(panel, window, cx)),
+                ),
             )
             .into_any_element()
     }
@@ -1382,14 +1382,14 @@ impl Render for TerminalSidebarToolbar {
             .bg(snapshot.colors.background)
             .border_l_1()
             .border_color(snapshot.colors.border)
-            .items_center()
-            .py_2()
-            .gap_1()
-            .children(
-                snapshot
-                    .buttons
-                    .into_iter()
-                    .map(|button| self.render_button(button, snapshot.colors.clone())),
+            .child(
+                v_flex().flex_1().items_center().py_2().gap_1().children(
+                    snapshot
+                        .buttons
+                        .iter()
+                        .copied()
+                        .map(|button| self.render_button(button, snapshot.colors.clone())),
+                ),
             )
     }
 }
@@ -1487,6 +1487,21 @@ mod tests {
 
         assert!(dock.toolbar_visible());
         assert!(dock.open_panels().is_empty());
+    }
+
+    #[test]
+    fn terminal_toolbar_only_renders_top_level_tools() {
+        let source = include_str!("mod.rs");
+        let toolbar_render = source
+            .split_once("impl Render for TerminalSidebarToolbar")
+            .expect("terminal toolbar render implementation")
+            .1
+            .split_once("pub(crate) struct TerminalSidebarToolPanel")
+            .expect("terminal toolbar render boundary")
+            .0;
+
+        assert!(!toolbar_render.contains("quick_command_group"));
+        assert!(!toolbar_render.contains("render_group_button"));
     }
 
     #[test]
