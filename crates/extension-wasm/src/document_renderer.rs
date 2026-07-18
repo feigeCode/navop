@@ -1,6 +1,7 @@
 use crate::{WasmError, WasmResult, WasmRuntimeConfig, document_renderer_bindings};
 use document_renderer_bindings::onet::extension::document_render as Wit;
 use std::path::Path;
+use std::time::Duration;
 use wasmtime::{
     Config, Engine, Store, StoreLimits, StoreLimitsBuilder,
     component::{Component, Linker, ResourceTable},
@@ -75,9 +76,16 @@ impl DocumentRendererRuntime {
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
         let mut store = Store::new(&self.engine, HostState::new(self.config.max_memory_mb));
         store.limiter(|state| &mut state.limits);
+        store.set_epoch_deadline(1);
         store
             .set_fuel(self.config.fuel_per_call)
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
+        let timeout_engine = self.engine.clone();
+        let timeout = Duration::from_millis(self.config.timeout_ms.max(1));
+        std::thread::spawn(move || {
+            std::thread::sleep(timeout);
+            timeout_engine.increment_epoch();
+        });
         let renderer = document_renderer_bindings::DocumentRenderer::instantiate_async(
             &mut store,
             &self.component,
@@ -146,5 +154,6 @@ fn engine() -> WasmResult<Engine> {
     config.wasm_component_model(true);
     config.async_support(true);
     config.consume_fuel(true);
+    config.epoch_interruption(true);
     Engine::new(&config).map_err(|e| WasmError::ComponentLoad(e.to_string()))
 }
