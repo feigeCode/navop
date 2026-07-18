@@ -12,6 +12,7 @@ mod file_open;
 mod home;
 mod home_tab;
 mod license;
+mod local_terminal_profiles;
 pub mod new_connection;
 mod onetcli_app;
 mod personal_sync_conflicts;

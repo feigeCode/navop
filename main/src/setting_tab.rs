@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
+use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -1087,39 +1088,6 @@ fn local_terminal_custom_arguments_item(default: &str) -> SettingItem {
         .default_value(SharedString::from(default.to_string())),
     )
     .description(t!("Settings.General.LocalTerminal.custom_arguments_desc").to_string())
-}
-
-fn local_terminal_profile_options(include_windows: bool) -> Vec<(SharedString, SharedString)> {
-    let mut kinds = vec![
-        LocalTerminalProfileKind::System,
-        LocalTerminalProfileKind::PowerShell,
-    ];
-    if include_windows {
-        kinds.extend([
-            LocalTerminalProfileKind::Cmd,
-            LocalTerminalProfileKind::Wsl,
-            LocalTerminalProfileKind::GitBash,
-        ]);
-    }
-    kinds.push(LocalTerminalProfileKind::Custom);
-    kinds
-        .into_iter()
-        .map(|kind| {
-            let label = match kind {
-                LocalTerminalProfileKind::System => t!("Settings.General.LocalTerminal.system"),
-                LocalTerminalProfileKind::PowerShell => {
-                    t!("Settings.General.LocalTerminal.powershell")
-                }
-                LocalTerminalProfileKind::Cmd => t!("Settings.General.LocalTerminal.cmd"),
-                LocalTerminalProfileKind::Wsl => t!("Settings.General.LocalTerminal.wsl"),
-                LocalTerminalProfileKind::GitBash => {
-                    t!("Settings.General.LocalTerminal.git_bash")
-                }
-                LocalTerminalProfileKind::Custom => t!("Settings.General.LocalTerminal.custom"),
-            };
-            (kind.as_str().into(), label.into())
-        })
-        .collect()
 }
 
 fn sync_setting_group(
