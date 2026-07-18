@@ -25,7 +25,7 @@ impl ToolHandler for RuntimeStatusTool {
         ToolDescriptor {
             id: RUNTIME_STATUS_TOOL.to_string(),
             title: "Navop runtime status".to_string(),
-            description: "Read the running Navop application's public MCP compatibility, permission mode, and authoritative Tool Exposure group states. Use tools/list for the actual available tool names and schemas; do not infer tools from the CLI package or Skill.".to_string(),
+            description: "Read the running Navop application's public MCP compatibility and authoritative Tool Exposure group states. Use initialize for the current permission mode and tools/list for the actual available tool names and schemas; do not infer tools from the CLI package or Skill.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {},
@@ -92,6 +92,15 @@ mod tests {
             .await
             .expect("runtime status should succeed")
             .structured_content;
+
+        let descriptor = registry
+            .get(RUNTIME_STATUS_TOOL, ToolAdapter::Mcp)
+            .expect("runtime status descriptor should be exposed");
+        assert!(
+            descriptor
+                .description
+                .contains("Use initialize for the current permission mode")
+        );
 
         assert_eq!(Some(1), result["contractVersion"].as_u64());
         assert_eq!(
