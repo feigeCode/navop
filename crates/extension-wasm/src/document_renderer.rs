@@ -1,4 +1,4 @@
-use crate::{WasmError, WasmResult, document_renderer_bindings};
+use crate::{WasmError, WasmResult, WasmRuntimeConfig, document_renderer_bindings};
 use document_renderer_bindings::onet::extension::document_render as Wit;
 use std::path::Path;
 use wasmtime::{
@@ -38,9 +38,18 @@ pub struct DocumentRendererRuntime {
     id: String,
     engine: Engine,
     component: Component,
+    config: WasmRuntimeConfig,
 }
 impl DocumentRendererRuntime {
     pub fn from_file(id: impl Into<String>, path: &Path) -> WasmResult<Self> {
+        Self::from_file_with_config(id, path, WasmRuntimeConfig::default())
+    }
+
+    pub fn from_file_with_config(
+        id: impl Into<String>,
+        path: &Path,
+        config: WasmRuntimeConfig,
+    ) -> WasmResult<Self> {
         if !path.exists() {
             return Err(WasmError::ComponentNotFound(path.display().to_string()));
         }
@@ -51,6 +60,7 @@ impl DocumentRendererRuntime {
             id: id.into(),
             engine,
             component,
+            config,
         })
     }
     pub fn id(&self) -> &str {
@@ -64,6 +74,9 @@ impl DocumentRendererRuntime {
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
         let mut store = Store::new(&self.engine, HostState::new());
+        store
+            .set_fuel(self.config.fuel_per_call)
+            .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
         let renderer = document_renderer_bindings::DocumentRenderer::instantiate_async(
             &mut store,
             &self.component,

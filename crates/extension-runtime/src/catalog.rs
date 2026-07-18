@@ -169,9 +169,10 @@ impl ExtensionRuntimeCatalog {
                 renderer.runtime_id.clone(),
             ));
         }
-        extension_wasm::DocumentRendererRuntime::from_file(
+        extension_wasm::DocumentRendererRuntime::from_file_with_config(
             renderer.id.clone(),
             &binding.module_path,
+            binding.config.clone(),
         )?
         .render(request)
         .await

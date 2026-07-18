@@ -50,12 +50,10 @@ impl ExtensionRuntimeCatalog {
             #[cfg(not(feature = "wasm-components"))]
             let module_path_for_log = runtime.module.clone();
             #[cfg(feature = "wasm-components")]
-            let base_config = extension_wasm::WasmRuntimeConfig::default();
-            #[cfg(feature = "wasm-components")]
             let config = extension_wasm::WasmRuntimeConfig {
                 max_memory_mb: runtime.max_memory_mb,
                 fuel_per_call: runtime.fuel_per_call,
-                ..base_config
+                timeout_ms: runtime.timeout_ms,
             };
             tracing::debug!(
                 target: "extension_loader",
