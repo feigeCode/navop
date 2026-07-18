@@ -1,0 +1,161 @@
+name: Build ARM Linux Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag to build and update, for example v0.8.10
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: arm-linux-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+
+jobs:
+  build:
+    name: Build and publish ARM Linux
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: aarch64-unknown-linux-gnu
+
+      - name: Install system dependencies
+        run: script/bootstrap
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: arm-linux-release-${{ hashFiles('**/Cargo.lock') }}-thin-cgu16
+          restore-keys: |
+            arm-linux-release-${{ hashFiles('**/Cargo.lock') }}-
+            arm-linux-release-
+
+      - name: Set release version
+        shell: bash
+        run: |
+          version="${{ inputs.tag }}"
+          echo "ONETCLI_VERSION=${version#v}" >> "$GITHUB_ENV"
+
+      - name: Verify secrets are set
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "::error::SUPABASE_URL secret is empty or not set"
+            exit 1
+          fi
+          if [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::SUPABASE_ANON_KEY secret is empty or not set"
+            exit 1
+          fi
+
+      - name: Build release binary
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
+          NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
+          ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
+        run: |
+          cargo --version
+          rustc --version
+          echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+          echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO}"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS}"
+          free -h
+          df -h
+          cargo build --release -p main --target aarch64-unknown-linux-gnu
+
+      - name: Package ARM Linux archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="navop-aarch64-unknown-linux-gnu.tar.gz"
+          mkdir -p package/usr/bin
+          mkdir -p package/usr/share/applications
+          mkdir -p package/usr/share/mime/packages
+          mkdir -p package/usr/share/icons/hicolor/128x128/apps
+          mkdir -p package/usr/share/icons/hicolor/256x256/apps
+          mkdir -p package/usr/share/icons/hicolor/512x515/apps
+          cp target/aarch64-unknown-linux-gnu/release/navop package/usr/bin/
+          cp resources/linux/navop.desktop package/usr/share/applications/
+          cp resources/linux/navop.xml package/usr/share/mime/packages/
+          cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
+          cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
+          cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
+          tar czf "$archive" -C package .
+          sha256sum "$archive" > arm-sha256sum.txt
+          cat arm-sha256sum.txt
+
+      - name: Upload ARM workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-aarch64-unknown-linux-gnu.tar.gz
+          path: navop-aarch64-unknown-linux-gnu.tar.gz
+
+      - name: Publish ARM asset and checksum
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="navop-aarch64-unknown-linux-gnu.tar.gz"
+          mkdir -p release-metadata
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+          if gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "sha256sums.txt" \
+            --dir release-metadata; then
+            awk '$2 != "navop-aarch64-unknown-linux-gnu.tar.gz"' \
+              release-metadata/sha256sums.txt > release-metadata/sha256sums.updated.txt
+          else
+            : > release-metadata/sha256sums.updated.txt
+          fi
+          cat arm-sha256sum.txt >> release-metadata/sha256sums.updated.txt
+          mv release-metadata/sha256sums.updated.txt release-metadata/sha256sums.txt
+
+          gh release upload "$RELEASE_TAG" "$archive" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release upload "$RELEASE_TAG" release-metadata/sha256sums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Trigger R2 synchronization
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh workflow run upload-r2.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref dev \
+            -f tag="$RELEASE_TAG"
