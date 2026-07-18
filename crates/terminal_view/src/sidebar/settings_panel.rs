@@ -1464,7 +1464,7 @@ fn validate_rule_for_save(rule: &TerminalHighlightRule) -> Result<(), String> {
 mod tests {
     use super::{parse_optional_hex_color, serialize_optional_color, terminal_font_options};
     use gpui::Hsla;
-    use one_core::settings::CustomFont;
+    use one_core::settings::{CustomFont, default_grid_monospace_font_family};
 
     #[test]
     fn parse_optional_hex_color_returns_none_for_invalid_input() {
@@ -1559,7 +1559,8 @@ mod tests {
 
     #[test]
     fn terminal_font_options_mark_missing_fonts_without_changing_values() {
-        let installed = vec!["Menlo".to_string()];
+        let default = default_grid_monospace_font_family();
+        let installed = vec![default.to_string()];
         let fonts = terminal_font_options(
             &[CustomFont {
                 path: "/tmp/CustomMono.ttf".to_string(),
@@ -1572,7 +1573,7 @@ mod tests {
         assert!(
             fonts
                 .iter()
-                .any(|font| { font.value.as_ref() == "Menlo" && font.label.as_ref() == "Menlo" })
+                .any(|font| { font.value.as_ref() == default && font.label.as_ref() == default })
         );
         assert!(fonts.iter().any(|font| {
             font.value.as_ref() == "Fira Code" && font.label.as_ref() == "Fira Code (未安装)"

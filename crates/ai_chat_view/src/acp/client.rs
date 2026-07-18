@@ -105,15 +105,12 @@ mod tests {
 
     #[test]
     fn workspace_path_allowed_rejects_paths_outside_root() {
-        let root = Path::new("/workspace/project");
-        assert!(workspace_path_allowed(
-            Path::new("/workspace/project/src/main.rs"),
-            root
-        ));
-        assert!(!workspace_path_allowed(
-            Path::new("/workspace/project/../secret"),
-            root
-        ));
-        assert!(!workspace_path_allowed(Path::new("relative/path"), root));
+        let root = std::env::temp_dir().join("workspace").join("project");
+        let inside = root.join("src").join("main.rs");
+        let outside = root.join("..").join("secret");
+
+        assert!(workspace_path_allowed(&inside, &root));
+        assert!(!workspace_path_allowed(&outside, &root));
+        assert!(!workspace_path_allowed(Path::new("relative/path"), &root));
     }
 }

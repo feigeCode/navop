@@ -6,7 +6,7 @@
 mod tests {
     use crate::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext};
     use crate::sql_editor::sql_symbol_table::SymbolTable;
-    use crate::sql_editor::sql_tokenizer::SqlTokenizer;
+    use crate::sql_editor::sql_tokenizer::{SqlKeyword, SqlTokenizer};
     use proptest::prelude::*;
     // =========================================================================
     // **Feature: sql-smart-completion, Property 4: Context Inference Accuracy**
@@ -32,80 +32,12 @@ mod tests {
 
     /// Generate valid SQL identifier
     fn identifier_strategy() -> impl Strategy<Value = String> {
-        "[a-z][a-z0-9_]{0,10}".prop_filter("not a keyword", |s| {
-            !matches!(
-                s.to_uppercase().as_str(),
-                "SELECT"
-                    | "FROM"
-                    | "WHERE"
-                    | "JOIN"
-                    | "AND"
-                    | "OR"
-                    | "ON"
-                    | "ORDER"
-                    | "GROUP"
-                    | "BY"
-                    | "SET"
-                    | "VALUES"
-                    | "INTO"
-                    | "UPDATE"
-                    | "DELETE"
-                    | "INSERT"
-                    | "CREATE"
-                    | "TABLE"
-                    | "LEFT"
-                    | "RIGHT"
-                    | "INNER"
-                    | "FULL"
-                    | "CROSS"
-                    | "AS"
-                    | "HAVING"
-                    | "LIMIT"
-                    | "DISTINCT"
-                    | "ALL"
-                    | "IS"
-                    | "IN"
-                    | "NOT"
-                    | "NULL"
-                    | "LIKE"
-                    | "BETWEEN"
-                    | "EXISTS"
-                    | "CASE"
-                    | "WHEN"
-                    | "THEN"
-                    | "ELSE"
-                    | "END"
-                    | "WITH"
-                    | "ASC"
-                    | "DESC"
-                    | "UNION"
-                    | "INTERSECT"
-                    | "EXCEPT"
-                    | "PRIMARY"
-                    | "FOREIGN"
-                    | "KEY"
-                    | "REFERENCES"
-                    | "UNIQUE"
-                    | "CHECK"
-                    | "DEFAULT"
-                    | "TRUNCATE"
-                    | "USING"
-                    | "INDEX"
-                    | "VIEW"
-                    | "ALTER"
-                    | "DROP"
-            )
-        })
+        "[a-z][a-z0-9_]{0,10}".prop_filter("not a keyword", |s| SqlKeyword::from_str(s).is_none())
     }
 
     /// Generate table alias (single letter or short identifier)
     fn alias_strategy() -> impl Strategy<Value = String> {
-        "[a-z][a-z0-9]{0,2}".prop_filter("not a keyword", |s| {
-            !matches!(
-                s.to_uppercase().as_str(),
-                "AS" | "ON" | "OR" | "BY" | "IN" | "IS"
-            )
-        })
+        "[a-z][a-z0-9]{0,2}".prop_filter("not a keyword", |s| SqlKeyword::from_str(s).is_none())
     }
 
     proptest! {
