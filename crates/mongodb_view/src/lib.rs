@@ -20,6 +20,7 @@ pub mod mongo_tree_view;
 pub mod sidebar;
 pub mod types;
 
+pub use bson;
 pub use collection_view::CollectionView;
 pub use connection::MongoConnection;
 #[cfg(feature = "builtin-mongodb")]
@@ -28,7 +29,7 @@ pub use manager::{GlobalMongoState, MongoManager};
 pub use mongo_form_window::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 pub use mongo_tab::MongoTabView;
 pub use mongo_tree_view::{MongoTreeView, MongoTreeViewEvent};
-pub use mongodb::{bson, options};
+pub use mongodb_runtime::MongoFindOptions;
 pub use sidebar::{MongoSidebar, MongoSidebarEvent};
 pub use types::*;
 

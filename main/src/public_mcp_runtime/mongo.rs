@@ -1,7 +1,6 @@
 use gpui::App;
-use mongodb_view::GlobalMongoState;
 use mongodb_view::bson::{Bson, Document};
-use mongodb_view::options::FindOptions;
+use mongodb_view::{GlobalMongoState, MongoFindOptions as FindOptions};
 use public_mcp::tools::{
     MongoConnectionSnapshot, MongoConnectionSnapshotProvider, MongoOperation,
     MongoOperationProvider, MongoToolProvider,
@@ -294,20 +293,9 @@ fn find_options(input: &Value) -> Result<FindOptions, ToolError> {
     let mut options = FindOptions::default();
     options.sort = optional_document(input, "sort")?;
     options.projection = optional_document(input, "projection")?;
-    options.skip = optional_u64(input, "skip")?;
+    options.skip = optional_i64(input, "skip")?;
     options.limit = optional_i64(input, "limit")?;
     Ok(options)
-}
-
-fn optional_u64(input: &Value, name: &str) -> Result<Option<u64>, ToolError> {
-    input
-        .get(name)
-        .map(|value| {
-            value
-                .as_u64()
-                .ok_or_else(|| invalid(format!("{name} must be a non-negative integer")))
-        })
-        .transpose()
 }
 
 fn optional_i64(input: &Value, name: &str) -> Result<Option<i64>, ToolError> {
@@ -347,5 +335,25 @@ fn tool_error(error: mongodb_view::MongoError) -> ToolError {
 fn invalid(message: impl Into<String>) -> ToolError {
     ToolError::Failed {
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_options;
+    use serde_json::json;
+
+    #[test]
+    fn find_options_use_runtime_signed_paging_contract() {
+        let options = find_options(&json!({"skip": 10, "limit": 25})).unwrap();
+
+        assert_eq!(Some(10), options.skip);
+        assert_eq!(Some(25), options.limit);
+    }
+
+    #[test]
+    fn find_options_reject_negative_paging_values() {
+        assert!(find_options(&json!({"skip": -1})).is_err());
+        assert!(find_options(&json!({"limit": -1})).is_err());
     }
 }
