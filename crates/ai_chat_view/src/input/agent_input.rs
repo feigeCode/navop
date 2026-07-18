@@ -23,9 +23,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex,
-};
+use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
@@ -1032,7 +1030,6 @@ impl AgentInput {
             cx.notify();
         }
     }
-
 }
 
 fn referenced_mentions_in_text(text: &str, mentions: &[MentionItem]) -> Vec<MentionItem> {
@@ -2696,15 +2693,9 @@ mod tests {
 
     #[test]
     fn resource_source_option_label_includes_count_or_disabled_hint() {
-        let enabled =
-            ComposerResourceSourceOption::new("all", "全部", 3, true);
-        let disabled = ComposerResourceSourceOption::new(
-            "workspace",
-            "工作区",
-            0,
-            false,
-        )
-        .disabled("暂无工作区资源来源");
+        let enabled = ComposerResourceSourceOption::new("all", "全部", 3, true);
+        let disabled = ComposerResourceSourceOption::new("workspace", "工作区", 0, false)
+            .disabled("暂无工作区资源来源");
 
         assert_eq!(resource_source_option_label(&enabled).as_ref(), "全部 3");
         assert_eq!(
