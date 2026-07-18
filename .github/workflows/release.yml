@@ -127,8 +127,6 @@ jobs:
 
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
             echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
-            echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"
-            echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16" >> "$GITHUB_ENV"
           fi
 
       - name: Verify secrets are set
@@ -157,8 +155,6 @@ jobs:
           cargo --version
           rustc --version
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
-          echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
-          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
           cargo build --release -p main --target ${{ matrix.target }}
 
 

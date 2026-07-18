@@ -269,15 +269,18 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(validator, /\$value = \[string\]\$record\.StringData\(1\)/);
 });
 
-test("release builds use cached-friendly thin LTO", () => {
-  for (const workflowPath of [
-    ".github/workflows/release.yml",
-    ".github/workflows/build-windows-msi.yml",
-  ]) {
-    const workflow = read(workflowPath);
-    assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO: thin/);
-    assert.match(workflow, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
-  }
+test("release builds keep size-optimized Cargo profile defaults", () => {
+  const release = read(".github/workflows/release.yml");
+  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_LTO:/);
+  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS:/);
+
+  const cargo = read("Cargo.toml");
+  assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "fat"/);
+  assert.match(cargo, /\[profile\.release\][\s\S]*?codegen-units = 1/);
+
+  const manualWindows = read(".github/workflows/build-windows-msi.yml");
+  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_LTO: thin/);
+  assert.match(manualWindows, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {
