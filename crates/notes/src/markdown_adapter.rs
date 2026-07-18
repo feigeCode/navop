@@ -35,7 +35,11 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
     config: MarkdownProjectionConfig<'_>,
     cx: &mut C,
 ) -> Result<MarkdownProjection> {
-    let imported = EditorDocument::from_markdown_with_report(config.document_id, config.source)?;
+    let imported = EditorDocument::from_markdown_bundle_with_report(
+        config.document_id,
+        config.source,
+        &config.store,
+    )?;
     let readonly = !matches!(imported.compatibility, MarkdownCompatibility::Editable);
     let (event_sender, events) = unbounded();
     let mut builder = Editor::builder()

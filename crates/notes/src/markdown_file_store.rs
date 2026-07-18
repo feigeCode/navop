@@ -37,6 +37,39 @@ struct MarkdownStoreState {
 }
 
 impl MarkdownFileStore {
+    pub(crate) fn asset_directory(&self) -> Result<String> {
+        let state = self.state()?;
+        let stem = state
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("document");
+        Ok(format!("{stem}.assets"))
+    }
+
+    pub(crate) fn write_assets(&self, assets: &[cditor_app::MarkdownAsset]) -> Result<()> {
+        let state = self.state()?;
+        let root = state
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        for asset in assets {
+            let relative = std::path::Path::new(&asset.relative_path);
+            if relative.is_absolute()
+                || relative
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::ParentDir))
+            {
+                anyhow::bail!("invalid Markdown asset path: {}", asset.relative_path);
+            }
+            let path = root.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, &asset.bytes)?;
+        }
+        Ok(())
+    }
     pub(crate) fn new(path: PathBuf) -> Self {
         Self {
             state: Arc::new(Mutex::new(MarkdownStoreState {
@@ -80,6 +113,28 @@ impl MarkdownFileStore {
         self.state
             .lock()
             .map_err(|_| anyhow::anyhow!("Markdown store lock is poisoned"))
+    }
+}
+
+impl cditor_app::MarkdownAssetResolver for MarkdownFileStore {
+    fn read_asset(&self, relative_path: &str) -> Result<Vec<u8>, cditor_app::MarkdownAssetError> {
+        let state = self
+            .state()
+            .map_err(|error| cditor_app::MarkdownAssetError::new(error.to_string()))?;
+        let relative = std::path::Path::new(relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(cditor_app::MarkdownAssetError::new("invalid asset path"));
+        }
+        let root = state
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        fs::read(root.join(relative))
+            .map_err(|error| cditor_app::MarkdownAssetError::new(error.to_string()))
     }
 }
 
