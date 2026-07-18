@@ -32,7 +32,8 @@ use crate::{
 };
 use ai_chat_view::{
     AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
-    LanguageMatcher, MentionItem, build_sidebar_resource_state,
+    LanguageMatcher, MentionItem, build_mentions_from_connections, build_resource_catalog,
+    build_sidebar_resource_state,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -55,17 +56,36 @@ use rust_i18n::t;
 use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use terminal::terminal::SshTerminalConfig;
+use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 
-const TERMINAL_AI_SYSTEM_INSTRUCTION: &str = r#"你是终端侧边栏中的 Linux 命令助手，默认面向 Linux shell 环境回答。
+fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> String {
+    let (environment, code_language) = match connection_kind {
+        TerminalConnectionKind::Local => (
+            format!(
+                "运行 Navop 的本地 {} 终端；优先遵循当前 shell 与本机平台语法，不要默认假定为 Linux",
+                std::env::consts::OS
+            ),
+            if cfg!(target_os = "windows") {
+                "powershell"
+            } else {
+                "bash"
+            },
+        ),
+        TerminalConnectionKind::Ssh => ("远程 Linux shell 环境".to_string(), "bash"),
+        TerminalConnectionKind::Serial => ("串口终端环境".to_string(), "text"),
+    };
+    format!(
+        r#"你是终端侧边栏中的命令助手，当前目标是{environment}。
 请严格遵循以下规则：
-1. 当用户请求安装、配置、排查、运维或执行命令时，优先返回可以直接在 Linux 终端执行的命令。
-2. 所有命令都必须放在 Markdown 代码块中，代码块语言使用 bash。
+1. 当用户请求安装、配置、排查、运维或执行命令时，优先返回可以直接在当前目标终端执行的命令。
+2. 所有命令都必须放在 Markdown 代码块中，代码块语言使用 {code_language}。
 3. 每个代码块只能包含一条命令，不要在同一个代码块中放多条命令，不要使用 &&、; 或换行把多个命令塞进同一个代码块，除非用户明确要求组合命令。
 4. 如果任务需要多步骤，请拆成多个独立代码块，每个代码块只对应一步的一条命令。
 5. 解释、注意事项、风险提示、步骤标题必须写在代码块外面，保持简洁。
 6. 如果命令依赖 sudo、包管理器或发行版差异，请先简短说明再给命令。
-7. 如果用户明确要求非 Linux 平台、非命令答案或更详细的解释，再按用户要求调整。"#;
+7. 如果用户明确要求其他平台、非命令答案或更详细的解释，再按用户要求调整。"#
+    )
+}
 
 fn agent_theme_from_terminal_theme(theme: &TerminalTheme) -> AgentChatTheme {
     let colors = theme.colors();
@@ -104,6 +124,35 @@ fn build_terminal_ai_context(
         &catalog,
         agent_runtime::DefaultTargetReason::CurrentTerminal,
     )
+}
+
+fn build_live_terminal_ai_context(
+    current_terminal: agent_runtime::ResourceRef,
+    all_connections: &[StoredConnection],
+) -> (
+    agent_runtime::AgentResourceScope,
+    agent_runtime::ResourceCatalog,
+    Vec<MentionItem>,
+) {
+    let mut resources = vec![current_terminal.clone()];
+    resources.extend(build_resource_catalog(all_connections));
+    let catalog = agent_runtime::ResourceCatalog::new(resources);
+    let scope = agent_runtime::AgentResourceScope::single_default(
+        current_terminal.clone(),
+        agent_runtime::DefaultTargetReason::CurrentTerminal,
+    );
+    let detail = std::iter::once("terminal".to_string())
+        .chain(current_terminal.aliases.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut mentions = vec![MentionItem::new(
+        current_terminal.id.as_str(),
+        current_terminal.label.clone(),
+        detail,
+        current_terminal.kind.as_str(),
+    )];
+    mentions.extend(build_mentions_from_connections(all_connections));
+    (scope, catalog, mentions)
 }
 
 fn terminal_ai_connection_catalog(
@@ -497,7 +546,9 @@ pub struct TerminalSidebar {
 impl TerminalSidebar {
     pub fn new(
         connection_id: Option<i64>,
+        connection_kind: TerminalConnectionKind,
         stored_connection: Option<StoredConnection>,
+        terminal_ai_resource: Option<agent_runtime::ResourceRef>,
         ssh_config: Option<SshTerminalConfig>,
         ssh_session_manager: Option<Arc<SshSessionManager>>,
         initial_theme: &TerminalTheme,
@@ -562,6 +613,15 @@ impl TerminalSidebar {
                     scope, catalog, mentions, window, cx,
                 )
             })
+        } else if let Some(terminal_resource) = terminal_ai_resource {
+            let connections = load_terminal_ai_connections(cx);
+            let (scope, catalog, mentions) =
+                build_live_terminal_ai_context(terminal_resource, &connections);
+            cx.new(|cx| {
+                DefaultAgentChatPanel::new_sidebar_with_scope_and_catalog(
+                    scope, catalog, mentions, window, cx,
+                )
+            })
         } else {
             cx.new(|cx| DefaultAgentChatPanel::new(window, cx))
         };
@@ -594,7 +654,7 @@ impl TerminalSidebar {
             panel.set_theme(Some(ai_theme), cx);
             panel.set_sidebar_header_visible(true, cx);
             panel.set_sidebar_frame_controls(true, SidebarPlacement::Right, cx);
-            panel.set_system_instruction(Some(TERMINAL_AI_SYSTEM_INSTRUCTION.to_string()), cx);
+            panel.set_system_instruction(Some(terminal_ai_system_instruction(connection_kind)), cx);
             // 注册复制操作（默认已有，这里只是确保）
             // 注册粘贴到终端操作
             if let Some(paste_action) = CodeBlockAction::new("paste-to-terminal")
@@ -1454,11 +1514,14 @@ impl Render for TerminalSidebar {
 mod tests {
     use super::{
         SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
-        build_terminal_ai_context, terminal_sidebar_available_panels,
+        build_live_terminal_ai_context, build_terminal_ai_context, terminal_ai_system_instruction,
+        terminal_sidebar_available_panels,
     };
     use crate::theme::TerminalTheme;
+    use agent_runtime::{ResourceCapability, ResourceKind, ResourceRef};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
+    use terminal::terminal::TerminalConnectionKind;
 
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
@@ -1479,6 +1542,45 @@ mod tests {
             team_id: None,
             owner_id: None,
         }
+    }
+
+    #[test]
+    fn local_terminal_ai_context_uses_the_live_session_as_current_target() {
+        let live_terminal =
+            ResourceRef::new("local-terminal-1", ResourceKind::Terminal, "local terminal")
+                .with_capability(ResourceCapability::TerminalExec)
+                .with_capability(ResourceCapability::TerminalControl);
+        let saved = stored_connection(42, "prod", ConnectionType::SshSftp);
+
+        let (scope, catalog, mentions) =
+            build_live_terminal_ai_context(live_terminal.clone(), &[saved]);
+        let resources = scope.to_resource_context();
+
+        assert_eq!(
+            Some(live_terminal.id.clone()),
+            resources.current,
+            "the local visible terminal must be the AI default target"
+        );
+        assert_eq!(Some(&live_terminal), resources.current());
+        assert!(catalog.resources.iter().any(|resource| {
+            resource.id == live_terminal.id
+                && resource
+                    .capabilities
+                    .contains(&ResourceCapability::TerminalExec)
+        }));
+        assert!(
+            mentions
+                .iter()
+                .any(|mention| mention.id == "local-terminal-1")
+        );
+    }
+
+    #[test]
+    fn local_terminal_ai_instruction_uses_the_host_platform() {
+        let instruction = terminal_ai_system_instruction(TerminalConnectionKind::Local);
+
+        assert!(instruction.contains(std::env::consts::OS));
+        assert!(instruction.contains("不要默认假定为 Linux"));
     }
 
     #[test]

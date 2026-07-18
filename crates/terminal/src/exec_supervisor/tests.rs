@@ -54,6 +54,18 @@ fn ready_exec_submits_without_ctrl_c_when_prompt_is_empty() {
 }
 
 #[test]
+fn terminal_output_capture_only_stays_enabled_while_observing_an_exec() {
+    let mut supervisor = ready_supervisor();
+    assert!(!supervisor.captures_terminal_output());
+
+    submit(&mut supervisor, 12, "pwd");
+    assert!(supervisor.captures_terminal_output());
+
+    assert!(supervisor.cancel(12).is_empty());
+    assert!(!supervisor.captures_terminal_output());
+}
+
+#[test]
 fn submitted_only_exec_becomes_busy_before_command_start_arrives() {
     let mut supervisor = ready_supervisor();
     let mut submitted_only = request("sleep 1");

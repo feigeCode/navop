@@ -48,6 +48,12 @@ impl ExecSupervisor {
         self.readiness
     }
 
+    pub(crate) fn captures_terminal_output(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.phase == ExecPhase::Observing && !active.detached)
+    }
+
     pub(crate) fn interrupt_foreground(
         &self,
     ) -> Result<TerminalControlReadiness, TerminalControlError> {

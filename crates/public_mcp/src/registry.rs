@@ -259,7 +259,7 @@ impl PublicMcpRegistry {
         cancellation: CancellationToken,
     ) -> Result<TerminalExecResult> {
         let handle = self.terminal_exec_handle(target)?;
-        ensure_exposed_session(&handle.snapshot())?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
         handle.exec_in_terminal(request, cancellation).await
     }
 
@@ -269,7 +269,7 @@ impl PublicMcpRegistry {
         request: TerminalReadRequest,
     ) -> Result<TerminalReadResult> {
         let handle = self.terminal_read_handle(target)?;
-        ensure_exposed_session(&handle.snapshot())?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
         handle.read_terminal(request)
     }
 
@@ -280,7 +280,7 @@ impl PublicMcpRegistry {
         cancellation: CancellationToken,
     ) -> Result<TerminalControlResult> {
         let handle = self.terminal_control_handle(target)?;
-        ensure_exposed_session(&handle.snapshot())?;
+        ensure_visible_terminal_session(&handle.snapshot())?;
         handle.control_terminal(request, cancellation).await
     }
 
@@ -465,6 +465,19 @@ fn ensure_exposed_session(snapshot: &TerminalSessionSnapshot) -> Result<()> {
     }
     Err(anyhow!(
         "terminal session is not an exposed connected SSH session"
+    ))
+}
+
+fn ensure_visible_terminal_session(snapshot: &TerminalSessionSnapshot) -> Result<()> {
+    if matches!(
+        snapshot.connection_kind,
+        TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
+    ) && matches!(snapshot.connection_state, ConnectionState::Connected)
+    {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "terminal session is not an exposed connected local or SSH session"
     ))
 }
 

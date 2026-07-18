@@ -1031,8 +1031,8 @@ impl TerminalView {
 
         // 获取初始颜色
         let colors = terminal.read(cx).term().lock().colors().clone();
-        let is_local_terminal =
-            terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+        let connection_kind = terminal.read(cx).connection_kind();
+        let is_local_terminal = connection_kind == TerminalConnectionKind::Local;
 
         // 创建默认主题（需要在创建侧边栏之前）
         let default_theme = TerminalTheme::ocean();
@@ -1042,14 +1042,22 @@ impl TerminalView {
         let default_line_height_scale = DEFAULT_LINE_HEIGHT_SCALE;
         let ssh_config = terminal.read(cx).ssh_config().cloned();
         let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
-        let history_scope =
-            terminal_history_scope(terminal.read(cx).connection_kind(), connection_id);
+        let history_scope = terminal_history_scope(connection_kind, connection_id);
+        let public_mcp_registration = {
+            let terminal = terminal.read(cx);
+            crate::public_mcp::register_terminal(terminal, cx)
+        };
+        let terminal_ai_resource = public_mcp_registration
+            .as_ref()
+            .and_then(TerminalPublicMcpRegistration::agent_resource);
 
         // 创建侧边栏（传递 StoredConnection 用于文件管理器）
         let sidebar = cx.new(|cx| {
             TerminalSidebar::new(
                 connection_id,
+                connection_kind,
                 stored_connection,
+                terminal_ai_resource,
                 ssh_config,
                 ssh_session_manager,
                 &default_theme,
@@ -1183,22 +1191,13 @@ impl TerminalView {
             view_bounds: Bounds::default(),
             scrollbar_metrics,
             scrollbar_handle,
-            public_mcp_registration: None,
+            public_mcp_registration,
             render_mode: TerminalRenderMode::Embedded,
         };
         let initial_settings = current_settings(cx);
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
-        this.register_public_mcp_session(cx);
         this
-    }
-
-    fn register_public_mcp_session(&mut self, cx: &mut Context<Self>) {
-        let terminal = self.terminal.read(cx);
-        let Some(registration) = crate::public_mcp::register_terminal(terminal, cx) else {
-            return;
-        };
-        self.public_mcp_registration = Some(registration);
     }
 
     fn register_broadcast_input(&mut self, cx: &mut Context<Self>) {

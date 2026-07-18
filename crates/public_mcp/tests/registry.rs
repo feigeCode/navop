@@ -1,16 +1,18 @@
 use public_mcp::registry::{
     ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
     TerminalControlFuture, TerminalControlSessionHandle, TerminalExecFuture,
-    TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalExecSessionHandle, TerminalReadSessionHandle, TerminalSessionHandle,
+    TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
     RemoteCommandMode, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
     RemoteFileWriteResult, SessionDiagnosticsRequest, SessionDiagnosticsResult,
 };
 use public_mcp::terminal_control::{
-    TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
+    TerminalControlAction, TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
+use public_mcp::terminal_read::{TerminalReadRequest, TerminalReadResult};
 use std::collections::BTreeMap;
 use tool_runtime::ResourceCapability;
 
@@ -79,6 +81,26 @@ impl TerminalControlSessionHandle for FakeTerminal {
                 sent: true,
                 readiness_before: TerminalControlReadiness::CommandRunning,
             })
+        })
+    }
+}
+
+impl TerminalReadSessionHandle for FakeTerminal {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        <Self as TerminalSessionHandle>::snapshot(self)
+    }
+
+    fn read_terminal(&self, request: TerminalReadRequest) -> anyhow::Result<TerminalReadResult> {
+        Ok(TerminalReadResult {
+            target: request.target,
+            text: "local output".to_string(),
+            requested_lines: request.lines,
+            returned_lines: 1,
+            available_lines: 1,
+            history_size: 0,
+            screen_lines: 24,
+            columns: 80,
+            truncated: false,
         })
     }
 }
@@ -292,6 +314,86 @@ fn remote_exec_rejects_local_session() {
         .expect_err("local session should reject remote exec");
 
     assert!(err.to_string().contains("exposed connected SSH session"));
+}
+
+#[tokio::test]
+async fn visible_terminal_exec_accepts_connected_local_session() {
+    let registry = PublicMcpRegistry::default();
+    let terminal = FakeTerminal {
+        id: "local-ready".to_string(),
+        kind: TerminalConnectionKind::Local,
+        state: ConnectionState::Connected,
+    };
+    registry.register_terminal_exec(terminal);
+
+    let result = registry
+        .terminal_exec(
+            "local-ready",
+            TerminalExecRequest {
+                target: "local-ready".to_string(),
+                command: "pwd".to_string(),
+                submit: true,
+                wait_for_output: false,
+                ready_timeout_ms: 0,
+                timeout_ms: Some(1_000),
+            },
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("connected local terminal should accept visible exec");
+
+    assert_eq!("local-ready", result.target);
+    assert_eq!("pwd", result.command);
+}
+
+#[test]
+fn visible_terminal_read_accepts_connected_local_session() {
+    let registry = PublicMcpRegistry::default();
+    registry.register_terminal_read(FakeTerminal {
+        id: "local-ready".to_string(),
+        kind: TerminalConnectionKind::Local,
+        state: ConnectionState::Connected,
+    });
+
+    let result = registry
+        .terminal_read(
+            "local-ready",
+            TerminalReadRequest {
+                target: "local-ready".to_string(),
+                lines: 20,
+            },
+        )
+        .expect("connected local terminal should be readable");
+
+    assert_eq!("local output", result.text);
+}
+
+#[tokio::test]
+async fn visible_terminal_control_accepts_connected_local_session() {
+    let registry = PublicMcpRegistry::default();
+    registry.register_terminal_control(FakeTerminal {
+        id: "local-ready".to_string(),
+        kind: TerminalConnectionKind::Local,
+        state: ConnectionState::Connected,
+    });
+
+    let result = registry
+        .terminal_control(
+            "local-ready",
+            TerminalControlRequest {
+                target: "local-ready".to_string(),
+                action: TerminalControlAction::Interrupt,
+            },
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .expect("connected local terminal should accept visible control");
+
+    assert!(result.sent);
+    assert_eq!(
+        TerminalControlReadiness::CommandRunning,
+        result.readiness_before
+    );
 }
 
 #[test]

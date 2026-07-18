@@ -5,15 +5,25 @@ use alacritty_terminal::term::{ClipboardType, Term};
 use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite, Options as PtyOptions};
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::{self, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::{
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    oneshot,
+};
+use tokio_util::sync::CancellationToken;
 
+use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
 use crate::osc::{OscEvent, extract_osc_events};
-use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
+use crate::{
+    TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
+    TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
+    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+};
 
 /// 终端事件类型
 #[derive(Debug, Clone)]
@@ -46,11 +56,89 @@ pub enum TerminalEvent {
     CommandRecorded(String),
 }
 
-/// Commands from UI layer to PTY backend
-pub enum PtyCommand {
-    Write(Vec<u8>),
-    Resize(TerminalSize),
+enum LocalPtyCommand {
+    Write {
+        source: TerminalInputSource,
+        data: Vec<u8>,
+    },
+    InterruptForeground {
+        request: TerminalControlRequest,
+        cancellation: CancellationToken,
+        result: oneshot::Sender<Result<TerminalControlOutput, TerminalControlError>>,
+    },
+    StartExec {
+        id: u64,
+        request: TerminalExecRequest,
+        result: oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>,
+    },
+    CancelExec {
+        id: u64,
+    },
+    ExecTimeout {
+        id: u64,
+        phase: ExecPhase,
+    },
+    TerminalChunk(Vec<u8>),
+    Disconnect,
     Shutdown,
+}
+
+type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
+
+fn build_local_terminal_exec_handle(
+    command_tx: UnboundedSender<LocalPtyCommand>,
+    exec_ids: Arc<AtomicU64>,
+) -> TerminalExecHandle {
+    TerminalExecHandle::new(move |request, cancellation| {
+        let command_tx = command_tx.clone();
+        let exec_ids = exec_ids.clone();
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(TerminalExecError::CancelledBeforeSubmit);
+            }
+            let id = exec_ids.fetch_add(1, Ordering::Relaxed);
+            let (result_tx, result_rx) = oneshot::channel();
+            command_tx
+                .send(LocalPtyCommand::StartExec {
+                    id,
+                    request,
+                    result: result_tx,
+                })
+                .map_err(|_| TerminalExecError::Disconnected)?;
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    let _ = command_tx.send(LocalPtyCommand::CancelExec { id });
+                    Err(TerminalExecError::Cancelled)
+                }
+                result = result_rx => result.unwrap_or(Err(TerminalExecError::Disconnected)),
+            }
+        })
+    })
+}
+
+fn build_local_terminal_control_handle(
+    command_tx: UnboundedSender<LocalPtyCommand>,
+) -> TerminalControlHandle {
+    TerminalControlHandle::new(move |request, cancellation| {
+        let command_tx = command_tx.clone();
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(TerminalControlError::Cancelled);
+            }
+            let (result_tx, result_rx) = oneshot::channel();
+            command_tx
+                .send(LocalPtyCommand::InterruptForeground {
+                    request,
+                    cancellation,
+                    result: result_tx,
+                })
+                .map_err(|_| TerminalControlError::Disconnected)?;
+            result_rx
+                .await
+                .unwrap_or(Err(TerminalControlError::Disconnected))
+        })
+    })
 }
 
 fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
@@ -71,12 +159,6 @@ fn terminal_events_from_osc_chunk(data: &[u8]) -> Vec<TerminalEvent> {
         .collect()
 }
 
-fn forward_osc_events(data: &[u8], event_tx: &UnboundedSender<TerminalEvent>) {
-    for event in terminal_events_from_osc_chunk(data) {
-        let _ = event_tx.send(event);
-    }
-}
-
 struct OscTrackingPty<T: EventedPty> {
     inner: Box<T>,
     reader: OscTrackingReader<T>,
@@ -85,6 +167,8 @@ struct OscTrackingPty<T: EventedPty> {
 struct OscTrackingReader<T: EventedPty> {
     inner: *mut T,
     event_tx: UnboundedSender<TerminalEvent>,
+    command_tx: UnboundedSender<LocalPtyCommand>,
+    capture_output: Arc<AtomicBool>,
 }
 
 // EventLoop owns the wrapper on one thread; the reader pointer targets the boxed
@@ -92,11 +176,18 @@ struct OscTrackingReader<T: EventedPty> {
 unsafe impl<T: EventedPty + Send> Send for OscTrackingReader<T> {}
 
 impl<T: EventedPty> OscTrackingPty<T> {
-    fn new(inner: T, event_tx: UnboundedSender<TerminalEvent>) -> Self {
+    fn new(
+        inner: T,
+        event_tx: UnboundedSender<TerminalEvent>,
+        command_tx: UnboundedSender<LocalPtyCommand>,
+        capture_output: Arc<AtomicBool>,
+    ) -> Self {
         let mut inner = Box::new(inner);
         let reader = OscTrackingReader {
             inner: inner.as_mut() as *mut T,
             event_tx,
+            command_tx,
+            capture_output,
         };
         Self { inner, reader }
     }
@@ -106,7 +197,16 @@ impl<T: EventedPty> Read for OscTrackingReader<T> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let bytes_read = unsafe { (&mut *self.inner).reader().read(buf) }?;
         if bytes_read > 0 {
-            forward_osc_events(&buf[..bytes_read], &self.event_tx);
+            let data = &buf[..bytes_read];
+            let terminal_events = terminal_events_from_osc_chunk(data);
+            if self.capture_output.load(Ordering::Acquire) || !terminal_events.is_empty() {
+                let _ = self
+                    .command_tx
+                    .send(LocalPtyCommand::TerminalChunk(data.to_vec()));
+            }
+            for event in terminal_events {
+                let _ = self.event_tx.send(event);
+            }
         }
         Ok(bytes_read)
     }
@@ -168,8 +268,8 @@ where
 /// 需要通过此通道将响应写回终端。
 #[derive(Clone)]
 enum PtyWriteBack {
-    /// 本地 PTY：通过 EventLoopSender 写回
-    Local(EventLoopSender),
+    /// 本地 PTY：先经过 exec supervisor，再写回 EventLoop
+    Local(UnboundedSender<LocalPtyCommand>),
     /// SSH：通过 UnboundedSender 写回
     Ssh(UnboundedSender<Vec<u8>>),
 }
@@ -178,11 +278,20 @@ impl PtyWriteBack {
     fn write(&self, data: Vec<u8>) {
         match self {
             PtyWriteBack::Local(sender) => {
-                let _ = sender.send(Msg::Input(Cow::Owned(data)));
+                let _ = sender.send(LocalPtyCommand::Write {
+                    source: TerminalInputSource::TerminalResponse,
+                    data,
+                });
             }
             PtyWriteBack::Ssh(sender) => {
                 let _ = sender.send(data);
             }
+        }
+    }
+
+    fn disconnect(&self) {
+        if let PtyWriteBack::Local(sender) = self {
+            let _ = sender.send(LocalPtyCommand::Disconnect);
         }
     }
 }
@@ -195,8 +304,11 @@ impl PtyWriteBack {
 /// 3. Sends Wakeup event via EventListener
 pub struct LocalPtyBackend {
     event_loop_sender: EventLoopSender,
+    command_tx: UnboundedSender<LocalPtyCommand>,
+    exec_ids: Arc<AtomicU64>,
     event_proxy: GpuiEventProxy,
     _event_loop_handle: JoinHandle<()>,
+    _supervisor_handle: JoinHandle<()>,
 }
 
 impl LocalPtyBackend {
@@ -220,28 +332,51 @@ impl LocalPtyBackend {
             window_size.cell_height
         );
 
+        let (command_tx, command_rx) = unbounded_channel();
+        let capture_output = Arc::new(AtomicBool::new(false));
         let pty = tty::new(&pty_options, window_size, 0)?;
-        let pty = OscTrackingPty::new(pty, event_proxy.event_tx.clone());
+        let pty = OscTrackingPty::new(
+            pty,
+            event_proxy.event_tx.clone(),
+            command_tx.clone(),
+            capture_output.clone(),
+        );
         let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
 
         // 设置 PtyWrite 回写通道，使 DA 等终端响应能写回 PTY
-        event_proxy.set_write_back(PtyWriteBack::Local(event_loop_sender.clone()));
+        event_proxy.set_write_back(PtyWriteBack::Local(command_tx.clone()));
         event_proxy.set_window_size(window_size);
 
-        let handle = thread::spawn(move || {
+        let supervisor_event_loop_sender = event_loop_sender.clone();
+        let supervisor_command_tx = command_tx.clone();
+        let supervisor_handle = thread::spawn(move || {
+            run_local_exec_supervisor(
+                command_rx,
+                supervisor_command_tx,
+                supervisor_event_loop_sender,
+                capture_output,
+            );
+        });
+        let event_loop_handle = thread::spawn(move || {
             let _ = event_loop.spawn().join();
         });
 
         Ok(Self {
             event_loop_sender,
+            command_tx,
+            exec_ids: Arc::new(AtomicU64::new(1)),
             event_proxy,
-            _event_loop_handle: handle,
+            _event_loop_handle: event_loop_handle,
+            _supervisor_handle: supervisor_handle,
         })
     }
 
     pub fn write(&self, data: Vec<u8>) {
-        let _ = self.event_loop_sender.send(Msg::Input(Cow::Owned(data)));
+        let _ = self.command_tx.send(LocalPtyCommand::Write {
+            source: TerminalInputSource::User,
+            data,
+        });
     }
 
     pub fn resize(&self, size: TerminalSize) {
@@ -273,20 +408,34 @@ impl LocalPtyBackend {
     }
 
     pub fn shutdown(&self) {
-        let _ = self.event_loop_sender.send(Msg::Shutdown);
+        let _ = self.command_tx.send(LocalPtyCommand::Shutdown);
     }
 }
 
 impl TerminalBackend for LocalPtyBackend {
     fn write(&self, data: Vec<u8>) {
-        let _ = self.event_loop_sender.send(Msg::Input(Cow::Owned(data)));
+        LocalPtyBackend::write(self, data);
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
-        let sender = self.event_loop_sender.clone();
+        let sender = self.command_tx.clone();
         Some(TerminalInputHandle::new(move |data| {
-            let _ = sender.send(Msg::Input(Cow::Owned(data)));
+            let _ = sender.send(LocalPtyCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            });
         }))
+    }
+
+    fn exec_handle(&self) -> Option<TerminalExecHandle> {
+        Some(build_local_terminal_exec_handle(
+            self.command_tx.clone(),
+            self.exec_ids.clone(),
+        ))
+    }
+
+    fn control_handle(&self) -> Option<TerminalControlHandle> {
+        Some(build_local_terminal_control_handle(self.command_tx.clone()))
     }
 
     fn resize(&self, size: TerminalSize) {
@@ -296,6 +445,165 @@ impl TerminalBackend for LocalPtyBackend {
     fn shutdown(&self) {
         LocalPtyBackend::shutdown(self);
     }
+}
+
+fn run_local_exec_supervisor(
+    mut command_rx: UnboundedReceiver<LocalPtyCommand>,
+    command_tx: UnboundedSender<LocalPtyCommand>,
+    event_loop_sender: EventLoopSender,
+    capture_output: Arc<AtomicBool>,
+) {
+    let mut supervisor = ExecSupervisor::new();
+    let mut exec_results = HashMap::<u64, ExecResultSender>::new();
+    while let Some(command) = command_rx.blocking_recv() {
+        let keep_running = match command {
+            LocalPtyCommand::Write { source, data } => {
+                apply_local_exec_effects(
+                    supervisor.on_input(source, &data),
+                    &event_loop_sender,
+                    &command_tx,
+                    &mut exec_results,
+                ) && event_loop_sender.send(Msg::Input(Cow::Owned(data))).is_ok()
+            }
+            LocalPtyCommand::InterruptForeground {
+                request,
+                cancellation,
+                result,
+            } => {
+                if cancellation.is_cancelled() {
+                    let _ = result.send(Err(TerminalControlError::Cancelled));
+                    true
+                } else {
+                    let readiness = match request.action {
+                        crate::TerminalControlAction::Interrupt => {
+                            supervisor.interrupt_foreground()
+                        }
+                    };
+                    match readiness {
+                        Ok(readiness_before) => {
+                            if event_loop_sender
+                                .send(Msg::Input(Cow::Owned(vec![0x03])))
+                                .is_ok()
+                            {
+                                let _ = result.send(Ok(TerminalControlOutput {
+                                    action: request.action,
+                                    sent: true,
+                                    readiness_before,
+                                }));
+                                true
+                            } else {
+                                let _ = result.send(Err(TerminalControlError::Disconnected));
+                                false
+                            }
+                        }
+                        Err(error) => {
+                            let _ = result.send(Err(error));
+                            true
+                        }
+                    }
+                }
+            }
+            LocalPtyCommand::StartExec {
+                id,
+                request,
+                result,
+            } => {
+                exec_results.insert(id, result);
+                apply_local_exec_effects(
+                    supervisor.start(id, request),
+                    &event_loop_sender,
+                    &command_tx,
+                    &mut exec_results,
+                )
+            }
+            LocalPtyCommand::CancelExec { id } => {
+                exec_results.remove(&id);
+                apply_local_exec_effects(
+                    supervisor.cancel(id),
+                    &event_loop_sender,
+                    &command_tx,
+                    &mut exec_results,
+                )
+            }
+            LocalPtyCommand::ExecTimeout { id, phase } => apply_local_exec_effects(
+                supervisor.timeout(id, phase),
+                &event_loop_sender,
+                &command_tx,
+                &mut exec_results,
+            ),
+            LocalPtyCommand::TerminalChunk(data) => {
+                let events = extract_osc_events(&data);
+                apply_local_exec_effects(
+                    supervisor.on_terminal_chunk(&data, &events),
+                    &event_loop_sender,
+                    &command_tx,
+                    &mut exec_results,
+                )
+            }
+            LocalPtyCommand::Disconnect => false,
+            LocalPtyCommand::Shutdown => {
+                let _ = event_loop_sender.send(Msg::Shutdown);
+                false
+            }
+        };
+        capture_output.store(supervisor.captures_terminal_output(), Ordering::Release);
+        if !keep_running {
+            break;
+        }
+    }
+
+    let _ = apply_local_exec_effects(
+        supervisor.disconnect(),
+        &event_loop_sender,
+        &command_tx,
+        &mut exec_results,
+    );
+    for (_, result) in exec_results.drain() {
+        let _ = result.send(Err(TerminalExecError::Disconnected));
+    }
+    capture_output.store(false, Ordering::Release);
+}
+
+fn apply_local_exec_effects(
+    effects: Vec<ExecEffect>,
+    event_loop_sender: &EventLoopSender,
+    command_tx: &UnboundedSender<LocalPtyCommand>,
+    results: &mut HashMap<u64, ExecResultSender>,
+) -> bool {
+    for effect in effects {
+        match effect {
+            ExecEffect::Write { data, .. } => {
+                if event_loop_sender
+                    .send(Msg::Input(Cow::Owned(data)))
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            ExecEffect::Complete { id, output } => {
+                if let Some(result) = results.remove(&id) {
+                    let _ = result.send(Ok(output));
+                }
+            }
+            ExecEffect::Fail { id, error } => {
+                if let Some(result) = results.remove(&id) {
+                    let _ = result.send(Err(error));
+                }
+            }
+            ExecEffect::ArmTimeout {
+                id,
+                phase,
+                duration,
+            } => {
+                let command_tx = command_tx.clone();
+                thread::spawn(move || {
+                    thread::sleep(duration);
+                    let _ = command_tx.send(LocalPtyCommand::ExecTimeout { id, phase });
+                });
+            }
+        }
+    }
+    true
 }
 
 /// GPUI Event proxy for alacritty_terminal
@@ -362,6 +670,12 @@ impl GpuiEventProxy {
             wb.write(data);
         }
     }
+
+    fn disconnect_local_backend(&self) {
+        if let Some(wb) = self.write_back.lock().unwrap().as_ref() {
+            wb.disconnect();
+        }
+    }
 }
 
 impl EventListener for GpuiEventProxy {
@@ -392,7 +706,10 @@ impl EventListener for GpuiEventProxy {
             AlacTermEvent::Bell => TerminalEvent::Bell,
             AlacTermEvent::ClipboardStore(ty, data) => TerminalEvent::ClipboardStore(ty, data),
             AlacTermEvent::ClipboardLoad(ty, _) => TerminalEvent::ClipboardLoad(ty),
-            AlacTermEvent::Exit => TerminalEvent::ChildExit(0),
+            AlacTermEvent::Exit => {
+                self.disconnect_local_backend();
+                TerminalEvent::ChildExit(0)
+            }
             _ => return,
         };
         let _ = self.event_tx.send(terminal_event);
@@ -430,6 +747,18 @@ mod tests {
     use base64::Engine;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
+    use tokio_util::sync::CancellationToken;
+
+    fn exec_request(command: &str) -> crate::TerminalExecRequest {
+        crate::TerminalExecRequest {
+            command: command.to_string(),
+            submit: true,
+            wait_for_output: false,
+            ready_timeout: std::time::Duration::ZERO,
+            timeout: std::time::Duration::from_secs(1),
+            observer: None,
+        }
+    }
 
     #[test]
     fn wakeup_dedup_collapses_repeated_wakeups_until_reset() {
@@ -514,6 +843,88 @@ mod tests {
         assert_ne!((bg.r, bg.g, bg.b), (0, 0, 0));
         assert_eq!((cursor.r, cursor.g, cursor.b), (0xFF, 0xFF, 0xFF));
         assert_eq!((other.r, other.g, other.b), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn local_exec_handle_submits_visible_command_to_the_pty() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_local_terminal_exec_handle(command_tx, Arc::new(AtomicU64::new(1)));
+        let task = tokio::spawn(async move {
+            handle
+                .exec(exec_request("pwd"), CancellationToken::new())
+                .await
+        });
+
+        let output = crate::TerminalExecOutput {
+            completion: crate::TerminalExecCompletion::SubmittedOnly,
+            exit_code: None,
+            output: String::new(),
+            duration_ms: 1,
+        };
+        match command_rx.recv().await {
+            Some(LocalPtyCommand::StartExec {
+                id,
+                request,
+                result,
+            }) => {
+                assert_eq!(1, id);
+                assert_eq!("pwd", request.command);
+                result.send(Ok(output.clone())).unwrap();
+            }
+            _ => panic!("expected local terminal exec start command"),
+        }
+
+        assert_eq!(output, task.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn local_exec_handle_honors_cancellation_before_submit() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_local_terminal_exec_handle(command_tx, Arc::new(AtomicU64::new(1)));
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = handle
+            .exec(exec_request("pwd"), cancellation)
+            .await
+            .expect_err("cancelled local exec should not submit");
+
+        assert_eq!(crate::TerminalExecError::CancelledBeforeSubmit, error);
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn local_control_handle_forwards_interrupt_requests() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_local_terminal_control_handle(command_tx);
+        let task = tokio::spawn(async move {
+            handle
+                .control(
+                    crate::TerminalControlRequest {
+                        action: crate::TerminalControlAction::Interrupt,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+        });
+
+        match command_rx.recv().await {
+            Some(LocalPtyCommand::InterruptForeground {
+                request, result, ..
+            }) => {
+                assert_eq!(crate::TerminalControlAction::Interrupt, request.action);
+                result
+                    .send(Ok(crate::TerminalControlOutput {
+                        action: request.action,
+                        sent: true,
+                        readiness_before: crate::TerminalControlReadiness::CommandRunning,
+                    }))
+                    .unwrap();
+            }
+            _ => panic!("expected local terminal interrupt command"),
+        }
+
+        assert!(task.await.unwrap().unwrap().sent);
     }
 
     #[test]

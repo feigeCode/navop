@@ -52,9 +52,58 @@ pub struct TerminalPublicMcpRegistration {
     terminal_control_registered: AtomicBool,
 }
 
+fn terminal_session_id(
+    kind: TerminalConnectionKind,
+    connection_id: Option<i64>,
+    nonce: Uuid,
+) -> Option<String> {
+    match kind {
+        TerminalConnectionKind::Local => Some(format!("local-terminal-{nonce}")),
+        TerminalConnectionKind::Ssh => connection_id.map(|id| format!("ssh-terminal-{id}-{nonce}")),
+        TerminalConnectionKind::Serial => None,
+    }
+}
+
+fn agent_resource_from_session(
+    session: public_mcp::registry::PublicMcpSessionInfo,
+) -> agent_runtime::ResourceRef {
+    let label = if session.host_label.is_empty() {
+        session.title.clone()
+    } else {
+        session.host_label.clone()
+    };
+    let mut resource = agent_runtime::ResourceRef::new(
+        session.session_id.clone(),
+        agent_runtime::ResourceKind::Terminal,
+        label,
+    )
+    .with_alias(session.session_id);
+    if let Some(connection_id) = session.connection_id {
+        resource = resource.with_alias(connection_id.to_string());
+    }
+    for alias in [session.title, session.host_label] {
+        if !alias.is_empty() {
+            resource = resource.with_alias(alias);
+        }
+    }
+    for capability in session.capabilities {
+        resource = resource.with_capability(capability);
+    }
+    resource
+}
+
 impl TerminalPublicMcpRegistration {
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// 将活动终端转换为 Agent 资源，供侧边栏建立当前默认目标。
+    pub fn agent_resource(&self) -> Option<agent_runtime::ResourceRef> {
+        self.registry
+            .list_sessions()
+            .into_iter()
+            .find(|session| session.session_id == self.session_id)
+            .map(agent_resource_from_session)
     }
 
     pub fn refresh(&self, terminal: &Terminal) {
@@ -138,12 +187,9 @@ impl TerminalPublicMcpRegistration {
 }
 
 pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublicMcpRegistration> {
-    if terminal.connection_kind() != TerminalConnectionKind::Ssh {
-        return None;
-    }
-
-    let connection_id = terminal.connection_id()?;
-    let session_id = format!("ssh-terminal-{connection_id}-{}", Uuid::new_v4());
+    let connection_kind = terminal.connection_kind();
+    let connection_id = terminal.connection_id();
+    let session_id = terminal_session_id(connection_kind, connection_id, Uuid::new_v4())?;
     let state = Arc::new(Mutex::new(snapshot_for_terminal(
         session_id.clone(),
         terminal,
@@ -437,7 +483,11 @@ fn host_label(terminal: &Terminal) -> String {
                 .ssh_config()
                 .map(|config| config.ssh_config.host.as_str())
         })
-        .unwrap_or("ssh terminal")
+        .unwrap_or(match terminal.connection_kind() {
+            TerminalConnectionKind::Local => "local terminal",
+            TerminalConnectionKind::Ssh => "ssh terminal",
+            TerminalConnectionKind::Serial => "serial terminal",
+        })
         .to_string()
 }
 
@@ -473,6 +523,53 @@ mod tests {
         TerminalControlReadiness as CoreTerminalControlReadiness,
         TerminalControlRequest as CoreTerminalControlRequest,
     };
+    use uuid::Uuid;
+
+    #[test]
+    fn local_terminal_registration_does_not_require_a_saved_connection_id() {
+        let session_id = terminal_session_id(TerminalConnectionKind::Local, None, Uuid::nil())
+            .expect("local terminal should be exposed to AI tools");
+
+        assert_eq!(
+            "local-terminal-00000000-0000-0000-0000-000000000000",
+            session_id
+        );
+    }
+
+    #[test]
+    fn serial_terminal_is_not_registered_as_an_ai_terminal_session() {
+        assert!(
+            terminal_session_id(TerminalConnectionKind::Serial, Some(42), Uuid::nil()).is_none()
+        );
+    }
+
+    #[test]
+    fn local_terminal_session_becomes_an_agent_terminal_resource() {
+        let resource = agent_resource_from_session(public_mcp::registry::PublicMcpSessionInfo {
+            session_id: "local-terminal-1".to_string(),
+            connection_id: None,
+            title: "zsh".to_string(),
+            host_label: "local terminal".to_string(),
+            cwd: Some("/tmp/project".to_string()),
+            rows: 24,
+            cols: 80,
+            connection_kind: McpKind::Local,
+            connected: true,
+            capabilities: vec![
+                agent_runtime::ResourceCapability::TerminalExec,
+                agent_runtime::ResourceCapability::TerminalControl,
+            ],
+        });
+
+        assert_eq!(agent_runtime::ResourceKind::Terminal, resource.kind);
+        assert_eq!("local-terminal-1", resource.id.as_str());
+        assert_eq!("local terminal", resource.label);
+        assert!(
+            resource
+                .capabilities
+                .contains(&agent_runtime::ResourceCapability::TerminalExec)
+        );
+    }
 
     fn snapshot(state: McpConnectionState) -> TerminalSessionSnapshot {
         TerminalSessionSnapshot {
