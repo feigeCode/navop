@@ -59,7 +59,7 @@ jobs:
         include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.run_on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test release packaging
         if: ${{ matrix.run_on == 'ubuntu-latest' }}
         run: node --test script/test-release-packaging.mjs
@@ -68,7 +68,7 @@ jobs:
         if: ${{ matrix.run_on != 'windows-latest' }}
         run: script/bootstrap
       - name: Setup | Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
