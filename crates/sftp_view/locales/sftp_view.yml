@@ -59,6 +59,28 @@ Common:
     zh-CN: 编辑
     zh-HK: 編輯
 
+Endpoint:
+  local:
+    en: Local
+    zh-CN: 本地
+    zh-HK: 本地
+  search:
+    en: Search servers
+    zh-CN: 搜索服务器
+    zh-HK: 搜尋伺服器
+  connection_missing:
+    en: The selected server no longer exists
+    zh-CN: 所选服务器已不存在
+    zh-HK: 所選伺服器已不存在
+  connection_invalid:
+    en: "Invalid server connection: %{error}"
+    zh-CN: "服务器连接配置无效：%{error}"
+    zh-HK: "伺服器連線設定無效：%{error}"
+  remote_edit_pending:
+    en: Remote editing actions for the left pane are not available yet
+    zh-CN: 左侧远程栏的修改操作暂不可用
+    zh-HK: 左側遠端欄的修改操作暫不可用
+
 # 文件操作
 File:
   items_count:
@@ -461,3 +483,7 @@ Transfer:
     en: "Closing now will cancel all operations. Are you sure you want to close?"
     zh-CN: "现在关闭将取消所有操作。确定要关闭吗？"
     zh-HK: "現在關閉將取消所有操作。確定要關閉嗎？"
+  server_copy_n_items:
+    en: "Server copy (%{count} items)"
+    zh-CN: "服务器间复制（%{count} 个项目）"
+    zh-HK: "伺服器間複製（%{count} 個項目）"

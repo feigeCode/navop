@@ -17,6 +17,8 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::time::SystemTime;
 
+use crate::endpoint::DragSource;
+
 #[derive(Clone, Debug)]
 pub struct FileItem {
     pub name: String,
@@ -132,6 +134,7 @@ fn apply_selection_mode(
 pub struct FileListPanel {
     current_path: String,
     is_remote: bool,
+    drag_source: DragSource,
 
     items: Vec<FileItem>,
     filtered_indices: Vec<usize>,
@@ -192,6 +195,11 @@ impl FileListPanel {
         Self {
             current_path: initial_path,
             is_remote,
+            drag_source: if is_remote {
+                DragSource::RemoteRight
+            } else {
+                DragSource::LocalLeft
+            },
             items: Vec::new(),
             filtered_indices: Vec::new(),
             selected_indices: HashSet::new(),
@@ -207,6 +215,17 @@ impl FileListPanel {
             focus_handle,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub fn set_left_endpoint(&mut self, is_remote: bool, cx: &mut Context<Self>) {
+        self.is_remote = is_remote;
+        self.drag_source = if is_remote {
+            DragSource::RemoteLeft
+        } else {
+            DragSource::LocalLeft
+        };
+        self.clear_selection();
+        cx.notify();
     }
 
     pub fn set_items(&mut self, items: Vec<FileItem>, cx: &mut Context<Self>) {
@@ -1053,9 +1072,11 @@ pub enum FileListPanelEvent {
 #[derive(Clone, Debug)]
 pub struct DraggedFileItem {
     pub name: String,
+    pub size: u64,
     pub is_dir: bool,
     pub full_path: String,
     pub is_remote: bool,
+    pub(crate) source: DragSource,
 }
 
 /// 支持多文件拖拽的结构体
@@ -1063,19 +1084,30 @@ pub struct DraggedFileItem {
 pub struct DraggedFileItems {
     pub items: Vec<DraggedFileItem>,
     pub is_remote: bool,
+    pub(crate) source: DragSource,
 }
 
 impl DraggedFileItems {
     pub fn single(item: DraggedFileItem) -> Self {
         let is_remote = item.is_remote;
+        let source = item.source;
         Self {
             items: vec![item],
             is_remote,
+            source,
         }
     }
 
-    pub fn multiple(items: Vec<DraggedFileItem>, is_remote: bool) -> Self {
-        Self { items, is_remote }
+    pub(crate) fn multiple(
+        items: Vec<DraggedFileItem>,
+        is_remote: bool,
+        source: DragSource,
+    ) -> Self {
+        Self {
+            items,
+            is_remote,
+            source,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -1278,6 +1310,7 @@ impl Render for FileListPanel {
                                 move |state: &mut Self, range: Range<usize>, _window, cx| {
                                     let current_path = state.current_path.clone();
                                     let is_remote = state.is_remote;
+                                    let drag_source = state.drag_source;
                                     let has_parent = !state.is_at_root();
                                     let view = cx.entity();
                                     range
@@ -1355,22 +1388,30 @@ impl Render for FileListPanel {
                                                                 };
                                                                 DraggedFileItem {
                                                                     name: item.name.clone(),
+                                                                    size: item.size,
                                                                     is_dir: item.is_dir,
                                                                     full_path: item_path,
                                                                     is_remote,
+                                                                    source: drag_source,
                                                                 }
                                                             })
                                                         },
                                                     )
                                                 })
                                                 .collect();
-                                                    DraggedFileItems::multiple(items, is_remote)
+                                                    DraggedFileItems::multiple(
+                                                        items,
+                                                        is_remote,
+                                                        drag_source,
+                                                    )
                                                 } else {
                                                     DraggedFileItems::single(DraggedFileItem {
                                                         name: item_name.clone(),
+                                                        size: item.size,
                                                         is_dir,
                                                         full_path: full_path.clone(),
                                                         is_remote,
+                                                        source: drag_source,
                                                     })
                                                 };
 
