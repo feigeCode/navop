@@ -114,10 +114,15 @@ jobs:
             --pattern "navop-aarch64-apple-darwin.tar.gz" \
             --pattern "navop-x86_64-apple-darwin.tar.gz" \
             --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
-            --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-x86_64-pc-windows-msvc.zip" \
             --pattern "sha256sums.txt" \
             --dir artifacts
+          if ! gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
+            --dir artifacts; then
+            echo "ARM Linux asset is not published yet; continuing with the available platforms."
+          fi
           ls -la artifacts
 
       - name: Verify downloaded release assets
@@ -128,7 +133,6 @@ jobs:
             navop-aarch64-apple-darwin.tar.gz \
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
             sha256sums.txt; do
             if [ ! -s "artifacts/${file}" ]; then
@@ -141,13 +145,19 @@ jobs:
             navop-aarch64-apple-darwin.tar.gz \
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip; do
             if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
               echo "::error::sha256sums.txt is missing checksum for ${file}"
               exit 1
             fi
           done
+
+          if [ -s "artifacts/navop-aarch64-unknown-linux-gnu.tar.gz" ] && ! awk \
+            '$2 == "navop-aarch64-unknown-linux-gnu.tar.gz" && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' \
+            artifacts/sha256sums.txt; then
+            echo "::error::sha256sums.txt is missing checksum for navop-aarch64-unknown-linux-gnu.tar.gz"
+            exit 1
+          fi
 
       - name: Generate R2 update manifest
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
@@ -180,9 +190,11 @@ jobs:
             "aarch64-apple-darwin": "navop-aarch64-apple-darwin.tar.gz",
             "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
             "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
-            "aarch64-unknown-linux-gnu": "navop-aarch64-unknown-linux-gnu.tar.gz",
             "x86_64-pc-windows-msvc": "navop-x86_64-pc-windows-msvc.zip",
           };
+          if (fs.existsSync("artifacts/navop-aarch64-unknown-linux-gnu.tar.gz")) {
+            appAssets["aarch64-unknown-linux-gnu"] = "navop-aarch64-unknown-linux-gnu.tar.gz";
+          }
 
           function checksumFor(fileName) {
             const sha256 = checksums.get(fileName);
@@ -265,9 +277,11 @@ jobs:
             navop-aarch64-apple-darwin.tar.gz \
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
           )
+          if [ -s "artifacts/navop-aarch64-unknown-linux-gnu.tar.gz" ]; then
+            release_files+=(navop-aarch64-unknown-linux-gnu.tar.gz)
+          fi
           for file in "${release_files[@]}"; do
             if [[ "$file" == *.zip ]]; then
               content_type="application/zip"
