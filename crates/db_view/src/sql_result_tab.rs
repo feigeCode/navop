@@ -16,7 +16,7 @@ use gpui_component::{
     h_flex,
     popover::Popover,
     progress::Progress,
-    scroll::{ScrollableElement, Scrollbar},
+    scroll::{ScrollableElement, Scrollbar, ScrollbarShow},
     spinner::Spinner,
     tab::{Tab, TabBar},
     v_flex,
@@ -793,12 +793,16 @@ impl SqlResultTabContainer {
         let clone_self = self.clone();
         h_flex()
             .w_full()
-            .p_4()
-            .gap_8()
+            .px_4()
+            .py_3()
+            .gap_4()
             .justify_between()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(
                 h_flex()
-                    .gap_8()
+                    .min_w_0()
+                    .gap_6()
                     .child(
                         v_flex()
                             .gap_1()
@@ -867,7 +871,7 @@ impl SqlResultTabContainer {
                     ),
             )
             .child(
-                h_flex().gap_2().items_center().child(
+                h_flex().flex_shrink_0().gap_2().items_center().child(
                     Checkbox::new("show-errors-only")
                         .label(t!("SqlResultTab.show_errors_only").to_string())
                         .checked(show_errors_only)
@@ -930,6 +934,8 @@ impl SqlResultTabContainer {
             .py_2()
             .gap_4()
             .bg(cx.theme().muted)
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .w(px(300.))
@@ -991,18 +997,21 @@ impl SqlResultTabContainer {
             .id("statement-list-container")
             .flex_1()
             .min_h_0()
+            .min_w_0()
             .w_full()
             .relative()
             .child(
                 div()
-                    .id("statement-list-scroll")
+                    .id("statement-list-viewport")
                     .flex_1()
+                    .min_h_0()
+                    .min_w_0()
                     .size_full()
                     .overflow_scroll()
                     .px_4()
                     .child(self.render_statement_list_content(item_count, cx)),
             )
-            .child(Scrollbar::vertical(&self.scroll_handle))
+            .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always))
             .into_any_element()
     }
 
@@ -1011,7 +1020,7 @@ impl SqlResultTabContainer {
         item_count: usize,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        div().size_full().child(
+        div().size_full().min_h_0().min_w_0().child(
             uniform_list(
                 "statement-list",
                 item_count,
@@ -1038,6 +1047,9 @@ impl SqlResultTabContainer {
                                         .h(px(40.))
                                         .items_center()
                                         .gap_4()
+                                        .border_b_1()
+                                        .border_color(cx.theme().border)
+                                        .hover(|this| this.bg(cx.theme().muted))
                                         .child(Self::render_sql_column(
                                             item,
                                             sql_display,
@@ -1262,6 +1274,7 @@ impl SqlResultTabContainer {
         div()
             .flex_1()
             .min_h_0()
+            .min_w_0()
             .bg(cx.theme().background)
             .border_1()
             .border_color(cx.theme().border)
@@ -1271,6 +1284,7 @@ impl SqlResultTabContainer {
                 v_flex()
                     .size_full()
                     .min_h_0()
+                    .min_w_0()
                     .child(self.render_stats_row(
                         all_results,
                         success_count,
@@ -1280,7 +1294,6 @@ impl SqlResultTabContainer {
                         cx,
                     ))
                     .child(self.render_progress_bar(is_executing, current, total, cx))
-                    .child(div().mx_4().h(px(1.)).w_full().bg(cx.theme().border))
                     .child(self.render_table_header(cx))
                     .child(self.render_statement_list(filtered_items, is_executing, cx)),
             )
@@ -1291,9 +1304,19 @@ impl SqlResultTabContainer {
         query_tabs
             .get(active_idx - 1)
             .and_then(|tab| tab.content.as_ref())
-            .map(|content| content.clone().into_any_element())
+            .map(|content| {
+                div()
+                    .size_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(content.clone())
+                    .into_any_element()
+            })
             .unwrap_or_else(|| {
                 div()
+                    .size_full()
+                    .min_h_0()
+                    .min_w_0()
                     .flex_1()
                     .bg(cx.theme().background)
                     .border_1()
@@ -1318,72 +1341,86 @@ impl Render for SqlResultTabContainer {
             .size_full()
             .gap_0()
             .child(
-                div().w_full().relative().child(
-                    TabBar::new("result-tabs")
-                        .p_2()
-                        .w_full()
-                        .underline()
-                        .justify_center()
-                        .with_size(Size::Small)
-                        .track_scroll(&self.tab_scroll_handle)
-                        .selected_index(active_idx)
-                        .menu(true)
-                        .on_click({
-                            let clone_self = clone_self.clone();
-                            move |ix: &usize, _w, cx| {
-                                clone_self.active_result_tab.update(cx, |active, cx| {
-                                    *active = *ix;
-                                    cx.notify();
-                                });
-                                clone_self.tab_scroll_handle.scroll_to_item(*ix);
-                            }
-                        })
-                        .child(
-                            Tab::new().label(match &execution_state {
-                                ExecutionState::Executing { current, total } => t!(
-                                    "SqlResultTab.summary_with_counts",
-                                    current = current,
-                                    total = total
-                                )
-                                .to_string(),
-                                _ => t!("SqlResultTab.summary").to_string(),
-                            }),
-                        )
-                        .children({
-                            let mut tabs = vec![];
-                            for idx in 0..query_tabs.len() {
-                                tabs.push(Tab::new().label(
-                                    t!("SqlResultTab.result_tab", index = idx + 1).to_string(),
-                                ))
-                            }
-                            tabs
-                        })
-                        .suffix(
-                            Button::new("close-results")
-                                .with_size(Size::Small)
-                                .ghost()
-                                .icon(IconName::Close)
-                                .tooltip(t!("SqlResultTab.hide_results_panel").to_string())
-                                .on_click({
-                                    let close_self = clone_self.clone();
-                                    move |_, _, cx| {
-                                        close_self.clone().hide(cx);
-                                    }
+                div()
+                    .w_full()
+                    .relative()
+                    .bg(cx.theme().background)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        TabBar::new("result-tabs")
+                            .p_2()
+                            .w_full()
+                            .underline()
+                            .justify_center()
+                            .with_size(Size::Small)
+                            .track_scroll(&self.tab_scroll_handle)
+                            .selected_index(active_idx)
+                            .menu(true)
+                            .on_click({
+                                let clone_self = clone_self.clone();
+                                move |ix: &usize, _w, cx| {
+                                    clone_self.active_result_tab.update(cx, |active, cx| {
+                                        *active = *ix;
+                                        cx.notify();
+                                    });
+                                    clone_self.tab_scroll_handle.scroll_to_item(*ix);
+                                }
+                            })
+                            .child(
+                                Tab::new().label(match &execution_state {
+                                    ExecutionState::Executing { current, total } => t!(
+                                        "SqlResultTab.summary_with_counts",
+                                        current = current,
+                                        total = total
+                                    )
+                                    .to_string(),
+                                    _ => t!("SqlResultTab.summary").to_string(),
                                 }),
-                        ),
-                ),
+                            )
+                            .children({
+                                let mut tabs = vec![];
+                                for idx in 0..query_tabs.len() {
+                                    tabs.push(Tab::new().label(
+                                        t!("SqlResultTab.result_tab", index = idx + 1).to_string(),
+                                    ))
+                                }
+                                tabs
+                            })
+                            .suffix(
+                                Button::new("close-results")
+                                    .with_size(Size::Small)
+                                    .ghost()
+                                    .icon(IconName::Close)
+                                    .tooltip(t!("SqlResultTab.hide_results_panel").to_string())
+                                    .on_click({
+                                        let close_self = clone_self.clone();
+                                        move |_, _, cx| {
+                                            close_self.clone().hide(cx);
+                                        }
+                                    }),
+                            ),
+                    ),
             )
-            .child(if active_idx == 0 {
-                self.render_summary_panel(
-                    all_results,
-                    execution_state,
-                    show_errors_only,
-                    total_elapsed_ms,
-                    cx,
-                )
-                .into_any_element()
-            } else {
-                self.render_result_tab(active_idx, cx).into_any_element()
-            })
+            .child(
+                div()
+                    .id("sql-result-content")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(if active_idx == 0 {
+                        self.render_summary_panel(
+                            all_results,
+                            execution_state,
+                            show_errors_only,
+                            total_elapsed_ms,
+                            cx,
+                        )
+                        .into_any_element()
+                    } else {
+                        self.render_result_tab(active_idx, cx).into_any_element()
+                    }),
+            )
     }
 }
