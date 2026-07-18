@@ -6,12 +6,15 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable,
+    ActiveTheme, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     scroll::ScrollableElement,
     v_flex,
 };
+
+const NOTES_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
+const NOTES_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(48.0);
 
 impl NotesView {
     fn render_ready(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -35,34 +38,89 @@ impl NotesView {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let collapsed = self.sidebar_collapsed;
         let rows = self
             .rows
             .iter()
             .map(|row| self.render_row(row, cx))
             .collect::<Vec<_>>();
         v_flex()
-            .w(px(220.0))
+            .relative()
+            .w(if collapsed {
+                NOTES_SIDEBAR_COLLAPSED_WIDTH
+            } else {
+                NOTES_SIDEBAR_EXPANDED_WIDTH
+            })
+            .flex_shrink_0()
             .h_full()
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
             .border_r_1()
             .border_color(cx.theme().border)
-            .child(self.render_toolbar(cx))
+            .when(!collapsed, |this| this.child(self.render_toolbar(cx)))
+            .when(!collapsed, |this| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_h_0()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            v_flex()
+                                .size_full()
+                                .p_2()
+                                .gap_1()
+                                .overflow_y_scrollbar()
+                                .children(rows),
+                        ),
+                )
+            })
             .child(
                 div()
-                    .flex_1()
-                    .h_full()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(24.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .occlude()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|view, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            view.sidebar_collapsed = !view.sidebar_collapsed;
+                            cx.notify();
+                        }),
+                    )
                     .child(
-                        v_flex()
-                            .size_full()
-                            .p_2()
-                            .gap_1()
-                            .overflow_y_scrollbar()
-                            .children(rows),
+                        div()
+                            .id("notes-sidebar-toggle")
+                            .w(px(18.0))
+                            .h(px(52.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(9.0))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().background)
+                            .shadow_sm()
+                            .hover(|this| this.bg(cx.theme().muted))
+                            .child(
+                                Icon::new(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronLeft
+                                })
+                                .with_size(Size::Small)
+                                .text_color(cx.theme().muted_foreground),
+                            ),
                     ),
             )
             .into_any_element()

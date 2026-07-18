@@ -112,6 +112,12 @@ fn installed_mermaid_extension_registers_and_renders_when_fixture_is_provided() 
     let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
     let renderer = catalog.document_renderer_for_kind("mermaid").unwrap();
     assert_eq!("Mermaid", renderer.display_name);
+    catalog.prewarm_document_renderers().unwrap();
+    assert_eq!(
+        1,
+        catalog.document_renderer_runtimes.lock().unwrap().len(),
+        "renderer prewarming must retain the compiled component"
+    );
     let output = futures::executor::block_on(catalog.render_document(
         extension_wasm::DocumentRenderRequest {
             renderer: "mermaid".to_owned(),
@@ -134,11 +140,7 @@ fn installed_mermaid_extension_registers_and_renders_when_fixture_is_provided() 
     .unwrap();
     assert_eq!("image/svg+xml", output.media_type);
     assert!(String::from_utf8(output.bytes).unwrap().contains("<svg"));
-    assert_eq!(
-        1,
-        catalog.document_renderer_runtimes.lock().unwrap().len(),
-        "compiled renderer runtimes must be retained by the catalog"
-    );
+    assert_eq!(1, catalog.document_renderer_runtimes.lock().unwrap().len());
 }
 
 #[test]

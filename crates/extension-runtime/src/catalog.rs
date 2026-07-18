@@ -157,13 +157,10 @@ impl ExtensionRuntimeCatalog {
     }
 
     #[cfg(feature = "wasm-components")]
-    pub async fn render_document(
+    fn document_renderer_runtime(
         &self,
-        request: extension_wasm::DocumentRenderRequest,
-    ) -> extension_wasm::WasmResult<Option<extension_wasm::DocumentRenderArtifact>> {
-        let Some(renderer) = self.document_renderer_for_kind(&request.renderer) else {
-            return Ok(None);
-        };
+        renderer: &RegisteredDocumentRenderer,
+    ) -> extension_wasm::WasmResult<Arc<extension_wasm::DocumentRendererRuntime>> {
         let Some(binding) = self.wasm_runtimes.get(&renderer.runtime_id) else {
             return Err(extension_wasm::WasmError::FunctionNotFound(
                 renderer.runtime_id.clone(),
@@ -174,25 +171,41 @@ impl ExtensionRuntimeCatalog {
                 renderer.runtime_id.clone(),
             ));
         }
-        let runtime = {
-            let mut runtimes = self
-                .document_renderer_runtimes
-                .lock()
-                .map_err(|error| extension_wasm::WasmError::ComponentLoad(error.to_string()))?;
-            if let Some(runtime) = runtimes.get(&renderer.runtime_id) {
-                runtime.clone()
-            } else {
-                let runtime = Arc::new(
-                    extension_wasm::DocumentRendererRuntime::from_file_with_config(
-                        renderer.id.clone(),
-                        &binding.module_path,
-                        binding.config.clone(),
-                    )?,
-                );
-                runtimes.insert(renderer.runtime_id.clone(), runtime.clone());
-                runtime
-            }
+        let mut runtimes = self
+            .document_renderer_runtimes
+            .lock()
+            .map_err(|error| extension_wasm::WasmError::ComponentLoad(error.to_string()))?;
+        if let Some(runtime) = runtimes.get(&renderer.runtime_id) {
+            return Ok(runtime.clone());
+        }
+        let runtime = Arc::new(
+            extension_wasm::DocumentRendererRuntime::from_file_with_config(
+                renderer.id.clone(),
+                &binding.module_path,
+                binding.config.clone(),
+            )?,
+        );
+        runtimes.insert(renderer.runtime_id.clone(), runtime.clone());
+        Ok(runtime)
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub fn prewarm_document_renderers(&self) -> extension_wasm::WasmResult<()> {
+        for renderer in &self.document_renderers {
+            self.document_renderer_runtime(renderer)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub async fn render_document(
+        &self,
+        request: extension_wasm::DocumentRenderRequest,
+    ) -> extension_wasm::WasmResult<Option<extension_wasm::DocumentRenderArtifact>> {
+        let Some(renderer) = self.document_renderer_for_kind(&request.renderer) else {
+            return Ok(None);
         };
+        let runtime = self.document_renderer_runtime(renderer)?;
         runtime.render(request).await.map(Some)
     }
 

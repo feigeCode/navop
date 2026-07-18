@@ -59,5 +59,9 @@ fn real_math_component_renders_visible_svg_paths_when_fixture_is_provided() {
         svg.contains("<path"),
         "embedded math fonts must produce visible glyph paths"
     );
+    assert!(
+        svg.contains("<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>"),
+        "math SVG must paint the requested theme background"
+    );
     assert!(!svg.to_ascii_lowercase().contains("<foreignobject"));
 }

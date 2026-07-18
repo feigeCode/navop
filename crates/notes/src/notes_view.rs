@@ -52,6 +52,7 @@ pub struct NotesView {
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
+    pub(crate) sidebar_collapsed: bool,
 }
 
 impl NotesView {
@@ -146,6 +147,7 @@ impl NotesView {
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
             standalone_markdown,
+            sidebar_collapsed: false,
         }
     }
 
