@@ -116,6 +116,10 @@ impl MongoManager {
     pub fn build_connection_string(params: &MongoDBParams) -> Result<String, MongoError> {
         let host_value = params.host.trim().to_string();
         if host_value.is_empty() {
+            let connection_string = params.connection_string.trim();
+            if !connection_string.is_empty() {
+                return Ok(connection_string.to_string());
+            }
             return Err(MongoError::Internal(
                 t!("MongoManager.host_required").to_string(),
             ));
@@ -333,6 +337,59 @@ mod tests {
             uri,
             "mongodb://user:pass@localhost:27017/app?authSource=admin"
         );
+    }
+
+    #[test]
+    fn build_connection_string_uses_raw_uri_when_host_is_empty() {
+        let params = MongoDBParams {
+            connection_string:
+                "  mongodb://user:pass@localhost:27017/app?authSource=admin  ".to_string(),
+            host: String::new(),
+            port: None,
+            database: None,
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: None,
+            application_name: None,
+            ssh_tunnel: None,
+        };
+
+        let uri = MongoManager::build_connection_string(&params)
+            .expect("raw MongoDB URI should be accepted without a separate host");
+
+        assert_eq!(
+            "mongodb://user:pass@localhost:27017/app?authSource=admin",
+            uri
+        );
+    }
+
+    #[test]
+    fn build_connection_string_rejects_missing_host_and_raw_uri() {
+        let params = MongoDBParams {
+            connection_string: "  ".to_string(),
+            host: "  ".to_string(),
+            port: None,
+            database: None,
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: None,
+            application_name: None,
+            ssh_tunnel: None,
+        };
+
+        assert!(MongoManager::build_connection_string(&params).is_err());
     }
 
     #[test]

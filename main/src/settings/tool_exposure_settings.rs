@@ -67,7 +67,7 @@ enum ToolExposureItem {
 }
 
 impl ToolExposureItem {
-    const MCP_VISIBLE: [Self; 7] = [
+    const MCP_VISIBLE: [Self; 8] = [
         Self::Terminal,
         Self::TerminalSshExec,
         Self::TerminalExec,
@@ -75,6 +75,7 @@ impl ToolExposureItem {
         Self::Sftp,
         Self::Redis,
         Self::Database,
+        Self::InternalFunctions,
     ];
     const AGENT_VISIBLE: [Self; 8] = [
         Self::Terminal,
@@ -232,7 +233,8 @@ mod tests {
                 "connections",
                 "sftp",
                 "redis",
-                "database"
+                "database",
+                "internal_functions"
             ],
             ids
         );

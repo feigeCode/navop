@@ -5,7 +5,7 @@ use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
     internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
-    terminal_exec_tool_registry,
+    terminal_exec_tool_registry, terminal_read_tool_registry,
 };
 use std::sync::Arc;
 
@@ -52,6 +52,7 @@ fn build_tool_registry_for_surface(
             }
             if toolsets.terminal_exec {
                 runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_read_tool_registry(registry.clone()));
                 runtime_registries.push(terminal_control_tool_registry(registry));
             }
         } else {
@@ -501,6 +502,7 @@ mod tests {
 
         assert!(!tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.read"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
     }
 
@@ -738,6 +740,7 @@ mod tests {
                     target: request.target,
                     command: request.command,
                     submitted: request.submit,
+                    command_id: None,
                     completion: TerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),

@@ -115,7 +115,7 @@ async fn launcher_connects_from_discovery_and_completes_initialize() {
 
     assert_eq!(json!(1), response["id"]);
     assert_eq!(
-        "onetcli-public-mcp",
+        "navop-public-mcp",
         response["result"]["serverInfo"]["name"]
     );
     assert_eq!(

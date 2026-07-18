@@ -96,7 +96,7 @@ fn present_approval_request(
 }
 
 fn present_next_approval(queue: Arc<Mutex<ApprovalQueueState>>, cx: &mut App) -> bool {
-    let Some(window_id) = cx.active_window() else {
+    let Some(window_id) = crate::app_init::resolve_navop_window(cx) else {
         return false;
     };
     let snapshot = queue

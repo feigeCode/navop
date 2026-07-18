@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 const SERVER_NAME: &str = "navop";
 const LEGACY_SERVER_NAME: &str = "onetcli";
 const PACKAGE_NAME: &str = "@navop/mcp";
-pub const RECOMMENDED_PACKAGE_VERSION: &str = "0.1.1";
+pub const RECOMMENDED_PACKAGE_VERSION: &str = "0.1.2";
 const CODEX_BEGIN: &str = "# BEGIN NAVOP MCP";
 const CODEX_END: &str = "# END NAVOP MCP";
 const LEGACY_CODEX_BEGIN: &str = "# BEGIN ONETCLI PUBLIC MCP";
