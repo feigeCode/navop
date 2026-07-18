@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use one_core::storage::{DatabaseType, StoredConnection};
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::Mutex;
 
     #[test]
