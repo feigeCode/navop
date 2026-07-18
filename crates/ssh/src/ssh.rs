@@ -806,11 +806,8 @@ where
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::{Arc, Mutex as StdMutex};
-    #[cfg(unix)]
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, Mutex as StdMutex, OnceLock};
 
-    #[cfg(unix)]
     fn test_auth_failure_messages() -> AuthFailureMessages {
         AuthFailureMessages {
             password_failed: "password".to_string(),

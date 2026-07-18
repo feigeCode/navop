@@ -1544,14 +1544,15 @@ mod tests {
 
     #[test]
     fn resolve_installed_grid_font_rejects_missing_requested_family() {
-        let installed = vec!["Menlo".to_string(), "PingFang SC".to_string()];
+        let default = default_grid_monospace_font_family();
+        let installed = vec![default.to_string(), "PingFang SC".to_string()];
 
         assert_eq!(
-            "Menlo",
+            default,
             resolve_installed_grid_monospace_font_family("Fira Code", &installed)
         );
         assert_eq!(
-            "Menlo",
+            default,
             resolve_installed_grid_monospace_font_family("PingFang SC", &installed)
         );
     }
@@ -1568,10 +1569,11 @@ mod tests {
 
     #[test]
     fn installed_grid_monospace_font_uses_effective_installed_family() {
-        let installed = vec!["Menlo".to_string()];
+        let default = default_grid_monospace_font_family();
+        let installed = vec![default.to_string()];
         let font = installed_grid_monospace_font("Fira Code", &installed);
 
-        assert_eq!("Menlo", font.family.as_ref());
+        assert_eq!(default, font.family.as_ref());
         assert!(font.fallbacks.is_some());
     }
 
