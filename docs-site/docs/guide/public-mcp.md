@@ -31,3 +31,60 @@ Navop 还可安装或更新供 Codex 与 Agents 使用的 Navop Skill。Skill �
 审批窗口会展示外部客户端请求的实际操作。核对客户端、工具、目标连接和参数后再允许；拒绝后应回到客户端修改请求，而不是放宽全部权限。ACP 已授权并不代表 Public MCP 自动放行，二次审批用于保护宿主能力。
 
 连接失败时依次检查 Navop 是否运行、服务模式、Node.js 版本、客户端配置、discovery 文件权限和 Tool Exposure。工具缺失通常是未暴露或当前版本不支持；Schema 不匹配时重新连接并获取实时定义。日志和配置发给他人前删除 Token、路径、连接名称与业务参数。
+
+## 安装前检查
+
+Public MCP 由正在运行的 Navop 提供真实工具，`@navop/mcp` 只是外部客户端、CLI、Skill 和 stdio 桥接层。开始前确认：
+
+1. Navop 正在运行，并已在“设置 → 通用 → MCP”启用 MCP Server。
+2. 当前设备已安装 Node.js 20 或更高版本，并能运行 `npx`。
+3. 已选择合适的 Permission Profile。
+4. Tool Exposure 只开放当前任务需要的能力组。
+5. 外部客户端使用 Navop 推荐的 `@navop/mcp` 精确版本。
+
+## CLI 自检流程
+
+下面的命令适合确认运行时、工具列表和单个工具 Schema。示例版本以当前 README 为准；实际使用时优先复制 Navop 设置页给出的精确命令。
+
+```bash
+npx -y @navop/mcp@0.1.2 status --json
+npx -y @navop/mcp@0.1.2 tools --json
+npx -y @navop/mcp@0.1.2 schema <tool-name> --json
+npx -y @navop/mcp@0.1.2 call <tool-name> --arguments '<json-object>' --json
+npx -y @navop/mcp@0.1.2 mcp
+```
+
+推荐的排查顺序是 `status → tools → schema → call`。不要猜测工具名称、参数或资源 ID；资源 ID 应来自 Navop 实时返回的连接、会话或工作区结果。
+
+## 权限档位
+
+| 档位 | 行为 | 推荐用途 |
+| --- | --- | --- |
+| Safe / `deny` | 允许只读发现，拒绝修改操作 | 初次配置、审计和只读查询 |
+| Confirm / `ask` | 修改操作需要在 Navop 中确认 | 日常交互式使用 |
+| Auto / `allow` | 修改操作自动执行 | 受控自动化环境，必须明确限制 Tool Exposure |
+
+即使选择 Auto，调用者也应该明确表达破坏性意图。Tool Exposure 中被关闭的能力组不会被宿主声明为可用，客户端不应尝试绕过。
+
+## 当前能力组
+
+| 能力组 | 当前宿主能力 |
+| --- | --- |
+| Runtime | 兼容信息、权限提示、Tool Exposure 状态、实时工具和 Schema |
+| SSH | 隔离命令执行、会话诊断、后台命令轮询、输出和取消 |
+| Visible terminal | 读取有限滚动区、在可见 PTY 执行、明确中断 |
+| SQL databases | Schema、表、描述、样例行、只读查询和可写执行 |
+| Redis | 活动连接、命令、Keys、Get、Set |
+| MongoDB | 数据库、集合、Find、Aggregate、Count、索引、校验、CRUD、Explain |
+| SFTP | List、Stat、Read、Write、Upload、Download |
+| Connections | List、Find、Show、Kinds、Schema、Validate、Save、Delete、Test、Open、Sessions |
+| Workspaces | List 和 Show |
+| Internal functions | 列出宿主函数并按实时 Schema 调用 |
+
+能力以运行中的 Navop 返回结果为准。Navop 可以更新宿主工具而不要求 npm 包同步发布，因此文档中的静态列表只能作为导航，不能替代 `tools/list` 和实时 Schema。
+
+## 给外部客户端配置 MCP
+
+Navop 可以管理 Codex、Claude Desktop 和 Claude Code 的配置，也可以复制通用 MCP JSON。使用自动安装或更新前先查看目标配置文件，避免覆盖同名的自定义 Server。
+
+配置完成后重启或重新加载客户端，再执行只读状态检查。若客户端看不到新工具，按顺序检查 Navop 是否运行、MCP Server 开关、Tool Exposure、权限档位、discovery 文件权限和客户端缓存。

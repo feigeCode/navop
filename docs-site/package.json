@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync:assets": "node scripts/sync-doc-assets.mjs",
+    "predev": "npm run sync:assets",
     "dev": "vitepress dev docs",
+    "prebuild": "npm run sync:assets",
     "build": "vitepress build docs",
     "preview": "vitepress preview docs"
   },

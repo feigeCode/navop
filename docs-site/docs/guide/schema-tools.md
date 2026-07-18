@@ -2,6 +2,8 @@
 
 结构工具覆盖数据库对象浏览、表设计器、DDL、ER 图、Schema Compare 和 Data Compare。它们可能生成 DROP、ALTER、INSERT、UPDATE 或 DELETE，任何自动计划都必须经过人工审阅。
 
+![ER 图与数据库关系](/images/er.png)
+
 ## 浏览数据库对象
 
 连接后按数据库和 Schema 展开表、视图及其他受支持对象。打开表可查看列、类型、默认值、可空性、主键、索引和 DDL。对象列表受账号权限、当前上下文和 Schema 过滤共同影响；导航树中不可见不代表服务器上不存在。

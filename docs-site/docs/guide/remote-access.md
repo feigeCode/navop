@@ -2,6 +2,8 @@
 
 Navop 通过 Provider 扩展接入 RDP 和 VNC，并提供 Serial 串口终端与 SSH 服务器监控。不同平台、扩展版本和远端系统的能力可能不同，连接前应先确认兼容性。
 
+![服务器监控](/images/monitor.png)
+
 ## RDP 与 VNC Provider
 
 先从扩展市场安装适合当前平台的远程桌面 Provider，再新建 RDP 或 VNC 连接。填写主机、端口、用户名、密码；RDP 还可能需要 Domain。Provider 版本不兼容时先更新或重载扩展，而不是反复修改服务器凭据。

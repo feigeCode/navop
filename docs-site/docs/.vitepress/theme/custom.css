@@ -38,6 +38,15 @@ body {
   border-radius: 6px;
 }
 
+.VPDoc img:not(.VPImage) {
+  display: block;
+  width: 100%;
+  margin: 24px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  box-shadow: 0 10px 28px rgba(24, 35, 52, 0.08);
+}
+
 .VPFooter {
   border-top: 1px solid var(--vp-c-divider);
 }
