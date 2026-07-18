@@ -438,6 +438,12 @@ impl DatabaseEventHandler {
                 let tree_view = tree_view_for_objects.clone();
 
                 match event {
+                    DatabaseObjectsEvent::TreeEvent { event } => {
+                        let event = event.clone();
+                        cx.defer(move |cx| {
+                            tree_view.update(cx, |_tree, cx| cx.emit(event));
+                        });
+                    }
                     DatabaseObjectsEvent::Refresh { node } => {
                         Self::handle_node_selected(
                             node.clone(),

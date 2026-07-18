@@ -1,8 +1,15 @@
 use crate::database_table_columns::{
     render_table_column_resize_handle, resize_table_column, ui_columns_from_object_columns,
 };
-use crate::database_view_plugin::{ToolbarButtonType, build_toolbar_buttons_for};
-use crate::db_tree_view::get_icon_for_node_type;
+use crate::database_view_plugin::{
+    ContextMenuEvent, ContextMenuItem, ToolbarButtonType, build_context_menu_for,
+    build_toolbar_buttons_for,
+};
+use crate::db_tree_view::{DbTreeViewEvent, get_icon_for_node_type};
+use crate::extension_menu::{
+    DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
+    DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
+};
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
 };
@@ -16,6 +23,7 @@ use gpui::{
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, table::Column, tooltip::Tooltip, v_flex,
@@ -23,8 +31,8 @@ use gpui_component::{
 use gpui_component::{InteractiveElementExt, WindowExt};
 use one_core::storage::manager::get_queries_dir;
 use one_core::storage::{
-    ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState, StorageManager,
-    Workspace,
+    ActiveConnections, ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState,
+    StorageManager, Workspace,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::debouncer::Debouncer;
@@ -33,6 +41,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::log::warn;
 
 fn format_timestamp(ts: i64) -> String {
     use chrono::{DateTime, Local};
@@ -90,9 +99,22 @@ fn render_object_name_text(cell_value: String, search_query: &str, cx: &App) -> 
         .into_any_element()
 }
 
+pub(crate) fn apply_object_context_menu_target(
+    selected_indices: &mut HashSet<usize>,
+    context_menu_row: &mut Option<usize>,
+    row_ix: usize,
+) {
+    selected_indices.clear();
+    selected_indices.insert(row_ix);
+    *context_menu_row = Some(row_ix);
+}
+
 /// 数据库对象面板事件 - 统一的表格交互事件
 #[derive(Clone, Debug)]
 pub enum DatabaseObjectsEvent {
+    /// 将对象页签菜单动作转发到数据库树的统一事件处理链
+    TreeEvent { event: DbTreeViewEvent },
+
     /// 刷新当前视图
     Refresh { node: DbNode },
 
@@ -179,6 +201,7 @@ pub struct DatabaseObjects {
     search_debouncer: Arc<Debouncer>,
     current_node: Option<DbNode>,
     selected_indices: HashSet<usize>,
+    context_menu_row: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -292,6 +315,7 @@ impl DatabaseObjects {
             search_debouncer,
             current_node: None,
             selected_indices: HashSet::new(),
+            context_menu_row: None,
             _subscriptions: vec![search_sub],
         }
     }
@@ -345,6 +369,7 @@ impl DatabaseObjects {
 
         self.current_node = Some(node.clone());
         self.selected_indices.clear();
+        self.context_menu_row = None;
         let node_clone = node.clone();
         let storage_manager = cx.global::<GlobalStorageState>().storage.clone();
         let global_state = cx.global::<GlobalDbState>().clone();
@@ -394,6 +419,7 @@ impl DatabaseObjects {
     }
 
     fn toggle_selection(&mut self, row_ix: usize, multi_select: bool) {
+        self.context_menu_row = None;
         if multi_select {
             if self.selected_indices.contains(&row_ix) {
                 self.selected_indices.remove(&row_ix);
@@ -763,6 +789,164 @@ impl DatabaseObjects {
         )
     }
 
+    fn render_context_menu_items(
+        mut menu: PopupMenu,
+        items: Vec<ContextMenuItem>,
+        is_active: bool,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        for item in items {
+            menu = match item {
+                ContextMenuItem::Item {
+                    label,
+                    event,
+                    requires_active,
+                } => Self::render_context_menu_action(
+                    menu,
+                    label,
+                    event,
+                    requires_active && !is_active,
+                    view,
+                    window,
+                ),
+                ContextMenuItem::Separator => menu.separator(),
+                ContextMenuItem::Submenu {
+                    label,
+                    items,
+                    requires_active,
+                } => {
+                    let view = view.clone();
+                    let submenu = PopupMenu::build(window, cx, move |menu, window, cx| {
+                        Self::render_context_menu_items(
+                            menu,
+                            items.clone(),
+                            is_active,
+                            &view,
+                            window,
+                            cx,
+                        )
+                    });
+                    menu.item(
+                        PopupMenuItem::submenu(label, submenu)
+                            .disabled(requires_active && !is_active),
+                    )
+                }
+            };
+        }
+        menu
+    }
+
+    fn render_context_menu_action(
+        menu: PopupMenu,
+        label: String,
+        event: ContextMenuEvent,
+        disabled: bool,
+        view: &Entity<Self>,
+        window: &mut Window,
+    ) -> PopupMenu {
+        let ContextMenuEvent::TreeEvent(event) = event else {
+            return menu;
+        };
+        let view = view.clone();
+        menu.item(
+            PopupMenuItem::new(label)
+                .disabled(disabled)
+                .on_click(window.listener_for(&view, move |_this, _, _, cx| {
+                    cx.emit(DatabaseObjectsEvent::TreeEvent {
+                        event: event.clone(),
+                    });
+                })),
+        )
+    }
+
+    fn render_extension_menu_items(
+        mut menu: PopupMenu,
+        items: Vec<DbTreeExtensionMenuItem>,
+        is_active: bool,
+        node: &DbNode,
+    ) -> PopupMenu {
+        for item in items {
+            let context = DbTreeExtensionActionContext {
+                extension_id: item.extension_id.clone(),
+                command_id: item.command_id.clone(),
+                node_id: node.id.clone(),
+                node_name: node.name.clone(),
+                node_type: node.node_type,
+                database_type: node.database_type.clone(),
+                connection_id: node.connection_id.clone(),
+            };
+            let disabled = item.requires_active && !is_active;
+            menu = menu.item(PopupMenuItem::new(item.label).disabled(disabled).on_click(
+                move |_, window, cx| {
+                    if let Some(handler) = cx
+                        .try_global::<GlobalDbTreeExtensionActionHandler>()
+                        .cloned()
+                    {
+                        handler.run(context.clone(), window, cx);
+                    } else {
+                        warn!(
+                            "db tree extension action handler is not registered for {}",
+                            context.command_id
+                        );
+                    }
+                },
+            ));
+        }
+        menu
+    }
+
+    fn build_context_menu_for_target(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let Some(row_ix) = view.read(cx).context_menu_row else {
+            return menu;
+        };
+        let Some(node) = view.read(cx).build_node_for_row(row_ix) else {
+            return menu;
+        };
+        let is_active = node
+            .connection_id
+            .parse::<i64>()
+            .ok()
+            .map(|id| cx.global::<ActiveConnections>().is_active(id))
+            .unwrap_or(false);
+        let items =
+            build_context_menu_for(node.database_type.clone(), &node.id, node.node_type, cx);
+        let mut menu = Self::render_context_menu_items(menu, items, is_active, view, window, cx);
+        let extension_items = cx
+            .try_global::<DbTreeExtensionMenuRegistry>()
+            .map(|registry| {
+                registry.items_for_context(&DbTreeExtensionMenuContext {
+                    node_type: node.node_type,
+                    node_name: node.name.clone(),
+                    connection_id: node.connection_id.clone(),
+                    database_type: node.database_type.clone(),
+                })
+            })
+            .unwrap_or_default();
+        if !extension_items.is_empty() {
+            menu = menu.separator();
+            menu = Self::render_extension_menu_items(menu, extension_items, is_active, &node);
+        }
+        let refresh_node = view.read(cx).current_node.clone().unwrap_or(node);
+        let view = view.clone();
+        menu.item(
+            PopupMenuItem::new(t!("Common.refresh")).on_click(window.listener_for(
+                &view,
+                move |_this, _, _, cx| {
+                    cx.emit(DatabaseObjectsEvent::Refresh {
+                        node: refresh_node.clone(),
+                    });
+                },
+            )),
+        )
+    }
+
     fn render_header(
         &self,
         columns: &[Column],
@@ -1076,6 +1260,7 @@ impl Render for DatabaseObjects {
                                             let is_selected =
                                                 state.selected_indices.contains(&list_ix);
                                             let row_ix = list_ix;
+                                            let view = cx.entity();
                                             div()
                                                     .id(list_ix)
                                                     .cursor_pointer()
@@ -1091,6 +1276,22 @@ impl Render for DatabaseObjects {
                                                                 this.toggle_selection(
                                                                     row_ix,
                                                                     multi_select,
+                                                                );
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    )
+                                                    .on_mouse_down(
+                                                        MouseButton::Right,
+                                                        cx.listener(
+                                                            move |this,
+                                                                  _event: &MouseDownEvent,
+                                                                  _window,
+                                                                  cx| {
+                                                                apply_object_context_menu_target(
+                                                                    &mut this.selected_indices,
+                                                                    &mut this.context_menu_row,
+                                                                    row_ix,
                                                                 );
                                                                 cx.notify();
                                                             },
@@ -1115,6 +1316,11 @@ impl Render for DatabaseObjects {
                                                         },
                                                         cx,
                                                     ))
+                                                    .context_menu(move |menu, window, cx| {
+                                                        Self::build_context_menu_for_target(
+                                                            menu, &view, window, cx,
+                                                        )
+                                                    })
                                                     .into_any_element()
                                         })
                                         .collect()
@@ -1147,6 +1353,7 @@ impl Clone for DatabaseObjects {
             search_debouncer: self.search_debouncer.clone(),
             current_node: self.current_node.clone(),
             selected_indices: self.selected_indices.clone(),
+            context_menu_row: self.context_menu_row,
             _subscriptions: vec![],
         }
     }
