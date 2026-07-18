@@ -10,6 +10,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use one_core::storage::{ConnectionType, StoredConnection};
+use rust_i18n::t;
 
 /// 连接选择器事件
 #[derive(Clone, Debug)]
@@ -82,7 +83,7 @@ impl ConnectionSelector {
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("当前连接"),
+                                    .child(t!("AgentUi.current_connection").to_string()),
                             )
                             .child(
                                 div()
@@ -103,7 +104,9 @@ impl ConnectionSelector {
                     .into_any_element()
             }
         } else {
-            div().child("无连接").into_any_element()
+            div()
+                .child(t!("AgentUi.no_connection").to_string())
+                .into_any_element()
         }
     }
 }

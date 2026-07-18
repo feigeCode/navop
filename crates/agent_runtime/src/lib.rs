@@ -14,6 +14,8 @@
 //!                     -> ToolObservation 写回 Session.history -> 再次采样(follow-up)
 //! ```
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod error;
 pub mod history;
 pub mod ids;

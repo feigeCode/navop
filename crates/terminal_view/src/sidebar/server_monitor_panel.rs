@@ -1227,7 +1227,7 @@ fn render_cpu_core_grid(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child("Per-core"),
+                .child(t!("ServerMonitor.per_core").to_string()),
         )
         .child(
             h_flex()

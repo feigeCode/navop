@@ -2459,7 +2459,7 @@ impl TabContainer {
         .icon(IconName::EyeOff)
         .ghost()
         .compact()
-        .tooltip("Hide panel")
+        .tooltip(t!("Sidebar.hide_panel").to_string())
         .on_click(move |_, window, cx| {
             if let Some(close) = contribution.actions.close.as_ref() {
                 close(window, cx);
@@ -2516,7 +2516,7 @@ impl TabContainer {
                 .icon(Icon::new(contribution.icon.clone()).text_color(text_color))
                 .ghost()
                 .compact()
-                .tooltip("Show panel")
+                .tooltip(t!("Sidebar.show_panel").to_string())
                 .on_click({
                     let container = container.clone();
                     move |_, _, cx| {

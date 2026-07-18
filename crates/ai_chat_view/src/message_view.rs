@@ -19,6 +19,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, v_flex,
 };
+use rust_i18n::t;
 
 pub fn render_messages(
     messages: &[ChatMessageUI],
@@ -407,7 +408,7 @@ fn render_thinking_themed(theme: &AgentChatTheme) -> AnyElement {
             div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child("思考中..."),
+                .child(t!("AgentUi.thinking").to_string()),
         )
         .into_any_element()
 }
@@ -428,19 +429,23 @@ fn render_card(
     if let Some(element) =
         with_agent_chat_theme(theme, || CardRegistry::render_global(&card_msg, window, cx))
     {
-        return div()
+        return v_flex()
             .w_full()
             .min_w_0()
+            .items_stretch()
             .overflow_hidden()
             .text_color(theme.foreground)
             .child(element)
             .into_any_element();
     }
-    render_placeholder_themed(format!("[未注册卡片: {kind}]"), theme)
+    render_placeholder_themed(
+        t!("AgentUi.unregistered_card", kind = kind).to_string(),
+        theme,
+    )
 }
 
 fn render_sql_result_placeholder(theme: &AgentChatTheme) -> AnyElement {
-    render_placeholder_themed("[SQL 结果卡片需要业务渲染器]", theme)
+    render_placeholder_themed(t!("AgentUi.sql_card_renderer_required").to_string(), theme)
 }
 
 fn render_placeholder_themed(text: impl Into<String>, theme: &AgentChatTheme) -> AnyElement {

@@ -6,6 +6,7 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex, v_flex,
 };
+use rust_i18n::t;
 
 use super::super::{ConnectionImportWindow, is_save_candidate};
 use crate::home::connection_import_draft::{EditableImportDraft, ImportDraftKind};
@@ -68,7 +69,7 @@ fn render_row_actions(
                 .xsmall()
                 .primary()
                 .icon(IconName::Upload)
-                .label("保存")
+                .label(t!("Common.save").to_string())
                 .disabled(!is_save_candidate(&row.save_status))
                 .on_click(cx.listener({
                     let record_id = record_id.to_string();
@@ -168,23 +169,27 @@ fn row_icon_name(draft: &EditableImportDraft) -> IconName {
     }
 }
 
-fn kind_text(kind: ImportDraftKind) -> &'static str {
+fn kind_text(kind: ImportDraftKind) -> String {
     match kind {
-        ImportDraftKind::Database => "数据库",
-        ImportDraftKind::Ssh => "SSH",
-        ImportDraftKind::Unsupported => "暂不支持",
+        ImportDraftKind::Database => t!("Home.ConnectionImport.kind_database").to_string(),
+        ImportDraftKind::Ssh => "SSH".to_string(),
+        ImportDraftKind::Unsupported => t!("Home.ConnectionImport.kind_unsupported").to_string(),
     }
 }
 
 fn status_text(status: &ImportRowSaveStatus) -> String {
     match status {
-        ImportRowSaveStatus::Pending => "待保存".to_string(),
-        ImportRowSaveStatus::Saving => "保存中".to_string(),
-        ImportRowSaveStatus::Saved { .. } => "已保存".to_string(),
-        ImportRowSaveStatus::Failed { message } => format!("失败：{message}"),
-        ImportRowSaveStatus::SkippedDuplicate { existing_name } => {
-            format!("已跳过重复：{existing_name}")
+        ImportRowSaveStatus::Pending => t!("Home.ConnectionImport.status_pending").to_string(),
+        ImportRowSaveStatus::Saving => t!("Home.ConnectionImport.status_saving").to_string(),
+        ImportRowSaveStatus::Saved { .. } => t!("Home.ConnectionImport.status_saved").to_string(),
+        ImportRowSaveStatus::Failed { message } => {
+            t!("Home.ConnectionImport.status_failed", error = message).to_string()
         }
+        ImportRowSaveStatus::SkippedDuplicate { existing_name } => t!(
+            "Home.ConnectionImport.status_duplicate",
+            name = existing_name
+        )
+        .to_string(),
     }
 }
 

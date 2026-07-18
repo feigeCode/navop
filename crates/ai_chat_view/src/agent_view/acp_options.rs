@@ -36,7 +36,7 @@ pub(super) fn current_agent_label(
     acp_connecting: bool,
 ) -> SharedString {
     if acp_connecting {
-        return SharedString::from("连接中...");
+        return SharedString::from(t!("AgentUi.connecting").to_string());
     }
     if backend == Backend::Local {
         return SharedString::from("One Agent");

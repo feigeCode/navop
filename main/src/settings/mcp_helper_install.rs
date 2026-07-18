@@ -7,6 +7,9 @@ use gpui_component::{
 use public_mcp::client_config::{ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION};
 use rust_i18n::t;
 
+#[cfg(test)]
+const MCP_RUNTIME_REQUIREMENTS_ITEM_ID: &str = "mcp-runtime-requirements";
+
 pub(crate) fn mcp_runtime_requirements_item() -> SettingItem {
     SettingItem::new(
         t!("Settings.General.Mcp.runtime_requirements"),
@@ -21,6 +24,11 @@ pub(crate) fn mcp_runtime_requirements_item() -> SettingItem {
         }),
     )
     .description(t!("Settings.General.Mcp.runtime_requirements_desc").to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn mcp_runtime_requirements_item_id() -> &'static str {
+    MCP_RUNTIME_REQUIREMENTS_ITEM_ID
 }
 
 fn runtime_requirements_status() -> String {

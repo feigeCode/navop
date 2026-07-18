@@ -7,6 +7,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
+use rust_i18n::t;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -38,8 +39,8 @@ impl NotesView {
         cx: &mut Context<Self>,
     ) {
         let placeholder = match kind {
-            CreateKind::Directory => "目录名称",
-            CreateKind::Document(_) => "文档名称",
+            CreateKind::Directory => t!("Notes.directory_name").to_string(),
+            CreateKind::Document(_) => t!("Notes.document_name").to_string(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         self.dialog_subscription = Some(cx.subscribe_in(
@@ -66,7 +67,7 @@ impl NotesView {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(&row.display_name)
-                .placeholder("新名称")
+                .placeholder(t!("Notes.new_name").to_string())
         });
         let input_for_focus = input.clone();
         let row_for_enter = row.clone();
@@ -87,7 +88,7 @@ impl NotesView {
             let view_for_ok = view.clone();
             let row_for_ok = row.clone();
             dialog
-                .title("重命名")
+                .title(t!("Notes.rename").to_string())
                 .w(px(380.0))
                 .confirm()
                 .on_ok(move |_, window, cx| {
@@ -97,7 +98,10 @@ impl NotesView {
                     });
                     true
                 })
-                .child(name_dialog_body("输入新的名称", &input))
+                .child(name_dialog_body(
+                    t!("Notes.enter_new_name").as_ref(),
+                    &input,
+                ))
         });
         defer_input_focus(input_for_focus, window, cx);
     }
@@ -113,17 +117,18 @@ impl NotesView {
             let view_for_ok = view.clone();
             let row_for_ok = row.clone();
             dialog
-                .title("删除")
+                .title(t!("Notes.delete").to_string())
                 .w(px(380.0))
                 .confirm()
                 .on_ok(move |_, window, cx| {
                     view_for_ok.update(cx, |view, cx| view.apply_delete(&row_for_ok, window, cx));
                     true
                 })
-                .child(div().text_sm().child(format!(
-                    "确定删除「{}」？目录会被递归删除，此操作不可撤销。",
-                    row.display_name
-                )))
+                .child(
+                    div().text_sm().child(
+                        t!("Notes.delete_confirmation", name = row.display_name).to_string(),
+                    ),
+                )
         });
     }
 
@@ -302,16 +307,16 @@ fn open_name_dialog(
     cx: &mut Context<NotesView>,
 ) {
     let title = match kind {
-        CreateKind::Directory => "新建目录",
-        CreateKind::Document(DocumentFormat::RichText) => "新建富文本",
-        CreateKind::Document(DocumentFormat::Markdown) => "新建 Markdown",
+        CreateKind::Directory => t!("Notes.new_directory").to_string(),
+        CreateKind::Document(DocumentFormat::RichText) => t!("Notes.new_rich_text").to_string(),
+        CreateKind::Document(DocumentFormat::Markdown) => t!("Notes.new_markdown").to_string(),
     };
     let input_for_focus = input.clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let input_for_ok = input.clone();
         let view_for_ok = view.clone();
         dialog
-            .title(title)
+            .title(title.clone())
             .w(px(380.0))
             .confirm()
             .on_ok(move |_, window, cx| {
@@ -319,7 +324,7 @@ fn open_name_dialog(
                 view_for_ok.update(cx, |view, cx| view.apply_create(kind, &name, window, cx));
                 true
             })
-            .child(name_dialog_body("请输入名称", &input))
+            .child(name_dialog_body(t!("Notes.enter_name").as_ref(), &input))
     });
     defer_input_focus(input_for_focus, window, cx);
 }

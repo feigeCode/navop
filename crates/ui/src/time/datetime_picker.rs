@@ -663,7 +663,7 @@ impl RenderOnce for DateTimePicker {
                                             Button::new("now")
                                                 .small()
                                                 .ghost()
-                                                .label("Now")
+                                                .label(t!("TimePicker.now").to_string())
                                                 .on_click(window.listener_for(
                                                     &self.state,
                                                     |this, _, window, cx| {
@@ -678,7 +678,7 @@ impl RenderOnce for DateTimePicker {
                                                     Button::new("ok")
                                                         .small()
                                                         .primary()
-                                                        .label("OK")
+                                                        .label(t!("TimePicker.ok").to_string())
                                                         .on_click(window.listener_for(
                                                             &self.state,
                                                             |this, _, window, cx| {
@@ -690,7 +690,7 @@ impl RenderOnce for DateTimePicker {
                                                     Button::new("cancel")
                                                         .small()
                                                         .ghost()
-                                                        .label("Cancel")
+                                                        .label(t!("TimePicker.cancel").to_string())
                                                         .on_click(window.listener_for(
                                                             &self.state,
                                                             |this, _, window, cx| {

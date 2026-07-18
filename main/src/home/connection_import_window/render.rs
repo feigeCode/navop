@@ -10,6 +10,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use rust_i18n::t;
 
 use super::ConnectionImportWindow;
 use preview::render_preview_row;
@@ -34,7 +35,7 @@ impl ConnectionImportWindow {
                     .small()
                     .primary()
                     .icon(IconName::Play)
-                    .label("扫描")
+                    .label(t!("Home.ConnectionImport.scan").to_string())
                     .disabled(!self.model.can_scan() || self.scanning)
                     .on_click(cx.listener(|this, _, _, cx| this.scan_selected(cx))),
             )
@@ -42,7 +43,7 @@ impl ConnectionImportWindow {
                 Button::new("save-selected-imports")
                     .small()
                     .icon(IconName::Check)
-                    .label("保存所选")
+                    .label(t!("Home.ConnectionImport.save_selected").to_string())
                     .disabled(self.scanning || self.model.batch_save_row_ids().is_empty())
                     .on_click(cx.listener(|this, _, _, cx| this.save_selected(cx))),
             )
@@ -63,7 +64,7 @@ impl ConnectionImportWindow {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(Icon::new(IconName::LoaderCircle).with_size(Size::Small))
-                        .child("正在扫描"),
+                        .child(t!("Home.ConnectionImport.scanning").to_string()),
                 )
             })
     }
@@ -83,17 +84,20 @@ impl ConnectionImportWindow {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("预览结果"),
+                                .child(t!("Home.ConnectionImport.preview_results").to_string()),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!(
-                                    "可保存 {} / {} 条",
-                                    self.model.batch_save_row_ids().len(),
-                                    self.model.rows().len()
-                                )),
+                                .child(
+                                    t!(
+                                        "Home.ConnectionImport.savable_count",
+                                        savable = self.model.batch_save_row_ids().len(),
+                                        total = self.model.rows().len()
+                                    )
+                                    .to_string(),
+                                ),
                         ),
                 )
                 .child(
@@ -123,7 +127,7 @@ impl ConnectionImportWindow {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("应用来源"),
+                    .child(t!("Home.ConnectionImport.sources").to_string()),
             )
             .children(
                 self.model
@@ -164,11 +168,11 @@ impl ConnectionImportWindow {
 
     fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let message = if self.loading_sources {
-            "正在加载导入扩展"
+            t!("Home.ConnectionImport.loading_extensions")
         } else if self.scanning {
-            "正在扫描选中的导入来源"
+            t!("Home.ConnectionImport.scanning_selected_sources")
         } else {
-            "选择来源后点击扫描"
+            t!("Home.ConnectionImport.select_sources_hint")
         };
         div()
             .p_4()
@@ -177,7 +181,7 @@ impl ConnectionImportWindow {
             .rounded(px(6.0))
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(message)
+            .child(message.to_string())
             .into_any_element()
     }
 }

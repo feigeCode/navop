@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 #[cfg(feature = "wasm-components")]
 mod action;
 mod catalog;

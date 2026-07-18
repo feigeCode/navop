@@ -94,7 +94,7 @@ pub use chart_json::{
 };
 pub use chat_state::ChatViewState;
 pub use chat_tab::{CHAT_TAB_CONTENT_KEY, ChatTabContent};
-pub use chat_view::{CHAT_TASK_SIDEBAR_TITLE, ChatView};
+pub use chat_view::{ChatView, chat_task_sidebar_title};
 pub use code_block::{
     CodeBlockAction, CodeBlockActionBuilder, CodeBlockActionCallback, CodeBlockActionPreview,
     CodeBlockActionRegistry, FencedCodeBlock, LanguageMatcher, extract_fenced_code_blocks,

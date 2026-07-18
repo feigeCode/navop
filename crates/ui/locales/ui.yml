@@ -113,6 +113,18 @@ TimePicker:
     zh-CN: 选择时间
     zh-HK: 選擇時間
     it: "Seleziona ora"
+  now:
+    en: Now
+    zh-CN: 现在
+    zh-HK: 現在
+  ok:
+    en: OK
+    zh-CN: 确定
+    zh-HK: 確定
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
 Select:
   placeholder:
     en: "Please select"
@@ -251,3 +263,27 @@ Pagination:
     en: Next
     zh-CN: 下一页
     zh-HK: 下一頁
+
+Text:
+  failed_to_parse:
+    en: Failed to parse content
+    zh-CN: 解析内容失败
+    zh-HK: 解析內容失敗
+
+Inspector:
+  title:
+    en: Inspector
+    zh-CN: 检查器
+    zh-HK: 檢查器
+  rust_styles:
+    en: Rust Styles
+    zh-CN: Rust 样式
+    zh-HK: Rust 樣式
+  json_styles:
+    en: JSON Styles
+    zh-CN: JSON 样式
+    zh-HK: JSON 樣式
+  reset:
+    en: Reset
+    zh-CN: 重置
+    zh-HK: 重設

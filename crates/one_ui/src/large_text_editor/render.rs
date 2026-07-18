@@ -7,6 +7,7 @@ use gpui_component::input::Input;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::v_flex;
 use gpui_component::{IconName, Sizable, Size};
+use rust_i18n::t;
 
 impl Render for LargeTextEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -37,8 +38,8 @@ fn render_tab_bar(
     TabBar::new("editor-tabs")
         .with_size(Size::Small)
         .selected_index(active_index)
-        .child(Tab::new().label("Text"))
-        .child(Tab::new().label("JSON"))
+        .child(Tab::new().label(t!("LargeTextEditor.text").to_string()))
+        .child(Tab::new().label(t!("LargeTextEditor.json").to_string()))
         .on_click(cx.listener(|this, ix: &usize, window, cx| {
             let tab = if *ix == 0 {
                 LargeTextEditorTab::Text
@@ -54,7 +55,7 @@ fn render_tab_bar(
                     this.child(
                         Button::new("format-json")
                             .with_size(Size::Small)
-                            .label("Format")
+                            .label(t!("LargeTextEditor.format").to_string())
                             .icon(IconName::Star)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.format_json(window, cx);
@@ -63,7 +64,7 @@ fn render_tab_bar(
                     .child(
                         Button::new("minify-json")
                             .with_size(Size::Small)
-                            .label("Minify")
+                            .label(t!("LargeTextEditor.minify").to_string())
                             .icon(IconName::File)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.minify_json(window, cx);

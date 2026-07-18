@@ -105,7 +105,7 @@ fn render_code_block_toolbar(
     let mut row = h_flex().gap_1().text_color(theme.code_foreground).child(
         Clipboard::new(copy_id)
             .value(code.clone())
-            .tooltip("复制代码"),
+            .tooltip(t!("AgentUi.copy_code").to_string()),
     );
 
     if let Some(registry) = registry {

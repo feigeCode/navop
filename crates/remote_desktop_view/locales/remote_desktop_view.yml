@@ -1,6 +1,22 @@
 _version: 2
 
 RemoteDesktop:
+  status_waiting_layout:
+    en: Waiting for layout
+    zh-CN: 等待窗口布局
+    zh-HK: 等待視窗版面配置
+  status_connecting:
+    en: Connecting
+    zh-CN: 连接中
+    zh-HK: 連線中
+  status_connected:
+    en: Connected
+    zh-CN: 已连接
+    zh-HK: 已連線
+  status_reconnecting:
+    en: Reconnecting RDP session
+    zh-CN: 正在重新连接 RDP 会话
+    zh-HK: 正在重新連線 RDP 工作階段
   provider_version_too_old:
     en: "%{protocol} provider version %{installed} is too old. Please update the provider to %{required} or newer."
     zh-CN: "%{protocol} 扩展版本 %{installed} 过低，请更新到 %{required} 或更高版本。"

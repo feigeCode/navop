@@ -5,6 +5,7 @@ use crate::model::ModelRequest;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::{RuntimeServices, Session};
 use llm_connector::types::Message;
+use rust_i18n::t;
 use tokio_util::sync::CancellationToken;
 
 const DEFAULT_TRIGGER_CHARS: usize = 96_000;
@@ -47,14 +48,24 @@ pub(crate) async fn compact_session_context_if_needed(
     let Some(prefix) = history.compaction_prefix(policy.keep_last_items) else {
         return Ok(false);
     };
-    emit_compaction_status(session, turn_id, "正在压缩上下文...", false);
+    emit_compaction_status(
+        session,
+        turn_id,
+        t!("AgentRuntime.context_compaction_running").as_ref(),
+        false,
+    );
     let summary = summarize_prefix(prefix, services, policy, cancellation).await?;
     if cancellation.is_cancelled() {
         return Err(RuntimeError::Cancelled);
     }
     let compacted = session.compact_history(summary, policy.keep_last_items);
     if compacted {
-        emit_compaction_status(session, turn_id, "上下文压缩完成", true);
+        emit_compaction_status(
+            session,
+            turn_id,
+            t!("AgentRuntime.context_compaction_complete").as_ref(),
+            true,
+        );
     }
     Ok(compacted)
 }

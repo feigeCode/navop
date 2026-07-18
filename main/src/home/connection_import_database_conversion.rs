@@ -4,6 +4,7 @@ use connection_import_protocol::{DatabaseImportRecord, ImportDatabaseType, Impor
 use one_core::storage::{
     DatabaseType, DbConnectionConfig, MongoDBParams, RedisMode, RedisParams, StoredConnection,
 };
+use rust_i18n::t;
 
 use super::connection_import_draft::EditableImportDraft;
 use super::connection_import_draft_conversion::{
@@ -27,8 +28,11 @@ pub(crate) fn to_database_connection(
     let imported = record
         .database
         .as_ref()
-        .ok_or_else(|| "数据库导入记录缺少数据库配置".to_string())?;
-    let name = required_text(&draft.name, "连接名称")?;
+        .ok_or_else(|| t!("Home.ConnectionImport.database_config_missing").to_string())?;
+    let name = required_text(
+        &draft.name,
+        t!("Home.ConnectionImport.field_connection_name").as_ref(),
+    )?;
     if let Some(connection) = native_external_connection(draft, imported, &name, mode)? {
         return Ok(connection);
     }
@@ -133,7 +137,9 @@ fn host_for_native_external(
     mode: ConversionMode,
 ) -> Result<String, String> {
     match mode {
-        ConversionMode::StrictSave => required_text(&draft.host, "主机"),
+        ConversionMode::StrictSave => {
+            required_text(&draft.host, t!("Home.ConnectionImport.field_host").as_ref())
+        }
         ConversionMode::EditorPrefill => Ok(optional_text(&draft.host).unwrap_or_default()),
     }
 }
@@ -149,7 +155,7 @@ pub(crate) fn database_duplicate_identity(
     let imported = record
         .database
         .as_ref()
-        .ok_or_else(|| "数据库导入记录缺少数据库配置".to_string())?;
+        .ok_or_else(|| t!("Home.ConnectionImport.database_config_missing").to_string())?;
     if let Some(identity) = native_external_duplicate_identity(draft, imported)? {
         return Ok(identity);
     }
@@ -267,11 +273,13 @@ fn database_host(
         return match file_database_path(draft) {
             Some(path) => Ok(path),
             None if matches!(mode, ConversionMode::EditorPrefill) => Ok(String::new()),
-            None => Err("数据库文件路径不能为空".to_string()),
+            None => Err(t!("Home.ConnectionImport.database_file_required").to_string()),
         };
     }
     match mode {
-        ConversionMode::StrictSave => required_text(&draft.host, "主机"),
+        ConversionMode::StrictSave => {
+            required_text(&draft.host, t!("Home.ConnectionImport.field_host").as_ref())
+        }
         ConversionMode::EditorPrefill => Ok(optional_text(&draft.host).unwrap_or_default()),
     }
 }

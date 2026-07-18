@@ -1,6 +1,7 @@
 use super::acp_options::agent_selection_is_active;
 use super::*;
 use crate::AcpAgentConfig;
+use rust_i18n::t;
 
 impl AgentChatView {
     pub(super) fn select_local_backend(&mut self, cx: &mut Context<Self>) {
@@ -88,7 +89,7 @@ impl AgentChatView {
         self.set_running(false, cx);
         self.transcript.clear();
         self.transcript
-            .set_acp_status(format!("正在启动 {}", config.name));
+            .set_acp_status(t!("AgentUi.starting_agent", name = config.name).to_string());
         self.input
             .update(cx, |input, cx| input.set_running(true, cx));
         self.sync_composer(cx);
@@ -141,7 +142,7 @@ impl AgentChatView {
         self.acp_connecting = false;
         self.acp_connecting_id = None;
         self.transcript
-            .set_acp_status(format!("{} 需要登录", config.name));
+            .set_acp_status(t!("AgentUi.login_required", name = config.name).to_string());
         self.sync_composer(cx);
         cx.notify();
     }
@@ -162,7 +163,7 @@ impl AgentChatView {
             AcpErrorKind::InitializeFailed,
             config.id.to_string(),
             config.name.to_string(),
-            "连接 ACP Agent 失败",
+            t!("AgentUi.connect_acp_failed").to_string(),
         )
         .with_detail(source.to_string())
         .with_recovery(AcpRecoveryAction::Retry);
@@ -183,7 +184,7 @@ impl AgentChatView {
         self.acp_connecting = true;
         self.acp_connecting_id = Some(agent_id.clone());
         self.transcript
-            .set_acp_status(format!("正在登录 {agent_name}"));
+            .set_acp_status(t!("AgentUi.logging_in", name = agent_name).to_string());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = pending.authenticate(method_id).await;
@@ -297,7 +298,7 @@ fn auth_button(view: Entity<AgentChatView>, method: &str) -> Button {
     Button::new(SharedString::from(format!("acp-auth-{method}")))
         .small()
         .primary()
-        .child(format!("登录 ({method})"))
+        .child(t!("AgentUi.login_method", method = method).to_string())
         .on_click(move |_, _window, cx| {
             view.update(cx, |this, cx| this.authenticate_acp(method_id.clone(), cx));
         })
@@ -307,7 +308,7 @@ fn cancel_auth_button(view: Entity<AgentChatView>) -> Button {
     Button::new("acp-auth-cancel")
         .small()
         .outline()
-        .child("取消")
+        .child(t!("AgentUi.cancel").to_string())
         .on_click(move |_, _window, cx| {
             view.update(cx, |this, cx| this.cancel_acp_auth(cx));
         })

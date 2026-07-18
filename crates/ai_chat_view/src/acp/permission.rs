@@ -2,6 +2,7 @@ use agent_client_protocol::schema::{
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome,
 };
+use rust_i18n::t;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -178,7 +179,7 @@ fn acp_permission_request(request: RequestPermissionRequest) -> AcpPermissionReq
         request_id: format!("{session_id}:{tool_call_id}"),
         session_id,
         tool_call_id,
-        summary: format!("ACP Agent 请求执行工具：{tool_name}"),
+        summary: t!("AgentUi.acp_tool_request", tool = tool_name).to_string(),
         tool_name,
         details: serde_json::to_value(&request.tool_call).unwrap_or_else(|_| serde_json::json!({})),
         options: request

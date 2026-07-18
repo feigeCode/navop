@@ -16,6 +16,7 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
+use rust_i18n::t;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ImportSaveResult {
@@ -94,7 +95,7 @@ pub(crate) fn save_import_draft(
     let storage = cx.global::<GlobalStorageState>().storage.clone();
     let repo = storage
         .get::<ConnectionRepository>()
-        .ok_or_else(|| "ConnectionRepository not found".to_string())?;
+        .ok_or_else(|| t!("Home.ConnectionImport.repository_unavailable").to_string())?;
     let existing = repo.list().map_err(|error| error.to_string())?;
     if let Some(existing_name) = duplicate_connection_name(draft, &existing)? {
         return Ok(ImportSaveResult::SkippedDuplicate { existing_name });
@@ -110,7 +111,8 @@ pub(crate) fn save_import_draft(
 }
 
 fn composite_extensions_root() -> Result<std::path::PathBuf, String> {
-    let root = extensions_root().ok_or_else(|| "扩展目录不可用".to_string())?;
+    let root = extensions_root()
+        .ok_or_else(|| t!("Home.ConnectionImport.extension_directory_unavailable").to_string())?;
     Ok(root.join(ExtensionKind::Composite.dir_name()))
 }
 

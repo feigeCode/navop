@@ -14,6 +14,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use rust_i18n::t;
 use std::path::{Path, PathBuf};
 
 const NOTES_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(248.0);
@@ -190,11 +191,11 @@ impl NotesView {
                                             this.gap_1()
                                                 .text_sm()
                                                 .text_color(cx.theme().muted_foreground)
-                                                .child("还没有笔记")
+                                                .child(t!("Notes.empty_title").to_string())
                                                 .child(
                                                     div()
                                                         .text_xs()
-                                                        .child("使用顶部按钮或在这里右键新建"),
+                                                        .child(t!("Notes.empty_hint").to_string()),
                                                 )
                                         }),
                                 ),
@@ -270,7 +271,7 @@ impl NotesView {
                     this.flex().items_center().justify_center().child(
                         div()
                             .text_color(cx.theme().muted_foreground)
-                            .child("选择或新建一个文档"),
+                            .child(t!("Notes.select_or_create").to_string()),
                     )
                 },
             )
@@ -300,7 +301,7 @@ impl NotesView {
                     .icon(IconName::RichTextColor.color())
                     .ghost()
                     .xsmall()
-                    .tooltip("新建富文本文档")
+                    .tooltip(t!("Notes.new_rich_text_document").to_string())
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.start_create(
                             CreateKind::Document(DocumentFormat::RichText),
@@ -314,7 +315,7 @@ impl NotesView {
                     .icon(IconName::MarkdownColor.color())
                     .ghost()
                     .xsmall()
-                    .tooltip("新建 Markdown 文档")
+                    .tooltip(t!("Notes.new_markdown_document").to_string())
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.start_create(
                             CreateKind::Document(DocumentFormat::Markdown),
@@ -328,7 +329,7 @@ impl NotesView {
                     .icon(IconName::NewFolder)
                     .ghost()
                     .xsmall()
-                    .tooltip("新建文件夹")
+                    .tooltip(t!("Notes.new_folder").to_string())
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.start_create(CreateKind::Directory, window, cx)
                     })),
@@ -338,7 +339,7 @@ impl NotesView {
                     .icon(IconName::Refresh)
                     .ghost()
                     .xsmall()
-                    .tooltip("刷新笔记列表")
+                    .tooltip(t!("Notes.refresh_list").to_string())
                     .on_click(cx.listener(|view, _, window, cx| {
                         if let Err(error) = view.refresh_tree(window, cx) {
                             crate::notes_notifications::notify_operation_error(window, cx, error);
@@ -483,7 +484,7 @@ fn build_sidebar_context_menu(
             SidebarMenuAction::NewRichText => {
                 let directory = directory.clone();
                 menu.item(
-                    PopupMenuItem::new("新建富文本文档")
+                    PopupMenuItem::new(t!("Notes.new_rich_text_document").to_string())
                         .icon(IconName::RichTextColor.color())
                         .on_click(window.listener_for(&view, move |view, _, window, cx| {
                             view.start_create_in(
@@ -498,7 +499,7 @@ fn build_sidebar_context_menu(
             SidebarMenuAction::NewMarkdown => {
                 let directory = directory.clone();
                 menu.item(
-                    PopupMenuItem::new("新建 Markdown 文档")
+                    PopupMenuItem::new(t!("Notes.new_markdown_document").to_string())
                         .icon(IconName::MarkdownColor.color())
                         .on_click(window.listener_for(&view, move |view, _, window, cx| {
                             view.start_create_in(
@@ -513,7 +514,7 @@ fn build_sidebar_context_menu(
             SidebarMenuAction::NewFolder => {
                 let directory = directory.clone();
                 menu.item(
-                    PopupMenuItem::new("新建文件夹")
+                    PopupMenuItem::new(t!("Notes.new_folder").to_string())
                         .icon(IconName::NewFolder)
                         .on_click(window.listener_for(&view, move |view, _, window, cx| {
                             view.start_create_in(
@@ -538,20 +539,20 @@ fn build_sidebar_context_menu(
                         })),
                 )
             }
-            SidebarMenuAction::Refresh => {
-                menu.item(PopupMenuItem::new("刷新").icon(IconName::Refresh).on_click(
-                    window.listener_for(&view, |view, _, window, cx| {
+            SidebarMenuAction::Refresh => menu.item(
+                PopupMenuItem::new(t!("Notes.refresh").to_string())
+                    .icon(IconName::Refresh)
+                    .on_click(window.listener_for(&view, |view, _, window, cx| {
                         if let Err(error) = view.refresh_tree(window, cx) {
                             crate::notes_notifications::notify_operation_error(window, cx, error);
                         }
                         cx.notify();
-                    }),
-                ))
-            }
+                    })),
+            ),
             SidebarMenuAction::ConvertToMarkdown => {
                 let row = row.clone().expect("document context menu requires a row");
                 menu.item(
-                    PopupMenuItem::new("转换为 Markdown（保留原文档）")
+                    PopupMenuItem::new(t!("Notes.convert_to_markdown").to_string())
                         .icon(IconName::Copy)
                         .on_click(window.listener_for(&view, move |view, _, window, cx| {
                             view.convert_to_markdown(&row, window, cx);
@@ -560,19 +561,23 @@ fn build_sidebar_context_menu(
             }
             SidebarMenuAction::Rename => {
                 let row = row.clone().expect("node context menu requires a row");
-                menu.item(PopupMenuItem::new("重命名").icon(IconName::Edit).on_click(
-                    window.listener_for(&view, move |view, _, window, cx| {
-                        view.start_rename(row.clone(), window, cx);
-                    }),
-                ))
+                menu.item(
+                    PopupMenuItem::new(t!("Notes.rename").to_string())
+                        .icon(IconName::Edit)
+                        .on_click(window.listener_for(&view, move |view, _, window, cx| {
+                            view.start_rename(row.clone(), window, cx);
+                        })),
+                )
             }
             SidebarMenuAction::Delete => {
                 let row = row.clone().expect("node context menu requires a row");
-                menu.item(PopupMenuItem::new("删除").icon(IconName::Remove).on_click(
-                    window.listener_for(&view, move |view, _, window, cx| {
-                        view.confirm_delete(row.clone(), window, cx);
-                    }),
-                ))
+                menu.item(
+                    PopupMenuItem::new(t!("Notes.delete").to_string())
+                        .icon(IconName::Remove)
+                        .on_click(window.listener_for(&view, move |view, _, window, cx| {
+                            view.confirm_delete(row.clone(), window, cx);
+                        })),
+                )
             }
         };
     }

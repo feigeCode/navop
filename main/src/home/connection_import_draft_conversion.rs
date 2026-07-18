@@ -1,5 +1,6 @@
 use connection_import_protocol::{ImportRecord, ImportRecordKind, SshImportAuthMethod};
 use one_core::storage::{ConnectionType, SshAuthMethod, SshParams, StoredConnection};
+use rust_i18n::t;
 
 use super::connection_import_database_conversion::{
     database_config_duplicate_identity, database_duplicate_identity, to_database_connection,
@@ -34,7 +35,9 @@ fn import_draft_to_connection(
     match record.kind {
         ImportRecordKind::Database => to_database_connection(draft, record, mode),
         ImportRecordKind::Ssh => to_ssh_connection(draft, record),
-        ImportRecordKind::PortForwarding => Err("暂不支持直接保存端口转发导入记录".to_string()),
+        ImportRecordKind::PortForwarding => {
+            Err(t!("Home.ConnectionImport.port_forwarding_save_unsupported").to_string())
+        }
     }
 }
 
@@ -45,7 +48,9 @@ pub(crate) fn import_draft_duplicate_identity(
     match record.kind {
         ImportRecordKind::Database => database_duplicate_identity(draft, record),
         ImportRecordKind::Ssh => ssh_duplicate_identity(draft),
-        ImportRecordKind::PortForwarding => Err("暂不支持端口转发导入记录重复检测".to_string()),
+        ImportRecordKind::PortForwarding => {
+            Err(t!("Home.ConnectionImport.port_forwarding_duplicate_unsupported").to_string())
+        }
     }
 }
 
@@ -107,10 +112,13 @@ fn to_ssh_connection(
     let imported = record
         .ssh
         .as_ref()
-        .ok_or_else(|| "SSH 导入记录缺少 SSH 配置".to_string())?;
-    let name = required_text(&draft.name, "连接名称")?;
+        .ok_or_else(|| t!("Home.ConnectionImport.ssh_config_missing").to_string())?;
+    let name = required_text(
+        &draft.name,
+        t!("Home.ConnectionImport.field_connection_name").as_ref(),
+    )?;
     let params = SshParams {
-        host: required_text(&draft.host, "主机")?,
+        host: required_text(&draft.host, t!("Home.ConnectionImport.field_host").as_ref())?,
         port: required_port(&draft.port)?,
         username: draft.username.trim().to_string(),
         auth_method: edited_ssh_auth_method(draft, &imported.auth_method)?,
@@ -152,7 +160,7 @@ fn edited_ssh_auth_method(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| "SSH 导入记录缺少私钥内容".to_string())?;
+                .ok_or_else(|| t!("Home.ConnectionImport.private_key_missing").to_string())?;
             Ok(SshAuthMethod::PrivateKeyContent {
                 private_key: private_key.to_string(),
                 passphrase: passphrase.clone(),
@@ -199,7 +207,7 @@ pub(super) fn normalize_identity_part(value: &str) -> String {
 pub(super) fn required_text(value: &str, label: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(format!("{}不能为空", label));
+        return Err(t!("Home.ConnectionImport.field_required", field = label).to_string());
     }
     Ok(trimmed.to_string())
 }
@@ -217,9 +225,9 @@ pub(super) fn optional_port(value: &str) -> Result<Option<u16>, String> {
     trimmed
         .parse::<u16>()
         .map(Some)
-        .map_err(|_| "端口必须是 1-65535".to_string())
+        .map_err(|_| t!("Home.ConnectionImport.invalid_port").to_string())
 }
 
 fn required_port(value: &str) -> Result<u16, String> {
-    optional_port(value)?.ok_or_else(|| "端口不能为空".to_string())
+    optional_port(value)?.ok_or_else(|| t!("Home.ConnectionImport.port_required").to_string())
 }

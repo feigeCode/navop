@@ -234,6 +234,7 @@ dependencies = [
  "chrono",
  "futures",
  "llm-connector",
+ "rust-i18n",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3660,6 +3661,7 @@ dependencies = [
  "html-preview",
  "one-core",
  "remote_desktop",
+ "rust-i18n",
  "security-framework 3.7.0",
  "semver",
  "serde",
@@ -8074,6 +8076,7 @@ dependencies = [
  "gpui-component",
  "json5",
  "one-core",
+ "rust-i18n",
  "serde_json",
  "tracing",
 ]
@@ -9891,6 +9894,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "rust-i18n",
  "sftp",
  "tokio",
 ]

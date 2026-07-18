@@ -329,7 +329,7 @@ impl Render for ConnectionFormWindow {
                             Button::new("save-continue")
                                 .small()
                                 .outline()
-                                .label("保存并继续")
+                                .label(t!("Connection.save_and_continue").to_string())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.on_save_and_continue(window, cx);
                                 })),

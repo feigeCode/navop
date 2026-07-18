@@ -1,4 +1,5 @@
 use agent_client_protocol::{Agent, ConnectionTo};
+use rust_i18n::t;
 
 use crate::acp::state::AcpConnectionPhase;
 use crate::acp::{AcpError, AcpErrorKind};
@@ -23,15 +24,17 @@ pub(super) fn finish_connect(
                 build_pending(shared, spawned, connection, methods),
             )))
         }
-        Ok(Ok(Err(error))) => {
-            abort_with_error(shared, spawned, format!("ACP agent 初始化失败:{error}"))
-        }
-        Ok(Err(_)) => abort_with_error(
+        Ok(Ok(Err(error))) => abort_with_error(
             shared,
             spawned,
-            "ACP agent 未就绪(进程可能已退出)".to_string(),
+            t!("AgentUi.connect_acp_failed", error = error).to_string(),
         ),
-        Err(_) => abort_with_error(shared, spawned, "ACP agent 连接超时".to_string()),
+        Ok(Err(_)) => abort_with_error(shared, spawned, t!("AgentUi.acp_not_ready").to_string()),
+        Err(_) => abort_with_error(
+            shared,
+            spawned,
+            t!("AgentUi.acp_connection_timeout").to_string(),
+        ),
     }
 }
 

@@ -8,6 +8,7 @@ use one_core::storage::{
     StoredConnection, traits::Repository,
 };
 use one_core::tab_container::{TabItem, TabOpenMode};
+use rust_i18n::t;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -54,9 +55,11 @@ pub(crate) fn open_input(input: FileOpenInput, window: &mut Window, cx: &mut App
     if let Err(error) = try_open_input(input, window, cx) {
         tracing::warn!(error = %error, "failed to open associated file");
         window.push_notification(
-            Notification::error(format!("无法打开文件：{error:#}"))
-                .id::<FileOpenNotification>()
-                .autohide(true),
+            Notification::error(
+                t!("Common.file_open_failed", error = format!("{error:#}")).to_string(),
+            )
+            .id::<FileOpenNotification>()
+            .autohide(true),
             cx,
         );
     }

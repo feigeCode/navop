@@ -4,6 +4,7 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Sizable, WindowExt, progress::Progress, v_flex};
+use rust_i18n::t;
 use std::{
     collections::VecDeque,
     sync::{
@@ -76,7 +77,7 @@ pub(super) fn open_driver_install_progress_dialog(
     let dialog_view = view.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
-            .title("正在安装数据库驱动")
+            .title(t!("DriverInstall.title").to_string())
             .child(dialog_view.clone())
             .w(px(420.))
             .close_button(false)
@@ -151,7 +152,7 @@ impl DriverInstallProgressState {
         Self {
             driver_id: driver_id.to_string().into(),
             connection_name: connection_name.to_string().into(),
-            status: "准备下载驱动...".into(),
+            status: t!("DriverInstall.preparing").to_string().into(),
             progress_value: 0.0,
         }
     }
@@ -159,12 +160,17 @@ impl DriverInstallProgressState {
     fn apply_download_progress(&mut self, progress: DownloadProgress) {
         match progress {
             DownloadProgress::Started { .. } => {
-                self.status = "正在连接下载源...".into();
+                self.status = t!("DriverInstall.connecting_source").to_string().into();
                 self.progress_value = START_PROGRESS;
             }
             DownloadProgress::Bytes { downloaded, total } => {
                 self.progress_value = byte_progress_value(downloaded, total);
-                self.status = format!("正在下载驱动 {:.0}%", self.progress_value).into();
+                self.status = t!(
+                    "DriverInstall.downloading",
+                    progress = format!("{:.0}", self.progress_value)
+                )
+                .to_string()
+                .into();
             }
             DownloadProgress::Failed {
                 error, retrying, ..
@@ -177,12 +183,12 @@ impl DriverInstallProgressState {
     }
 
     fn mark_installing(&mut self) {
-        self.status = "正在安装驱动...".into();
+        self.status = t!("DriverInstall.installing").to_string().into();
         self.progress_value = INSTALLING_PROGRESS;
     }
 
     fn mark_finished(&mut self) {
-        self.status = "安装完成，正在打开连接...".into();
+        self.status = t!("DriverInstall.finished").to_string().into();
         self.progress_value = FINISHED_PROGRESS;
     }
 
@@ -205,10 +211,14 @@ impl Render for DriverInstallProgressView {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!(
-                        "连接「{}」需要安装「{}」数据库驱动。",
-                        self.state.connection_name, self.state.driver_id
-                    )),
+                    .child(
+                        t!(
+                            "DriverInstall.description",
+                            connection = self.state.connection_name,
+                            driver = self.state.driver_id
+                        )
+                        .to_string(),
+                    ),
             )
             .child(
                 Progress::new("database-driver-install-progress")
@@ -226,15 +236,15 @@ fn byte_progress_value(downloaded: u64, total: Option<u64>) -> f32 {
     ((downloaded as f32 / total as f32) * 100.0).clamp(START_PROGRESS, 90.0)
 }
 
-fn failed_source_status(error: &str, retrying: bool) -> &'static str {
+fn failed_source_status(error: &str, retrying: bool) -> String {
     match (
         error.contains("sha256 mismatch") || error.contains("verify sha256"),
         retrying,
     ) {
-        (true, true) => "当前下载源校验失败，正在切换到下一个源...",
-        (true, false) => "下载源校验失败，请稍后重试。",
-        (false, true) => "当前下载源失败，正在切换到下一个源...",
-        (false, false) => "下载源失败，请稍后重试。",
+        (true, true) => t!("DriverInstall.checksum_failed_retrying").to_string(),
+        (true, false) => t!("DriverInstall.checksum_failed").to_string(),
+        (false, true) => t!("DriverInstall.source_failed_retrying").to_string(),
+        (false, false) => t!("DriverInstall.source_failed").to_string(),
     }
 }
 
@@ -249,22 +259,25 @@ mod tests {
         state.apply_download_progress(DownloadProgress::Started {
             url: "https://example.test/duckdb.tar.gz".to_string(),
         });
-        assert_eq!("正在连接下载源...", state.status());
+        assert_eq!(t!("DriverInstall.connecting_source"), state.status());
         assert_eq!(5.0, state.progress_value());
 
         state.apply_download_progress(DownloadProgress::Bytes {
             downloaded: 25,
             total: Some(100),
         });
-        assert_eq!("正在下载驱动 25%", state.status());
+        assert_eq!(
+            t!("DriverInstall.downloading", progress = 25),
+            state.status()
+        );
         assert_eq!(25.0, state.progress_value());
 
         state.mark_installing();
-        assert_eq!("正在安装驱动...", state.status());
+        assert_eq!(t!("DriverInstall.installing"), state.status());
         assert_eq!(95.0, state.progress_value());
 
         state.mark_finished();
-        assert_eq!("安装完成，正在打开连接...", state.status());
+        assert_eq!(t!("DriverInstall.finished"), state.status());
         assert_eq!(100.0, state.progress_value());
     }
 
@@ -283,13 +296,13 @@ mod tests {
             error: "sha256 mismatch".to_string(),
             retrying: true,
         });
-        assert_eq!("当前下载源校验失败，正在切换到下一个源...", state.status());
+        assert_eq!(t!("DriverInstall.checksum_failed_retrying"), state.status());
         assert_eq!(5.0, state.progress_value());
 
         state.apply_download_progress(DownloadProgress::Started {
             url: "https://github.example.test/duckdb.tar.gz".to_string(),
         });
-        assert_eq!("正在连接下载源...", state.status());
+        assert_eq!(t!("DriverInstall.connecting_source"), state.status());
         assert_eq!(5.0, state.progress_value());
     }
 

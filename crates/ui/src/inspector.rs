@@ -12,6 +12,7 @@ use lsp_types::{
     DiagnosticSeverity, Position, TextEdit,
 };
 use ropey::Rope;
+use rust_i18n::t;
 
 use crate::{
     ActiveTheme, IconName, Selectable, Sizable, TITLE_BAR_HEIGHT,
@@ -424,12 +425,15 @@ impl Render for DivInspector {
                             h_flex()
                                 .justify_between()
                                 .gap_x_2()
-                                .child("Rust Styles")
-                                .child(Button::new("rust-reset").label("Reset").small().on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.reset_style(window, cx);
-                                    }),
-                                )),
+                                .child(t!("Inspector.rust_styles").to_string())
+                                .child(
+                                    Button::new("rust-reset")
+                                        .label(t!("Inspector.reset").to_string())
+                                        .small()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reset_style(window, cx);
+                                        })),
+                                ),
                         )
                         .child(
                             v_flex()
@@ -452,12 +456,19 @@ impl Render for DivInspector {
                         .child(
                             h_flex()
                                 .gap_x_2()
-                                .child(div().flex_1().child("JSON Styles"))
-                                .child(Button::new("json-reset").label("Reset").small().on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.reset_style(window, cx);
-                                    }),
-                                )),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .child(t!("Inspector.json_styles").to_string()),
+                                )
+                                .child(
+                                    Button::new("json-reset")
+                                        .label(t!("Inspector.reset").to_string())
+                                        .small()
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reset_style(window, cx);
+                                        })),
+                                ),
                         )
                         .child(
                             v_flex()
@@ -521,7 +532,7 @@ fn render_inspector(
                                     window.refresh();
                                 })),
                         )
-                        .child("Inspector"),
+                        .child(t!("Inspector.title").to_string()),
                 )
                 .child(
                     Button::new("close")

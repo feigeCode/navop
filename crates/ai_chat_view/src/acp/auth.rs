@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::{AuthMethodId, AuthenticateRequest};
 use agent_client_protocol::{Agent, ConnectionTo};
+use rust_i18n::t;
 
 use super::error::extract_rpc_error_detail;
 use super::{AcpAuthConfig, AcpAuthMethodConfig, AcpError, AcpErrorKind, AcpRecoveryAction};
@@ -70,7 +71,7 @@ pub(crate) async fn authenticate(
             AcpErrorKind::AuthenticationFailed,
             agent_id,
             agent_name,
-            "ACP Agent 鉴权失败",
+            t!("AgentUi.acp_authentication_failed").to_string(),
         )
         .with_detail(extract_rpc_error_detail(
             &error.message,
@@ -81,7 +82,7 @@ pub(crate) async fn authenticate(
             AcpErrorKind::AuthenticationTimeout,
             agent_id,
             agent_name,
-            "ACP Agent 鉴权超时",
+            t!("AgentUi.acp_authentication_timeout").to_string(),
         )
         .with_recovery(AcpRecoveryAction::Authenticate)),
     }
@@ -190,7 +191,7 @@ fn unsupported_method(agent_id: &str, agent_name: &str, method: &str) -> AcpErro
         AcpErrorKind::UnsupportedAuthMethod,
         agent_id,
         agent_name,
-        format!("ACP Agent 不支持鉴权方式 {method}"),
+        t!("AgentUi.acp_unsupported_auth_method", method = method).to_string(),
     )
     .with_recovery(AcpRecoveryAction::Configure {
         path: "acp-agents.json".to_string(),
@@ -211,9 +212,12 @@ fn missing_credentials(agent_id: &str, agent_name: &str, config: &AcpAuthConfig)
         AcpErrorKind::MissingCredentials,
         agent_id,
         agent_name,
-        "ACP Agent 缺少可用凭证",
+        t!("AgentUi.acp_missing_credentials").to_string(),
     )
-    .with_detail(format!("需要环境变量: {names}"))
+    .with_detail(t!(
+        "AgentUi.acp_required_environment_variables",
+        names = names
+    ))
     .with_recovery(AcpRecoveryAction::Configure {
         path: "acp-agents.json".to_string(),
     })

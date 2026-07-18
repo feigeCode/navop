@@ -9,6 +9,7 @@ use one_core::storage::{
     GlobalStorageState, TerminalCommandHistory, TerminalCommandHistoryRepository,
     TerminalCommandHistorySort, TerminalHistoryScope,
 };
+use rust_i18n::t;
 use terminal::history::normalize_recorded_command;
 
 mod render;
@@ -41,7 +42,9 @@ impl HistoryCommandPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let search_input_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("HistoryCommand.search").to_string())
+        });
         let input_entity = search_input_state.clone();
         let subscription = cx.subscribe_in(
             &search_input_state,

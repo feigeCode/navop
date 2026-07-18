@@ -970,6 +970,18 @@ ConnectionForm:
     en: Tunnel Target Port
     zh-CN: 隧道目标端口
     zh-HK: 通道目標端口
+  enter_password:
+    en: Enter password
+    zh-CN: 输入密码
+    zh-HK: 輸入密碼
+  enter_passphrase:
+    en: Enter passphrase
+    zh-CN: 输入私钥口令
+    zh-HK: 輸入私鑰口令
+  target_host_placeholder:
+    en: MongoDB target host
+    zh-CN: MongoDB 目标主机
+    zh-HK: MongoDB 目標主機
   ssh_tunnel_invalid:
     en: Invalid SSH tunnel configuration
     zh-CN: SSH 隧道配置无效

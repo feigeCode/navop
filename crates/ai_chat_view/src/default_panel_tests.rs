@@ -106,11 +106,11 @@ fn workbench_config_uses_full_view_task_history_sidebar() {
 #[test]
 fn workbench_mode_uses_workbench_tab_title() {
     assert_eq!(
-        "AI 工作台",
+        rust_i18n::t!("AgentUi.workbench"),
         panel_title_for_mode(DefaultAgentChatPanelMode::Workbench)
     );
     assert_eq!(
-        "AI Chat",
+        rust_i18n::t!("AgentUi.ai_chat"),
         panel_title_for_mode(DefaultAgentChatPanelMode::Sidebar)
     );
 }

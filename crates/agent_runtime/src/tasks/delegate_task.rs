@@ -7,6 +7,7 @@ use crate::ids::{SubAgentId, TurnId};
 use crate::runtime::{RuntimeServices, Session};
 use crate::tasks::subagent_task::run_subagent_model;
 use crate::tools::{ObservationData, ToolCall, ToolName, ToolObservation, ToolSpec};
+use rust_i18n::t;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -80,13 +81,15 @@ pub async fn handle_delegate_task(
 }
 
 fn parse_args(call: &ToolCall) -> Result<DelegateTaskArgs, String> {
-    let args = serde_json::from_value::<DelegateTaskArgs>(call.arguments.clone())
-        .map_err(|err| format!("delegate_task 参数无效:{err}"))?;
+    let args =
+        serde_json::from_value::<DelegateTaskArgs>(call.arguments.clone()).map_err(|error| {
+            t!("AgentRuntime.delegate_invalid_arguments", error = error).to_string()
+        })?;
     if args.task.trim().is_empty() {
-        return Err("delegate_task.task 不能为空".to_string());
+        return Err(t!("AgentRuntime.delegate_task_required").to_string());
     }
     if args.name.trim().is_empty() {
-        return Err("delegate_task.name 不能为空".to_string());
+        return Err(t!("AgentRuntime.delegate_name_required").to_string());
     }
     Ok(args)
 }
@@ -100,7 +103,7 @@ fn finish_success(
     summary: String,
 ) -> ToolObservation {
     let summary = if summary.is_empty() {
-        "子代理完成,但没有返回文本。".to_string()
+        t!("AgentRuntime.subagent_empty_response").to_string()
     } else {
         summary
     };
@@ -108,7 +111,7 @@ fn finish_success(
     ToolObservation::success(
         call.call_id.clone(),
         ToolName::new(DELEGATE_TASK_TOOL),
-        format!("子代理 {name} 完成"),
+        t!("AgentRuntime.subagent_complete", name = name).to_string(),
         ObservationData::Text(summary),
     )
 }

@@ -273,7 +273,9 @@ impl QuickCommandPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
+        let search_input_state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("QuickCommand.search").to_string())
+        });
         let input_entity = search_input_state.clone();
         let subscriptions = vec![cx.subscribe_in(
             &search_input_state,
@@ -444,19 +446,19 @@ impl QuickCommandPanel {
 
         let name_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("输入简短名称（可选）")
+                .placeholder(t!("QuickCommand.name_placeholder").to_string())
                 .default_value(&initial_name)
         });
         let description_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("输入备注或使用说明（可选）")
+                .placeholder(t!("QuickCommand.description_placeholder").to_string())
                 .multi_line(true)
                 .rows(2)
                 .default_value(&initial_description)
         });
         let group_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("输入分组名称（可选）")
+                .placeholder(t!("QuickCommand.group_placeholder").to_string())
                 .default_value(&initial_group_name)
         });
         let color_items = quick_command_group_color_items();
@@ -474,21 +476,21 @@ impl QuickCommandPanel {
         });
         let command_state = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("输入命令")
+                .placeholder(t!("QuickCommand.command_placeholder").to_string())
                 .multi_line(true)
                 .rows(4)
                 .default_value(&initial_command)
         });
 
         let title = if existing.is_some() {
-            "编辑快捷命令"
+            t!("QuickCommand.edit").to_string()
         } else {
-            "新增快捷命令"
+            t!("QuickCommand.add").to_string()
         };
         let ok_text = if existing.is_some() {
-            "保存"
+            t!("QuickCommand.save").to_string()
         } else {
-            "新增"
+            t!("QuickCommand.add_action").to_string()
         };
         let colors = self.colors.clone();
         let input_style = quick_command_dialog_input_style(&colors);
@@ -507,7 +509,7 @@ impl QuickCommandPanel {
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .border_color(colors.border)
-                .title(title)
+                .title(title.clone())
                 .confirm()
                 .child(
                     v_flex()
@@ -521,7 +523,7 @@ impl QuickCommandPanel {
                                     div()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
-                                        .child("名称"),
+                                        .child(t!("QuickCommand.name").to_string()),
                                 )
                                 .child(
                                     Input::new(&name_state)
@@ -538,7 +540,7 @@ impl QuickCommandPanel {
                                     div()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
-                                        .child("说明"),
+                                        .child(t!("QuickCommand.description").to_string()),
                                 )
                                 .child(
                                     div().w_full().h(gpui::px(76.0)).child(
@@ -558,7 +560,7 @@ impl QuickCommandPanel {
                                     div()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
-                                        .child("分组"),
+                                        .child(t!("QuickCommand.group").to_string()),
                                 )
                                 .child(
                                     Input::new(&group_state)
@@ -575,7 +577,7 @@ impl QuickCommandPanel {
                                     div()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
-                                        .child("分组颜色"),
+                                        .child(t!("QuickCommand.group_color").to_string()),
                                 )
                                 .child(
                                     Select::new(&color_state)
@@ -597,7 +599,7 @@ impl QuickCommandPanel {
                                     div()
                                         .text_xs()
                                         .text_color(colors.muted_foreground)
-                                        .child("命令"),
+                                        .child(t!("QuickCommand.command").to_string()),
                                 )
                                 .child(
                                     div().w_full().h(gpui::px(132.0)).child(
@@ -614,16 +616,17 @@ impl QuickCommandPanel {
                 )
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text(ok_text)
+                        .ok_text(ok_text.clone())
                         .ok_variant(ok_variant)
-                        .cancel_text("取消")
+                        .cancel_text(t!("QuickCommand.cancel").to_string())
                         .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, window, cx| {
                     let command = command_ok.read(cx).value().trim().to_string();
                     if command.is_empty() {
                         window.push_notification(
-                            Notification::error("命令不能为空").autohide(true),
+                            Notification::error(t!("QuickCommand.command_required").to_string())
+                                .autohide(true),
                             cx,
                         );
                         return false;
@@ -653,8 +656,10 @@ impl QuickCommandPanel {
                         };
                         if let Err(error) = result {
                             window.push_notification(
-                                Notification::error(format!("保存快捷命令失败: {error}"))
-                                    .autohide(true),
+                                Notification::error(
+                                    t!("QuickCommand.save_failed", error = error).to_string(),
+                                )
+                                .autohide(true),
                                 cx,
                             );
                         }
@@ -796,7 +801,7 @@ impl QuickCommandPanel {
         let input_style = quick_command_dialog_input_style(&colors);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("输入新的分组名称")
+                .placeholder(t!("QuickCommand.rename_group_placeholder").to_string())
                 .default_value(&group_name)
         });
         window.open_dialog(cx, move |dialog, _window, dialog_cx| {
@@ -809,7 +814,7 @@ impl QuickCommandPanel {
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .border_color(colors.border)
-                .title("重命名分组")
+                .title(t!("QuickCommand.rename_group").to_string())
                 .confirm()
                 .child(
                     div().bg(colors.background).child(
@@ -822,9 +827,9 @@ impl QuickCommandPanel {
                 )
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("保存")
+                        .ok_text(t!("QuickCommand.save").to_string())
                         .ok_variant(ok_variant)
-                        .cancel_text("取消")
+                        .cancel_text(t!("QuickCommand.cancel").to_string())
                         .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, _, cx| {
@@ -857,22 +862,21 @@ impl QuickCommandPanel {
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .border_color(colors.border)
-                .title("删除分组")
+                .title(t!("QuickCommand.delete_group").to_string())
                 .confirm()
                 .child(
                     div()
                         .bg(colors.background)
                         .text_color(colors.foreground)
-                        .child(format!(
-                            "确定删除分组“{}”吗？该分组下的快捷命令会保留，但会变为未分组。",
-                            group_name
-                        )),
+                        .child(
+                            t!("QuickCommand.delete_group_confirm", name = group_name).to_string(),
+                        ),
                 )
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("删除分组")
+                        .ok_text(t!("QuickCommand.delete_group").to_string())
                         .ok_variant(ok_variant)
-                        .cancel_text("取消")
+                        .cancel_text(t!("QuickCommand.cancel").to_string())
                         .cancel_variant(cancel_variant),
                 )
                 .on_ok(move |_, _, cx| {
@@ -900,15 +904,17 @@ impl QuickCommandPanel {
         let rename_panel = panel.clone();
         let rename_colors = colors.clone();
         menu = menu.item(
-            PopupMenuItem::new("重命名分组").on_click(move |_, window, cx| {
-                Self::open_rename_group_dialog(
-                    rename_panel.clone(),
-                    group_name_for_rename.clone(),
-                    rename_colors.clone(),
-                    window,
-                    cx,
-                );
-            }),
+            PopupMenuItem::new(t!("QuickCommand.rename_group").to_string()).on_click(
+                move |_, window, cx| {
+                    Self::open_rename_group_dialog(
+                        rename_panel.clone(),
+                        group_name_for_rename.clone(),
+                        rename_colors.clone(),
+                        window,
+                        cx,
+                    );
+                },
+            ),
         );
 
         menu = menu.separator();
@@ -918,7 +924,7 @@ impl QuickCommandPanel {
             let value = value.to_string();
             let checked = chip.color.as_deref().unwrap_or_default() == value;
             menu = menu.item(
-                PopupMenuItem::new(format!("颜色：{}", label))
+                PopupMenuItem::new(t!("QuickCommand.color_option", color = label).to_string())
                     .checked(checked)
                     .on_click(move |_, _, cx| {
                         recolor_panel.update(cx, |panel, cx| {
@@ -934,15 +940,17 @@ impl QuickCommandPanel {
 
         let delete_panel = panel;
         menu.separator().item(
-            PopupMenuItem::new("删除分组").on_click(move |_, window, cx| {
-                Self::open_delete_group_dialog(
-                    delete_panel.clone(),
-                    group_name_for_delete.clone(),
-                    colors.clone(),
-                    window,
-                    cx,
-                );
-            }),
+            PopupMenuItem::new(t!("QuickCommand.delete_group").to_string()).on_click(
+                move |_, window, cx| {
+                    Self::open_delete_group_dialog(
+                        delete_panel.clone(),
+                        group_name_for_delete.clone(),
+                        colors.clone(),
+                        window,
+                        cx,
+                    );
+                },
+            ),
         )
     }
 
@@ -1323,14 +1331,14 @@ impl QuickCommandPanel {
                     .text_color(muted_fg),
             )
             .child(div().text_sm().text_color(muted_fg).child(if search_empty {
-                "当前分组暂无命令"
+                t!("QuickCommand.empty_group").to_string()
             } else {
-                "没有匹配的命令"
+                t!("QuickCommand.no_matches").to_string()
             }))
             .when(search_empty, |this| {
                 this.child(
                     Button::new("add-first-command")
-                        .label("新增命令")
+                        .label(t!("QuickCommand.add_command").to_string())
                         .small()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_command_editor(None, None, window, cx);
@@ -1351,7 +1359,12 @@ impl QuickCommandPanel {
                     .with_size(Size::Medium)
                     .text_color(muted_fg),
             )
-            .child(div().text_sm().text_color(muted_fg).child("Loading..."))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted_fg)
+                    .child(t!("QuickCommand.loading").to_string()),
+            )
     }
 }
 

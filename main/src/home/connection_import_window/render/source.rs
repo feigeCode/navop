@@ -5,6 +5,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, button::Button, checkbox::Checkbox,
     h_flex, v_flex,
 };
+use rust_i18n::t;
 
 use super::super::ConnectionImportWindow;
 use crate::home::connection_import_model::ImportSourceState;
@@ -21,7 +22,7 @@ pub(super) fn render_source_row(
         .capabilities
         .manual_file_pick_prompt
         .clone()
-        .unwrap_or_else(|| "选择导入文件".to_string());
+        .unwrap_or_else(|| t!("Home.ConnectionImport.choose_import_file").to_string());
     let file_pick_tooltip = file_pick_prompt.clone();
     h_flex()
         .items_center()
@@ -106,13 +107,17 @@ fn source_icon_name(source: &ImportSourceState) -> IconName {
 fn availability_text(availability: &ImporterAvailability) -> String {
     match availability {
         ImporterAvailability::Available { estimated_count } => estimated_count
-            .map(|count| format!("可导入 {count} 条"))
-            .unwrap_or_else(|| "可导入".to_string()),
-        ImporterAvailability::Installed => "已安装".to_string(),
-        ImporterAvailability::NotInstalled => "未安装".to_string(),
-        ImporterAvailability::NoData => "未发现数据".to_string(),
-        ImporterAvailability::PermissionRequired => "需要授权".to_string(),
-        ImporterAvailability::UnsupportedPlatform => "当前平台不支持".to_string(),
+            .map(|count| t!("Home.ConnectionImport.available_count", count = count).to_string())
+            .unwrap_or_else(|| t!("Home.ConnectionImport.available").to_string()),
+        ImporterAvailability::Installed => t!("Home.ConnectionImport.installed").to_string(),
+        ImporterAvailability::NotInstalled => t!("Home.ConnectionImport.not_installed").to_string(),
+        ImporterAvailability::NoData => t!("Home.ConnectionImport.no_data").to_string(),
+        ImporterAvailability::PermissionRequired => {
+            t!("Home.ConnectionImport.permission_required").to_string()
+        }
+        ImporterAvailability::UnsupportedPlatform => {
+            t!("Home.ConnectionImport.unsupported_platform").to_string()
+        }
         ImporterAvailability::Error { message } => message.clone(),
     }
 }

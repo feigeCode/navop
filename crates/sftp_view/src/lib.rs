@@ -811,10 +811,10 @@ impl SftpView {
 
         let remote_panel = cx.new(|cx| FileListPanel::new("/root".to_string(), true, window, cx));
 
-        let local_path_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Enter path..."));
-        let remote_path_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Enter path..."));
+        let local_path_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.path").to_string()));
+        let remote_path_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.path").to_string()));
         let local_favorite_search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("FavoritePath.search_placeholder"))
         });
@@ -1235,7 +1235,7 @@ impl SftpView {
         if image_format_for_path(&full_path).is_some() {
             let Some(client) = self.sftp_client.clone() else {
                 window.push_notification(
-                    Notification::error("SFTP client is not connected".to_string()),
+                    Notification::error(t!("Error.sftp_not_connected").to_string()),
                     cx,
                 );
                 return;
@@ -1249,7 +1249,7 @@ impl SftpView {
     fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
-                Notification::error("SFTP client is not connected".to_string()),
+                Notification::error(t!("Error.sftp_not_connected").to_string()),
                 cx,
             );
             return;
@@ -1267,7 +1267,7 @@ impl SftpView {
         let (full_path, editor_key) = selection;
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
-                Notification::error("SFTP client is not connected".to_string()),
+                Notification::error(t!("Error.sftp_not_connected").to_string()),
                 cx,
             );
             return;
@@ -2030,7 +2030,10 @@ impl SftpView {
                     new_path
                 );
                 window.open_dialog(cx, move |dialog, _, _| {
-                    dialog.title("Error").child(error_msg.clone()).alert()
+                    dialog
+                        .title(t!("Dialog.error").to_string())
+                        .child(error_msg.clone())
+                        .alert()
                 });
             }
         }
@@ -2252,7 +2255,10 @@ impl SftpView {
     fn paste_upload_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
-                Notification::warning("SFTP 未连接，无法上传剪贴板内容".to_string()).autohide(true),
+                Notification::warning(
+                    t!("Notification.clipboard_upload_not_connected").to_string(),
+                )
+                .autohide(true),
                 cx,
             );
             return;
@@ -2266,7 +2272,10 @@ impl SftpView {
             Ok(upload_paths) => upload_paths.paths,
             Err(error) => {
                 window.push_notification(
-                    Notification::error(format!("读取剪贴板失败：{error}")).autohide(true),
+                    Notification::error(
+                        t!("Notification.clipboard_read_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
                     cx,
                 );
                 return;
@@ -2275,7 +2284,8 @@ impl SftpView {
 
         if upload_paths.is_empty() {
             window.push_notification(
-                Notification::info("剪贴板没有可上传的文件或图片".to_string()).autohide(true),
+                Notification::info(t!("Notification.clipboard_no_uploads").to_string())
+                    .autohide(true),
                 cx,
             );
             return;
@@ -3799,7 +3809,7 @@ impl SftpView {
             .child(
                 div()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Drop files here"),
+                    .child(t!("File.drop_files_here").to_string()),
             )
     }
 

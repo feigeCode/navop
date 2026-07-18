@@ -8,6 +8,7 @@ use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
 use gpui::AsyncApp;
 use one_core::gpui_tokio::Tokio;
+use rust_i18n::t;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::acp::client::{handle_read_text_file_request, handle_write_text_file_request};
@@ -222,7 +223,7 @@ fn handle_client_error(shared: &ConnectShared, protocol: agent_client_protocol::
         AcpErrorKind::ConnectionClosed,
         shared.config.id.to_string(),
         shared.config.name.to_string(),
-        "ACP 连接已结束",
+        t!("AgentUi.acp_connection_closed").to_string(),
     )
     .with_detail(protocol.to_string());
     transition_state(

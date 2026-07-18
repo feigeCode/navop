@@ -20,6 +20,7 @@ use one_core::{
     storage::{ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository},
     tab_container::{TabContent, TabContentEvent},
 };
+use rust_i18n::t;
 
 use crate::{
     AcpAgentEntry, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
@@ -687,9 +688,9 @@ pub(crate) fn build_workbench_config(
     config.sidebar_mode(false).with_acp_agents(acp_agents)
 }
 
-pub(crate) fn panel_title_for_mode(mode: DefaultAgentChatPanelMode) -> &'static str {
+pub(crate) fn panel_title_for_mode(mode: DefaultAgentChatPanelMode) -> String {
     match mode {
-        DefaultAgentChatPanelMode::Sidebar => "AI Chat",
-        DefaultAgentChatPanelMode::Workbench => "AI 工作台",
+        DefaultAgentChatPanelMode::Sidebar => t!("AgentUi.ai_chat").to_string(),
+        DefaultAgentChatPanelMode::Workbench => t!("AgentUi.workbench").to_string(),
     }
 }

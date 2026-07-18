@@ -24,6 +24,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
+use rust_i18n::t;
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
@@ -94,7 +95,7 @@ const CONTEXT_KIND_MAX_WIDTH: f32 = 92.0;
 
 fn current_task_label(label: &SharedString) -> SharedString {
     if label.is_empty() {
-        SharedString::from("Auto Mode")
+        SharedString::from(t!("AgentUi.auto_mode").to_string())
     } else {
         label.clone()
     }
@@ -119,7 +120,7 @@ fn menu_state_after_open_change(
 
 fn current_tool_label(label: &SharedString) -> SharedString {
     if label.is_empty() {
-        SharedString::from("手动确认")
+        SharedString::from(t!("AgentUi.manual_confirmation").to_string())
     } else {
         label.clone()
     }
@@ -176,7 +177,7 @@ impl AgentInput {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::with_mentions(
             Vec::new(),
-            "给 Agent 下达目标，输入 @ 引用资源…",
+            t!("AgentUi.input_placeholder").to_string(),
             window,
             cx,
         )
@@ -234,7 +235,7 @@ impl AgentInput {
 
         let context_search_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("搜索目标…")
+                .placeholder(t!("AgentUi.search_targets").to_string())
                 .clean_on_escape()
         });
         let context_search_sub = cx.subscribe_in(
@@ -402,7 +403,7 @@ impl AgentInput {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("选择图片".into()),
+            prompt: Some(t!("AgentUi.choose_images").to_string().into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -917,7 +918,7 @@ impl AgentInput {
                             .icon(IconName::File)
                             .ghost()
                             .small()
-                            .tooltip("附加图片")
+                            .tooltip(t!("AgentUi.attach_images").to_string())
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.open_file_picker(window, cx)
@@ -929,7 +930,7 @@ impl AgentInput {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child(format!("{count} 个附件")),
+                            .child(t!("AgentUi.attachment_count", count = count).to_string()),
                     )
                     .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border)),
             )
@@ -946,7 +947,7 @@ impl AgentInput {
                             })
                             .ghost()
                             .small()
-                            .tooltip("折叠能力区")
+                            .tooltip(t!("AgentUi.collapse_capabilities").to_string())
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.top_capabilities_collapsed = !this.top_capabilities_collapsed;
                                 if this.top_capabilities_collapsed {
@@ -960,7 +961,7 @@ impl AgentInput {
                             .icon(IconName::Undo)
                             .ghost()
                             .small()
-                            .tooltip("撤销"),
+                            .tooltip(t!("AgentUi.undo").to_string()),
                     ),
             )
     }
@@ -970,21 +971,21 @@ impl AgentInput {
         let running = self.is_running;
         let model_label = match &self.context.model {
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
-            None => SharedString::from("选择模型"),
+            None => SharedString::from(t!("AgentUi.select_model").to_string()),
         };
         let run_button = if running {
             Button::new("agent-stop")
                 .icon(IconName::Close)
                 .danger()
                 .small()
-                .tooltip("停止")
+                .tooltip(t!("AgentUi.stop").to_string())
                 .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
         } else {
             Button::new("agent-send")
                 .icon(IconName::ArrowUp)
                 .primary()
                 .small()
-                .tooltip("发送")
+                .tooltip(t!("AgentUi.send").to_string())
                 .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
         };
 
@@ -1102,7 +1103,10 @@ fn render_mode_content(
         .bg(theme.background)
         .text_color(theme.foreground);
 
-    col = col.child(context_group_label("响应模式", theme));
+    col = col.child(context_group_label(
+        t!("AgentUi.response_mode").to_string(),
+        theme,
+    ));
     for option in data.task_options {
         let selected = option.label == data.task_label;
         col = col.child(mode_option_row(
@@ -1118,7 +1122,10 @@ fn render_mode_content(
         ));
     }
 
-    col = col.child(context_group_label("工具执行确认", theme));
+    col = col.child(context_group_label(
+        t!("AgentUi.tool_confirmation").to_string(),
+        theme,
+    ));
     for option in data.tool_options {
         let selected = option.label == data.tool_label;
         col = col.child(mode_option_row(
@@ -1207,7 +1214,10 @@ fn render_plan_mode_content(
     let border = theme.border;
     let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(320.0));
 
-    col = col.child(context_group_label("计划 Todo", &theme));
+    col = col.child(context_group_label(
+        t!("AgentUi.plan_todo").to_string(),
+        &theme,
+    ));
     if items.is_empty() {
         return col
             .child(
@@ -1216,7 +1226,7 @@ fn render_plan_mode_content(
                     .py_2()
                     .text_sm()
                     .text_color(muted)
-                    .child("暂无计划"),
+                    .child(t!("AgentUi.no_plan").to_string()),
             )
             .into_any_element();
     }
@@ -1240,7 +1250,7 @@ fn render_plan_mode_content(
 
 fn plan_trigger_label(items: &[ComposerPlanItem]) -> SharedString {
     if items.is_empty() {
-        return SharedString::from("计划");
+        return SharedString::from(t!("AgentUi.plan").to_string());
     }
     let total = items.len();
     let completed = items
@@ -1248,14 +1258,14 @@ fn plan_trigger_label(items: &[ComposerPlanItem]) -> SharedString {
         .filter(|item| is_completed_plan_status(item.status.as_ref()))
         .count();
     let label = if completed == total {
-        "完成"
+        t!("AgentUi.completed").to_string()
     } else if items
         .iter()
         .any(|item| is_running_plan_status(item.status.as_ref()))
     {
-        "进行中"
+        t!("AgentUi.in_progress").to_string()
     } else {
-        "待执行"
+        t!("AgentUi.pending").to_string()
     };
     SharedString::from(format!("{completed}/{total} {label}"))
 }
@@ -1377,16 +1387,24 @@ fn plan_item_details(
         );
     }
     if !item.risk.is_empty() {
-        details = details.child(plan_detail_line("风险", item.risk, muted));
+        details = details.child(plan_detail_line(
+            t!("AgentUi.risk").to_string(),
+            item.risk,
+            muted,
+        ));
     }
     if let Some(tool) = item.tool {
-        details = details.child(plan_detail_line("工具", tool, muted));
+        details = details.child(plan_detail_line(
+            t!("AgentUi.tool").to_string(),
+            tool,
+            muted,
+        ));
     }
     details.into_any_element()
 }
 
 fn plan_detail_line(
-    label: &'static str,
+    label: impl Into<SharedString>,
     value: SharedString,
     muted: gpui::Hsla,
 ) -> gpui::AnyElement {
@@ -1395,18 +1413,18 @@ fn plan_detail_line(
         .min_w_0()
         .gap_1()
         .text_xs()
-        .child(div().flex_shrink_0().text_color(muted).child(label))
+        .child(div().flex_shrink_0().text_color(muted).child(label.into()))
         .child(div().flex_1().min_w_0().truncate().child(value))
         .into_any_element()
 }
 
-fn plan_status_label(status: &str) -> &'static str {
+fn plan_status_label(status: &str) -> String {
     match status {
-        "completed" => "已完成",
-        "running" | "in_progress" => "进行中",
-        "failed" => "失败",
-        "cancelled" => "已取消",
-        _ => "待执行",
+        "completed" => t!("AgentUi.completed_state").to_string(),
+        "running" | "in_progress" => t!("AgentUi.in_progress").to_string(),
+        "failed" => t!("AgentUi.failed").to_string(),
+        "cancelled" => t!("AgentUi.cancelled").to_string(),
+        _ => t!("AgentUi.pending").to_string(),
     }
 }
 
@@ -1418,7 +1436,10 @@ fn render_subagent_mode_content(
     let muted = theme.muted_foreground;
     let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
 
-    col = col.child(context_group_label("子代理", &theme));
+    col = col.child(context_group_label(
+        t!("AgentUi.subagents").to_string(),
+        &theme,
+    ));
     if subagents.is_empty() {
         col = col.child(
             div()
@@ -1426,7 +1447,7 @@ fn render_subagent_mode_content(
                 .py_2()
                 .text_sm()
                 .text_color(muted)
-                .child("暂无子代理"),
+                .child(t!("AgentUi.no_subagents").to_string()),
         );
     }
     for subagent in subagents {
@@ -1437,20 +1458,23 @@ fn render_subagent_mode_content(
 
 fn subagent_trigger_label(subagents: &[ComposerSubAgentItem]) -> SharedString {
     if subagents.is_empty() {
-        SharedString::from("子代理")
+        SharedString::from(t!("AgentUi.subagents").to_string())
     } else {
-        SharedString::from(format!("子代理 · {}", subagents.len()))
+        SharedString::from(t!("AgentUi.subagent_count", count = subagents.len()).to_string())
     }
 }
 
 fn resource_pool_trigger_label(context: &AgentComposerContext) -> SharedString {
     if context.resource_pool.total_resources == 0 {
-        return SharedString::from("资源池");
+        return SharedString::from(t!("AgentUi.resource_pool").to_string());
     }
-    SharedString::from(format!(
-        "资源池 · {}",
-        context.resource_pool.total_resources
-    ))
+    SharedString::from(
+        t!(
+            "AgentUi.resource_pool_count",
+            count = context.resource_pool.total_resources
+        )
+        .to_string(),
+    )
 }
 
 fn subagent_item_row(
@@ -1481,7 +1505,7 @@ fn subagent_item_row(
                         .text_xs()
                         .text_color(muted)
                         .truncate()
-                        .child(format!("用途: {}", item.task)),
+                        .child(t!("AgentUi.purpose", value = item.task).to_string()),
                 )
                 .when(!item.summary.is_empty(), |this| {
                     this.child(
@@ -1489,7 +1513,7 @@ fn subagent_item_row(
                             .text_xs()
                             .text_color(muted)
                             .truncate()
-                            .child(format!("进展: {}", item.summary)),
+                            .child(t!("AgentUi.progress", value = item.summary).to_string()),
                     )
                 }),
         )
@@ -1541,12 +1565,17 @@ fn render_context_mode_content(
         col = col
             .px_1()
             .pt_1()
-            .child(context_group_label("默认目标", &theme))
+            .child(context_group_label(
+                t!("AgentUi.default_target").to_string(),
+                &theme,
+            ))
             .child(context_summary_row(target, muted, &theme));
     }
     let has_database_scope = scopes.iter().any(|scope| scope.key.as_ref() == "database");
     if !scopes.is_empty() {
-        col = col.px_1().child(context_group_label("作用域", &theme));
+        col = col
+            .px_1()
+            .child(context_group_label(t!("AgentUi.scope").to_string(), &theme));
         for scope in scopes {
             col = col.child(context_scope_row(
                 view.clone(),
@@ -1636,13 +1665,19 @@ fn render_context_mode_content(
         .overflow_x_hidden()
         .overflow_y_scroll();
     if filtered_pool_items.is_empty() && filtered_targets.is_empty() {
-        list = list.child(div().px_2().py_2().text_sm().text_color(muted).child(
-            if search_query.is_empty() {
-                "资源池为空"
-            } else {
-                "未匹配到资源"
-            },
-        ));
+        let empty_message = if search_query.is_empty() {
+            t!("AgentUi.resource_pool_empty").to_string()
+        } else {
+            t!("AgentUi.no_matching_resources").to_string()
+        };
+        list = list.child(
+            div()
+                .px_2()
+                .py_2()
+                .text_sm()
+                .text_color(muted)
+                .child(empty_message),
+        );
     }
     if filtered_pool_items.is_empty() {
         for opt in filtered_targets {
@@ -1873,7 +1908,7 @@ fn resource_pool_item_row(
                         )
                         .when(item.is_default, |this| {
                             this.child(resource_pool_badge(
-                                SharedString::from("默认"),
+                                SharedString::from(t!("AgentUi.default").to_string()),
                                 theme.selection_background(),
                                 theme.foreground,
                             ))
@@ -1976,7 +2011,7 @@ fn filter_result_label(filtered_count: usize, query: &SharedString) -> SharedStr
     if query.is_empty() {
         return SharedString::default();
     }
-    SharedString::from(format!("匹配到 {filtered_count} 个资源"))
+    SharedString::from(t!("AgentUi.matching_resources", count = filtered_count).to_string())
 }
 
 fn context_database_hint(
@@ -1988,17 +2023,17 @@ fn context_database_hint(
         .py_1()
         .text_xs()
         .text_color(muted)
-        .child("如需切换数据库,请在数据库侧边栏中点击目标数据库。")
+        .child(t!("AgentUi.switch_database_hint").to_string())
         .into_any_element()
 }
 
-fn context_group_label(label: &'static str, theme: &AgentChatTheme) -> gpui::AnyElement {
+fn context_group_label(label: impl Into<SharedString>, theme: &AgentChatTheme) -> gpui::AnyElement {
     div()
         .px_2()
         .pt_1()
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(label)
+        .child(label.into())
         .into_any_element()
 }
 
@@ -2480,7 +2515,7 @@ mod tests {
     #[test]
     fn empty_tool_label_defaults_to_manual_confirmation() {
         assert_eq!(
-            "手动确认",
+            t!("AgentUi.manual_confirmation").as_ref(),
             current_tool_label(&SharedString::from("")).as_ref()
         );
     }
@@ -2499,7 +2534,10 @@ mod tests {
 
     #[test]
     fn plan_trigger_label_is_default_when_empty() {
-        assert_eq!(plan_trigger_label(&[]).as_ref(), "计划");
+        assert_eq!(
+            plan_trigger_label(&[]).as_ref(),
+            t!("AgentUi.plan").as_ref()
+        );
     }
 
     #[test]
@@ -2510,7 +2548,10 @@ mod tests {
             ComposerPlanItem::new("待执行项", "pending"),
         ];
 
-        assert_eq!(plan_trigger_label(&items).as_ref(), "1/3 进行中");
+        assert_eq!(
+            plan_trigger_label(&items).as_ref(),
+            format!("1/3 {}", t!("AgentUi.in_progress"))
+        );
     }
 
     #[test]
@@ -2520,7 +2561,10 @@ mod tests {
             ComposerPlanItem::new("二", "completed"),
         ];
 
-        assert_eq!(plan_trigger_label(&items).as_ref(), "2/2 完成");
+        assert_eq!(
+            plan_trigger_label(&items).as_ref(),
+            format!("2/2 {}", t!("AgentUi.completed"))
+        );
     }
 
     #[test]
@@ -2530,12 +2574,18 @@ mod tests {
             ComposerPlanItem::new("二", "failed"),
         ];
 
-        assert_eq!(plan_trigger_label(&items).as_ref(), "0/2 待执行");
+        assert_eq!(
+            plan_trigger_label(&items).as_ref(),
+            format!("0/2 {}", t!("AgentUi.pending"))
+        );
     }
 
     #[test]
     fn subagent_trigger_label_shows_running_subagent_count() {
-        assert_eq!(subagent_trigger_label(&[]).as_ref(), "子代理");
+        assert_eq!(
+            subagent_trigger_label(&[]).as_ref(),
+            t!("AgentUi.subagents").as_ref()
+        );
 
         let items = vec![ComposerSubAgentItem::new(
             "sub_1",
@@ -2544,7 +2594,10 @@ mod tests {
             "running",
         )];
 
-        assert_eq!(subagent_trigger_label(&items).as_ref(), "子代理 · 1");
+        assert_eq!(
+            subagent_trigger_label(&items).as_ref(),
+            t!("AgentUi.subagent_count", count = 1).as_ref()
+        );
     }
 
     #[test]
@@ -2558,14 +2611,17 @@ mod tests {
             ..AgentComposerContext::default()
         };
 
-        assert_eq!(resource_pool_trigger_label(&context).as_ref(), "资源池 · 3");
+        assert_eq!(
+            resource_pool_trigger_label(&context).as_ref(),
+            t!("AgentUi.resource_pool_count", count = 3).as_ref()
+        );
     }
 
     #[test]
     fn resource_pool_trigger_label_handles_empty_pool() {
         assert_eq!(
             resource_pool_trigger_label(&AgentComposerContext::default()).as_ref(),
-            "资源池"
+            t!("AgentUi.resource_pool").as_ref()
         );
     }
 

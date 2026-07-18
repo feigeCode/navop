@@ -448,7 +448,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
                 title,
                 is_done: false,
                 ..
-            } if title == "正在压缩上下文..."
+            } if title == "Compressing context..."
         )
     }));
     assert!(events.iter().any(|event| {
@@ -458,7 +458,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
                 title,
                 is_done: true,
                 ..
-            } if title == "上下文压缩完成"
+            } if title == "Context compression complete"
         )
     }));
 }
@@ -766,7 +766,7 @@ async fn agent_delegate_task_runs_isolated_subagent_and_emits_events() {
             item,
             agent_runtime::HistoryItem::Observation(observation)
                 if observation.tool_name.as_str() == "delegate_task"
-                    && observation.summary.contains("子代理 reviewer 完成")
+                    && observation.summary.contains("Subagent reviewer completed")
         )
     }));
 }
@@ -1418,7 +1418,7 @@ async fn manual_tool_mode_rejects_pending_tool_and_continues_followup() {
         matches!(
             event,
             RuntimeEvent::ObservationAdded { observation, .. }
-                if !observation.success && observation.summary.contains("用户拒绝执行工具")
+                if !observation.success && observation.summary.contains("The user rejected tool")
         )
     }));
     assert!(

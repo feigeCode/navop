@@ -44,7 +44,7 @@ async fn empty_agent_response_becomes_turn_failure() {
 
     assert!(matches!(
         events.last(),
-        Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("没有返回任何内容")
+        Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("returned no content")
     ));
 }
 
@@ -89,7 +89,7 @@ async fn prompt_timeout_sends_cancel_and_returns_to_ready() {
 
     assert!(matches!(
         events.last(),
-        Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("超时")
+        Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("timed out")
     ));
     assert_eq!(AcpConnectionPhase::Ready, connection.phase());
 }
@@ -102,7 +102,9 @@ async fn process_exit_after_initialize_fails_connect() {
     };
 
     assert!(
-        error.to_string().contains("未就绪") || error.to_string().contains("初始化失败"),
+        error.to_string().contains("not ready")
+            || error.to_string().contains("Failed to connect ACP Agent")
+            || error.to_string().contains("connection timed out"),
         "unexpected error: {error:#}"
     );
 }

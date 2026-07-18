@@ -1,0 +1,41 @@
+_version: 2
+
+LargeTextEditor:
+  text:
+    en: Text
+    zh-CN: 文本
+    zh-HK: 文字
+  json:
+    en: JSON
+    zh-CN: JSON
+    zh-HK: JSON
+  format:
+    en: Format
+    zh-CN: 格式化
+    zh-HK: 格式化
+  minify:
+    en: Minify
+    zh-CN: 压缩
+    zh-HK: 壓縮
+  text_placeholder:
+    en: Enter your text here...
+    zh-CN: 在此输入文本...
+    zh-HK: 在此輸入文字...
+  json_placeholder:
+    en: Enter JSON here...
+    zh-CN: 在此输入 JSON...
+    zh-HK: 在此輸入 JSON...
+
+EditTable:
+  selected_count:
+    en: Selected %{selected} / %{total}
+    zh-CN: 已选择 %{selected} / %{total}
+    zh-HK: 已選擇 %{selected} / %{total}
+  select_all:
+    en: Select All
+    zh-CN: 全选
+    zh-HK: 全選
+  clear:
+    en: Clear
+    zh-CN: 清除
+    zh-HK: 清除

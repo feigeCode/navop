@@ -381,7 +381,7 @@ impl DbFormConfig {
                 FormFieldType::Password,
             )
             .optional()
-            .placeholder("Enter SSH password"),
+            .placeholder(t!("ConnectionForm.enter_ssh_password").to_string()),
             FormField::new(
                 "ssh_private_key_path",
                 t!("ConnectionForm.ssh_private_key_path"),
@@ -403,7 +403,7 @@ impl DbFormConfig {
                 FormFieldType::Password,
             )
             .optional()
-            .placeholder("Enter key passphrase"),
+            .placeholder(t!("ConnectionForm.enter_key_passphrase").to_string()),
             FormField::new(
                 "ssh_target_host",
                 t!("ConnectionForm.ssh_target_host"),
@@ -596,7 +596,10 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My MySQL Database")
+                    .placeholder(
+                        t!("ConnectionForm.connection_name_placeholder", kind = "MySQL")
+                            .to_string(),
+                    )
                     .default("Local MySQL"),
                     FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
                         .placeholder("localhost")
@@ -616,14 +619,14 @@ impl DbFormConfig {
                         t!("ConnectionForm.password"),
                         FormFieldType::Password,
                     )
-                    .placeholder("Enter password"),
+                    .placeholder(t!("ConnectionForm.enter_password").to_string()),
                     FormField::new(
                         "database",
                         t!("ConnectionForm.database"),
                         FormFieldType::Text,
                     )
                     .optional()
-                    .placeholder("database name (optional)"),
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
                     FormField::new(
@@ -682,7 +685,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My PostgreSQL Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "PostgreSQL"
+                        )
+                        .to_string(),
+                    )
                     .default("Local PostgreSQL"),
                     FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
                         .placeholder("localhost")
@@ -702,14 +711,14 @@ impl DbFormConfig {
                         t!("ConnectionForm.password"),
                         FormFieldType::Password,
                     )
-                    .placeholder("Enter password"),
+                    .placeholder(t!("ConnectionForm.enter_password").to_string()),
                     FormField::new(
                         "database",
                         t!("ConnectionForm.database"),
                         FormFieldType::Text,
                     )
                     .optional()
-                    .placeholder("database name (optional)"),
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
                     Self::with_schema_preference_fields(vec![
@@ -727,7 +736,7 @@ impl DbFormConfig {
                             FormFieldType::Text,
                         )
                         .optional()
-                        .placeholder("Application Name"),
+                        .placeholder(t!("ConnectionForm.application_name").to_string()),
                     ]),
                 ),
                 Self::postgres_ssl_tab_group(),
@@ -760,7 +769,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My SQL Server Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "SQL Server"
+                        )
+                        .to_string(),
+                    )
                     .default("Local SQL Server"),
                     FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
                         .placeholder("localhost")
@@ -780,14 +795,14 @@ impl DbFormConfig {
                         t!("ConnectionForm.password"),
                         FormFieldType::Password,
                     )
-                    .placeholder("Enter password"),
+                    .placeholder(t!("ConnectionForm.enter_password").to_string()),
                     FormField::new(
                         "database",
                         t!("ConnectionForm.database"),
                         FormFieldType::Text,
                     )
                     .optional()
-                    .placeholder("database name (optional)"),
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
                     Self::with_schema_preference_fields(vec![
@@ -805,7 +820,7 @@ impl DbFormConfig {
                             FormFieldType::Text,
                         )
                         .optional()
-                        .placeholder("Application Name"),
+                        .placeholder(t!("ConnectionForm.application_name").to_string()),
                     ]),
                 ),
                 Self::mssql_ssl_tab_group(),
@@ -838,7 +853,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My Oracle Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "Oracle"
+                        )
+                        .to_string(),
+                    )
                     .default("Local Oracle"),
                     FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
                         .placeholder("localhost")
@@ -858,13 +879,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.password"),
                         FormFieldType::Password,
                     )
-                    .placeholder("Enter password"),
+                    .placeholder(t!("ConnectionForm.enter_password").to_string()),
                     FormField::new("service_name", "Service Name", FormFieldType::Text)
                         .optional()
-                        .placeholder("ORCL (or use SID)"),
+                        .placeholder(t!("ConnectionForm.service_name_placeholder").to_string()),
                     FormField::new("sid", "SID", FormFieldType::Text)
                         .optional()
-                        .placeholder("orcl (or use Service Name)"),
+                        .placeholder(t!("ConnectionForm.sid_placeholder").to_string()),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
                     Self::with_schema_preference_fields(vec![
@@ -907,7 +928,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My ClickHouse Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "ClickHouse"
+                        )
+                        .to_string(),
+                    )
                     .default("Local ClickHouse"),
                     FormField::new("host", t!("ConnectionForm.host"), FormFieldType::Text)
                         .placeholder("localhost")
@@ -927,14 +954,14 @@ impl DbFormConfig {
                         t!("ConnectionForm.password"),
                         FormFieldType::Password,
                     )
-                    .placeholder("Enter password"),
+                    .placeholder(t!("ConnectionForm.enter_password").to_string()),
                     FormField::new(
                         "database",
                         t!("ConnectionForm.database"),
                         FormFieldType::Text,
                     )
                     .optional()
-                    .placeholder("database name (optional)"),
+                    .placeholder(t!("ConnectionForm.database_optional").to_string()),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
                     FormField::new(
@@ -991,7 +1018,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My SQLite Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "SQLite"
+                        )
+                        .to_string(),
+                    )
                     .default("Local SQLite"),
                     FormField::new(
                         "host",
@@ -1037,7 +1070,13 @@ impl DbFormConfig {
                         t!("ConnectionForm.connection_name"),
                         FormFieldType::Text,
                     )
-                    .placeholder("My DuckDB Database")
+                    .placeholder(
+                        t!(
+                            "ConnectionForm.connection_name_placeholder",
+                            kind = "DuckDB"
+                        )
+                        .to_string(),
+                    )
                     .default("Local DuckDB"),
                     FormField::new(
                         "host",

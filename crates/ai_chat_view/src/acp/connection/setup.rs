@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{AuthMethodId, NewSessionRequest, SessionId};
 use agent_client_protocol::{Agent, ConnectionTo};
+use rust_i18n::t;
 
 use crate::acp::auth::{AuthDecision, authenticate, select_auth};
 use crate::acp::client::build_initialize_request;
@@ -149,7 +150,7 @@ fn session_error(config: &AcpAgentConfig, error: agent_client_protocol::Error) -
         AcpErrorKind::SessionCreationFailed,
         config.id.to_string(),
         config.name.to_string(),
-        "ACP 会话创建失败",
+        t!("AgentUi.acp_session_creation_failed").to_string(),
     )
     .with_detail(crate::acp::error::extract_rpc_error_detail(
         &error.message,

@@ -160,8 +160,11 @@ impl FileListPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
-        let path_input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter path..."));
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+        let path_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.path").to_string()));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Placeholder.search").to_string())
+        });
 
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.subscribe(

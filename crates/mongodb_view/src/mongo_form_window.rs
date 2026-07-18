@@ -449,7 +449,7 @@ impl MongoFormWindow {
 
         let ssh_password_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
-                .placeholder("Password")
+                .placeholder(t!("ConnectionForm.enter_password").to_string())
                 .masked(true);
             if let Some(ssh) = existing_ssh.and_then(|ssh| ssh.password.as_ref()) {
                 state.set_value(ssh.clone(), window, cx);
@@ -478,7 +478,7 @@ impl MongoFormWindow {
 
         let ssh_private_key_passphrase_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
-                .placeholder("Passphrase")
+                .placeholder(t!("ConnectionForm.enter_passphrase").to_string())
                 .masked(true);
             if let Some(passphrase) =
                 existing_ssh.and_then(|ssh| ssh.private_key_passphrase.as_ref())
@@ -489,7 +489,8 @@ impl MongoFormWindow {
         });
 
         let ssh_target_host_input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("MongoDB target host");
+            let mut state = InputState::new(window, cx)
+                .placeholder(t!("ConnectionForm.target_host_placeholder").to_string());
             if let Some(host) = existing_ssh.and_then(|ssh| ssh.target_host.as_ref()) {
                 state.set_value(host.clone(), window, cx);
             }

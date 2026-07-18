@@ -943,7 +943,10 @@ impl TerminalView {
 
         if let Some(error) = init_error.borrow_mut().take() {
             window.push_notification(
-                Notification::error(format!("创建本地终端失败: {}", error)).autohide(true),
+                Notification::error(
+                    t!("TerminalView.local_terminal_create_failed", error = error).to_string(),
+                )
+                .autohide(true),
                 cx,
             );
         }
@@ -3005,7 +3008,7 @@ impl TerminalView {
             .map(|config| config.ssh_config.clone())
         else {
             window.push_notification(
-                Notification::error("当前终端不是 SSH 终端，无法上传剪贴板图片".to_string())
+                Notification::error(t!("TerminalView.clipboard_image_requires_ssh").to_string())
                     .autohide(true),
                 cx,
             );
@@ -3014,7 +3017,8 @@ impl TerminalView {
 
         if image.bytes.is_empty() {
             window.push_notification(
-                Notification::error("剪贴板图片为空，无法上传".to_string()).autohide(true),
+                Notification::error(t!("TerminalView.clipboard_image_empty").to_string())
+                    .autohide(true),
                 cx,
             );
             return;
@@ -3022,7 +3026,8 @@ impl TerminalView {
 
         self.spawn_clipboard_image_upload(ssh_config, image, window, cx);
         window.push_notification(
-            Notification::info("正在上传剪贴板图片到远程服务器...".to_string()).autohide(true),
+            Notification::info(t!("TerminalView.clipboard_image_uploading").to_string())
+                .autohide(true),
             cx,
         );
     }
@@ -3063,18 +3068,24 @@ impl TerminalView {
                 self.paste_remote_image_path(&path, cx);
                 self.notify_clipboard_image_upload(
                     window_handle,
-                    Notification::success(format!("已上传剪贴板图片并粘贴路径：{path}")),
+                    Notification::success(
+                        t!("TerminalView.clipboard_image_uploaded", path = path).to_string(),
+                    ),
                     cx,
                 );
             }
             Ok(Err(error)) => self.notify_clipboard_image_upload(
                 window_handle,
-                Notification::error(format!("上传剪贴板图片失败：{error}")),
+                Notification::error(
+                    t!("TerminalView.clipboard_image_upload_failed", error = error).to_string(),
+                ),
                 cx,
             ),
             Err(error) => self.notify_clipboard_image_upload(
                 window_handle,
-                Notification::error(format!("上传剪贴板图片任务失败：{error}")),
+                Notification::error(
+                    t!("TerminalView.clipboard_image_task_failed", error = error).to_string(),
+                ),
                 cx,
             ),
         }

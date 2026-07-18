@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
@@ -1200,12 +1201,16 @@ impl DatabasePlugin for MySqlPlugin {
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("charset", "Charset").width(120.0),
-            Column::new("collation", "Collation").width(180.0),
-            Column::new("size", "Size").width(100.0).text_right(),
-            Column::new("tables", "Tables").width(80.0).text_right(),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("charset", "ObjectView.columns.charset").width(120.0),
+            Column::localized("collation", "ObjectView.columns.collation").width(180.0),
+            Column::localized("size", "ObjectView.columns.size")
+                .width(100.0)
+                .text_right(),
+            Column::localized("tables", "ObjectView.columns.tables")
+                .width(80.0)
+                .text_right(),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -1226,7 +1231,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Database,
-            title: format!("{} database(s)", databases.len()),
+            title: t!("ObjectView.counts.databases", count = databases.len()).to_string(),
             columns,
             rows,
         })
@@ -1358,11 +1363,13 @@ impl DatabasePlugin for MySqlPlugin {
         let tables = self.list_tables(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("engine", "Engine").width(150.0),
-            Column::new("rows", "Rows").width(100.0).text_right(),
-            Column::new("created", "Created").width(180.0),
-            Column::new("comment", "Comment").width(300.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("engine", "ObjectView.columns.engine").width(150.0),
+            Column::localized("rows", "ObjectView.columns.rows")
+                .width(100.0)
+                .text_right(),
+            Column::localized("created", "ObjectView.columns.created").width(180.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -1383,7 +1390,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Table,
-            title: format!("{} table(s)", tables.len()),
+            title: t!("ObjectView.counts.tables", count = tables.len()).to_string(),
             columns,
             rows,
         })
@@ -1452,12 +1459,12 @@ impl DatabasePlugin for MySqlPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("type", "Type").width(150.0),
-            Column::new("nullable", "Nullable").width(80.0),
-            Column::new("key", "Key").width(80.0),
-            Column::new("default", "Default").width(120.0),
-            Column::new("comment", "Comment").width(250.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("type", "ObjectView.columns.type").width(150.0),
+            Column::localized("nullable", "ObjectView.columns.nullable").width(80.0),
+            Column::localized("key", "ObjectView.columns.key").width(80.0),
+            Column::localized("default", "ObjectView.columns.default").width(120.0),
+            Column::localized("comment", "ObjectView.columns.comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1476,7 +1483,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Column,
-            title: format!("{} column(s)", columns_data.len()),
+            title: t!("ObjectView.counts.columns", count = columns_data.len()).to_string(),
             columns,
             rows,
         })
@@ -1546,10 +1553,10 @@ impl DatabasePlugin for MySqlPlugin {
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("columns", "Columns").width(250.0),
-            Column::new("unique", "Unique").width(80.0),
-            Column::new("type", "Type").width(120.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("columns", "ObjectView.columns.columns").width(250.0),
+            Column::localized("unique", "ObjectView.columns.unique").width(80.0),
+            Column::localized("type", "ObjectView.columns.type").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1566,7 +1573,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Index,
-            title: format!("{} index(es)", indexes.len()),
+            title: t!("ObjectView.counts.indexes", count = indexes.len()).to_string(),
             columns,
             rows,
         })
@@ -1696,8 +1703,8 @@ impl DatabasePlugin for MySqlPlugin {
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("definition", "Definition").width(400.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("definition", "ObjectView.columns.definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1712,7 +1719,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::View,
-            title: format!("{} view(s)", views.len()),
+            title: t!("ObjectView.counts.views", count = views.len()).to_string(),
             columns,
             rows,
         })
@@ -1763,8 +1770,8 @@ impl DatabasePlugin for MySqlPlugin {
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(200.0),
-            Column::new("return_type", "Return Type").width(150.0),
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::localized("return_type", "ObjectView.columns.return_type").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1779,7 +1786,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Function,
-            title: format!("{} function(s)", functions.len()),
+            title: t!("ObjectView.counts.functions", count = functions.len()).to_string(),
             columns,
             rows,
         })
@@ -1901,7 +1908,7 @@ impl DatabasePlugin for MySqlPlugin {
     ) -> Result<ObjectView> {
         let procedures = self.list_procedures(connection, database).await?;
 
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         let rows: Vec<Vec<String>> = procedures
             .iter()
@@ -1910,7 +1917,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
-            title: format!("{} procedure(s)", procedures.len()),
+            title: t!("ObjectView.counts.procedures", count = procedures.len()).to_string(),
             columns,
             rows,
         })
@@ -1963,10 +1970,10 @@ impl DatabasePlugin for MySqlPlugin {
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(180.0),
-            Column::new("table", "Table").width(150.0),
-            Column::new("event", "Event").width(100.0),
-            Column::new("timing", "Timing").width(100.0),
+            Column::localized("name", "ObjectView.columns.name").width(180.0),
+            Column::localized("table", "ObjectView.columns.table").width(150.0),
+            Column::localized("event", "ObjectView.columns.event").width(100.0),
+            Column::localized("timing", "ObjectView.columns.timing").width(100.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -1983,7 +1990,7 @@ impl DatabasePlugin for MySqlPlugin {
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Trigger,
-            title: format!("{} trigger(s)", triggers.len()),
+            title: t!("ObjectView.counts.triggers", count = triggers.len()).to_string(),
             columns,
             rows,
         })
@@ -2003,11 +2010,11 @@ impl DatabasePlugin for MySqlPlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        let columns = vec![Column::new("name", "Name").width(200.0)];
+        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
-            title: "0 sequence(s)".to_string(),
+            title: t!("ObjectView.counts.sequences", count = 0).to_string(),
             columns,
             rows: vec![],
         })

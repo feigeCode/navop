@@ -105,3 +105,83 @@ Notes:
     en: The selected AI model is no longer available
     zh-CN: 选择的 AI 模型已不可用
     zh-HK: 選擇的 AI 模型已不可用
+  directory_name:
+    en: Directory name
+    zh-CN: 目录名称
+    zh-HK: 目錄名稱
+  document_name:
+    en: Document name
+    zh-CN: 文档名称
+    zh-HK: 文件名稱
+  new_name:
+    en: New name
+    zh-CN: 新名称
+    zh-HK: 新名稱
+  rename:
+    en: Rename
+    zh-CN: 重命名
+    zh-HK: 重新命名
+  enter_new_name:
+    en: Enter a new name
+    zh-CN: 输入新的名称
+    zh-HK: 輸入新的名稱
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_confirmation:
+    en: "Delete “%{name}”? Directories are deleted recursively. This action cannot be undone."
+    zh-CN: "确定删除“%{name}”？目录会被递归删除，此操作不可撤销。"
+    zh-HK: "確定刪除「%{name}」？目錄會被遞迴刪除，此操作無法復原。"
+  new_directory:
+    en: New Directory
+    zh-CN: 新建目录
+    zh-HK: 新增目錄
+  new_rich_text:
+    en: New Rich Text Document
+    zh-CN: 新建富文本
+    zh-HK: 新增富文字文件
+  new_markdown:
+    en: New Markdown Document
+    zh-CN: 新建 Markdown
+    zh-HK: 新增 Markdown 文件
+  enter_name:
+    en: Enter a name
+    zh-CN: 请输入名称
+    zh-HK: 請輸入名稱
+  empty_title:
+    en: No notes yet
+    zh-CN: 还没有笔记
+    zh-HK: 尚未有筆記
+  empty_hint:
+    en: Use the buttons above or right-click here to create one
+    zh-CN: 使用顶部按钮或在这里右键新建
+    zh-HK: 使用上方按鈕或在此按右鍵新增
+  select_or_create:
+    en: Select or create a document
+    zh-CN: 选择或新建一个文档
+    zh-HK: 選擇或新增一份文件
+  new_rich_text_document:
+    en: New Rich Text Document
+    zh-CN: 新建富文本文档
+    zh-HK: 新增富文字文件
+  new_markdown_document:
+    en: New Markdown Document
+    zh-CN: 新建 Markdown 文档
+    zh-HK: 新增 Markdown 文件
+  new_folder:
+    en: New Folder
+    zh-CN: 新建文件夹
+    zh-HK: 新增資料夾
+  refresh_list:
+    en: Refresh notes list
+    zh-CN: 刷新笔记列表
+    zh-HK: 重新整理筆記清單
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  convert_to_markdown:
+    en: Convert to Markdown (keep original document)
+    zh-CN: 转换为 Markdown（保留原文档）
+    zh-HK: 轉換為 Markdown（保留原始文件）

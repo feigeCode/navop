@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::{AuthMethodId, SessionId as AcpSessionId};
 use agent_client_protocol::{Agent, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
+use rust_i18n::t;
 use tokio::sync::broadcast;
 
 use crate::acp::config::AcpAgentConfig;
@@ -76,6 +77,6 @@ fn unsupported_method(config: &AcpAgentConfig, method_id: &str) -> AcpError {
         AcpErrorKind::UnsupportedAuthMethod,
         config.id.to_string(),
         config.name.to_string(),
-        format!("ACP Agent 不支持鉴权方式 {method_id}"),
+        t!("AgentUi.acp_unsupported_auth_method", method = method_id).to_string(),
     )
 }

@@ -1844,7 +1844,7 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
         return;
     };
     let Some(storage) = cx.try_global::<GlobalStorageState>() else {
-        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        window.push_notification(t!("Common.storage_unavailable").to_string(), cx);
         return;
     };
     let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
@@ -1984,7 +1984,7 @@ fn team_key_engine_from_settings(window: &mut Window, cx: &mut App) -> Option<Sy
         return None;
     };
     let Some(storage) = cx.try_global::<GlobalStorageState>() else {
-        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        window.push_notification(t!("Common.storage_unavailable").to_string(), cx);
         return None;
     };
     let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
@@ -2010,7 +2010,7 @@ fn rotate_team_key_from_settings(
         return;
     };
     let Some(storage) = cx.try_global::<GlobalStorageState>() else {
-        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        window.push_notification(t!("Common.storage_unavailable").to_string(), cx);
         return;
     };
     let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));

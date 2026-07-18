@@ -796,7 +796,7 @@ pub(crate) fn section_title(title: impl IntoElement) -> impl IntoElement {
 
 pub(super) fn close_button() -> impl IntoElement {
     Button::new("close")
-        .child("Close")
+        .child(t!("Common.close").to_string())
         .on_click(|_, window, _| {
             window.remove_window();
         })

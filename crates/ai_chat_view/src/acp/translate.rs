@@ -269,7 +269,7 @@ fn continuing_status_event(
     RuntimeEvent::Status {
         session_id: session_id.clone(),
         turn_id: turn_id.clone(),
-        title: format!("{agent_name} 正在继续响应…"),
+        title: t!("AgentUi.acp_continuing_response", name = agent_name).to_string(),
         is_done: false,
     }
 }
@@ -344,7 +344,8 @@ fn tool_text(raw_output: Option<&serde_json::Value>, content_json: Option<String
 fn content_block_text(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Text(t) => t.text.clone(),
-        _ => serde_json::to_string(block).unwrap_or_else(|_| "[非文本 ACP 内容]".to_string()),
+        _ => serde_json::to_string(block)
+            .unwrap_or_else(|_| t!("AgentUi.acp_non_text_content").to_string()),
     }
 }
 
@@ -353,7 +354,7 @@ fn acp_plan_to_runtime(plan: &AcpPlan) -> Plan {
         .entries
         .first()
         .map(|e| e.content.clone())
-        .unwrap_or_else(|| "执行计划".to_string());
+        .unwrap_or_else(|| t!("AgentUi.execution_plan").to_string());
     let steps: Vec<PlanStep> = plan
         .entries
         .iter()
@@ -678,7 +679,7 @@ mod tests {
         assert!(matches!(
             &events[2],
             RuntimeEvent::Status { title, is_done: false, .. }
-                if title == "OpenCode 正在继续响应…"
+                if title == &t!("AgentUi.acp_continuing_response", name = "OpenCode")
         ));
     }
 
@@ -697,7 +698,7 @@ mod tests {
         assert!(matches!(
             transcript.messages.last().map(|message| &message.variant),
             Some(crate::MessageVariant::Status { title, is_done: false })
-                if title == "Codex 正在继续响应…"
+                if title == &t!("AgentUi.acp_continuing_response", name = "Codex")
         ));
 
         let delta = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
