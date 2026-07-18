@@ -10,7 +10,7 @@ mod tests {
     use db::plugin::SqlCompletionInfo;
     use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext};
     use db::sql_editor::sql_symbol_table::SymbolTable;
-    use db::sql_editor::sql_tokenizer::SqlTokenizer;
+    use db::sql_editor::sql_tokenizer::{SqlKeyword, SqlTokenizer};
     use gpui_component::input::CompletionProvider;
     use proptest::prelude::*;
     use std::collections::HashMap;
@@ -26,72 +26,18 @@ mod tests {
     /// Generate valid SQL identifier
     fn identifier_strategy() -> impl Strategy<Value = String> {
         "[a-z][a-z0-9_]{0,10}".prop_filter("not a keyword", |s| {
-            !matches!(
-                s.to_uppercase().as_str(),
-                "SELECT"
-                    | "FROM"
-                    | "WHERE"
-                    | "JOIN"
-                    | "AND"
-                    | "OR"
-                    | "ON"
-                    | "ORDER"
-                    | "GROUP"
-                    | "BY"
-                    | "SET"
-                    | "VALUES"
-                    | "INTO"
-                    | "UPDATE"
-                    | "DELETE"
-                    | "INSERT"
-                    | "CREATE"
-                    | "TABLE"
-                    | "LEFT"
-                    | "RIGHT"
-                    | "INNER"
-                    | "FULL"
-                    | "CROSS"
-                    | "AS"
-                    | "HAVING"
-                    | "LIMIT"
-                    | "DISTINCT"
-                    | "ALL"
-                    | "ID"
-                    | "NAME"
-            )
+            SqlKeyword::from_str(s).is_none() && !matches!(s.to_uppercase().as_str(), "ID" | "NAME")
         })
     }
 
     /// Generate table alias (single letter or short identifier)
     fn alias_strategy() -> impl Strategy<Value = String> {
-        "[a-z][a-z0-9]{0,2}".prop_filter("not a keyword", |s| {
-            !matches!(
-                s.to_uppercase().as_str(),
-                "AND" | "AS" | "ON" | "OR" | "BY" | "IN" | "IS"
-            )
-        })
+        "[a-z][a-z0-9]{0,2}".prop_filter("not a keyword", |s| SqlKeyword::from_str(s).is_none())
     }
 
     /// Generate column name
     fn column_strategy() -> impl Strategy<Value = String> {
-        "[a-z][a-z0-9_]{0,8}".prop_filter("not a keyword", |s| {
-            !matches!(
-                s.to_uppercase().as_str(),
-                "SELECT"
-                    | "FROM"
-                    | "WHERE"
-                    | "JOIN"
-                    | "AND"
-                    | "OR"
-                    | "ON"
-                    | "AS"
-                    | "BY"
-                    | "IN"
-                    | "IS"
-                    | "SET"
-                    | "ALL"
-            )
-        })
+        "[a-z][a-z0-9_]{0,8}".prop_filter("not a keyword", |s| SqlKeyword::from_str(s).is_none())
     }
 
     /// Helper to build symbol table from SQL
