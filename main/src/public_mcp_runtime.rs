@@ -1,5 +1,6 @@
 mod config;
 mod connection_sessions;
+mod diagnostics;
 mod internal_functions;
 mod mongo;
 mod redis;

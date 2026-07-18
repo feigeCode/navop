@@ -4,7 +4,7 @@ use gpui_component::{
     setting::{SettingField, SettingItem},
     v_flex,
 };
-use public_mcp::client_config::{ClientConfigInstall, RECOMMENDED_PACKAGE_VERSION};
+use public_mcp::client_config::{ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION};
 use rust_i18n::t;
 
 pub(crate) fn mcp_runtime_requirements_item() -> SettingItem {
@@ -32,7 +32,7 @@ fn runtime_requirements_status() -> String {
         Ok(install) => t!(
             "Settings.General.Mcp.runtime_requirements_ready",
             path = install.launcher_path.display().to_string(),
-            package = format!("@navop/mcp@{RECOMMENDED_PACKAGE_VERSION}")
+            package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}")
         )
         .to_string(),
         Err(error) => t!(

@@ -7,7 +7,7 @@ use gpui_component::{
     setting::{SettingField, SettingItem},
     v_flex,
 };
-use public_mcp::client_config::{ClientConfigInstall, RECOMMENDED_PACKAGE_VERSION};
+use public_mcp::client_config::{ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION};
 use rust_i18n::t;
 use std::{path::PathBuf, process::Command};
 
@@ -108,7 +108,7 @@ fn mcp_skill_install_item(target: SkillTarget) -> SettingItem {
 fn skill_install_args(target: SkillTarget, force: bool) -> Vec<String> {
     let mut args = vec![
         "-y".to_string(),
-        format!("@navop/mcp@{RECOMMENDED_PACKAGE_VERSION}"),
+        format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}"),
         "skill".to_string(),
         "install".to_string(),
         "--target".to_string(),
@@ -187,7 +187,7 @@ mod tests {
         let args = skill_install_args(SkillTarget::Codex, false);
 
         assert_eq!("-y", args[0]);
-        assert_eq!(format!("@navop/mcp@{RECOMMENDED_PACKAGE_VERSION}"), args[1]);
+        assert_eq!(format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}"), args[1]);
         assert_eq!(
             vec![
                 "skill", "install", "--target", "codex", "--scope", "user", "--json"

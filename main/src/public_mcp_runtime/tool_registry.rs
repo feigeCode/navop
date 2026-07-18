@@ -1,4 +1,4 @@
-use super::{internal_functions, mongo, redis, resource_pool};
+use super::{diagnostics, internal_functions, mongo, redis, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use one_core::tab_container::TabOpenMode;
@@ -44,7 +44,7 @@ fn build_tool_registry_for_surface(
     surface: ToolRegistrySurface,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
-    let mut runtime_registries = Vec::new();
+    let mut runtime_registries = vec![diagnostics::runtime_status_tool_registry(toolsets)];
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
             if toolsets.terminal_ssh_exec {
