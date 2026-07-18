@@ -230,6 +230,9 @@ test("CI runs release packaging regression checks", () => {
   const ci = read(".github/workflows/ci.yml");
 
   assert.match(ci, /node --test script\/test-release-packaging\.mjs/);
+  assert.match(ci, /workflow_dispatch:/);
+  assert.match(ci, /- windows/);
+  assert.match(ci, /fromJSON\(needs\.prepare\.outputs\.matrix\)/);
 });
 
 test("manual Windows workflow builds a release MSI with its checksum", () => {

@@ -305,10 +305,9 @@ mod tests {
 
     #[test]
     fn file_urls_are_decoded_to_local_paths() {
-        assert_eq!(
-            PathBuf::from("/tmp/Navop notes/README.md"),
-            local_path_from_file_url("file:///tmp/Navop%20notes/README.md").unwrap()
-        );
+        let path = std::env::temp_dir().join("Navop notes").join("README.md");
+        let url = url::Url::from_file_path(&path).unwrap().to_string();
+        assert_eq!(path, local_path_from_file_url(&url).unwrap());
         assert!(local_path_from_file_url("https://example.com/README.md").is_err());
     }
 

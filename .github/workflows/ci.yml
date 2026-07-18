@@ -6,24 +6,57 @@ on:
       - main
     tags:
       - "*"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Run all platforms or only one platform"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - linux
+          - windows
+          - macos
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}-${{ github.ref_name == 'main' && github.sha || 'anysha' }}
   cancel-in-progress: true
 
 jobs:
+  prepare:
+    name: Prepare CI matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Resolve requested platforms
+        id: matrix
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          platform="${REQUESTED_PLATFORM:-all}"
+          linux='{"target":"x86_64-linux-gnu","run_on":"ubuntu-latest","platform":"linux"}'
+          windows='{"target":"x86_64-windows-msvc","run_on":"windows-latest","platform":"windows"}'
+          macos='{"target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos"}'
+          case "$platform" in
+            all) matrix="[$macos,$linux,$windows]" ;;
+            linux) matrix="[$linux]" ;;
+            windows) matrix="[$windows]" ;;
+            macos) matrix="[$macos]" ;;
+            *) echo "::error::Unsupported platform: $platform"; exit 1 ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   test:
-    name: Test
+    name: Test (${{ matrix.platform }}, ${{ matrix.target }})
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            run_on: macos-latest
-          - target: x86_64-linux-gnu
-            run_on: ubuntu-latest
-          - target: x86_64-windows-msvc
-            run_on: windows-latest
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v4

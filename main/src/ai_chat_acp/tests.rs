@@ -30,11 +30,12 @@ fn normalizes_duplicate_acp_agent_config_ids() {
 fn builds_acp_agent_config_from_extension_agent() {
     let mut env = BTreeMap::new();
     env.insert("CODEX_HOME".to_string(), "test-home".to_string());
+    let manifest_dir = std::env::temp_dir().join("onetcli-acp").join("codex");
     let agent = AcpAgentExtensionAgent::stdio(
         "com.example.codex",
         "codex",
         "Codex",
-        PathBuf::from("/tmp/onetcli-acp/codex"),
+        manifest_dir.clone(),
         "bin/codex-acp",
         vec!["--stdio".to_string()],
         env,
@@ -46,7 +47,13 @@ fn builds_acp_agent_config_from_extension_agent() {
     assert_eq!("Codex", config.name.as_ref());
     match config.transport {
         AcpTransport::Stdio { command, args, env } => {
-            assert_eq!("/tmp/onetcli-acp/codex/bin/codex-acp", command);
+            let expected_command = manifest_dir
+                .join("bin/codex-acp")
+                .components()
+                .collect::<PathBuf>()
+                .display()
+                .to_string();
+            assert_eq!(expected_command, command);
             assert_eq!(vec!["--stdio".to_string()], args);
             assert_eq!(
                 vec![("CODEX_HOME".to_string(), "test-home".to_string())],

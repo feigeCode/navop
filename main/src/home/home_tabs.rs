@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn notes_tab_uses_stable_identity() {
-        let source = include_str!("home_tabs.rs");
+        let source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         assert!(source.contains("fn add_notes_tab"));
         assert!(source.contains("activate_or_add_tab_lazy(\n                    \"notes\""));
         assert!(source.contains("TabItem::new(\"notes\", \"home\", notes)"));

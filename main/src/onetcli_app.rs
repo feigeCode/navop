@@ -1184,7 +1184,7 @@ mod tests {
 
     #[test]
     fn quit_action_routes_through_active_window_quit_request() {
-        let source = include_str!("onetcli_app.rs");
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
         let start = source.find("fn quit_app").expect("quit_app function");
         let end = source[start..]
             .find("\n}\n\nfn request_active_window_quit")
