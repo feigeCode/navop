@@ -2,7 +2,7 @@ use crate::{WasmError, WasmResult, WasmRuntimeConfig, document_renderer_bindings
 use document_renderer_bindings::onet::extension::document_render as Wit;
 use std::path::Path;
 use wasmtime::{
-    Config, Engine, Store,
+    Config, Engine, Store, StoreLimits, StoreLimitsBuilder,
     component::{Component, Linker, ResourceTable},
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -73,7 +73,8 @@ impl DocumentRendererRuntime {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
-        let mut store = Store::new(&self.engine, HostState::new());
+        let mut store = Store::new(&self.engine, HostState::new(self.config.max_memory_mb));
+        store.limiter(|state| &mut state.limits);
         store
             .set_fuel(self.config.fuel_per_call)
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
@@ -116,12 +117,19 @@ impl DocumentRendererRuntime {
 struct HostState {
     wasi_ctx: WasiCtx,
     table: ResourceTable,
+    limits: StoreLimits,
 }
 impl HostState {
-    fn new() -> Self {
+    fn new(max_memory_mb: u32) -> Self {
         Self {
             wasi_ctx: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(max_memory_mb as usize * 1024 * 1024)
+                .instances(8)
+                .tables(8)
+                .memories(8)
+                .build(),
         }
     }
 }
@@ -137,5 +145,6 @@ fn engine() -> WasmResult<Engine> {
     let mut config = Config::new();
     config.wasm_component_model(true);
     config.async_support(true);
+    config.consume_fuel(true);
     Engine::new(&config).map_err(|e| WasmError::ComponentLoad(e.to_string()))
 }
