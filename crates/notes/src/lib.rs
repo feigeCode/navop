@@ -28,8 +28,8 @@ mod storage_conversion;
 mod storage_location;
 mod storage_support;
 mod syntax_highlighting;
-mod tree_state;
 mod theme_provider;
+mod tree_state;
 
 #[cfg(test)]
 mod storage_tests;

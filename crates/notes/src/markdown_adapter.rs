@@ -4,8 +4,7 @@ use anyhow::Result;
 use cditor_app::{
     AiProvider, DocumentRendererProvider, Editor, EditorDocument, EditorEvent, EditorHandle,
     MarkdownApplyMode, MarkdownCompatibility, MarkdownDiagnostic, MarkdownExportMode,
-    MarkdownImportResult, SyntaxHighlightProvider,
-    ThemeProvider,
+    MarkdownImportResult, SyntaxHighlightProvider, ThemeProvider,
 };
 use gpui::AppContext;
 use smol::channel::{Receiver, unbounded};

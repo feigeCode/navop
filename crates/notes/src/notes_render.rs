@@ -1,7 +1,7 @@
 use crate::notes_actions::CreateKind;
 use crate::notes_view::NotesLoadState;
-use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
 use crate::theme_provider::cditor_theme;
+use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,

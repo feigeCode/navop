@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cditor_app::{ThemeProvider, gui::GuiTheme};
 use gpui::{Hsla, Rgba};
@@ -101,10 +101,35 @@ fn rgb24(color: Hsla) -> u32 {
 }
 
 fn blend(base: u32, overlay: u32, amount: f32) -> u32 {
-    let channel = |shift| {
-        let base = ((base >> shift) & 0xff) as f32;
-        let overlay = ((overlay >> shift) & 0xff) as f32;
+    let channel = |shift: u32| {
+        let base = ((base >> shift) & 0xffu32) as f32;
+        let overlay = ((overlay >> shift) & 0xffu32) as f32;
         (base + (overlay - base) * amount).round() as u32
     };
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::rgb;
+
+    #[test]
+    fn editor_surface_and_text_follow_the_host_theme() {
+        let theme = cditor_theme(
+            rgb(0x111111).into(),
+            rgb(0xeeeeee).into(),
+            rgb(0x999999).into(),
+            rgb(0x333333).into(),
+            rgb(0x4488ff).into(),
+            rgb(0xff4455).into(),
+        );
+
+        assert_eq!(theme.page, 0x111111);
+        assert_eq!(theme.surface, 0x111111);
+        assert_eq!(theme.text, 0xeeeeee);
+        assert_eq!(theme.border, 0x333333);
+        assert_eq!(theme.action_accent, 0x4488ff);
+        assert_ne!(theme.code_background, 0xf7f6f3);
+    }
 }
