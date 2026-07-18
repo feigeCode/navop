@@ -203,7 +203,7 @@ fn client_config_inspection_reports_unusable_helper_for_non_executable_file() {
 #[test]
 fn helper_install_path_resolves_npx_instead_of_a_bundled_helper() {
     let path = helper_install_path_from_data_dir("/Users/me/.config/one-hub");
-    assert!(path.ends_with("npx"));
+    assert_eq!(Some("npx"), path.file_stem().and_then(|stem| stem.to_str()));
 }
 
 #[test]
