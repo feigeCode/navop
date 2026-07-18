@@ -118,22 +118,19 @@ fn asset_resolver_rewrites_extension_asset_urls_and_rejects_escape() {
 
 #[test]
 fn registered_extension_asset_roots_resolve_safe_protocol_urls() {
-    register_extension_asset_root(
-        "com.example.preview",
-        "/extensions/com.example.preview/assets",
-    );
+    let assets_dir = tempfile::TempDir::new().unwrap();
+    let extension_id = "com.example.preview.registered-root";
+    register_extension_asset_root(extension_id, assets_dir.path());
 
     assert_eq!(
-        "/extensions/com.example.preview/assets/app.css",
-        resolve_extension_asset_url("onet-extension://com.example.preview/app.css")
-            .unwrap()
-            .display()
-            .to_string()
+        assets_dir.path().join("app.css"),
+        resolve_extension_asset_url(&format!("onet-extension://{extension_id}/app.css")).unwrap()
     );
     assert!(
-        resolve_extension_asset_url("onet-extension://com.example.preview/../secret").is_none()
+        resolve_extension_asset_url(&format!("onet-extension://{extension_id}/../secret"))
+            .is_none()
     );
-    assert!(resolve_extension_asset_url("https://com.example.preview/app.css").is_none());
+    assert!(resolve_extension_asset_url(&format!("https://{extension_id}/app.css")).is_none());
 }
 
 #[test]
