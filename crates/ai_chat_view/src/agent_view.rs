@@ -870,7 +870,11 @@ impl AgentChatView {
             envelope.resolve(AcpPermissionOutcome::Cancelled);
             return;
         }
-        self.transcript.push_acp_permission(&request);
+        let requires_safety_confirmation = current_acp_tool_mode(cx)
+            .unwrap_or_else(|| tool_execution_mode_from_label(&self.selected_tool))
+            == ToolExecutionMode::Manual;
+        self.transcript
+            .push_acp_permission(&request, requires_safety_confirmation);
         self.pending_acp_permissions
             .insert(request.request_id, envelope);
         self.request_scroll_to_bottom();
@@ -4457,6 +4461,36 @@ mod tests {
         });
         assert_eq!("approved", data.status);
         assert_eq!("仅本次允许", data.selected_option_name);
+        assert!(data.summary.contains("安全确认"));
+        assert!(data.summary.contains("二次审批"));
+        assert!(data.summary.contains("自动执行"));
+    }
+
+    #[gpui::test]
+    fn gpui_acp_permission_card_omits_second_approval_notice_in_auto_mode(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let request = test_acp_permission_request();
+        let (envelope, _outcome_rx) = AcpPermissionEnvelope::new(request.clone());
+
+        view.update(cx, |view, cx| {
+            view.selected_tool = SharedString::from("自动");
+            view.receive_acp_permission(envelope, cx);
+        });
+
+        let data = view.read_with(cx, |view, _| {
+            let message = view
+                .transcript
+                .messages
+                .iter()
+                .find(|message| message.variant.card_kind() == Some(ACP_PERMISSION_CARD))
+                .expect("ACP permission card");
+            AcpPermissionCardData::from_json(&message.content).expect("card data")
+        });
+        assert_eq!(request.summary, data.summary);
+        assert!(!data.summary.contains("二次审批"));
     }
 
     #[gpui::test]

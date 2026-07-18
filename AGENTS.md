@@ -408,12 +408,12 @@
 - **验证方式**：覆盖 Auto 的 High、Critical、同轮多个 High 直接执行且无 `NeedUserInput`；覆盖 Manual 非 Read 仍审批、ReadOnly 仍过滤写工具；验证 Agent Auto permission policy 的 `mode=Auto` 且 `high_risk_policy=Allow`。
 - **适用范围**：`crates/agent_runtime/src/tasks/agent.rs`、`crates/agent_runtime/src/tools/runtime_adapter.rs`、Agent 工具模式 UI 与相关审批测试。
 
-- **标题**：ACP 安全确认的第二次 Public MCP 审批必须回到消息流
-- **触发信号**：ACP 工具先出现一张只有 `toolCallId/kind/status` 的权限卡，用户允许后又弹出带完整参数的全局 MCP Dialog；或者切换为“自动执行”后高风险 Public MCP 工具仍继续请求审批。
-- **根因 / 约束**：ACP `request_permission` 与实际 Public MCP `tools/call` 是两个独立安全边界，前者可能只携带精简的工具状态，完整参数直到后者才出现。安全确认模式要求保留第二次审批，但全局 Dialog 会割裂当前会话；Auto 模式若仍保留 `high_risk_policy=Ask`，则设置提示与实际行为不一致。
-- **正确做法**：第一次 ACP 允许时，为当前聊天视图注册一个 15 秒、一次性 Public MCP 审批路由；优先用同一 `toolCallId` 的前序 ToolCall 原始入参做精确匹配，协议从未提供入参时才使用只负责路由、绝不自动放行的短时通配记录。实际 Public MCP Ask 到达后，在该 ACP 消息流新增工具确认卡，展示脱敏后的完整参数，并明确说明这是“安全确认”带来的二次审批以及可在设置中改为“自动执行”。匹配的 ACP 请求不得再打开全局 Dialog；不属于 ACP 的外部 MCP 请求保留原审批回退。Public MCP Auto 必须将 High/Critical 一并设为 Allow。
-- **验证方式**：覆盖精确参数路由优先于通配、路由只消费一次、消息卡完整展示 `requestArguments`、卡片允许/拒绝回传原 Public MCP future、超时/会话重置 fail closed、匹配 ACP 请求不进入 Dialog 队列、外部请求仍走回退，以及 Public MCP Auto 高风险工具零审批直接执行。
-- **适用范围**：`crates/ai_chat_view/src/acp/*`、`agent_transcript.rs`、`agent_view.rs`、`crates/public_mcp/src/{approval_grants,permissions}.rs`、`main/src/public_mcp_approval*`。
+- **标题**：ACP 安全确认保留 Dialog，并在权限卡解释二次审批
+- **触发信号**：ACP 权限卡允许后又弹出 Public MCP 安全确认 Dialog，用户误以为发生了无意义的重复审批；或者自动执行模式仍显示二次审批提示、High/Critical 工具仍继续请求确认。
+- **根因 / 约束**：ACP `request_permission` 与实际 Public MCP `tools/call` 是两个独立安全边界。安全确认模式需要用强制可见的 Dialog 承担最终审批，但如果消息卡不解释模式来源，用户会把它理解为异常重复；Auto 模式则不应保留确认语义。
+- **正确做法**：在“手动确认/安全确认”模式的 ACP 权限卡中明确说明：允许 ACP 后，实际工具执行还会弹出一次安全确认窗口；如不需要二次审批，可将 MCP 权限模式切换为“自动执行”。Public MCP Ask 统一进入全局 Dialog，不再通过 ACP 一次性路由替换成第二张可操作消息卡。自动执行模式不显示上述提示，且 High/Critical 一并直接执行。
+- **验证方式**：覆盖手动确认卡片包含“安全确认、二次审批、自动执行”说明，自动执行卡片不含误导提示，ACP 后续 Public MCP 请求进入 Dialog 队列并展示完整脱敏参数，以及 Auto High/Critical 直接执行。
+- **适用范围**：`crates/ai_chat_view/src/acp/*`、`agent_transcript.rs`、`agent_view.rs`、`crates/public_mcp/src/permissions.rs`、`main/src/public_mcp_approval*`。
 
 - **标题**：macOS 自定义标题栏中的可拖元素必须由应用显式接管标题栏拖动
 - **触发信号**：透明标题栏或 tab 栏中，按钮、输入框或 tab 的拖动被解释为窗口移动；为了规避问题出现 `allow_tab_drag = !is_macos` 一类平台禁用逻辑。

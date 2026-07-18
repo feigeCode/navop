@@ -110,18 +110,30 @@ impl AgentTranscript {
     }
 
     /// 把当前 ACP 连接收到的权限请求追加到消息流。
-    pub(crate) fn push_acp_permission(&mut self, request: &AcpPermissionRequest) {
+    pub(crate) fn push_acp_permission(
+        &mut self,
+        request: &AcpPermissionRequest,
+        requires_safety_confirmation: bool,
+    ) {
         if self.has_pending_acp_permission(&request.request_id) {
             return;
         }
         self.finish_active_status();
         self.close_streaming_segment();
+        let summary = if requires_safety_confirmation {
+            format!(
+                "{}\n\n当前已开启“安全确认（手动确认）”模式。允许本次 ACP 权限请求后，实际工具执行还需要在弹出的安全确认窗口中进行二次审批；如不需要二次审批，可将 MCP 权限模式切换为“自动执行”。",
+                request.summary
+            )
+        } else {
+            request.summary.clone()
+        };
         let data = AcpPermissionCardData {
             request_id: request.request_id.clone(),
             session_id: request.session_id.clone(),
             tool_call_id: request.tool_call_id.clone(),
             tool_name: request.tool_name.clone(),
-            summary: request.summary.clone(),
+            summary,
             details_json: serde_json::to_string_pretty(&request.details)
                 .unwrap_or_else(|_| request.details.to_string()),
             options: request
@@ -1418,7 +1430,7 @@ mod tests {
         };
         let mut transcript = AgentTranscript::new();
 
-        transcript.push_acp_permission(&request);
+        transcript.push_acp_permission(&request, true);
 
         assert_eq!(1, transcript.messages.len());
         assert_eq!(
@@ -1429,9 +1441,39 @@ mod tests {
 
         transcript.resolve_acp_permission(&request.request_id, &request.options[1]);
         let data = AcpPermissionCardData::from_json(&transcript.messages[0].content).unwrap();
+        assert!(data.summary.contains("安全确认"));
+        assert!(data.summary.contains("二次审批"));
+        assert!(data.summary.contains("自动执行"));
         assert_eq!("approved", data.status);
         assert_eq!("Allow once", data.selected_option_name);
         assert!(!transcript.has_pending_acp_permission(&request.request_id));
+    }
+
+    #[test]
+    fn acp_permission_card_does_not_claim_second_approval_in_auto_mode() {
+        use crate::acp::{AcpPermissionOption, AcpPermissionRequest};
+        use crate::agent_cards::AcpPermissionCardData;
+
+        let request = AcpPermissionRequest {
+            request_id: "session:auto-call".into(),
+            session_id: "session".into(),
+            tool_call_id: "auto-call".into(),
+            tool_name: "Execute command".into(),
+            summary: "ACP Agent 请求执行工具：Execute command".into(),
+            details: serde_json::json!({"command": "pwd"}),
+            options: vec![AcpPermissionOption {
+                option_id: "allow".into(),
+                name: "Allow once".into(),
+                kind: "allow_once".into(),
+            }],
+        };
+        let mut transcript = AgentTranscript::new();
+
+        transcript.push_acp_permission(&request, false);
+
+        let data = AcpPermissionCardData::from_json(&transcript.messages[0].content).unwrap();
+        assert_eq!(request.summary, data.summary);
+        assert!(!data.summary.contains("二次审批"));
     }
 
     #[test]
