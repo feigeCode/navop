@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use one_core::{
@@ -29,6 +29,9 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
     pub(super) html_preview_transforms: Vec<RegisteredHtmlPreviewTransform>,
     pub(super) document_renderers: Vec<RegisteredDocumentRenderer>,
+    #[cfg(feature = "wasm-components")]
+    pub(super) document_renderer_runtimes:
+        Mutex<HashMap<String, Arc<extension_wasm::DocumentRendererRuntime>>>,
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
 }
 
@@ -58,6 +61,8 @@ impl ExtensionRuntimeCatalog {
             keybindings: Vec::new(),
             html_preview_transforms: Vec::new(),
             document_renderers: Vec::new(),
+            #[cfg(feature = "wasm-components")]
+            document_renderer_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
         }
     }
@@ -169,14 +174,26 @@ impl ExtensionRuntimeCatalog {
                 renderer.runtime_id.clone(),
             ));
         }
-        extension_wasm::DocumentRendererRuntime::from_file_with_config(
-            renderer.id.clone(),
-            &binding.module_path,
-            binding.config.clone(),
-        )?
-        .render(request)
-        .await
-        .map(Some)
+        let runtime = {
+            let mut runtimes = self
+                .document_renderer_runtimes
+                .lock()
+                .map_err(|error| extension_wasm::WasmError::ComponentLoad(error.to_string()))?;
+            if let Some(runtime) = runtimes.get(&renderer.runtime_id) {
+                runtime.clone()
+            } else {
+                let runtime = Arc::new(
+                    extension_wasm::DocumentRendererRuntime::from_file_with_config(
+                        renderer.id.clone(),
+                        &binding.module_path,
+                        binding.config.clone(),
+                    )?,
+                );
+                runtimes.insert(renderer.runtime_id.clone(), runtime.clone());
+                runtime
+            }
+        };
+        runtime.render(request).await.map(Some)
     }
 
     #[cfg(feature = "wasm-components")]

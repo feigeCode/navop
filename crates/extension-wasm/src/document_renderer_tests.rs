@@ -8,7 +8,7 @@ fn real_mermaid_component_renders_svg_when_fixture_is_provided() {
     let runtime = DocumentRendererRuntime::from_file("mermaid", path.as_ref()).unwrap();
     let output = futures::executor::block_on(runtime.render(DocumentRenderRequest {
         renderer: "mermaid".to_owned(),
-        source: "flowchart LR\n  A --> B".to_owned(),
+        source: "graph TD\n  A[开始] --> B[处理]\n  B --> C[结束]".to_owned(),
         theme: DocumentRenderTheme {
             dark: false,
             background: 0xf7f6f3,

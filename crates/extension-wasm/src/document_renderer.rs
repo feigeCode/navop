@@ -41,6 +41,15 @@ pub struct DocumentRendererRuntime {
     component: Component,
     config: WasmRuntimeConfig,
 }
+impl std::fmt::Debug for DocumentRendererRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DocumentRendererRuntime")
+            .field("id", &self.id)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
 impl DocumentRendererRuntime {
     pub fn from_file(id: impl Into<String>, path: &Path) -> WasmResult<Self> {
         Self::from_file_with_config(id, path, WasmRuntimeConfig::default())
@@ -155,5 +164,8 @@ fn engine() -> WasmResult<Engine> {
     config.async_support(true);
     config.consume_fuel(true);
     config.epoch_interruption(true);
+    if let Ok(cache) = wasmtime::Cache::from_file(None) {
+        config.cache(Some(cache));
+    }
     Engine::new(&config).map_err(|e| WasmError::ComponentLoad(e.to_string()))
 }

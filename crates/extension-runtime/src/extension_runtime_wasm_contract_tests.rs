@@ -115,7 +115,7 @@ fn installed_mermaid_extension_registers_and_renders_when_fixture_is_provided() 
     let output = futures::executor::block_on(catalog.render_document(
         extension_wasm::DocumentRenderRequest {
             renderer: "mermaid".to_owned(),
-            source: "flowchart TD\n A --> B".to_owned(),
+            source: "graph TD\n A[开始] --> B[处理]\n B --> C[结束]".to_owned(),
             theme: extension_wasm::DocumentRenderTheme {
                 dark: false,
                 background: 0xf7f6f3,
@@ -134,6 +134,11 @@ fn installed_mermaid_extension_registers_and_renders_when_fixture_is_provided() 
     .unwrap();
     assert_eq!("image/svg+xml", output.media_type);
     assert!(String::from_utf8(output.bytes).unwrap().contains("<svg"));
+    assert_eq!(
+        1,
+        catalog.document_renderer_runtimes.lock().unwrap().len(),
+        "compiled renderer runtimes must be retained by the catalog"
+    );
 }
 
 #[test]
