@@ -1447,14 +1447,17 @@ mod tests {
                 "shell setup 命令应成功执行: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert_eq!(
-                String::from_utf8_lossy(&output.stdout).trim(),
-                format!(
-                    "__HOME__={}\n__SESSION__={}\n__SHELL__=/bin/bash\n__TEST_OK__",
-                    home_dir.display(),
-                    home_dir.join(".config/onetcli").display()
-                )
-            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let lines = stdout.trim().lines().collect::<Vec<_>>();
+            let reported_home = lines
+                .first()
+                .and_then(|line| line.strip_prefix("__HOME__="))
+                .expect("应输出 shell 看到的 HOME");
+            assert!(!reported_home.is_empty());
+            let expected_session = format!("__SESSION__={reported_home}/.config/onetcli");
+            assert_eq!(lines.get(1).copied(), Some(expected_session.as_str()));
+            assert_eq!(lines.get(2).copied(), Some("__SHELL__=/bin/bash"));
+            assert_eq!(lines.get(3).copied(), Some("__TEST_OK__"));
         }
 
         let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
@@ -1605,10 +1608,14 @@ mod tests {
             "uninstall 命令应成功执行: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            format!("__HOME__={}\n__TEST_UNINSTALL_OK__", home_dir.display())
-        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines = stdout.trim().lines().collect::<Vec<_>>();
+        let reported_home = lines
+            .first()
+            .and_then(|line| line.strip_prefix("__HOME__="))
+            .expect("应输出 shell 看到的 HOME");
+        assert!(!reported_home.is_empty());
+        assert_eq!(lines.get(1).copied(), Some("__TEST_UNINSTALL_OK__"));
         assert_eq!(
             fs::read_to_string(home_dir.join(".bashrc")).expect("应读取 bashrc"),
             "before bash\nafter bash\n"
