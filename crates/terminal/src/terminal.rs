@@ -2304,6 +2304,7 @@ mod tests {
     use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder};
     use std::collections::VecDeque;
     use std::fs;
+    #[cfg(not(target_os = "windows"))]
     use std::process::Command;
     use tokio::sync::mpsc::unbounded_channel;
 

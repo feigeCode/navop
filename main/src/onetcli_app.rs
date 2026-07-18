@@ -1174,7 +1174,12 @@ mod tests {
 
     #[test]
     fn shortcut_label_formats_configured_shortcut() {
-        assert_eq!("⌃⌘T", super::shortcut_label("ctrl-cmd-t"));
+        #[cfg(target_os = "macos")]
+        let expected = "⌃⌘T";
+        #[cfg(not(target_os = "macos"))]
+        let expected = "Ctrl+Win+T";
+
+        assert_eq!(expected, super::shortcut_label("ctrl-cmd-t"));
     }
 
     #[test]
