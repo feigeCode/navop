@@ -11,7 +11,7 @@ test("release packaging uses the navop executable on every platform", () => {
   const desktop = read("resources/linux/navop.desktop");
 
   assert.doesNotMatch(release, /binary: onetcli(?:\.exe)?/);
-  assert.match(release, /binary: navop\.exe/);
+  assert.match(release, /navop\.exe/);
   assert.match(bundle, /BINARY_NAME="navop"/);
   assert.doesNotMatch(bundle, /generate-macos-icon\.sh/);
   assert.match(bundle, /Error: Icon file not found/);
@@ -206,7 +206,11 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
   const release = read(".github/workflows/release.yml");
   const upload = read(".github/workflows/upload-r2.yml");
 
-  assert.match(release, /artifacts\/navop-\*\.msi/);
+  assert.match(
+    release,
+    /name: navop-windows-msi[\s\S]*?path: navop-x86_64-pc-windows-msvc\.msi/,
+  );
+  assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
   assert.match(upload, /navop-aarch64-apple-darwin\.tar\.gz/);
   assert.match(upload, /navop-x86_64-unknown-linux-gnu\.tar\.gz/);
@@ -271,8 +275,10 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
 
 test("release builds keep size-optimized Cargo profile defaults", () => {
   const release = read(".github/workflows/release.yml");
-  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_LTO:/);
-  assert.doesNotMatch(release, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS:/);
+  assert.doesNotMatch(release, /^\s+CARGO_PROFILE_RELEASE_LTO:\s/m);
+  assert.doesNotMatch(release, /^\s+CARGO_PROFILE_RELEASE_CODEGEN_UNITS:\s/m);
+  assert.match(release, /export CARGO_PROFILE_RELEASE_LTO=thin/);
+  assert.match(release, /export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16/);
 
   const cargo = read("Cargo.toml");
   assert.match(cargo, /\[profile\.release\][\s\S]*?lto = "fat"/);
@@ -281,6 +287,34 @@ test("release builds keep size-optimized Cargo profile defaults", () => {
   const manualWindows = read(".github/workflows/build-windows-msi.yml");
   assert.match(manualWindows, /CARGO_PROFILE_RELEASE_LTO: thin/);
   assert.match(manualWindows, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
+});
+
+test("release builds are cacheable and individually repairable", () => {
+  const release = read(".github/workflows/release.yml");
+  const trigger = read(".github/workflows/release-trigger.yml");
+  const arm = read(".github/workflows/build-arm-linux.yml");
+
+  for (const platform of [
+    "macos-arm64",
+    "macos-x64",
+    "linux-x64",
+    "linux-arm64",
+    "windows-x64",
+  ]) {
+    assert.match(release, new RegExp(`- ${platform}`));
+  }
+  assert.match(release, /mozilla-actions\/sccache-action@/);
+  assert.match(release, /SCCACHE_GHA_ENABLED: "true"/);
+  assert.match(release, /release-cargo-inputs-/);
+  assert.doesNotMatch(release, /release-cargo-[^\n]*github\.run_id/);
+  assert.match(release, /cancel-in-progress: false/);
+  assert.match(release, /gh release upload[\s\S]*--clobber/);
+
+  assert.match(trigger, /tags:[\s\S]*- "v\*"/);
+  assert.match(trigger, /gh workflow run release\.yml/);
+  assert.match(trigger, /-f platform=all/);
+  assert.match(arm, /workflows:[\s\S]*- Release/);
+  assert.match(arm, /-f platform=linux-arm64/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

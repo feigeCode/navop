@@ -1,0 +1,32 @@
+name: Release Trigger
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: release-trigger-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Start release build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Dispatch cached release workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run release.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref dev \
+            -f tag="$RELEASE_TAG" \
+            -f platform=all

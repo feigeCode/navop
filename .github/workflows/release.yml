@@ -1,58 +1,110 @@
 name: Release
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      keep_build_cache:
-        description: "Restore and save Cargo build cache for faster release builds"
-        type: boolean
-        default: true
+      tag:
+        description: "GitHub Release tag to build or repair, for example v0.8.10"
+        required: true
+        type: string
+      platform:
+        description: "Build all primary platforms or repair one platform"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64
+          - macos-x64
+          - linux-x64
+          - linux-arm64
+          - windows-x64
 
 permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
+  prepare:
+    name: Prepare release build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      tag: ${{ steps.release.outputs.tag }}
+      platform: ${{ steps.release.outputs.platform }}
+
+    steps:
+      - name: Validate release request
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null
+          if [ "$RELEASE_PLATFORM" != "all" ]; then
+            gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "platform=$RELEASE_PLATFORM" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve platform matrix
+        id: matrix
+        env:
+          RELEASE_PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          macos_arm64='{"target":"aarch64-apple-darwin","os":"macos-latest","binary":"navop","archive":"navop-aarch64-apple-darwin.tar.gz","arm_linux":false}'
+          macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","arm_linux":false}'
+          linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","arm_linux":false}'
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","arm_linux":true}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","arm_linux":false}'
+
+          case "$RELEASE_PLATFORM" in
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$windows_x64]" ;;
+            macos-arm64) matrix="[$macos_arm64]" ;;
+            macos-x64) matrix="[$macos_x64]" ;;
+            linux-x64) matrix="[$linux_x64]" ;;
+            linux-arm64) matrix="[$linux_arm64]" ;;
+            windows-x64) matrix="[$windows_x64]" ;;
+            *) echo "::error::Unsupported platform: $RELEASE_PLATFORM"; exit 1 ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.target }})
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            binary: navop
-            archive: navop-aarch64-apple-darwin.tar.gz
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
-            binary: navop
-            archive: navop-x86_64-apple-darwin.tar.gz
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            binary: navop
-            archive: navop-x86_64-unknown-linux-gnu.tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            binary: navop.exe
-            archive: navop-x86_64-pc-windows-msvc.zip
+        include: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.arm_linux && 180 || 120 }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Free disk space (macOS)
         if: runner.os == 'macOS'
@@ -96,30 +148,22 @@ jobs:
         run: |
           cmake --version
 
-      - name: Cache Cargo
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.keep_build_cache }}
+      - name: Cache Cargo inputs
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-
-            release-cargo-${{ runner.os }}-${{ matrix.target }}-
+            release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Set environment variables
         shell: bash
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
-            echo "ONETCLI_VERSION=${VERSION}" >> "$GITHUB_ENV"
-          else
-            echo "ONETCLI_VERSION=0.0.0-dev.$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          fi
+          VERSION="${{ needs.prepare.outputs.tag }}"
+          echo "ONETCLI_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
 
       - name: Verify secrets are set
         shell: bash
@@ -137,6 +181,7 @@ jobs:
           fi
 
       - name: Build release binary
+        shell: bash
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -144,19 +189,23 @@ jobs:
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
         run: |
+          set -euo pipefail
+          if [ "${{ matrix.arm_linux }}" = "true" ]; then
+            export CARGO_BUILD_JOBS=2
+            export CARGO_PROFILE_RELEASE_LTO=thin
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+          fi
           cargo --version
           rustc --version
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
+          echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
+          echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
           cargo build --release -p main --target ${{ matrix.target }}
 
-
-      - name: Clean build artifacts (macOS)
-        if: ${{ runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.keep_build_cache == false }}
-        run: |
-          rm -rf target/debug
-          find target -name "incremental" -o -name "deps" -o -name "build" | xargs rm -rf || true
-          rm -rf ~/.cargo/registry/cache ~/.cargo/git/db
-          df -h
+      - name: Show sccache statistics
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
 
       - name: Create macOS app bundle
         if: runner.os == 'macOS'
@@ -378,14 +427,13 @@ jobs:
             navop_*.AppImage
 
   release:
-    name: Create Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish Release
+    needs:
+      - prepare
+      - build
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -395,9 +443,22 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
-      - name: Generate checksums
+      - name: Merge existing assets and generate checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          cd artifacts
+          set -euo pipefail
+          mkdir -p publish
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "navop-*" \
+              --pattern "navop_*" \
+              --dir publish
+          fi
+          cp -a artifacts/. publish/
+          cd publish
           shopt -s nullglob
           release_files=(navop-* navop_*)
           if [ "${#release_files[@]}" -eq 0 ]; then
@@ -408,14 +469,19 @@ jobs:
           cat sha256sums.txt
 
       - name: Write release metadata
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_PLATFORM: ${{ needs.prepare.outputs.platform }}
         run: |
           node <<'NODE'
           const fs = require("fs");
-          const releaseTag = process.env.GITHUB_REF_NAME;
+          const releaseTag = process.env.RELEASE_TAG;
           const version = releaseTag.replace(/^v/, "");
+          const platform = process.env.RELEASE_PLATFORM;
+          fs.mkdirSync("release-metadata", { recursive: true });
           fs.writeFileSync(
-            "artifacts/release-metadata.json",
-            `${JSON.stringify({ release_tag: releaseTag, version }, null, 2)}\n`,
+            "release-metadata/release-metadata.json",
+            `${JSON.stringify({ release_tag: releaseTag, version, platform }, null, 2)}\n`,
           );
           NODE
 
@@ -423,19 +489,30 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-metadata
-          path: artifacts/release-metadata.json
+          path: release-metadata/release-metadata.json
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: Navop ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
-            artifacts/navop-*.tar.gz
-            artifacts/navop-*.zip
-            artifacts/navop-*.msi
-            artifacts/navop-*.dmg
-            artifacts/navop_*.deb
-            artifacts/navop-*.rpm
-            artifacts/navop_*.AppImage
-            artifacts/sha256sums.txt
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Navop $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          shopt -s nullglob
+          new_files=(artifacts/navop-* artifacts/navop_*)
+          if [ "${#new_files[@]}" -eq 0 ]; then
+            echo "::error::No newly built release assets found"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            "${new_files[@]}" \
+            publish/sha256sums.txt
