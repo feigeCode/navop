@@ -271,7 +271,7 @@ impl NotesView {
     fn render_delete_button(&self, row: &TreeRow, cx: &mut Context<Self>) -> Button {
         let delete_row = row.clone();
         Button::new(row_action_id("delete", row))
-            .icon(IconName::Delete)
+            .icon(IconName::Remove)
             .ghost()
             .xsmall()
             .on_click(cx.listener(move |view, _, window, cx| {
