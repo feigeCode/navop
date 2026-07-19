@@ -206,6 +206,7 @@ fn installed_notes_exporter_registers_and_exports_all_formats_when_fixture_is_pr
                 format: format.to_owned(),
                 title: "导出测试".to_owned(),
                 source: "# 标题\n\n正文".to_owned(),
+                assets: Vec::new(),
                 theme: extension_wasm::DocumentExportTheme {
                     dark: false,
                     background: 0xffffff,

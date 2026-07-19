@@ -10,9 +10,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const DOCUMENT_EXPORTER_MARKETPLACE_QUERY: &str = "Notes Document Exporter";
-const DOCUMENT_EXPORTER_MARKETPLACE_TAB_ID: &str = "extensions-notes-document-exporter";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotesExportFormat {
     Html,
@@ -38,6 +35,22 @@ impl NotesExportFormat {
             Self::Word => "Word (.docx)",
         }
     }
+
+    fn marketplace_query(self) -> &'static str {
+        match self {
+            Self::Html => "Notes HTML Exporter",
+            Self::Pdf => "Notes PDF Exporter",
+            Self::Word => "Notes Word Exporter",
+        }
+    }
+
+    fn marketplace_tab_id(self) -> &'static str {
+        match self {
+            Self::Html => "extensions-notes-html-exporter",
+            Self::Pdf => "extensions-notes-pdf-exporter",
+            Self::Word => "extensions-notes-word-exporter",
+        }
+    }
 }
 
 impl NotesView {
@@ -56,14 +69,14 @@ impl NotesView {
             .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
             .and_then(|global| global.get())
         else {
-            self.open_document_exporter_marketplace(window, cx);
+            self.open_document_exporter_marketplace(format, window, cx);
             return;
         };
         if catalog.document_exporter_for_format(&format_name).is_none() {
-            self.open_document_exporter_marketplace(window, cx);
+            self.open_document_exporter_marketplace(format, window, cx);
             return;
         }
-        let source = match self.source_for_export(&row, cx) {
+        let export_source = match self.source_for_export(&row, cx) {
             Ok(source) => source,
             Err(error) => {
                 notify_operation_error(window, cx, error);
@@ -116,6 +129,12 @@ impl NotesView {
                 }
             };
             let Some(directory) = selected else { return };
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                window.push_notification(
+                    Notification::info(t!("Notes.export_started").to_string()).autohide(true),
+                    cx,
+                );
+            });
             let result = cx
                 .background_spawn(async move {
                     let artifact = catalog
@@ -123,7 +142,8 @@ impl NotesView {
                             exporter: String::new(),
                             format: format_name,
                             title: title.clone(),
-                            source,
+                            source: export_source.source,
+                            assets: export_source.assets,
                             theme,
                         })
                         .await
@@ -157,18 +177,23 @@ impl NotesView {
         .detach();
     }
 
-    fn open_document_exporter_marketplace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_document_exporter_marketplace(
+        &mut self,
+        format: NotesExportFormat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let host = Arc::new(extension_runtime::MainExtensionViewHost);
         let extensions = cx.new(|cx| {
             extension_view::ExtensionManagerView::new_marketplace_search(
                 host,
-                DOCUMENT_EXPORTER_MARKETPLACE_QUERY,
+                format.marketplace_query(),
                 window,
                 cx,
             )
         });
         cx.emit(TabContentEvent::OpenTab {
-            tab: TabItem::new(DOCUMENT_EXPORTER_MARKETPLACE_TAB_ID, "home", extensions),
+            tab: TabItem::new(format.marketplace_tab_id(), "home", extensions),
             mode: TabOpenMode::Activate,
         });
         window.push_notification(
@@ -177,8 +202,9 @@ impl NotesView {
         );
     }
 
-    fn source_for_export(&self, row: &TreeRow, cx: &App) -> anyhow::Result<String> {
+    fn source_for_export(&self, row: &TreeRow, cx: &App) -> anyhow::Result<ExportSource> {
         let descriptor = self.storage()?.descriptor(&row.relative_path)?;
+        let source_path = descriptor.absolute_path.clone();
         let source = match descriptor.format {
             DocumentFormat::Markdown => {
                 if let Some((_, session)) = self
@@ -200,7 +226,7 @@ impl NotesView {
                         }
                     }
                 } else {
-                    Ok(fs::read_to_string(descriptor.absolute_path)?)
+                    Ok(fs::read_to_string(&source_path)?)
                 }
             }
             DocumentFormat::RichText => {
@@ -212,14 +238,77 @@ impl NotesView {
                     let document = cached.handle.get_document(cx)?;
                     export_rich_text_document(&document)
                 } else {
-                    let document =
-                        EditorDocument::from_json(&fs::read_to_string(descriptor.absolute_path)?)?;
+                    let document = EditorDocument::from_json(&fs::read_to_string(&source_path)?)?;
                     export_rich_text_document(&document)
                 }
             }
         }?;
-        Ok(strip_whiteboard_metadata_comments(&source))
+        let source = strip_whiteboard_metadata_comments(&source);
+        let assets = collect_export_assets(&source, source_path.parent());
+        Ok(ExportSource { source, assets })
     }
+}
+
+struct ExportSource {
+    source: String,
+    assets: Vec<extension_wasm::DocumentExportAsset>,
+}
+
+fn collect_export_assets(
+    source: &str,
+    base: Option<&Path>,
+) -> Vec<extension_wasm::DocumentExportAsset> {
+    let Some(base) = base else { return Vec::new() };
+    let mut assets = Vec::new();
+    let mut seen = HashSet::new();
+    for line in source.lines() {
+        let Some(start) = line.find("](") else {
+            continue;
+        };
+        let Some(end) = line[start + 2..].find(')') else {
+            continue;
+        };
+        let target = line[start + 2..start + 2 + end].trim();
+        let path = if let Some(target) = target.strip_prefix('<') {
+            target
+                .split_once('>')
+                .map(|(path, _)| path)
+                .unwrap_or(target)
+        } else {
+            target.split_whitespace().next().unwrap_or(target)
+        };
+        if path.is_empty()
+            || path.contains("://")
+            || path.starts_with("data:")
+            || path.starts_with("asset:")
+        {
+            continue;
+        }
+        if !seen.insert(path.to_owned()) {
+            continue;
+        }
+        let file = base.join(path);
+        let Ok(bytes) = fs::read(&file) else { continue };
+        let media_type = match file
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "svg" => "image/svg+xml",
+            _ => "application/octet-stream",
+        };
+        assets.push(extension_wasm::DocumentExportAsset {
+            path: path.to_owned(),
+            media_type: media_type.to_owned(),
+            bytes,
+        });
+    }
+    assets
 }
 
 fn export_rich_text_document(document: &EditorDocument) -> anyhow::Result<String> {
@@ -327,8 +416,8 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::{
-        DOCUMENT_EXPORTER_MARKETPLACE_QUERY, NotesExportFormat, export_rich_text_document,
-        next_export_path, strip_whiteboard_metadata_comments, without_comment_blocks,
+        NotesExportFormat, collect_export_assets, export_rich_text_document, next_export_path,
+        strip_whiteboard_metadata_comments, without_comment_blocks,
     };
     use cditor_app::core::rich_text::{
         BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
@@ -346,13 +435,18 @@ mod tests {
 
     #[test]
     fn all_export_formats_route_to_the_document_exporter_marketplace_entry() {
-        for format in NotesExportFormat::ALL {
-            assert!(!format.protocol_name().is_empty());
-            assert_eq!(
-                "Notes Document Exporter",
-                DOCUMENT_EXPORTER_MARKETPLACE_QUERY
-            );
-        }
+        assert_eq!(
+            "Notes HTML Exporter",
+            NotesExportFormat::Html.marketplace_query()
+        );
+        assert_eq!(
+            "Notes PDF Exporter",
+            NotesExportFormat::Pdf.marketplace_query()
+        );
+        assert_eq!(
+            "Notes Word Exporter",
+            NotesExportFormat::Word.marketplace_query()
+        );
     }
 
     #[test]
@@ -433,6 +527,22 @@ mod tests {
         let source = "Before\n<!-- user note -->\nAfter";
 
         assert_eq!(source, strip_whiteboard_metadata_comments(source));
+    }
+
+    #[test]
+    fn local_markdown_images_are_attached_to_export_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("diagram.png"), b"png-data").unwrap();
+
+        let assets = collect_export_assets(
+            "![Diagram](diagram.png)\n![Again](diagram.png)",
+            Some(dir.path()),
+        );
+
+        assert_eq!(1, assets.len());
+        assert_eq!("diagram.png", assets[0].path);
+        assert_eq!("image/png", assets[0].media_type);
+        assert_eq!(b"png-data", assets[0].bytes.as_slice());
     }
 
     fn editor_document(blocks: Vec<EditorBlock>) -> EditorDocument {

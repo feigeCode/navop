@@ -2,7 +2,8 @@ package onet:extension;
 
 interface document-export {
     record theme { dark: bool, background: u32, foreground: u32, border: u32, muted: u32, accent: u32, danger: u32, font-family: string }
-    record request { exporter: string, format: string, title: string, source: string, theme: theme }
+    record request { exporter: string, format: string, title: string, source: string, assets: list<asset>, theme: theme }
+    record asset { path: string, media-type: string, bytes: list<u8> }
     record artifact { media-type: string, extension: string, bytes: list<u8> }
 }
 

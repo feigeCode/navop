@@ -26,7 +26,15 @@ pub struct DocumentExportRequest {
     pub format: String,
     pub title: String,
     pub source: String,
+    pub assets: Vec<DocumentExportAsset>,
     pub theme: DocumentExportTheme,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentExportAsset {
+    pub path: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,6 +120,15 @@ impl DocumentExporterRuntime {
             format: request.format,
             title: request.title,
             source: request.source,
+            assets: request
+                .assets
+                .into_iter()
+                .map(|asset| Wit::Asset {
+                    path: asset.path,
+                    media_type: asset.media_type,
+                    bytes: asset.bytes,
+                })
+                .collect(),
             theme: Wit::Theme {
                 dark: request.theme.dark,
                 background: request.theme.background,

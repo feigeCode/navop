@@ -164,11 +164,12 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
             window,
             cx,
             |this, state: &mut ContextMenuState, window, cx| {
+                let shared_state = state.shared_state.clone();
                 let (position, open) = {
-                    let shared_state = state.shared_state.borrow();
+                    let shared_state = shared_state.borrow();
                     (shared_state.position, shared_state.open)
                 };
-                let menu_view = state.shared_state.borrow().menu_view.clone();
+                let menu_view = shared_state.borrow().menu_view.clone();
                 let mut menu_element = None;
                 if open {
                     let has_menu_item = menu_view
@@ -183,6 +184,20 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                     div()
                                         .w(window.bounds().size.width)
                                         .h(window.bounds().size.height)
+                                        .on_mouse_down(MouseButton::Left, {
+                                            let shared_state = shared_state.clone();
+                                            move |_, window, _| {
+                                                shared_state.borrow_mut().open = false;
+                                                window.refresh();
+                                            }
+                                        })
+                                        .on_mouse_down(MouseButton::Right, {
+                                            let shared_state = shared_state.clone();
+                                            move |_, window, _| {
+                                                shared_state.borrow_mut().open = false;
+                                                window.refresh();
+                                            }
+                                        })
                                         .on_scroll_wheel(|_, _, cx| {
                                             cx.stop_propagation();
                                         })

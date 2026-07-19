@@ -198,9 +198,13 @@ Notes:
     zh-CN: 文档导出扩展未安装或不可用
     zh-HK: 文件匯出擴充功能未安裝或不可用
   export_extension_required:
-    en: Install Notes Document Exporter from Extensions, then retry the export
-    zh-CN: 请在扩展市场安装 Notes Document Exporter，然后重试导出
-    zh-HK: 請在擴充功能市集安裝 Notes Document Exporter，然後重試匯出
+    en: Install the exporter for this format from Extensions, then retry
+    zh-CN: 请在扩展市场安装当前格式对应的导出扩展，然后重试
+    zh-HK: 請在擴充功能市集安裝目前格式對應的匯出擴充功能，然後重試
+  export_started:
+    en: Export started. The first export may take longer while the exporter loads.
+    zh-CN: 已开始导出。首次导出需要加载扩展，可能会耗时较长，请稍候。
+    zh-HK: 已開始匯出。首次匯出需要載入擴充功能，可能需時較長，請稍候。
   exported:
     en: "Exported to %{path}"
     zh-CN: 已导出到 %{path}

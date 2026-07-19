@@ -17,7 +17,8 @@ pub use component::{ComponentHostState, ComponentRuntime};
 pub use config::WasmRuntimeConfig;
 pub use connection_import::{ConnectionImportComponentRuntime, ConnectionImportHostState};
 pub use document_exporter::{
-    DocumentExportArtifact, DocumentExportRequest, DocumentExportTheme, DocumentExporterRuntime,
+    DocumentExportArtifact, DocumentExportAsset, DocumentExportRequest, DocumentExportTheme,
+    DocumentExporterRuntime,
 };
 pub use document_renderer::{
     DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme, DocumentRendererRuntime,
