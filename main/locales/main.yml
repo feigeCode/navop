@@ -111,6 +111,14 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  local_terminal:
+    en: Terminal
+    zh-CN: 终端
+    zh-HK: 終端
+  local_terminal_tooltip:
+    en: Open the default local terminal; use the arrow to choose another profile
+    zh-CN: 打开默认本地终端；使用箭头选择其他终端配置
+    zh-HK: 開啟預設本機終端；使用箭頭選擇其他終端設定
   local_terminal_invalid_config:
     en: "Invalid local terminal configuration: %{error}"
     zh-CN: "本地终端配置无效：%{error}"
@@ -1021,14 +1029,6 @@ NewConnection:
     en: Remote server terminal and file connection
     zh-CN: 远程服务器终端与文件连接
     zh-HK: 遠端伺服器終端與檔案連線
-  description_terminal:
-    en: Open a local terminal tab
-    zh-CN: 打开一个本地终端标签页
-    zh-HK: 開啟一個本機終端標籤頁
-  open_terminal:
-    en: Open Terminal
-    zh-CN: 打开终端
-    zh-HK: 開啟終端
   description_rdp:
     en: Remote Desktop Protocol connection
     zh-CN: 远程桌面协议连接

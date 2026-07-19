@@ -6,18 +6,19 @@ use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
+    Anchor, AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
+    ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonVariants as _, DropdownButton},
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
+    menu::PopupMenuItem,
     popover::Popover,
     tooltip::Tooltip,
     v_flex,
@@ -62,6 +63,7 @@ use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
+use crate::local_terminal_profiles::launch_options;
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
@@ -345,6 +347,22 @@ mod external_driver_form_tests {
         assert_eq!("cmd-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS);
         assert_eq!("alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
         assert_ne!("ctrl-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
+    }
+
+    #[test]
+    fn local_terminal_launcher_is_visible_in_home_toolbar() {
+        let source = include_str!("home_tab.rs");
+        let toolbar = source
+            .rsplit("fn render_toolbar(")
+            .next()
+            .expect("render_toolbar exists")
+            .split("fn render_connection_list(")
+            .next()
+            .expect("render_toolbar has an end marker");
+
+        assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
+        assert!(source.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
+        assert!(source.contains(".checked(kind == default_kind)"));
     }
 
     #[test]
@@ -2654,6 +2672,47 @@ impl HomePage {
         }
     }
 
+    fn render_local_terminal_button(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let default_kind = AppSettings::global(cx).local_terminal_profile.kind;
+        let custom_program = AppSettings::global(cx)
+            .local_terminal_profile
+            .custom_program
+            .clone();
+        let view = cx.entity();
+        let menu_view = view.clone();
+        DropdownButton::new("local-terminal-dropdown")
+            .button(
+                Button::new("local-terminal-button")
+                    .icon(IconName::Terminal)
+                    .label(t!("Home.local_terminal").to_string())
+                    .tooltip(t!("Home.local_terminal_tooltip").to_string())
+                    .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                        this.add_terminal_tab_with_profile(default_kind, window, cx);
+                    })),
+            )
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                launch_options(cfg!(target_os = "windows"), &custom_program)
+                    .into_iter()
+                    .fold(menu, |menu, (kind, label)| {
+                        let view = menu_view.clone();
+                        menu.item(
+                            PopupMenuItem::new(label)
+                                .checked(kind == default_kind)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |home, cx| {
+                                        home.add_terminal_tab_with_profile(kind, window, cx);
+                                    });
+                                }),
+                        )
+                    })
+            })
+            .into_any_element()
+    }
+
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
@@ -2718,6 +2777,7 @@ impl HomePage {
                                 this.show_new_connection_dialog(window, cx);
                             })),
                     )
+                    .child(self.render_local_terminal_button(window, cx))
                     .child(
                         Button::new("import-connection-button")
                             .icon(IconName::Upload)
