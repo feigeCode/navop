@@ -362,7 +362,7 @@ mod external_driver_form_tests {
 
         assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
         assert!(source.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
-        assert!(source.contains(".icon(IconName::TerminalColor)"));
+        assert!(source.contains(".icon(IconName::TerminalColor.color())"));
         assert!(source.contains(".checked(kind == default_kind)"));
     }
 
@@ -2691,7 +2691,7 @@ impl HomePage {
         DropdownButton::new("local-terminal-dropdown")
             .button(
                 Button::new("local-terminal-button")
-                    .icon(IconName::TerminalColor)
+                    .icon(IconName::TerminalColor.color())
                     .label(t!("Home.local_terminal").to_string())
                     .tooltip(t!("Home.local_terminal_tooltip").to_string())
                     .on_click(window.listener_for(&view, move |this, _, window, cx| {
