@@ -18,7 +18,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
-    menu::PopupMenuItem,
+    menu::{DropdownMenu as _, PopupMenuItem},
     popover::Popover,
     tooltip::Tooltip,
     v_flex,
@@ -207,7 +207,7 @@ fn should_auto_onet_cloud_sync(cx: &App, current_user_present: bool) -> bool {
     sync_route(cx) == HomeSyncRoute::OnetCloud && current_user_present && crypto::has_master_key()
 }
 
-fn should_show_team_key_button(route: HomeSyncRoute, cached_team_count: usize) -> bool {
+fn should_show_team_key_menu_item(route: HomeSyncRoute, cached_team_count: usize) -> bool {
     route == HomeSyncRoute::OnetCloud && cached_team_count > 0
 }
 
@@ -667,11 +667,11 @@ mod external_driver_form_tests {
     }
 
     #[test]
-    fn team_key_button_is_visible_only_for_onetcloud_with_cached_teams() {
-        assert!(should_show_team_key_button(HomeSyncRoute::OnetCloud, 1));
-        assert!(should_show_team_key_button(HomeSyncRoute::OnetCloud, 3));
-        assert!(!should_show_team_key_button(HomeSyncRoute::OnetCloud, 0));
-        assert!(!should_show_team_key_button(HomeSyncRoute::Personal, 1));
+    fn team_key_menu_item_is_visible_only_for_onetcloud_with_cached_teams() {
+        assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 1));
+        assert!(should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 3));
+        assert!(!should_show_team_key_menu_item(HomeSyncRoute::OnetCloud, 0));
+        assert!(!should_show_team_key_menu_item(HomeSyncRoute::Personal, 1));
     }
 
     #[test]
@@ -692,6 +692,25 @@ mod external_driver_form_tests {
             .expect("render_toolbar has an end marker");
 
         assert!(toolbar.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
+    }
+
+    #[test]
+    fn personal_and_team_keys_share_one_toolbar_menu() {
+        let source = include_str!("home_tab.rs");
+        let toolbar = source
+            .rsplit("fn render_toolbar(")
+            .next()
+            .expect("render_toolbar exists")
+            .split("fn render_connection_list(")
+            .next()
+            .expect("render_toolbar has an end marker");
+
+        assert!(toolbar.contains("Button::new(\"key-menu-button\")"));
+        assert!(toolbar.contains(".dropdown_caret(true)"));
+        assert!(toolbar.contains("Encryption.personal_key_unlocked"));
+        assert!(toolbar.contains("Encryption.personal_key_locked"));
+        assert!(toolbar.contains("Encryption.team_key"));
+        assert!(!toolbar.contains("Button::new(\"team-key-button\")"));
     }
 
     #[test]
@@ -2738,8 +2757,8 @@ impl HomePage {
             HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
         };
         let has_master_key = crypto::has_master_key();
-        let show_team_key_button = is_feature_enabled(Feature::TeamManagement, cx)
-            && should_show_team_key_button(route, self.team_options.len());
+        let show_team_key_menu_item = is_feature_enabled(Feature::TeamManagement, cx)
+            && should_show_team_key_menu_item(route, self.team_options.len());
         let personal_conflict_count = if route == HomeSyncRoute::Personal {
             crate::personal_sync_conflicts::current_personal_conflict_count(cx)
         } else {
@@ -2868,41 +2887,57 @@ impl HomePage {
                                 })),
                         )
                     })
-                    // 主密钥按钮
+                    // 密钥菜单
                     .child(
-                        Button::new("encryption-key-button")
+                        Button::new("key-menu-button")
                             .icon(IconName::Key)
-                            .label(if has_master_key {
-                                t!("Encryption.key_unlocked").to_string()
-                            } else {
-                                t!("Encryption.edit_repo_password").to_string()
-                            })
+                            .label(t!("Encryption.keys").to_string())
+                            .dropdown_caret(true)
                             .ghost()
-                            .when(has_master_key, |btn| btn.text_color(cx.theme().success))
-                            .when(!has_master_key, |btn| {
-                                btn.text_color(cx.theme().muted_foreground)
-                            })
-                            .tooltip(if has_master_key {
-                                t!("Encryption.key_unlocked_tooltip")
-                            } else {
-                                t!("Encryption.key_locked_tooltip")
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_encryption_key_dialog(window, cx);
-                            })),
-                    )
-                    .when(show_team_key_button, |this| {
-                        this.child(
-                            Button::new("team-key-button")
-                                .icon(IconName::Key)
-                                .label(t!("TeamSync.manage_keys").to_string())
-                                .ghost()
-                                .tooltip(t!("TeamSync.key_help").to_string())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.add_team_key_settings_tab(window, cx);
-                                })),
-                        )
-                    }),
+                            .tooltip(t!("Encryption.keys_tooltip").to_string())
+                            .dropdown_menu_with_anchor(Anchor::TopRight, {
+                                let personal_view = view.clone();
+                                let team_view = view.clone();
+                                move |menu, _, _| {
+                                    let personal_label = if has_master_key {
+                                        t!("Encryption.personal_key_unlocked").to_string()
+                                    } else {
+                                        t!("Encryption.personal_key_locked").to_string()
+                                    };
+                                    let menu = menu.item(
+                                        PopupMenuItem::new(personal_label)
+                                            .icon(IconName::User)
+                                            .on_click({
+                                                let personal_view = personal_view.clone();
+                                                move |_, window, cx| {
+                                                    personal_view.update(cx, |home, cx| {
+                                                        home.show_encryption_key_dialog(window, cx);
+                                                    });
+                                                }
+                                            }),
+                                    );
+
+                                    if show_team_key_menu_item {
+                                        menu.item(
+                                            PopupMenuItem::new(
+                                                t!("Encryption.team_key").to_string(),
+                                            )
+                                            .icon(IconName::Building2)
+                                            .on_click({
+                                                let team_view = team_view.clone();
+                                                move |_, window, cx| {
+                                                    team_view.update(cx, |home, cx| {
+                                                        home.add_team_key_settings_tab(window, cx);
+                                                    });
+                                                }
+                                            }),
+                                        )
+                                    } else {
+                                        menu
+                                    }
+                                }
+                            }),
+                    ),
             )
             // ===== 右侧操作区 =====
             .child(

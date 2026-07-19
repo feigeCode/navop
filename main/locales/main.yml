@@ -813,6 +813,26 @@ Auth:
 
 # 主密钥
 Encryption:
+  keys:
+    en: Keys
+    zh-CN: 密钥
+    zh-HK: 密鑰
+  keys_tooltip:
+    en: Manage personal and team keys
+    zh-CN: 管理个人和团队密钥
+    zh-HK: 管理個人和團隊密鑰
+  personal_key_unlocked:
+    en: Personal · Unlocked
+    zh-CN: 个人 · 已解锁
+    zh-HK: 個人 · 已解鎖
+  personal_key_locked:
+    en: Personal · Locked
+    zh-CN: 个人 · 未解锁
+    zh-HK: 個人 · 未解鎖
+  team_key:
+    en: Team
+    zh-CN: 团队
+    zh-HK: 團隊
   edit_repo_password:
     en: Edit Master Key
     zh-CN: 编辑主密钥
