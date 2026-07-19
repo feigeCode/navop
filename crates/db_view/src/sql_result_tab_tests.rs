@@ -16,3 +16,31 @@ fn result_tabs_keep_content_shrinkable_inside_the_panel() {
     assert!(source.contains(".min_w_0()"));
     assert!(source.contains(".min_h_0()"));
 }
+
+#[test]
+fn result_content_wrapper_provides_a_full_height_vertical_flex_context() {
+    let source = include_str!("sql_result_tab.rs");
+    let wrapper = source
+        .split(".id(\"sql-result-content\")")
+        .nth(1)
+        .expect("result content wrapper should exist");
+
+    assert!(wrapper.contains(".flex_col()"));
+    assert!(wrapper.contains(".size_full()"));
+}
+
+#[test]
+fn statement_scrollbar_has_an_explicit_overlay_boundary() {
+    let source = include_str!("sql_result_tab.rs");
+    let scrollbar = source
+        .split(".id(\"statement-list-container\")")
+        .nth(1)
+        .and_then(|source| source.split(".into_any_element()").next())
+        .expect("statement scrollbar boundary should exist");
+
+    assert!(scrollbar.contains("Scrollbar::vertical(&self.scroll_handle)"));
+    assert!(scrollbar.contains(".absolute()"));
+    assert!(scrollbar.contains(".top_0()"));
+    assert!(scrollbar.contains(".right_0()"));
+    assert!(scrollbar.contains(".bottom_0()"));
+}

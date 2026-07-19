@@ -68,6 +68,14 @@ Endpoint:
     en: Search servers
     zh-CN: 搜索服务器
     zh-HK: 搜尋伺服器
+  switch_title:
+    en: Choose endpoint
+    zh-CN: 选择端点
+    zh-HK: 選擇端點
+  switch_tooltip:
+    en: "Switch endpoint (current: %{name})"
+    zh-CN: "切换端点（当前：%{name}）"
+    zh-HK: "切換端點（目前：%{name}）"
   connection_missing:
     en: The selected server no longer exists
     zh-CN: 所选服务器已不存在

@@ -151,7 +151,23 @@ impl ConnectionOpenStrategy for MongoOpenStrategy {
             connection,
             workspace,
         } = *self;
-        home.open_mongodb_tab_with_mode(connection, workspace, mode, window, cx);
+        let connection_name = connection.name.clone();
+        let requirement = extension_runtime::database_driver_install::required_native_driver(
+            "mongodb",
+            extension_runtime::database_driver_install::NativeDriverBackend::Ipc {
+                driver_id: mongodb_runtime::DEFAULT_MONGODB_MODERN_DRIVER_ID.to_string(),
+            },
+        );
+        extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
+            home,
+            requirement,
+            connection_name,
+            window,
+            cx,
+            move |home, window, cx| {
+                home.open_mongodb_tab_with_mode(connection, workspace, mode, window, cx);
+            },
+        );
     }
 }
 

@@ -30,10 +30,11 @@ pub(crate) enum LeftEndpointValue {
     Remote(i64),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct LeftEndpointItem {
     value: LeftEndpointValue,
     title: String,
+    icon: IconName,
 }
 
 impl LeftEndpointItem {
@@ -41,24 +42,29 @@ impl LeftEndpointItem {
         Self {
             value: LeftEndpointValue::Local,
             title,
+            icon: IconName::HardDrive,
         }
     }
 
     fn remote(connection: &StoredConnection) -> Option<Self> {
         let id = connection.id?;
-        let host = connection
-            .to_ssh_params()
-            .ok()
-            .map(|params| params.host)
-            .filter(|host| !host.trim().is_empty());
-        let title = host.map_or_else(
-            || connection.name.clone(),
-            |host| format!("{} ({host})", connection.name),
-        );
         Some(Self {
             value: LeftEndpointValue::Remote(id),
-            title,
+            title: connection_title(connection),
+            icon: connection.connection_type.icon(),
         })
+    }
+
+    pub(crate) fn value(&self) -> &LeftEndpointValue {
+        &self.value
+    }
+
+    pub(crate) fn title_text(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn icon(&self) -> IconName {
+        self.icon.clone()
     }
 }
 
@@ -87,6 +93,18 @@ pub(crate) fn endpoint_items(
             .filter_map(|connection| LeftEndpointItem::remote(&connection)),
     );
     items
+}
+
+pub(crate) fn connection_title(connection: &StoredConnection) -> String {
+    let host = connection
+        .to_ssh_params()
+        .ok()
+        .map(|params| params.host)
+        .filter(|host| !host.trim().is_empty());
+    host.map_or_else(
+        || connection.name.clone(),
+        |host| format!("{} ({host})", connection.name),
+    )
 }
 
 pub(crate) fn load_connection(id: i64, cx: &App) -> Option<StoredConnection> {
@@ -268,7 +286,7 @@ mod tests {
     }
 }
 use gpui::{App, SharedString};
-use gpui_component::select::SelectItem;
+use gpui_component::{IconName, select::SelectItem};
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
 };

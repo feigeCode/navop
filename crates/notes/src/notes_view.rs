@@ -9,8 +9,7 @@ use crate::{
 use anyhow::{Context as _, bail};
 use cditor_app::{AiProvider, Editor, EditorHandle};
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
-    Subscription, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Window,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::input::InputState;
@@ -53,7 +52,6 @@ pub struct NotesView {
     pub(crate) document_renderer_provider: Option<Arc<NavopDocumentRendererProvider>>,
     pub(crate) theme_provider: Arc<NavopThemeProvider>,
     pub(crate) setup_path: Entity<InputState>,
-    pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
@@ -159,7 +157,6 @@ impl NotesView {
             document_renderer_provider,
             theme_provider,
             setup_path: setup_path.clone(),
-            dialog_subscription: None,
             focus_handle: cx.focus_handle(),
             standalone_markdown,
             sidebar_collapsed: false,

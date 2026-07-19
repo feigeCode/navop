@@ -27,7 +27,7 @@ impl MongoEventHandler {
         let tree_subscription = cx.subscribe_in(
             tree_view,
             window,
-            move |_handler, _tree, event, window, cx| {
+            move |handler, _tree, event, window, cx| {
                 let tree_view = tree_view_clone.clone();
                 let collection_view = collection_view_clone.clone();
                 let tab_container = tab_container_clone.clone();
@@ -90,6 +90,33 @@ impl MongoEventHandler {
                         }
                     }
                     MongoTreeViewEvent::ConnectionEstablished { .. } => {}
+                    MongoTreeViewEvent::NativeDriverRequired {
+                        node_id,
+                        connection_name,
+                        driver_id,
+                    } => {
+                        let node_id = node_id.clone();
+                        let connection_name = connection_name.clone();
+                        let driver_id = driver_id.clone();
+                        let requirement = extension_runtime::database_driver_install::required_native_driver(
+                            "mongodb",
+                            extension_runtime::database_driver_install::NativeDriverBackend::Ipc {
+                                driver_id: driver_id.clone(),
+                            },
+                        );
+                        extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
+                            handler,
+                            requirement,
+                            connection_name,
+                            window,
+                            cx,
+                            move |_handler, _window, cx| {
+                                tree_view.update(cx, |view, cx| {
+                                    view.connect_node(node_id.clone(), cx);
+                                });
+                            },
+                        );
+                    }
                 }
             },
         );

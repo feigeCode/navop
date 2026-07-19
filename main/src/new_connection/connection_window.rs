@@ -1,23 +1,20 @@
 use db::ipc::IpcDriverRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, AnyElement, AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
+    AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, actions, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size,
-    button::{Button, ButtonVariants as _, DropdownButton},
+    button::{Button, ButtonVariants as _},
     h_flex,
-    menu::PopupMenuItem,
     scroll::ScrollableElement,
     v_flex,
 };
-use one_core::settings::{AppSettings, LocalTerminalProfileKind};
 use rust_i18n::t;
 
 use crate::home_tab::HomePage;
-use crate::local_terminal_profiles::launch_options;
 use crate::new_connection::connection_kind::{NewConnectionCategory, NewConnectionKind};
 use crate::new_connection::form_page::{NewConnectionFormPage, NewConnectionFormResult};
 
@@ -177,22 +174,6 @@ impl NewConnectionWindow {
         cx: &mut Context<Self>,
     ) {
         self.open_selected(window, cx);
-    }
-
-    fn open_terminal_profile(
-        &mut self,
-        profile_kind: LocalTerminalProfileKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let parent = self.parent.clone();
-        let parent_window = self.parent_window;
-        let _ = parent_window.update(cx, move |_, window, cx| {
-            let _ = parent.update(cx, |home, cx| {
-                home.add_terminal_tab_with_profile(profile_kind, window, cx);
-            });
-        });
-        window.remove_window();
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -382,59 +363,7 @@ impl NewConnectionWindow {
             )
     }
 
-    fn render_terminal_open_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let default_kind = AppSettings::global(cx).local_terminal_profile.kind;
-        let custom_program = AppSettings::global(cx)
-            .local_terminal_profile
-            .custom_program
-            .clone();
-        let view = cx.entity();
-        DropdownButton::new("open-terminal-dropdown")
-            .small()
-            .primary()
-            .button(
-                Button::new("open-terminal-default")
-                    .small()
-                    .primary()
-                    .label(t!("NewConnection.open_terminal").to_string())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_terminal_profile(default_kind, window, cx);
-                    })),
-            )
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                launch_options(cfg!(target_os = "windows"), &custom_program)
-                    .into_iter()
-                    .fold(menu, |menu, (kind, label)| {
-                        let view = view.clone();
-                        menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(kind == default_kind)
-                                .on_click(move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.open_terminal_profile(kind, window, cx);
-                                    });
-                                }),
-                        )
-                    })
-            })
-            .into_any_element()
-    }
-
     fn render_selection_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_button: AnyElement = if self.selected_kind == Some(NewConnectionKind::Terminal) {
-            self.render_terminal_open_button(cx)
-        } else {
-            Button::new("next-new-connection")
-                .small()
-                .primary()
-                .label(t!("Common.next").to_string())
-                .disabled(self.selected_kind.is_none())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.open_selected(window, cx);
-                }))
-                .into_any_element()
-        };
-
         h_flex()
             .flex_none()
             .w_full()
@@ -453,7 +382,16 @@ impl NewConnectionWindow {
                         cx.notify();
                     })),
             )
-            .child(action_button)
+            .child(
+                Button::new("next-new-connection")
+                    .small()
+                    .primary()
+                    .label(t!("Common.next").to_string())
+                    .disabled(self.selected_kind.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_selected(window, cx);
+                    })),
+            )
     }
 
     fn render_form_page(&self, form: AnyView, cx: &mut Context<Self>) -> impl IntoElement {
@@ -515,16 +453,15 @@ impl Render for NewConnectionWindow {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn terminal_selection_renders_profile_dropdown() {
+    fn local_terminal_is_not_part_of_new_connection_selection() {
         let source = include_str!("connection_window.rs");
         let production = source
             .split("#[cfg(test)]")
             .next()
             .expect("production source exists");
 
-        assert!(production.contains("DropdownButton::new(\"open-terminal-dropdown\")"));
-        assert!(production.contains(".checked(kind == default_kind)"));
-        assert!(production.contains("this.open_terminal_profile(kind, window, cx)"));
+        assert!(!production.contains("open_terminal_profile"));
+        assert!(!production.contains("render_terminal_open_button"));
     }
 
     #[test]

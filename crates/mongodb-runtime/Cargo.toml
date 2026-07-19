@@ -25,6 +25,7 @@ default = []
 builtin-mongodb = ["dep:mongodb"]
 
 [dev-dependencies]
+tempfile = "3"
 tokio.workspace = true
 
 [lints]

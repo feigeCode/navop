@@ -14,7 +14,7 @@ pub(crate) fn notify_operation_error<T>(
     notify_error_message(
         window,
         cx,
-        t!("Notes.operation_failed", error = error.to_string()),
+        t!("Notes.operation_failed", error = format!("{error:#}")),
     );
 }
 

@@ -1,4 +1,5 @@
 use crate::document_index::{DOCUMENT_INDEX_FILE, DocumentIndex, PendingDocumentOperation};
+use crate::path_policy::document_file_name;
 use crate::{DocumentFormat, NotesStorage, validate_node_name};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -245,6 +246,19 @@ fn rejects_unsafe_names_and_paths() -> Result<()> {
             .is_err()
     );
     assert!(storage.delete_node(Path::new("")).is_err());
+    Ok(())
+}
+
+#[test]
+fn document_names_accept_their_explicit_extension() -> Result<()> {
+    assert_eq!(
+        "Guide.md",
+        document_file_name("Guide.md", DocumentFormat::Markdown)?
+    );
+    assert_eq!(
+        "Guide.cditor.json",
+        document_file_name("Guide.cditor.json", DocumentFormat::RichText)?
+    );
     Ok(())
 }
 

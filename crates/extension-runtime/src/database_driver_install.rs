@@ -71,6 +71,12 @@ pub fn required_native_driver(
     }
 }
 
+pub fn native_driver_is_installed(api: &str, driver_id: &str) -> bool {
+    db::ipc::IpcDriverRegistry::load_default()
+        .find_by_api(api, driver_id)
+        .is_some()
+}
+
 /// Returns an explicit fallback requirement only for a structured server
 /// incompatibility. This keeps auth, TLS, timeout and other operational errors
 /// from silently switching driver implementations.
@@ -164,6 +170,37 @@ pub fn open_database_connection_with_driver_guard<T>(
                 home.open_database_connection(&connection, workspace, mode, window, cx);
             } else {
                 prompt_install_driver(connection, workspace, driver_id, mode, window, cx);
+            }
+        }
+    }
+}
+
+pub fn open_native_driver_connection_with_guard<T, F>(
+    target: &mut T,
+    requirement: NativeDriverRequirement,
+    connection_name: String,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    on_ready: F,
+) where
+    T: 'static,
+    F: FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
+{
+    match requirement {
+        NativeDriverRequirement::NotRequired => on_ready(target, window, cx),
+        NativeDriverRequirement::InvalidConfig { message } => notify_error(window, cx, message),
+        NativeDriverRequirement::Required { api, driver_id } => {
+            if native_driver_is_installed(&api, &driver_id) {
+                on_ready(target, window, cx);
+            } else {
+                prompt_install_driver_with_completion(
+                    api,
+                    driver_id,
+                    connection_name,
+                    window,
+                    cx,
+                    on_ready,
+                );
             }
         }
     }

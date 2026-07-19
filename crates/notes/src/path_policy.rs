@@ -38,7 +38,16 @@ pub(crate) fn document_file_name(name: &str, format: crate::DocumentFormat) -> R
         crate::DocumentFormat::RichText => RICH_TEXT_SUFFIX,
         crate::DocumentFormat::Markdown => MARKDOWN_SUFFIX,
     };
-    Ok(format!("{}{suffix}", validate_node_name(name)?))
+    let name = name.trim();
+    let display_name = strip_suffix_ignore_ascii_case(name, suffix).unwrap_or(name);
+    Ok(format!("{}{suffix}", validate_node_name(display_name)?))
+}
+
+fn strip_suffix_ignore_ascii_case<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
+    let prefix_len = value.len().checked_sub(suffix.len())?;
+    value[prefix_len..]
+        .eq_ignore_ascii_case(suffix)
+        .then(|| &value[..prefix_len])
 }
 
 pub(crate) fn document_display_name(file_name: &str) -> Option<(&str, crate::DocumentFormat)> {

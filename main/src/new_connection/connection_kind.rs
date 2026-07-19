@@ -54,7 +54,6 @@ impl NewConnectionCategory {
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum NewConnectionKind {
     Ssh,
-    Terminal,
     Rdp,
     Vnc,
     Redis,
@@ -77,7 +76,6 @@ impl NewConnectionKind {
     pub(super) fn all_with_registry(registry: &IpcDriverRegistry) -> Vec<Self> {
         let mut items = vec![
             Self::Ssh,
-            Self::Terminal,
             Self::Rdp,
             Self::Vnc,
             Self::Redis,
@@ -99,7 +97,6 @@ impl NewConnectionKind {
     pub(super) fn label(&self) -> String {
         match self {
             Self::Ssh => "SSH / SFTP".to_string(),
-            Self::Terminal => "Terminal".to_string(),
             Self::Rdp => "RDP".to_string(),
             Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
@@ -115,7 +112,6 @@ impl NewConnectionKind {
     pub(super) fn description(&self) -> String {
         match self {
             Self::Ssh => t!("NewConnection.description_ssh").to_string(),
-            Self::Terminal => t!("NewConnection.description_terminal").to_string(),
             Self::Rdp => t!("NewConnection.description_rdp").to_string(),
             Self::Vnc => t!("NewConnection.description_vnc").to_string(),
             Self::Redis => t!("NewConnection.description_redis").to_string(),
@@ -130,12 +126,9 @@ impl NewConnectionKind {
 
     pub(super) fn category(&self) -> NewConnectionCategory {
         match self {
-            Self::Ssh
-            | Self::Terminal
-            | Self::Rdp
-            | Self::Vnc
-            | Self::Serial
-            | Self::PortForwarding => NewConnectionCategory::Terminal,
+            Self::Ssh | Self::Rdp | Self::Vnc | Self::Serial | Self::PortForwarding => {
+                NewConnectionCategory::Terminal
+            }
             Self::MoreConnections => NewConnectionCategory::All,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
             Self::Database(_) => NewConnectionCategory::Database,
@@ -152,10 +145,6 @@ impl NewConnectionKind {
     pub(super) fn icon(&self) -> Icon {
         match self {
             Self::Ssh => IconName::TerminalColor.color().with_size(px(40.0)),
-            Self::Terminal => IconName::Terminal
-                .mono()
-                .text_color(gpui::rgb(0x8b5cf6))
-                .with_size(px(40.0)),
             Self::Rdp => IconName::Rdp.color().with_size(px(40.0)),
             Self::Vnc => IconName::Vnc.color().with_size(px(40.0)),
             Self::Redis => IconName::Redis.color().with_size(px(40.0)),
@@ -188,6 +177,7 @@ fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKin
     registry
         .drivers()
         .iter()
+        .filter(|driver| driver.ui.show_in_new_connection)
         .filter(|driver| !is_builtin_external_driver(&driver.id))
         .map(|driver| {
             let icon_asset_path = driver.preferred_icon_asset_path();
@@ -237,6 +227,30 @@ mod tests {
     }
 
     #[test]
+    fn external_database_kinds_respect_manifest_visibility() {
+        let hidden: IpcDriverManifest = serde_json::from_value(serde_json::json!({
+            "id": "redis",
+            "name": "Redis",
+            "api": "redis",
+            "entry": { "command": "./redis-driver" },
+            "transport": { "name": "redis.sock" },
+            "ui": { "show_in_new_connection": false }
+        }))
+        .unwrap();
+        let registry = IpcDriverRegistry::from_drivers(vec![hidden, manifest("custom", "Custom")]);
+
+        let ids: Vec<String> = external_database_kinds(&registry)
+            .into_iter()
+            .filter_map(|kind| match kind {
+                NewConnectionKind::ExternalDatabase { driver_id, .. } => Some(driver_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(ids, vec!["custom"]);
+    }
+
+    #[test]
     fn connection_categories_include_domestic_database() {
         assert_eq!(
             NewConnectionCategory::all(),
@@ -268,6 +282,17 @@ mod tests {
             NewConnectionKind::Vnc.category(),
             NewConnectionCategory::Terminal
         );
+    }
+
+    #[test]
+    fn local_terminal_is_not_a_new_connection_kind() {
+        let registry = IpcDriverRegistry::empty();
+        let labels = NewConnectionKind::all_with_registry(&registry)
+            .into_iter()
+            .map(|kind| kind.label())
+            .collect::<Vec<_>>();
+
+        assert!(!labels.iter().any(|label| label == "Terminal"));
     }
 
     #[test]

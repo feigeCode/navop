@@ -111,6 +111,14 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  local_terminal:
+    en: Terminal
+    zh-CN: 终端
+    zh-HK: 終端
+  local_terminal_tooltip:
+    en: Open the default local terminal; use the arrow to choose another profile
+    zh-CN: 打开默认本地终端；使用箭头选择其他终端配置
+    zh-HK: 開啟預設本機終端；使用箭頭選擇其他終端設定
   local_terminal_invalid_config:
     en: "Invalid local terminal configuration: %{error}"
     zh-CN: "本地终端配置无效：%{error}"
@@ -805,6 +813,26 @@ Auth:
 
 # 主密钥
 Encryption:
+  keys:
+    en: Keys
+    zh-CN: 密钥
+    zh-HK: 密鑰
+  keys_tooltip:
+    en: Manage personal and team keys
+    zh-CN: 管理个人和团队密钥
+    zh-HK: 管理個人和團隊密鑰
+  personal_key_unlocked:
+    en: Personal · Unlocked
+    zh-CN: 个人 · 已解锁
+    zh-HK: 個人 · 已解鎖
+  personal_key_locked:
+    en: Personal · Locked
+    zh-CN: 个人 · 未解锁
+    zh-HK: 個人 · 未解鎖
+  team_key:
+    en: Team
+    zh-CN: 团队
+    zh-HK: 團隊
   edit_repo_password:
     en: Edit Master Key
     zh-CN: 编辑主密钥
@@ -1021,14 +1049,6 @@ NewConnection:
     en: Remote server terminal and file connection
     zh-CN: 远程服务器终端与文件连接
     zh-HK: 遠端伺服器終端與檔案連線
-  description_terminal:
-    en: Open a local terminal tab
-    zh-CN: 打开一个本地终端标签页
-    zh-HK: 開啟一個本機終端標籤頁
-  open_terminal:
-    en: Open Terminal
-    zh-CN: 打开终端
-    zh-HK: 開啟終端
   description_rdp:
     en: Remote Desktop Protocol connection
     zh-CN: 远程桌面协议连接

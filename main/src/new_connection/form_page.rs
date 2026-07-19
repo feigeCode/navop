@@ -42,7 +42,6 @@ impl NewConnectionFormPage for NewConnectionKind {
         cx: &mut Context<NewConnectionWindow>,
     ) -> NewConnectionFormResult {
         match self {
-            Self::Terminal => open_terminal_tab(parent, parent_window, cx),
             Self::Ssh => build_ssh_form(parent, window, cx),
             Self::Rdp => build_remote_desktop_form(parent, RemoteDesktopProtocol::Rdp, window, cx),
             Self::Vnc => build_remote_desktop_form(parent, RemoteDesktopProtocol::Vnc, window, cx),
@@ -140,19 +139,6 @@ fn build_remote_desktop_form(
         cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx))
             .into(),
     )
-}
-
-fn open_terminal_tab(
-    parent: Entity<HomePage>,
-    parent_window: AnyWindowHandle,
-    cx: &mut Context<NewConnectionWindow>,
-) -> NewConnectionFormResult {
-    let _ = parent_window.update(cx, |_, window, cx| {
-        let _ = parent.update(cx, |home, cx| {
-            home.add_terminal_tab(window, cx);
-        });
-    });
-    NewConnectionFormResult::Done
 }
 
 fn open_extensions_tab(

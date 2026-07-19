@@ -4,7 +4,7 @@ use crate::{DocumentFormat, NotesView, TreeRow};
 use gpui::{AppContext, Context, Entity, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::{
     WindowExt, h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputState},
     v_flex,
 };
 use rust_i18n::t;
@@ -43,17 +43,6 @@ impl NotesView {
             CreateKind::Document(_) => t!("Notes.document_name").to_string(),
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-        self.dialog_subscription = Some(cx.subscribe_in(
-            &input,
-            window,
-            move |view, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    let name = input.read(cx).value().trim().to_owned();
-                    window.close_dialog(cx);
-                    view.apply_create(kind, &name, window, cx);
-                }
-            },
-        ));
         let view = cx.entity();
         open_name_dialog(view, input, kind, window, cx);
     }
@@ -70,18 +59,6 @@ impl NotesView {
                 .placeholder(t!("Notes.new_name").to_string())
         });
         let input_for_focus = input.clone();
-        let row_for_enter = row.clone();
-        self.dialog_subscription = Some(cx.subscribe_in(
-            &input,
-            window,
-            move |view, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    let name = input.read(cx).value().trim().to_owned();
-                    window.close_dialog(cx);
-                    view.apply_rename(&row_for_enter, &name, window, cx);
-                }
-            },
-        ));
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let input_for_ok = input.clone();
