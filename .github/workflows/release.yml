@@ -30,6 +30,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "7200"
 
 jobs:
   prepare:
@@ -105,6 +106,13 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Initialize sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server
+          sccache --show-stats
 
       - name: Free disk space (macOS)
         if: runner.os == 'macOS'
