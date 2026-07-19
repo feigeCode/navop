@@ -2442,10 +2442,12 @@ impl CollectionView {
                 h_flex()
                     .flex_1()
                     .min_h_0()
+                    .items_stretch()
                     .gap_2()
                     .child(
                         v_flex()
                             .flex_1()
+                            .h_full()
                             .min_h_0()
                             .border_1()
                             .border_color(cx.theme().border)
@@ -2462,6 +2464,7 @@ impl CollectionView {
                     .child(
                         v_flex()
                             .flex_1()
+                            .h_full()
                             .min_h_0()
                             .border_1()
                             .border_color(cx.theme().border)
