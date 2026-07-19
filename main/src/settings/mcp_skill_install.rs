@@ -7,7 +7,7 @@ use gpui_component::{
     setting::{SettingField, SettingItem},
     v_flex,
 };
-use public_mcp::client_config::{ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION};
+use public_mcp::client_config::ClientConfigInstall;
 use rust_i18n::t;
 use std::{path::PathBuf, process::Command};
 
@@ -16,6 +16,8 @@ enum SkillTarget {
     Codex,
     Agents,
 }
+
+const NAVOP_CLI_PACKAGE: &str = "@navop/cli@latest";
 
 impl SkillTarget {
     fn id(self) -> &'static str {
@@ -108,7 +110,7 @@ fn mcp_skill_install_item(target: SkillTarget) -> SettingItem {
 fn skill_install_args(target: SkillTarget, force: bool) -> Vec<String> {
     let mut args = vec![
         "-y".to_string(),
-        format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}"),
+        NAVOP_CLI_PACKAGE.to_string(),
         "skill".to_string(),
         "install".to_string(),
         "--target".to_string(),
@@ -183,11 +185,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn skill_install_uses_exact_package_version_without_a_shell() {
+    fn skill_install_uses_latest_cli_package_without_a_shell() {
         let args = skill_install_args(SkillTarget::Codex, false);
 
         assert_eq!("-y", args[0]);
-        assert_eq!(format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}"), args[1]);
+        assert_eq!(NAVOP_CLI_PACKAGE, args[1]);
         assert_eq!(
             vec![
                 "skill", "install", "--target", "codex", "--scope", "user", "--json"

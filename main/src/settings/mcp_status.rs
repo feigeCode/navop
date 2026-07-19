@@ -53,10 +53,22 @@ fn mcp_runtime_status_view_model(status: &PublicMcpRuntimeStatus) -> McpRuntimeS
         } => McpRuntimeStatusViewModel {
             state_key: "Settings.General.Mcp.status_running",
             detail_lines: vec![
-                bind_addr.to_string(),
-                public_mcp_mode_label(*mode).to_string(),
-                format!("clients: {client_count}"),
-                discovery_path.display().to_string(),
+                t!(
+                    "Settings.General.Mcp.status_bind_address",
+                    address = bind_addr.to_string()
+                )
+                .to_string(),
+                t!(
+                    "Settings.General.Mcp.status_discovery_mode",
+                    mode = t!(public_mcp_mode_label_key(*mode))
+                )
+                .to_string(),
+                t!("Settings.General.Mcp.status_clients", count = client_count).to_string(),
+                t!(
+                    "Settings.General.Mcp.status_discovery_path",
+                    path = discovery_path.display().to_string()
+                )
+                .to_string(),
             ],
         },
         PublicMcpRuntimeStatus::Failed { message, .. } => McpRuntimeStatusViewModel {
@@ -66,10 +78,10 @@ fn mcp_runtime_status_view_model(status: &PublicMcpRuntimeStatus) -> McpRuntimeS
     }
 }
 
-fn public_mcp_mode_label(mode: PublicMcpMode) -> &'static str {
+fn public_mcp_mode_label_key(mode: PublicMcpMode) -> &'static str {
     match mode {
-        PublicMcpMode::Temporary => "temporary",
-        PublicMcpMode::Persistent => "persistent",
+        PublicMcpMode::Temporary => "Settings.General.Mcp.server_mode_temporary",
+        PublicMcpMode::Persistent => "Settings.General.Mcp.server_mode_persistent",
     }
 }
 
@@ -95,15 +107,14 @@ mod tests {
             client_count: 2,
         });
         assert_eq!("Settings.General.Mcp.status_running", running.state_key);
-        assert_eq!(
-            vec![
-                "127.0.0.1:9234".to_string(),
-                "persistent".to_string(),
-                "clients: 2".to_string(),
-                "/tmp/public-mcp.json".to_string()
-            ],
-            running.detail_lines
+        assert_eq!(4, running.detail_lines.len());
+        assert!(running.detail_lines[0].contains("127.0.0.1:9234"));
+        assert!(
+            running.detail_lines[1]
+                .contains(t!("Settings.General.Mcp.server_mode_persistent").as_ref())
         );
+        assert!(running.detail_lines[2].contains('2'));
+        assert!(running.detail_lines[3].contains("/tmp/public-mcp.json"));
 
         let failed = mcp_runtime_status_view_model(&PublicMcpRuntimeStatus::Failed {
             generation: 4,

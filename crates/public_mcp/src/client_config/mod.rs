@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 const SERVER_NAME: &str = "navop";
 const LEGACY_SERVER_NAME: &str = "onetcli";
 const PACKAGE_NAME: &str = "@navop/mcp";
-/// Exact version of the external npm client/stdio launcher recommended by this Navop build.
-/// This is not a version of the host tool registry or of individual MCP tools.
-pub const NAVOP_MCP_CLIENT_VERSION: &str = "0.1.2";
+/// npm distribution tag used for the external MCP stdio launcher.
+/// The launcher resolves the current published package at startup.
+pub const NAVOP_MCP_CLIENT_TAG: &str = "latest";
 const CODEX_BEGIN: &str = "# BEGIN NAVOP MCP";
 const CODEX_END: &str = "# END NAVOP MCP";
 const LEGACY_CODEX_BEGIN: &str = "# BEGIN ONETCLI PUBLIC MCP";
@@ -55,7 +55,7 @@ impl ClientConfigInstall {
         Ok(Self::from_npx_path(
             npx,
             crate::discovery::public_mcp_discovery_path(),
-            NAVOP_MCP_CLIENT_VERSION,
+            NAVOP_MCP_CLIENT_TAG,
         ))
     }
 
@@ -220,7 +220,7 @@ fn classify_config_match(matches: bool, text: &str) -> Result<ClientConfigHealth
         return Ok(ClientConfigHealth::UpToDate);
     }
     if text.contains(PACKAGE_NAME)
-        && !text.contains(&format!("{PACKAGE_NAME}@{NAVOP_MCP_CLIENT_VERSION}"))
+        && !text.contains(&format!("{PACKAGE_NAME}@{NAVOP_MCP_CLIENT_TAG}"))
     {
         return Ok(ClientConfigHealth::PackageVersionOutdated);
     }

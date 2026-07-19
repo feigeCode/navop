@@ -15,7 +15,7 @@ use gpui_component::{
     v_flex,
 };
 use public_mcp::client_config::{
-    ClientConfigHealth, ClientConfigInstall, NAVOP_MCP_CLIENT_VERSION, claude_code_config_path,
+    ClientConfigHealth, ClientConfigInstall, NAVOP_MCP_CLIENT_TAG, claude_code_config_path,
     codex_config_path, helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
     install_claude_code_config, install_codex_config, uninstall_claude_code_config,
     uninstall_codex_config,
@@ -123,7 +123,7 @@ fn client_config_item_view_model(
 }
 
 fn client_config_health_label(health: ClientConfigHealth) -> String {
-    let package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_VERSION}");
+    let package = format!("@navop/mcp@{NAVOP_MCP_CLIENT_TAG}");
     match health {
         ClientConfigHealth::UpToDate => t!(
             "Settings.General.Mcp.client_config_status_up_to_date",

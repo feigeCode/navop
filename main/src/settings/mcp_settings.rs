@@ -120,7 +120,14 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(vec!["deny", "ask", "allow"], values);
-        assert_eq!(vec!["Safe", "Confirm", "Auto"], labels);
+        assert_eq!(
+            vec![
+                "Safe (Read-only)",
+                "Confirm Before Running",
+                "Run Automatically"
+            ],
+            labels
+        );
     }
 
     #[test]

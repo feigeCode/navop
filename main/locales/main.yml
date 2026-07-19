@@ -1605,25 +1605,25 @@ Settings:
         zh-CN: MCP
         zh-HK: MCP
       group_desc:
-        en: Server and tool-set changes may restart the MCP endpoint. Reconnect existing external MCP or ACP sessions afterward.
-        zh-CN: Server 或工具集合变更可能会重启 MCP 端点；已有的外部 MCP 或 ACP 会话需要随后重新连接。
-        zh-HK: Server 或工具集合變更可能會重新啟動 MCP 端點；現有的外部 MCP 或 ACP 工作階段需要隨後重新連線。
+        en: The MCP service exposes a loopback endpoint to external clients. Reconnect existing MCP or ACP sessions after server or tool-set changes.
+        zh-CN: MCP 服务向外部客户端提供本机回环接口；服务或工具集合变更后，已有的 MCP/ACP 会话需要重新连接。
+        zh-HK: MCP 服務向外部客戶端提供本機回環介面；服務或工具集合變更後，現有的 MCP/ACP 工作階段需要重新連線。
       server_enabled:
         en: Enable MCP Server
         zh-CN: 启用 MCP Server
         zh-HK: 啟用 MCP Server
       server_enabled_desc:
-        en: Start the shared MCP endpoint for external clients and internal tool callers
-        zh-CN: 为外部客户端和内部工具调用启动统一 MCP 端点
-        zh-HK: 為外部客戶端和內部工具調用啟動統一 MCP 端點
+        en: Start the local service shared by external MCP clients and Navop's internal tool callers
+        zh-CN: 启动供外部 MCP 客户端和 Navop 内部工具调用共用的本机服务
+        zh-HK: 啟動供外部 MCP 客戶端和 Navop 內部工具調用共用的本機服務
       server_mode:
         en: Server Mode
         zh-CN: Server 模式
         zh-HK: Server 模式
       server_mode_desc:
-        en: Choose whether discovery is temporary for the current app session or persistent across launches
-        zh-CN: 选择 discovery 配置仅用于当前应用会话，还是跨启动保持
-        zh-HK: 選擇 discovery 配置僅用於當前應用會話，還是跨啟動保持
+        en: Choose whether the service is available only for this Navop session or remains enabled across launches
+        zh-CN: 选择服务只在本次 Navop 会话提供，还是按设置在后续启动时保持
+        zh-HK: 選擇服務只在本次 Navop 工作階段提供，還是按設定在後續啟動時保持
       server_mode_temporary:
         en: Temporary
         zh-CN: 临时
@@ -1633,25 +1633,25 @@ Settings:
         zh-CN: 持久
         zh-HK: 持久
       permission_mode:
-        en: Permission Profile
-        zh-CN: 权限档位
-        zh-HK: 權限檔位
+        en: Tool Execution Permissions
+        zh-CN: 工具执行权限
+        zh-HK: 工具執行權限
       permission_mode_desc:
-        en: Map MCP access to the unified tool runtime permission profile
-        zh-CN: 将 MCP 访问映射到统一工具运行时权限档位
-        zh-HK: 將 MCP 訪問映射到統一工具運行時權限檔位
+        en: Control whether MCP tool calls are read-only, require confirmation, or run automatically
+        zh-CN: 控制 MCP 调用工具时的执行范围：安全、每次确认或自动执行
+        zh-HK: 控制 MCP 調用工具時的執行範圍：安全、每次確認或自動執行
       permission_profile_safe:
-        en: Safe
-        zh-CN: 安全模式
-        zh-HK: 安全模式
+        en: Safe (Read-only)
+        zh-CN: 安全（只读）
+        zh-HK: 安全（唯讀）
       permission_profile_confirm:
-        en: Confirm
-        zh-CN: 确认模式
-        zh-HK: 確認模式
+        en: Confirm Before Running
+        zh-CN: 确认后执行
+        zh-HK: 確認後執行
       permission_profile_auto:
-        en: Auto
-        zh-CN: 自动模式
-        zh-HK: 自動模式
+        en: Run Automatically
+        zh-CN: 自动执行
+        zh-HK: 自動執行
       permission_mode_deny:
         en: Deny
         zh-CN: 拒绝
@@ -1673,9 +1673,9 @@ Settings:
         zh-CN: 运行状态
         zh-HK: 運行狀態
       status_desc:
-        en: Current MCP server lifecycle state, bind address, and discovery file
-        zh-CN: 当前 MCP Server 生命周期状态、监听地址和 discovery 文件
-        zh-HK: 當前 MCP Server 生命週期狀態、監聽地址和 discovery 檔案
+        en: Current MCP service state, loopback address, client count, and discovery file used by external clients
+        zh-CN: 当前 MCP 服务状态、回环监听地址、连接数和外部客户端使用的 discovery 文件
+        zh-HK: 當前 MCP 服務狀態、回環監聽地址、連線數和外部客戶端使用的 discovery 檔案
       status_disabled:
         en: Disabled
         zh-CN: 已关闭
@@ -1692,34 +1692,50 @@ Settings:
         en: Failed
         zh-CN: 启动失败
         zh-HK: 啟動失敗
+      status_bind_address:
+        en: "Listen address: %{address}"
+        zh-CN: "监听地址：%{address}"
+        zh-HK: "監聽地址：%{address}"
+      status_discovery_mode:
+        en: "Discovery mode: %{mode}"
+        zh-CN: "Discovery 模式：%{mode}"
+        zh-HK: "Discovery 模式：%{mode}"
+      status_clients:
+        en: "Connected clients: %{count}"
+        zh-CN: "连接客户端：%{count}"
+        zh-HK: "連線客戶端：%{count}"
+      status_discovery_path:
+        en: "Discovery file: %{path}"
+        zh-CN: "Discovery 文件：%{path}"
+        zh-HK: "Discovery 檔案：%{path}"
       install_client_config:
-        en: Install
-        zh-CN: 安装
-        zh-HK: 安裝
+        en: Add or Update
+        zh-CN: 添加或更新
+        zh-HK: 新增或更新
       runtime_requirements:
-        en: Node.js and Navop CLI
-        zh-CN: Node.js 与 Navop CLI
-        zh-HK: Node.js 與 Navop CLI
+        en: Node.js and npx
+        zh-CN: Node.js 与 npx
+        zh-HK: Node.js 與 npx
       runtime_requirements_desc:
-        en: Navop clients launch the exact recommended @navop/mcp version through npx; it is downloaded and cached by npm, not installed from the extension marketplace
-        zh-CN: Navop 客户端通过 npx 启动精确的推荐 @navop/mcp 版本，由 npm 下载并缓存，不再从扩展市场安装
-        zh-HK: Navop 客戶端透過 npx 啟動精確的建議 @navop/mcp 版本，由 npm 下載並快取，不再從擴充功能市集安裝
+        en: External MCP clients launch @navop/mcp@latest through npx; npm resolves and caches the current package on demand, not from the extension marketplace
+        zh-CN: 外部 MCP 客户端通过 npx 启动 @navop/mcp@latest；npm 按需解析并缓存当前包，无需从扩展市场安装
+        zh-HK: 外部 MCP 客戶端透過 npx 啟動 @navop/mcp@latest；npm 按需解析並快取目前套件，無需從擴充功能市集安裝
       runtime_requirements_ready:
         en: "%{package} will run on demand through %{path}; no global npm install is required"
-        zh-CN: "%{package} 将通过 %{path} 按需下载运行，无需全局 npm 安装"
-        zh-HK: "%{package} 將透過 %{path} 按需下載執行，無需全域 npm 安裝"
+        zh-CN: "%{package} 将通过 %{path} 按需启动；无需全局安装 npm 包"
+        zh-HK: "%{package} 將透過 %{path} 按需啟動；無需全域安裝 npm 套件"
       runtime_requirements_missing:
         en: "Node.js/npx is unavailable: %{error}"
         zh-CN: "Node.js/npx 不可用：%{error}"
         zh-HK: "Node.js/npx 無法使用：%{error}"
       install_codex_config:
-        en: Install Codex MCP Config
-        zh-CN: 安装 Codex MCP 配置
-        zh-HK: 安裝 Codex MCP 配置
+        en: Codex MCP Configuration
+        zh-CN: Codex MCP 配置
+        zh-HK: Codex MCP 配置
       install_codex_config_desc:
-        en: Write or update the managed Navop MCP server entry in ~/.codex/config.toml
-        zh-CN: 在 ~/.codex/config.toml 中写入或更新 Navop MCP Server 托管配置
-        zh-HK: 在 ~/.codex/config.toml 中寫入或更新 Navop MCP Server 託管配置
+        en: Add or update Navop in ~/.codex/config.toml using the npx @navop/mcp@latest stdio bridge
+        zh-CN: 在 ~/.codex/config.toml 中添加或更新 Navop；通过 npx 启动 @navop/mcp@latest stdio 桥接
+        zh-HK: 在 ~/.codex/config.toml 中新增或更新 Navop；透過 npx 啟動 @navop/mcp@latest stdio 橋接
       install_claude_config:
         en: Install Claude MCP Config
         zh-CN: 安装 Claude MCP 配置
@@ -1729,21 +1745,21 @@ Settings:
         zh-CN: 在 Claude Desktop 配置中写入或更新 Navop MCP Server
         zh-HK: 在 Claude Desktop 配置中寫入或更新 Navop MCP Server
       install_claude_code_config:
-        en: Install Claude Code MCP Config
-        zh-CN: 安装 Claude Code MCP 配置
-        zh-HK: 安裝 Claude Code MCP 配置
+        en: Claude Code MCP Configuration
+        zh-CN: Claude Code MCP 配置
+        zh-HK: Claude Code MCP 配置
       install_claude_code_config_desc:
         en: Write or update the Navop MCP server entry in ~/.claude.json
-        zh-CN: 在 ~/.claude.json 中写入或更新 Navop MCP Server
-        zh-HK: 在 ~/.claude.json 中寫入或更新 Navop MCP Server
+        zh-CN: 在 ~/.claude.json 的 mcpServers.navop 中添加或更新配置
+        zh-HK: 在 ~/.claude.json 的 mcpServers.navop 中新增或更新配置
       copy_agent_config:
         en: Copy MCP Config
         zh-CN: 复制 MCP 配置
         zh-HK: 複製 MCP 配置
       copy_agent_config_desc:
         en: Copy a generic mcpServers JSON block for other agents
-        zh-CN: 复制通用 mcpServers JSON 配置，供其他 agent 使用
-        zh-HK: 複製通用 mcpServers JSON 配置，供其他 agent 使用
+        zh-CN: 复制通用 mcpServers JSON 配置，供支持 stdio MCP 的其他客户端使用
+        zh-HK: 複製通用 mcpServers JSON 配置，供支援 stdio MCP 的其他客戶端使用
       copy_agent_config_button:
         en: Copy Config
         zh-CN: 复制配置
@@ -1765,9 +1781,9 @@ Settings:
         zh-CN: 为 Agents 安装 Navop Skill
         zh-HK: 為 Agents 安裝 Navop Skill
       install_skill_desc:
-        en: Install the Skill from the exact recommended npm package into the user skill directory; npm downloads it on demand and Navop does not use a shell
-        zh-CN: 从精确推荐版本的 npm 包安装到用户 Skill 目录；npm 按需下载，Navop 不通过 shell 执行
-        zh-HK: 從精確建議版本的 npm 套件安裝到使用者 Skill 目錄；npm 按需下載，Navop 不透過 shell 執行
+        en: Install the Skill from @navop/cli@latest into the user Skill directory; npm downloads it on demand and Navop does not use a shell
+        zh-CN: 从 @navop/cli@latest 安装到用户 Skill 目录；npm 按需下载，Navop 不通过 shell 执行
+        zh-HK: 從 @navop/cli@latest 安裝到使用者 Skill 目錄；npm 按需下載，Navop 不透過 shell 執行
       skill_status_installed:
         en: "Installed at %{path}; use Update to explicitly replace it with the recommended package copy"
         zh-CN: "已安装到 %{path}；点击更新才会明确替换为推荐 npm 包中的版本"
@@ -1826,16 +1842,16 @@ Settings:
         zh-HK: 未安裝
       client_config_status_needs_repair:
         en: Managed entry is malformed or differs from the recommended command
-        zh-CN: 托管配置格式损坏或命令与推荐配置不一致
-        zh-HK: 託管配置格式損壞或命令與建議配置不一致
+        zh-CN: Navop 配置格式损坏，或启动命令与当前推荐配置不一致
+        zh-HK: Navop 配置格式損壞，或啟動命令與目前建議配置不一致
       client_config_status_needs_migration:
         en: Legacy onetcli/Rust helper config detected; migrate it to the Navop npm launcher
         zh-CN: 检测到旧 onetcli/Rust helper 配置，需要迁移到 Navop npm 启动方式
         zh-HK: 偵測到舊 onetcli/Rust helper 配置，需要遷移到 Navop npm 啟動方式
       client_config_status_package_outdated:
         en: "Package version is outdated; update the managed entry to %{package}"
-        zh-CN: "npm 包版本已过期，请将托管配置更新为 %{package}"
-        zh-HK: "npm 套件版本已過期，請將託管配置更新為 %{package}"
+        zh-CN: "npm 包版本已过期，请更新为 %{package}"
+        zh-HK: "npm 套件版本已過期，請更新為 %{package}"
       client_config_status_node_unavailable:
         en: Node.js is unavailable; install Node.js 20 or newer and restart Navop
         zh-CN: Node.js 不可用；请安装 Node.js 20 或更高版本并重启 Navop

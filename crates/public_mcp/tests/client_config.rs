@@ -207,17 +207,16 @@ fn helper_install_path_resolves_npx_instead_of_a_bundled_helper() {
 }
 
 #[test]
-fn npx_install_uses_exact_package_version_and_navop_server_name() {
+fn npx_install_uses_latest_package_tag_and_navop_server_name() {
     let dir = tempfile::tempdir().unwrap();
     let npx = dir.path().join("npx");
     write_usable_helper(&npx);
-    let install = ClientConfigInstall::from_npx_path(&npx, "/tmp/navop/public-mcp.json", "0.1.0");
+    let install = ClientConfigInstall::from_npx_path(&npx, "/tmp/navop/public-mcp.json", "latest");
     let config_path = dir.path().join("config.toml");
     install_codex_config(&config_path, &install).unwrap();
     let text = std::fs::read_to_string(config_path).unwrap();
     assert!(text.contains("[mcp_servers.navop]"));
-    assert!(text.contains("@navop/mcp@0.1.0"));
-    assert!(!text.contains("latest"));
+    assert!(text.contains("@navop/mcp@latest"));
 }
 
 #[test]
