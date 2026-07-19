@@ -20,6 +20,10 @@ Common editing, selection, search, and save shortcuts are listed under Settings 
 
 After pasting rich content, inspect structure and external resources. Use stable relative paths for links, images, and code-related assets.
 
+## Export HTML, PDF, and Word
+
+With the Notes document exporter extension installed, export the current document as self-contained HTML, PDF, or Word DOCX. The Rust WASM exporter does not require local Chrome, Office, or a host conversion library. Choose the output directory deliberately and inspect images, code, Mermaid, and math in the target environment.
+
 ## Manage resources and external changes
 
 Images and attachments live in the note directory or its resource area. Moving or deleting them can break references, so search for usage before reorganizing. Avoid accumulating very large binaries as ordinary note assets.

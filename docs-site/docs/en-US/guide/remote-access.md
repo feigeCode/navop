@@ -10,7 +10,7 @@ Configure SOCKS/HTTP proxy and read-only mode when supported. Read-only reduces 
 
 ## Diagnose display and input
 
-Resolution, clipboard, keyboard layout, and input depend on provider and platform. For lag, reduce display load and check latency. Black screens and authentication errors may come from session policy, Domain, certificates, or ports.
+Resolution, clipboard, keyboard layout, and input depend on provider and platform. RDP/VNC providers now stream incremental frame updates, which usually keeps active sessions smoother than full-frame refreshes. For lag, still reduce display load and check latency. Black screens and authentication errors may come from session policy, Domain, certificates, or ports.
 
 Save work in remote applications before closing. Disconnecting does not necessarily log the remote account out; lock or sign out according to security policy.
 

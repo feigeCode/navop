@@ -12,7 +12,7 @@ Formatting and compacting change presentation, not correctness. Preserve an orig
 
 Run selected SQL, the statement under the cursor, or the entire editor. Inspect selection boundaries before running. With no selection, place the cursor inside the intended statement. Run All is suitable only for a fully reviewed script, not a scratch file containing examples and temporary DELETE statements.
 
-The result area shows rows, affected counts, or errors. The maximum-row setting prevents huge previews from exhausting memory. Use export for complete datasets rather than raising the limit without bounds.
+The result area shows rows, affected counts, or errors. Result tabs can be switched independently and keep scrolling within a stable viewport, even for long or multi-statement results. The maximum-row setting prevents huge previews from exhausting memory. Use export for complete datasets rather than raising the limit without bounds.
 
 ## Use EXPLAIN responsibly
 

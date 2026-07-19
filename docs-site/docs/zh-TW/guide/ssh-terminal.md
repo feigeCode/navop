@@ -6,7 +6,9 @@ Navop 將遠端 SSH 和本機 Terminal 放在統一工作區，支援標籤、�
 
 SSH 支援密碼、私鑰檔、私鑰內容、SSH Agent 和預設 `~/.ssh`；互動驗證伺服器可能要求 MFA。可設定代理與逾時，首次連線先核對主機指紋。失敗時分別檢查使用者、密鑰權限、Agent、MFA 和伺服器政策。
 
-本機 profile 可選系統 Shell、PowerShell、CMD、WSL、Git Bash 或自訂程式。自訂可執行檔必須可信，不要把密碼放在命令參數。
+本機 profile 可選系統 Shell、PowerShell、CMD、WSL、Git Bash 或自訂程式；開啟終端時可直接選擇目前工作階段使用的 Profile，並會隱藏本機平台不可用的選項。自訂可執行檔必須可信，不要把密碼放在命令參數。
+
+終端 AI 側邊欄同時支援 SSH 與本機終端，並把目前終端作為預設資源上下文。執行產生的命令前仍要核對 Shell、作業系統、主機與目錄；本機 PowerShell、自訂程式和遠端 Linux Shell 的語法不能混用。
 
 ## 標籤與分割
 

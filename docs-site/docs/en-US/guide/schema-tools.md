@@ -4,7 +4,7 @@ Schema tools cover object browsing, table design, DDL, ER diagrams, Schema Compa
 
 ## Browse database objects
 
-Expand databases and schemas to inspect tables, views, and other supported objects. A table can expose columns, types, defaults, nullability, primary keys, indexes, and DDL. Visibility depends on permissions, context, and schema filters.
+Expand databases and schemas to inspect tables, views, and other supported objects. A table can expose columns, types, defaults, nullability, primary keys, indexes, and DDL. Right-click an object row to see actions available for that object type and installed extensions. Visibility depends on permissions, context, and schema filters.
 
 Refresh before a change so an old tab does not hide modifications made by another user or tool.
 

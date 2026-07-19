@@ -6,7 +6,9 @@ Navop combines remote SSH and local Terminal sessions with tabs, splits, broadca
 
 SSH authentication supports passwords, private-key files, inline private-key content, SSH Agent, and default `~/.ssh` configuration. Interactive servers may request MFA. Configure proxy and timeout when necessary, and verify the host fingerprint on first connection.
 
-Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a custom program. Use trusted executables and safely parsed arguments; do not place passwords in command-line parameters.
+Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a custom program. Select the profile when opening a terminal; unavailable platform-specific choices are hidden. Use trusted executables and safely parsed arguments, and do not place passwords in command-line parameters.
+
+The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. Verify the shell, operating system, host, and current directory before running generated commands; local PowerShell, custom programs, and remote Linux shells are not interchangeable.
 
 ## Arrange tabs and splits
 

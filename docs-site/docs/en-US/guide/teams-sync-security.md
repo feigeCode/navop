@@ -12,7 +12,7 @@ Verify email and least-required role before inviting. Removing, leaving, or down
 
 The master key encrypts database passwords, SSH private keys, and related secrets locally. Personal sync uploads ciphertext. A new device still needs the correct master key, and the website cannot recover one that is forgotten.
 
-Back it up through a secure offline method. Never send it through chat, email, shared Notes, or reuse it as an account password.
+Back it up through a secure offline method. Never send it through chat, email, shared Notes, or reuse it as an account password. The home workspace groups personal and team keys separately, so confirm which key type a connection uses before opening or creating it; a team key only applies to authorized shared connections.
 
 ## Resolve sync conflicts
 

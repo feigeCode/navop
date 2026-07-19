@@ -58,15 +58,15 @@
   </p>
 </div>
 
-## What's New in v0.8.10
+## What's New in v0.8.11
 
-- **Notes workspace** — added local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, configurable document locations, editor shortcuts, and a Cditor AI Provider.
-- **Document rendering** — added Tree-sitter syntax highlighting, Mermaid and math rendering, extension-provided renderers, renderer prewarming, caching, and theme synchronization.
-- **Terminal workspaces** — added native draggable splits, cross-workspace tab transfers, grouped quick commands, broadcast input, and clearer drag-and-drop placement feedback.
-- **Terminal diagnostics** — added bounded `terminal.read` scrollback inspection and safer command preflight handling for visible and background terminal workflows.
-- **Public MCP and Agent integrations** — completed the Navop npm runtime migration, added MongoDB tools and host-authoritative capability discovery, and improved ACP and Public MCP approval flows.
-- **Redis and file workflows** — added a dedicated Redis tools view, multi-database connections, server-side key pagination, binary-safe String inspection, and associated database/Markdown file opening.
-- **Extension and release reliability** — added renderer resource and execution limits, preserved the size-optimized release profile, and fixed cross-platform release builds under `-D warnings`.
+- **Server-to-server SFTP** — added a searchable endpoint switcher and direct file or directory copy between two remote servers without staging data on the local machine.
+- **Local terminals and AI** — added launch-time terminal profile selection, platform-aware shell choices, and the terminal AI sidebar for local sessions with live terminal context.
+- **Notes document export** — added extension-backed export to self-contained HTML, PDF, and Word DOCX files through a sandboxed Rust WASM exporter.
+- **Database workspace polish** — added context menus for database object rows, stable result-panel scrolling, and fixes for SQL result summaries and pinned scrollbars.
+- **Remote desktop performance** — RDP and VNC providers now stream incremental frame updates for more responsive sessions, with improved recovery for stalled VNC connections.
+- **Connections and credentials** — the home workspace now separates personal and team keys, while SFTP endpoint headers make the active local or remote side explicit.
+- **Extensions, CLI, and release reliability** — Redis and MongoDB native drivers moved into installable extensions, the global Navop CLI/Skill workflow is documented, and release builds can be repaired independently across platforms.
 
 
 ## Why Navop?
@@ -104,7 +104,7 @@ Beyond the built-in drivers, Navop ships an extension marketplace that adds data
 
 ### SQL Editor & Schema Tools
 
-Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams. Database compare tools support schema/data comparison, target selection, sync planning, and multi-table synchronization workflows.
+Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams. Database object rows expose context actions, and result tabs keep their scrollbars pinned to the viewport for large or multi-statement result sets. Database compare tools support schema/data comparison, target selection, sync planning, and multi-table synchronization workflows.
 
 ### Redis & MongoDB
 
@@ -112,11 +112,11 @@ Use the dedicated Redis viewer for multi-database key browsing, server-side pagi
 
 ### Notes
 
-The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Document locations, editor shortcuts, and AI Providers are configurable, while extension-provided renderers can add or update document formats independently.
+The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Document locations, editor shortcuts, and AI Providers are configurable. Extension-provided renderers can add or update document formats independently, and a sandboxed WASM exporter can produce self-contained HTML, PDF, and Word DOCX files.
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The built-in SFTP sidebar supports drag-and-drop uploads, files copied from the system file manager can be uploaded by pasting, and path favorites provide quick jumps to frequently used directories. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments; choose a profile when opening a terminal instead of changing the global default first. The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The SFTP workspace can switch either side between local storage and searchable remote endpoints, copy files directly between servers, upload by drag-and-drop or paste, and jump through path favorites. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
 
 ### Port Forwarding
 
@@ -128,7 +128,7 @@ Edit remote files directly inside Navop with syntax highlighting and autocomplet
 
 ### Remote Desktop (RDP & VNC)
 
-Open RDP and VNC sessions through installable remote desktop providers. Each connection can use a SOCKS5 or HTTP CONNECT proxy without requiring a provider protocol upgrade. Connect to Windows machines over RDP, or to any VNC server, and drive the remote desktop from the same workspace where your databases, terminals, and files live.
+Open RDP and VNC sessions through installable remote desktop providers. Each connection can use a SOCKS5 or HTTP CONNECT proxy without requiring a provider protocol upgrade. Incremental frame streaming reduces full-frame work and keeps active sessions more responsive, while stalled VNC sessions can recover more reliably. Connect to Windows machines over RDP, or to any VNC server, and drive the remote desktop from the same workspace where your databases, terminals, and files live.
 
 ### Monitoring & Charts
 

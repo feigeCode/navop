@@ -1,12 +1,16 @@
 # SFTP and remote file editing
 
-The SFTP manager provides navigation, favorites, transfer, permissions, extraction, and remote editing. Overwrites, deletion, permission changes, and automatic upload affect the server immediately.
+The SFTP manager provides navigation, favorites, transfer, permissions, extraction, and remote editing. Each side can switch between local storage and a searchable remote endpoint, and files or directories can be copied directly between two remote servers. Overwrites, deletion, permission changes, and automatic upload affect the server immediately.
 
 ## Navigate and coordinate with terminal
 
 Browse folders, show hidden files when needed, and favorite common paths. Open a terminal in the current directory; with shell integration, the terminal path can synchronize back to the file manager. Access remains limited by the remote account.
 
 Confirm the current path before creating or renaming. Renaming a live configuration or script can break services and links.
+
+## Copy between remote endpoints
+
+Use the endpoint switcher to search for the target SSH/SFTP server, then confirm the connection, user, and path shown on each side. Server copy transfers the selected files or directories through the remote connections without staging them in a local temporary directory. Refresh the destination and verify size, permissions, and any required checksum; both remote accounts and server policies still apply.
 
 ## Transfer files and folders
 
