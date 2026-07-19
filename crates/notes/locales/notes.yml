@@ -197,6 +197,10 @@ Notes:
     en: The document export extension is not installed or unavailable
     zh-CN: 文档导出扩展未安装或不可用
     zh-HK: 文件匯出擴充功能未安裝或不可用
+  export_extension_required:
+    en: Install Notes Document Exporter from Extensions, then retry the export
+    zh-CN: 请在扩展市场安装 Notes Document Exporter，然后重试导出
+    zh-HK: 請在擴充功能市集安裝 Notes Document Exporter，然後重試匯出
   exported:
     en: "Exported to %{path}"
     zh-CN: 已导出到 %{path}

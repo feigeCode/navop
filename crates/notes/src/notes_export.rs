@@ -1,11 +1,16 @@
-use crate::notes_notifications::{notify_error_message, notify_operation_error};
+use crate::notes_notifications::notify_operation_error;
 use crate::{DocumentFormat, MarkdownViewMode, NotesView, TreeRow};
 use cditor_app::{EditorDocument, MarkdownExportMode};
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
+use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
 use rust_i18n::t;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+const DOCUMENT_EXPORTER_MARKETPLACE_QUERY: &str = "Notes Document Exporter";
+const DOCUMENT_EXPORTER_MARKETPLACE_TAB_ID: &str = "extensions-notes-document-exporter";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotesExportFormat {
@@ -45,6 +50,18 @@ impl NotesView {
         if row.kind != crate::NodeKind::Document {
             return;
         }
+        let format_name = format.protocol_name().to_owned();
+        let Some(catalog) = cx
+            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
+            .and_then(|global| global.get())
+        else {
+            self.open_document_exporter_marketplace(window, cx);
+            return;
+        };
+        if catalog.document_exporter_for_format(&format_name).is_none() {
+            self.open_document_exporter_marketplace(window, cx);
+            return;
+        }
         let source = match self.source_for_export(&row, cx) {
             Ok(source) => source,
             Err(error) => {
@@ -53,13 +70,6 @@ impl NotesView {
             }
         };
         let title = row.display_name.clone();
-        let Some(global) = cx
-            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
-            .cloned()
-        else {
-            notify_error_message(window, cx, t!("Notes.export_unavailable").to_string());
-            return;
-        };
         let theme = export_theme(
             cx.theme().background,
             cx.theme().foreground,
@@ -75,7 +85,6 @@ impl NotesView {
             prompt: Some(t!("Notes.select_export_directory").into()),
         });
         let window_handle = window.window_handle();
-        let format_name = format.protocol_name().to_owned();
         cx.spawn(async move |_, cx: &mut AsyncApp| {
             let selected = match prompt.await {
                 Ok(Ok(Some(paths))) => paths.into_iter().next(),
@@ -106,16 +115,6 @@ impl NotesView {
                 }
             };
             let Some(directory) = selected else { return };
-            let Some(catalog) = global.get() else {
-                let _ = cx.update_window(window_handle, |_, window, cx| {
-                    window.push_notification(
-                        Notification::error(t!("Notes.export_unavailable").to_string())
-                            .autohide(false),
-                        cx,
-                    );
-                });
-                return;
-            };
             let result = cx
                 .background_spawn(async move {
                     let artifact = catalog
@@ -155,6 +154,26 @@ impl NotesView {
             });
         })
         .detach();
+    }
+
+    fn open_document_exporter_marketplace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let host = Arc::new(extension_runtime::MainExtensionViewHost);
+        let extensions = cx.new(|cx| {
+            extension_view::ExtensionManagerView::new_marketplace_search(
+                host,
+                DOCUMENT_EXPORTER_MARKETPLACE_QUERY,
+                window,
+                cx,
+            )
+        });
+        cx.emit(TabContentEvent::OpenTab {
+            tab: TabItem::new(DOCUMENT_EXPORTER_MARKETPLACE_TAB_ID, "home", extensions),
+            mode: TabOpenMode::Activate,
+        });
+        window.push_notification(
+            Notification::info(t!("Notes.export_extension_required").to_string()).autohide(true),
+            cx,
+        );
     }
 
     fn source_for_export(&self, row: &TreeRow, cx: &App) -> anyhow::Result<String> {
@@ -254,7 +273,7 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 
 #[cfg(test)]
 mod tests {
-    use super::{NotesExportFormat, next_export_path};
+    use super::{DOCUMENT_EXPORTER_MARKETPLACE_QUERY, NotesExportFormat, next_export_path};
 
     #[test]
     fn export_submenu_exposes_html_pdf_and_word() {
@@ -262,6 +281,17 @@ mod tests {
             NotesExportFormat::ALL.map(NotesExportFormat::label),
             ["HTML", "PDF", "Word (.docx)"]
         );
+    }
+
+    #[test]
+    fn all_export_formats_route_to_the_document_exporter_marketplace_entry() {
+        for format in NotesExportFormat::ALL {
+            assert!(!format.protocol_name().is_empty());
+            assert_eq!(
+                "Notes Document Exporter",
+                DOCUMENT_EXPORTER_MARKETPLACE_QUERY
+            );
+        }
     }
 
     #[test]
