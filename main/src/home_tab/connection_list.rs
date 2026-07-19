@@ -19,8 +19,13 @@ impl HomePage {
             &self.team_options,
             self.current_user.is_some(),
         );
-        let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
+        let team_badge = if cfg!(feature = "screenshot-safe") {
+            None
+        } else {
+            connection_team_badge(conn.team_id.as_deref(), &self.team_options)
+        };
         let actions = self.render_connection_list_actions(&conn, can_edit, cx);
+        let display_name = connection_display_name(&conn);
 
         h_flex()
             .id(SharedString::from(format!(
@@ -84,7 +89,7 @@ impl HomePage {
                                     .whitespace_nowrap()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(conn.name.clone()),
+                                    .child(display_name),
                             )
                             .when_some(team_badge, |this, badge| {
                                 this.child(render_list_team_badge(&conn, badge, cx))

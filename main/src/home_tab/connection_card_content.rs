@@ -6,7 +6,8 @@ impl HomePage {
         conn: &StoredConnection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let name_tooltip: SharedString = conn.name.clone().into();
+        let display_name = connection_display_name(conn);
+        let name_tooltip: SharedString = display_name.clone().into();
         let connection_info = card_connection_info(conn);
 
         h_flex()
@@ -45,7 +46,7 @@ impl HomePage {
                             .tooltip(move |window, cx| {
                                 Tooltip::new(name_tooltip.clone()).build(window, cx)
                             })
-                            .child(conn.name.clone()),
+                            .child(display_name),
                     )
                     .when_some(connection_info, |this, info| {
                         let tooltip_text: SharedString = info.clone().into();

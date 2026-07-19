@@ -82,6 +82,7 @@ builtin-data-drivers = ["builtin-redis", "builtin-mongodb"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []
+screenshot-safe = []
 wasm-components = ["extension-runtime/wasm-components"]
 
 [lints]

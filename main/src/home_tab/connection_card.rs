@@ -19,7 +19,11 @@ impl HomePage {
             &self.team_options,
             self.current_user.is_some(),
         );
-        let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
+        let team_badge = if cfg!(feature = "screenshot-safe") {
+            None
+        } else {
+            connection_team_badge(conn.team_id.as_deref(), &self.team_options)
+        };
 
         v_flex()
             .justify_center()

@@ -181,7 +181,8 @@ mod workspace_filter;
 use connection_badge::{ConnectionTeamBadge, connection_team_badge};
 use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
 use connection_info::{
-    card_connection_info, generate_duplicate_name, port_forwarding_connection_info,
+    card_connection_info, connection_display_name, generate_duplicate_name,
+    port_forwarding_connection_info,
 };
 pub use keybindings::{init, refresh_keybindings};
 use sync_route::{

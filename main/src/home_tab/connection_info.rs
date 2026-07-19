@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
+    if cfg!(feature = "screenshot-safe") {
+        return screenshot_safe_connection_info(conn.connection_type).map(str::to_owned);
+    }
+
     match conn.connection_type {
         ConnectionType::Database => conn.to_db_connection().ok().map(database_connection_info),
         ConnectionType::SshSftp => conn
@@ -20,6 +24,41 @@ pub(super) fn card_connection_info(conn: &StoredConnection) -> Option<String> {
             .map(|params| port_forwarding_connection_info(&params)),
         _ => None,
     }
+}
+
+pub(super) fn screenshot_safe_connection_info(
+    connection_type: ConnectionType,
+) -> Option<&'static str> {
+    match connection_type {
+        ConnectionType::Database => Some("user@localhost:5432/example"),
+        ConnectionType::SshSftp => Some("user@localhost:22"),
+        ConnectionType::Redis => Some("localhost:6379/0"),
+        ConnectionType::MongoDB => Some("localhost:27017"),
+        ConnectionType::Serial => Some("COM1 (115200, 8N1)"),
+        ConnectionType::PortForwarding => Some("localhost:8080 -> localhost:80"),
+        ConnectionType::Rdp => Some("user@localhost:3389"),
+        ConnectionType::Vnc => Some("user@localhost:5900"),
+        ConnectionType::All => None,
+    }
+}
+
+pub(super) fn connection_display_name(conn: &StoredConnection) -> String {
+    if !cfg!(feature = "screenshot-safe") {
+        return conn.name.clone();
+    }
+
+    match conn.connection_type {
+        ConnectionType::Database => "Local Database",
+        ConnectionType::SshSftp => "Local SSH",
+        ConnectionType::Redis => "Local Redis",
+        ConnectionType::MongoDB => "Local MongoDB",
+        ConnectionType::Serial => "Local Serial",
+        ConnectionType::PortForwarding => "Local Port Forwarding",
+        ConnectionType::Rdp => "Local RDP",
+        ConnectionType::Vnc => "Local VNC",
+        ConnectionType::All => "Local Connection",
+    }
+    .to_owned()
 }
 
 fn database_connection_info(params: one_core::storage::DbConnectionConfig) -> String {

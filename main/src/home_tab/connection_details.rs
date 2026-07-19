@@ -2,6 +2,12 @@ use super::*;
 
 impl HomePage {
     pub(super) fn connection_info_text(&self, conn: &StoredConnection) -> String {
+        if cfg!(feature = "screenshot-safe") {
+            return connection_info::screenshot_safe_connection_info(conn.connection_type)
+                .unwrap_or_default()
+                .to_owned();
+        }
+
         match conn.connection_type {
             ConnectionType::Database => conn
                 .to_db_connection()
