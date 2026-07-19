@@ -1063,7 +1063,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.11.0",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1592,7 +1592,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "async-channel",
  "serde",
@@ -1602,7 +1602,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1626,7 +1626,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "serde",
  "serde_json",
@@ -1636,7 +1636,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1655,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -3092,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=7b94c47#7b94c4753537a658d862aa69dc6f272a5a28d82a"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=60d2e7f#60d2e7f29c25bfd27c4ca864d053ca3d5e1e0373"
 dependencies = [
  "gpui",
  "log",
@@ -5529,7 +5529,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tokio",
  "tower-service",
  "tracing",
@@ -6808,7 +6808,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "main"
-version = "0.8.12"
+version = "0.8.13"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -9359,7 +9359,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls 0.23.41",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -9396,7 +9396,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.4",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -14694,7 +14694,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
