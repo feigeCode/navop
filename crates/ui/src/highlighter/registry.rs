@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Deref,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -509,6 +509,8 @@ pub struct LanguageRegistry {
     languages: Mutex<HashMap<SharedString, LanguageConfig>>,
     file_extensions: Mutex<HashMap<SharedString, SharedString>>,
     wasm_extensions: Mutex<HashMap<SharedString, LazyWasmExtension>>,
+    failed_wasm_languages: Mutex<HashSet<SharedString>>,
+    wasm_load_lock: Mutex<()>,
     revision: AtomicU64,
 }
 
@@ -534,6 +536,8 @@ impl LanguageRegistry {
             languages: Mutex::new(HashMap::new()),
             file_extensions: Mutex::new(HashMap::new()),
             wasm_extensions: Mutex::new(HashMap::new()),
+            failed_wasm_languages: Mutex::new(HashSet::new()),
+            wasm_load_lock: Mutex::new(()),
             revision: AtomicU64::new(0),
         }
     }
@@ -569,6 +573,7 @@ impl LanguageRegistry {
     /// Registers language extension metadata without loading the wasm parser yet.
     pub fn register_wasm_manifest(&self, manifest: LanguageManifest, source_path: PathBuf) {
         let lang = SharedString::from(manifest.name.clone());
+        self.failed_wasm_languages.lock().unwrap().remove(&lang);
         self.register_file_extensions(&lang, &manifest.file_extensions);
         self.wasm_extensions
             .lock()
@@ -604,6 +609,10 @@ impl LanguageRegistry {
             .lock()
             .unwrap()
             .insert(name.to_string().into(), config);
+        self.failed_wasm_languages
+            .lock()
+            .unwrap()
+            .remove(&SharedString::from(name.to_string()));
         self.wasm_extensions
             .lock()
             .unwrap()
@@ -666,6 +675,7 @@ impl LanguageRegistry {
     pub fn unregister(&self, name: &str) -> bool {
         let builtin = builtin_language_config(name);
         let key = SharedString::from(name.to_string());
+        self.failed_wasm_languages.lock().unwrap().remove(&key);
         let mut languages = self.languages.lock().unwrap();
 
         match languages.get(&key) {
@@ -697,12 +707,21 @@ impl LanguageRegistry {
 
 impl LanguageRegistry {
     fn load_lazy_wasm_language(&self, name: &str) -> Option<LanguageConfig> {
-        let extension = self.wasm_extensions.lock().unwrap().get(name).cloned()?;
+        let _load_guard = self.wasm_load_lock.lock().unwrap();
+        if let Some(config) = self.languages.lock().unwrap().get(name).cloned() {
+            return Some(config);
+        }
+        let key = SharedString::from(name.to_owned());
+        if self.failed_wasm_languages.lock().unwrap().contains(&key) {
+            return None;
+        }
+        let extension = self.wasm_extensions.lock().unwrap().get(&key).cloned()?;
         match InstalledExtension::load_from_dir(&extension.source_path)
             .and_then(|extension| extension.register(self))
         {
             Ok(()) => self.languages.lock().unwrap().get(name).cloned(),
             Err(error) => {
+                self.failed_wasm_languages.lock().unwrap().insert(key);
                 tracing::warn!("failed to lazy load language extension {name:?}: {error:?}");
                 None
             }
@@ -750,7 +769,7 @@ fn builtin_language_config(name: &str) -> Option<LanguageConfig> {
 
 #[cfg(test)]
 mod tests {
-    use crate::highlighter::{LanguageConfig, LanguageRegistry, WasmLanguageQueries};
+    use super::*;
 
     #[test]
     fn test_registry() {
@@ -900,5 +919,27 @@ mod tests {
         assert_eq!(builtin, registry.language("json").unwrap());
         assert!(!registry.unregister("json"));
         assert_eq!(builtin, registry.language("json").unwrap());
+    }
+
+    #[test]
+    fn failed_lazy_wasm_language_is_not_retried_until_reregistered() {
+        let registry = LanguageRegistry::with_default_languages();
+        let name = SharedString::from("__test_missing_lazy_wasm__");
+        registry.wasm_extensions.lock().unwrap().insert(
+            name.clone(),
+            LazyWasmExtension {
+                source_path: PathBuf::from("/definitely/missing/language-extension"),
+            },
+        );
+
+        assert!(registry.language(name.as_ref()).is_none());
+        assert!(
+            registry
+                .failed_wasm_languages
+                .lock()
+                .unwrap()
+                .contains(&name)
+        );
+        assert!(registry.language(name.as_ref()).is_none());
     }
 }

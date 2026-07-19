@@ -1,12 +1,15 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use cditor_app::{
     SyntaxHighlightError, SyntaxHighlightLanguage, SyntaxHighlightPalette, SyntaxHighlightProvider,
     SyntaxHighlightRun, SyntaxHighlightStyle,
 };
 use gpui::{FontStyle, FontWeight, HighlightStyle, Hsla, Rgba};
-use gpui_component::highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighlighter};
+use gpui_component::highlighter::{
+    HighlightTheme, LanguageConfig, LanguageRegistry, SyntaxHighlighter,
+};
 use ropey::Rope;
 
 struct ProviderState {
@@ -14,9 +17,15 @@ struct ProviderState {
     palette: SyntaxHighlightPalette,
 }
 
+struct SharedHighlighter {
+    config: LanguageConfig,
+    highlighter: Arc<Mutex<SyntaxHighlighter>>,
+}
+
 pub(crate) struct NavopSyntaxHighlightProvider {
     state: RwLock<ProviderState>,
     theme_revision: AtomicU64,
+    highlighters: Mutex<HashMap<String, SharedHighlighter>>,
 }
 
 impl NavopSyntaxHighlightProvider {
@@ -27,6 +36,7 @@ impl NavopSyntaxHighlightProvider {
                 palette: palette(background, foreground),
             }),
             theme_revision: AtomicU64::new(0),
+            highlighters: Mutex::new(HashMap::new()),
         }
     }
 
@@ -49,7 +59,7 @@ impl NavopSyntaxHighlightProvider {
 
 impl SyntaxHighlightProvider for NavopSyntaxHighlightProvider {
     fn id(&self) -> &str {
-        "navop-tree-sitter-wasm"
+        "navop-tree-sitter"
     }
 
     fn revision(&self) -> u64 {
@@ -81,13 +91,36 @@ impl SyntaxHighlightProvider for NavopSyntaxHighlightProvider {
         language: &str,
         source: &str,
     ) -> Result<Vec<SyntaxHighlightRun>, SyntaxHighlightError> {
-        if LanguageRegistry::singleton().language(language).is_none() {
+        let registry = LanguageRegistry::singleton();
+        let Some(config) = registry.language(language) else {
             return Err(SyntaxHighlightError::new(format!(
                 "language {language:?} is not registered"
             )));
-        }
+        };
         let text = Rope::from_str(source);
-        let mut highlighter = SyntaxHighlighter::new(language);
+        let highlighter = {
+            let mut highlighters = self
+                .highlighters
+                .lock()
+                .expect("syntax highlighter pool poisoned");
+            let entry =
+                highlighters
+                    .entry(language.to_owned())
+                    .or_insert_with(|| SharedHighlighter {
+                        config: config.clone(),
+                        highlighter: Arc::new(Mutex::new(SyntaxHighlighter::new(language))),
+                    });
+            if entry.config != config {
+                *entry = SharedHighlighter {
+                    config,
+                    highlighter: Arc::new(Mutex::new(SyntaxHighlighter::new(language))),
+                };
+            }
+            entry.highlighter.clone()
+        };
+        let mut highlighter = highlighter
+            .lock()
+            .expect("shared syntax highlighter poisoned");
         if !highlighter.update(None, &text, None) {
             return Err(SyntaxHighlightError::new(format!(
                 "tree-sitter parse failed for {language:?}"
@@ -195,6 +228,33 @@ mod tests {
                 .languages()
                 .iter()
                 .any(|language| { language.id == "markdown" && language.label == "Markdown" })
+        );
+    }
+
+    #[test]
+    fn provider_reuses_one_highlighter_per_language() {
+        let provider = NavopSyntaxHighlightProvider::new(
+            HighlightTheme::default_light(),
+            Hsla::from(rgb(0xffffff)),
+            Hsla::from(rgb(0x111111)),
+        );
+        provider.highlight("markdown", "# First").unwrap();
+        let first = {
+            let highlighters = provider.highlighters.lock().unwrap();
+            highlighters
+                .get("markdown")
+                .map(|entry| Arc::as_ptr(&entry.highlighter))
+                .unwrap()
+        };
+
+        let second_source = "## Second\n\n`code`";
+        provider.highlight("markdown", second_source).unwrap();
+        let highlighters = provider.highlighters.lock().unwrap();
+        let entry = highlighters.get("markdown").unwrap();
+        assert_eq!(first, Arc::as_ptr(&entry.highlighter));
+        assert_eq!(
+            entry.highlighter.lock().unwrap().text().to_string(),
+            second_source
         );
     }
 }

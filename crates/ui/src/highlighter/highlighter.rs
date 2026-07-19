@@ -409,13 +409,13 @@ impl SyntaxHighlighter {
             return true;
         }
 
-        let edit = edit.unwrap_or(InputEdit {
+        let edit = edit.unwrap_or_else(|| InputEdit {
             start_byte: 0,
-            old_end_byte: 0,
+            old_end_byte: self.text.len(),
             new_end_byte: text.len(),
             start_position: Point::new(0, 0),
-            old_end_position: Point::new(0, 0),
-            new_end_position: Point::new(0, 0),
+            old_end_position: rope_end_point(&self.text),
+            new_end_position: rope_end_point(text),
         });
 
         let mut old_tree = self
@@ -848,6 +848,22 @@ impl SyntaxHighlighter {
 
         styles
     }
+}
+
+fn rope_end_point(text: &Rope) -> Point {
+    let mut row = 0usize;
+    let mut column = 0usize;
+    for chunk in text.chunks() {
+        for byte in chunk.bytes() {
+            if byte == b'\n' {
+                row += 1;
+                column = 0;
+            } else {
+                column += 1;
+            }
+        }
+    }
+    Point::new(row, column)
 }
 
 /// To merge intersection ranges, let the subsequent range cover

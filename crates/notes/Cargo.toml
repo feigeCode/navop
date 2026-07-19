@@ -15,7 +15,7 @@ extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension_view.workspace = true
 extension-wasm.workspace = true
 gpui.workspace = true
-gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
+gpui-component = { workspace = true, features = ["tree-sitter-html", "tree-sitter-markdown"] }
 one-core.workspace = true
 rust-i18n.workspace = true
 ropey.workspace = true
