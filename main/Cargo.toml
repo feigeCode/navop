@@ -1,6 +1,6 @@
 [package]
 name = "main"
-version = "0.8.10"
+version = "0.8.11"
 publish.workspace = true
 edition.workspace = true
 
