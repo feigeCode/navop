@@ -306,8 +306,11 @@ test("release builds are cacheable and individually repairable", () => {
   ]) {
     assert.match(release, new RegExp(`- ${platform}`));
   }
-  assert.match(release, /mozilla-actions\/sccache-action@/);
-  assert.match(release, /SCCACHE_GHA_ENABLED: "true"/);
+  assert.match(release, /mozilla-actions\/sccache-action@v0\.0\.10/);
+  assert.match(release, /version: v0\.16\.0/);
+  assert.match(release, /SCCACHE_S3_KEY_PREFIX=sccache\/navop\//);
+  assert.match(release, /RUSTC_WRAPPER=\$sccache_bin/);
+  assert.match(release, /sccache did not observe any rustc compile requests/);
   assert.match(release, /release-cargo-inputs-/);
   assert.doesNotMatch(release, /release-cargo-[^\n]*github\.run_id/);
   assert.match(release, /No existing release assets found/);
