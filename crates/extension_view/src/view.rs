@@ -9,7 +9,7 @@ use gpui_component::{ActiveTheme, Icon, IconName, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
-use crate::{ExtensionSummary, ExtensionViewHost, MarketplaceEntry};
+use crate::{ExtensionKind, ExtensionSummary, ExtensionViewHost, MarketplaceEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtensionManagerMode {
@@ -22,6 +22,7 @@ pub struct ExtensionManagerView {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) mode: ExtensionManagerMode,
     pub(crate) search: Entity<InputState>,
+    pub(crate) selected_kind: Option<ExtensionKind>,
     pub(crate) installed: Vec<ExtensionSummary>,
     pub(crate) marketplace_entries: Vec<MarketplaceEntry>,
     pub(crate) marketplace_load_attempted: bool,
@@ -90,6 +91,7 @@ impl ExtensionManagerView {
             focus_handle: cx.focus_handle(),
             mode,
             search,
+            selected_kind: None,
             installed: Vec::new(),
             marketplace_entries: Vec::new(),
             marketplace_load_attempted: false,
@@ -136,7 +138,7 @@ impl Render for ExtensionManagerView {
                 .p_4()
                 .bg(cx.theme().background)
                 .child(self.render_toolbar(window, cx))
-                .child(div().flex_1().min_h_0().child(self.render_body(cx))),
+                .child(div().flex_1().min_h_0().child(self.render_body(window, cx))),
         )
     }
 }

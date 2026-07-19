@@ -79,14 +79,34 @@ Extension:
     en: Uninstall
     zh-CN: 卸载
     zh-HK: 解除安裝
+  kind_all:
+    en: All
+    zh-CN: 全部
+    zh-HK: 全部
   kind_language:
     en: Language
     zh-CN: 语言
     zh-HK: 語言
+  kind_language_bundle:
+    en: Language Bundle
+    zh-CN: 语言包
+    zh-HK: 語言包
   kind_database_driver:
     en: Database Driver
     zh-CN: 数据库驱动
     zh-HK: 資料庫驅動
+  kind_remote_desktop_provider:
+    en: Remote Desktop
+    zh-CN: 远程桌面
+    zh-HK: 遠端桌面
+  kind_mcp_helper:
+    en: MCP Helper
+    zh-CN: MCP 助手
+    zh-HK: MCP 助手
+  kind_acp_agent:
+    en: ACP Agent
+    zh-CN: ACP 智能体
+    zh-HK: ACP 智能體
   kind_composite:
     en: Composite Extension
     zh-CN: 复合扩展

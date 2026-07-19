@@ -21,6 +21,15 @@ use crate::{
 };
 
 const INSTALL_PROGRESS_WIDTH: f32 = 144.0;
+const EXTENSION_KINDS: [ExtensionKind; 7] = [
+    ExtensionKind::Language,
+    ExtensionKind::LanguageBundle,
+    ExtensionKind::DatabaseDriver,
+    ExtensionKind::RemoteDesktopProvider,
+    ExtensionKind::McpHelper,
+    ExtensionKind::AcpAgent,
+    ExtensionKind::Composite,
+];
 
 impl ExtensionManagerView {
     pub(crate) fn render_toolbar(
@@ -68,10 +77,15 @@ impl ExtensionManagerView {
             )
     }
 
-    pub(crate) fn render_body(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(crate) fn render_body(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         self.ensure_marketplace_loaded(cx);
         let query_text = self.search.read(cx).text().to_string();
         let query = marketplace_filter_query(&query_text);
+        let search_width = px((window.viewport_size().width.as_f32() - 32.0).max(0.0));
         let content = match self.mode {
             ExtensionManagerMode::Installed => self.render_installed(query, cx),
             ExtensionManagerMode::Marketplace => self.render_marketplace(query, cx),
@@ -82,10 +96,14 @@ impl ExtensionManagerView {
             .gap_3()
             .child(self.render_tabs(cx))
             .child(
-                Input::new(&self.search)
-                    .small()
-                    .prefix(Icon::new(IconName::Search)),
+                div().w(search_width).child(
+                    Input::new(&self.search)
+                        .small()
+                        .w_full()
+                        .prefix(Icon::new(IconName::Search)),
+                ),
             )
+            .child(self.render_kind_filters(cx))
             .child(
                 div()
                     .flex_1()
@@ -159,8 +177,38 @@ impl ExtensionManagerView {
             }))
     }
 
+    fn render_kind_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .w_full()
+            .flex_wrap()
+            .gap_2()
+            .child(self.render_kind_filter_button(None, t!("Extension.kind_all").to_string(), cx))
+            .children(
+                EXTENSION_KINDS
+                    .into_iter()
+                    .map(|kind| self.render_kind_filter_button(Some(kind), kind_label(kind), cx)),
+            )
+    }
+
+    fn render_kind_filter_button(
+        &self,
+        kind: Option<ExtensionKind>,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        let id = kind.map_or("all", extension_kind_id);
+        Button::new(format!("extension-manager-kind-{id}"))
+            .small()
+            .label(label)
+            .when(self.selected_kind == kind, |button| button.primary())
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.selected_kind = kind;
+                cx.notify();
+            }))
+    }
+
     fn render_installed(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
-        let list = filter_installed(&self.installed, query, None);
+        let list = filter_installed(&self.installed, query, self.selected_kind);
         if list.is_empty() {
             return empty_state(t!("Extension.no_installed_matches").to_string(), cx);
         }
@@ -175,7 +223,7 @@ impl ExtensionManagerView {
     }
 
     fn render_marketplace(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
-        let list = filter_marketplace(&self.marketplace_entries, query, None);
+        let list = filter_marketplace(&self.marketplace_entries, query, self.selected_kind);
         if list.is_empty() {
             let message = if self.loading {
                 t!("Extension.loading_marketplace").to_string()
@@ -331,11 +379,25 @@ fn empty_state(message: String, cx: &Context<ExtensionManagerView>) -> gpui::Any
 fn kind_label(kind: ExtensionKind) -> String {
     match kind {
         ExtensionKind::Language => t!("Extension.kind_language").to_string(),
-        ExtensionKind::LanguageBundle => "Language Bundle".to_string(),
+        ExtensionKind::LanguageBundle => t!("Extension.kind_language_bundle").to_string(),
         ExtensionKind::DatabaseDriver => t!("Extension.kind_database_driver").to_string(),
-        ExtensionKind::RemoteDesktopProvider => "Remote Desktop".to_string(),
-        ExtensionKind::McpHelper => "MCP Helper".to_string(),
-        ExtensionKind::AcpAgent => "ACP Agent".to_string(),
+        ExtensionKind::RemoteDesktopProvider => {
+            t!("Extension.kind_remote_desktop_provider").to_string()
+        }
+        ExtensionKind::McpHelper => t!("Extension.kind_mcp_helper").to_string(),
+        ExtensionKind::AcpAgent => t!("Extension.kind_acp_agent").to_string(),
         ExtensionKind::Composite => t!("Extension.kind_composite").to_string(),
+    }
+}
+
+fn extension_kind_id(kind: ExtensionKind) -> &'static str {
+    match kind {
+        ExtensionKind::Language => "language",
+        ExtensionKind::LanguageBundle => "language-bundle",
+        ExtensionKind::DatabaseDriver => "database-driver",
+        ExtensionKind::RemoteDesktopProvider => "remote-desktop-provider",
+        ExtensionKind::McpHelper => "mcp-helper",
+        ExtensionKind::AcpAgent => "acp-agent",
+        ExtensionKind::Composite => "composite",
     }
 }
