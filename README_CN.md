@@ -1,3 +1,5 @@
+> 老仓库 ：<https://github.com/feigeCode/onetcli> · [![OnetCli Stars](https://img.shields.io/github/stars/feigeCode/onetcli?style=flat-square&logo=github&label=OnetCli%20Stars)](https://github.com/feigeCode/onetcli)
+
 <div align="center">
   <p>
     <img src="resources/navop-icon.png" alt="Navop" width="120" />
