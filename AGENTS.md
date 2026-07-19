@@ -345,12 +345,12 @@
 - **验证方式**：补结构性回归测试，断言外层有 flex/h_full/min/overflow_hidden 边界、内层有 size_full/overflow_y_scrollbar；运行相关 UI 模块的定向 `cargo test`，必要时手工打开窗口验证滚轮。
 - **适用范围**：GPUI popup、dialog、tab 面板中需要滚动的列表、卡片网格、表单内容区域。
 
-- **标题**：扩展管理器的单项 reload 必须按扩展 kind 缩小刷新范围
-- **触发信号**：重新加载一个静态 composite、数据库驱动或 provider 时，UI 长时间无响应，日志出现大量 `cranelift_codegen`、`wasmtime` 或 Tree-sitter 语言扩展编译记录。
-- **根因 / 约束**：统一 reload 路径如果无条件调用 `load_language_extensions_from_root`，会在 GPUI 线程同步重新编译全部语言 WASM；单个非语言扩展 reload 实际只需要刷新 runtime catalog 和贡献点。
-- **正确做法**：`Language` 与 `LanguageBundle` 单项 reload 才重载语言 registry；其他 kind 跳过语言加载，只调用 `refresh_global_runtime_catalog` 和 `refresh_runtime_contributions`。安装/卸载的无 kind 全量刷新可单独保留。
-- **验证方式**：用纯 reload-scope contract 覆盖所有 `ExtensionKind`，并手工重新加载静态 composite，确认日志不再出现 Cranelift/Wasmtime 语言编译且 busy 状态及时清除。
-- **适用范围**：`crates/extension-runtime/src/extension_view_host.rs`、扩展管理页的重新加载、安装与卸载刷新路径。
+- **标题**：扩展管理器的 reload、安装和卸载刷新必须按 kind 且保持语言 WASM 惰性加载
+- **触发信号**：重新加载、安装或卸载一个静态 composite、数据库驱动或 provider 时，UI 长时间无响应，日志出现大量 `cranelift_codegen`、`wasmtime` 或 Tree-sitter 语言扩展编译记录。
+- **根因 / 约束**：统一刷新路径如果丢失扩展 kind，或调用 `load_language_extensions_from_root`，会在 GPUI 线程同步读取并编译全部语言 WASM；非语言扩展实际只需要刷新 runtime catalog 和贡献点，语言扩展也只需要更新 manifest 与文件后缀映射，parser 应在调用方首次请求语言时惰性加载。
+- **正确做法**：reload、安装和卸载完成后都必须把具体 `ExtensionKind` 传给 runtime 刷新；只有 `Language` 与 `LanguageBundle` 才调用 `register_language_extension_manifests_from_root`，不得在刷新路径调用 eager 的 `load_language_extensions_from_root`。其他 kind 只调用 `refresh_global_runtime_catalog` 和 `refresh_runtime_contributions`；目录删除等文件 I/O 使用 `cx.background_spawn`，完成后回到前台更新 UI。
+- **验证方式**：用 reload-scope contract 覆盖所有 `ExtensionKind`，用结构 contract 约束刷新只注册 manifest、卸载 I/O 使用 background executor；手工卸载静态 composite，确认 UI 不冻结且日志不再出现语言 Cranelift/Wasmtime 编译。
+- **适用范围**：`crates/extension-runtime/src/extension_view_host.rs`、`crates/extension_view/src/actions.rs`、扩展管理页的重新加载、安装与卸载刷新路径。
 
 - **标题**：macOS 局域网 `No route to host` 先检查本地网络权限与 App Bundle 签名
 - **触发信号**：Navop 在 macOS 上可连接公网或正式服务器，但访问 `10.*`、`172.16-31.*`、`192.168.*` 等局域网地址时返回 `No route to host (os error 65)`，而终端或旧版 OnetCli 可以连接。
