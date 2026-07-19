@@ -670,14 +670,10 @@ fn init_native_data_driver_factories(cx: &mut App) {
     };
     let driver_root = root.join("database_drivers");
     #[cfg(not(feature = "builtin-redis"))]
-    if let Ok(registry) = extension_host::NativeDriverRegistry::load_from_dir(&driver_root) {
-        if let Some(manifest) = registry.find("redis", "redis") {
-            redis_view::init_with_factory(
-                cx,
-                redis_runtime::RedisConnectionFactory::Ipc(Box::new(manifest)),
-            );
-        }
-    }
+    redis_view::init_with_factory(
+        cx,
+        redis_runtime::RedisConnectionFactory::from_installed_root(driver_root.clone()),
+    );
     #[cfg(not(feature = "builtin-mongodb"))]
     mongodb_view::init_with_factory(
         cx,
@@ -1268,6 +1264,40 @@ mod tests {
 
         assert!(requirement < guard);
         assert!(guard < open);
+    }
+
+    #[test]
+    fn redis_open_strategy_guards_the_native_driver() {
+        let source = include_str!("home/home_strategy.rs");
+        let strategy = source
+            .find("impl ConnectionOpenStrategy for RedisOpenStrategy")
+            .unwrap();
+        let body = &source[strategy..];
+        let backend = body
+            .find("default_backend_kind")
+            .expect("Redis backend selection");
+        let requirement = body
+            .find("DEFAULT_REDIS_DRIVER_ID")
+            .expect("Redis native driver requirement");
+        let guard = body
+            .find("open_native_driver_connection_with_guard")
+            .expect("native driver install guard");
+        let open = body
+            .find("open_redis_tab_with_mode")
+            .expect("Redis tab open callback");
+
+        assert!(backend < requirement);
+        assert!(requirement < guard);
+        assert!(guard < open);
+    }
+
+    #[test]
+    fn redis_factory_reloads_the_installed_driver_registry() {
+        let source = include_str!("onetcli_app.rs");
+        let init = source.find("fn init_native_data_driver_factories").unwrap();
+        let body = &source[init..];
+
+        assert!(body.contains("RedisConnectionFactory::from_installed_root"));
     }
 
     #[test]

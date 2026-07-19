@@ -130,7 +130,29 @@ impl ConnectionOpenStrategy for RedisOpenStrategy {
             connection,
             workspace,
         } = *self;
-        home.open_redis_tab_with_mode(connection, workspace, mode, window, cx);
+        let connection_name = connection.name.clone();
+        let backend = match redis_runtime::default_backend_kind() {
+            redis_runtime::RedisBackendKind::Builtin => {
+                extension_runtime::database_driver_install::NativeDriverBackend::Builtin
+            }
+            redis_runtime::RedisBackendKind::Ipc => {
+                extension_runtime::database_driver_install::NativeDriverBackend::Ipc {
+                    driver_id: redis_runtime::DEFAULT_REDIS_DRIVER_ID.to_string(),
+                }
+            }
+        };
+        let requirement =
+            extension_runtime::database_driver_install::required_native_driver("redis", backend);
+        extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
+            home,
+            requirement,
+            connection_name,
+            window,
+            cx,
+            move |home, window, cx| {
+                home.open_redis_tab_with_mode(connection, workspace, mode, window, cx);
+            },
+        );
     }
 }
 

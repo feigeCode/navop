@@ -1,5 +1,7 @@
 //! Redis domain contracts and backend selection without GPUI dependencies.
 
+use std::path::PathBuf;
+
 rust_i18n::i18n!("../redis_view/locales", fallback = "zh-CN");
 
 pub mod connection;
@@ -84,15 +86,20 @@ pub const fn default_backend_kind() -> RedisBackendKind {
 #[derive(Clone)]
 pub enum RedisConnectionFactory {
     Ipc(Box<extension_host::NativeDriverManifest>),
+    InstalledRegistry(PathBuf),
     Unavailable,
     #[cfg(feature = "builtin-redis")]
     Builtin,
 }
 
 impl RedisConnectionFactory {
+    pub fn from_installed_root(root: impl Into<PathBuf>) -> Self {
+        Self::InstalledRegistry(root.into())
+    }
+
     pub fn backend_kind(&self) -> RedisBackendKind {
         match self {
-            Self::Ipc(_) => RedisBackendKind::Ipc,
+            Self::Ipc(_) | Self::InstalledRegistry(_) => RedisBackendKind::Ipc,
             Self::Unavailable => RedisBackendKind::Ipc,
             #[cfg(feature = "builtin-redis")]
             Self::Builtin => RedisBackendKind::Builtin,
@@ -105,6 +112,19 @@ impl RedisConnectionFactory {
     ) -> Result<Box<dyn RedisConnection>, RedisError> {
         match self {
             Self::Ipc(manifest) => Ok(Box::new(IpcRedisConnection::start(manifest, config).await?)),
+            Self::InstalledRegistry(root) => {
+                let registry = extension_host::NativeDriverRegistry::load_from_dir(root)
+                    .map_err(|error| RedisError::connection(error.to_string()))?;
+                let manifest =
+                    registry
+                        .find("redis", DEFAULT_REDIS_DRIVER_ID)
+                        .ok_or_else(|| {
+                            RedisError::connection("Redis native driver is not installed")
+                        })?;
+                Ok(Box::new(
+                    IpcRedisConnection::start(&manifest, config).await?,
+                ))
+            }
             Self::Unavailable => Err(RedisError::Connection {
                 message: "Redis native driver is not installed".into(),
                 source: None,
@@ -129,6 +149,14 @@ mod tests {
         assert_eq!(RedisBackendKind::Builtin, default_backend_kind());
         #[cfg(not(feature = "builtin-redis"))]
         assert_eq!(RedisBackendKind::Ipc, default_backend_kind());
+    }
+
+    #[test]
+    fn installed_registry_factory_reports_ipc_backend() {
+        assert_eq!(
+            RedisBackendKind::Ipc,
+            RedisConnectionFactory::from_installed_root("database_drivers").backend_kind()
+        );
     }
 
     #[cfg(feature = "builtin-redis")]
