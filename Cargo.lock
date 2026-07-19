@@ -1592,7 +1592,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "async-channel",
  "serde",
@@ -1602,7 +1602,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1626,7 +1626,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "serde",
  "serde_json",
@@ -1636,7 +1636,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1655,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -3092,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=b9c4b9b#b9c4b9bbf0116da7e943c007827d8a02ef2e8ff0"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=441633b#441633b5e15e6a02a8283dcc91bed887de902c53"
 dependencies = [
  "gpui",
  "log",
@@ -3150,7 +3150,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3530,7 +3530,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7137,7 +7137,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7625,7 +7625,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10539,7 +10539,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11494,7 +11494,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11662,7 +11662,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -12150,7 +12150,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -13238,7 +13238,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -14694,7 +14694,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
