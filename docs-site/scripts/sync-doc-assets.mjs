@@ -17,7 +17,10 @@ const screenshots = [
   "chatdb.png",
   "monitor.png",
   "er.png",
-  "extension.png"
+  "extension.png",
+  "markdown.png",
+  "richtext.png",
+  "whiteboard.png"
 ];
 
 mkdirSync(outputDir, { recursive: true });

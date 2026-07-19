@@ -2,6 +2,12 @@
 
 Notes manages Markdown, rich-text, and whiteboard material in a local folder, keeping query records, operational procedures, and project knowledge beside active connections. Files remain in the directory you choose; Navop is not a replacement for backup or version control.
 
+<div class="notes-screenshot-grid">
+  <figure><img src="/images/markdown.png" alt="Markdown Notes workspace"><figcaption>Markdown documents, Mermaid, and math</figcaption></figure>
+  <figure><img src="/images/richtext.png" alt="Rich-text Notes workspace"><figcaption>Rich-text blocks and embedded content</figcaption></figure>
+  <figure><img src="/images/whiteboard.png" alt="Notes whiteboard workspace"><figcaption>Whiteboard canvas and freeform layout</figcaption></figure>
+</div>
+
 ## Choose a workspace folder
 
 Select a readable and writable folder on first use, or change the Notes path in Settings. Use clear project directories and remember that changing the configured path does not move old files. Cloud drives, network folders, and Git repositories may work, but their synchronization and locking rules still apply.

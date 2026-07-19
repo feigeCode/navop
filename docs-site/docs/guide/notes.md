@@ -2,6 +2,12 @@
 
 Notes 用于在本地目录中管理 Markdown、富文本和白板内容，把查询记录、运维步骤和项目资料放在连接工作流旁边。文件仍保存在你选择的目录中，Navop 不替代版本控制和备份。
 
+<div class="notes-screenshot-grid">
+  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作区"><figcaption>Markdown 文档、Mermaid 与数学公式</figcaption></figure>
+  <figure><img src="/images/richtext.png" alt="富文本 Notes 工作区"><figcaption>富文本块编辑与嵌入内容</figcaption></figure>
+  <figure><img src="/images/whiteboard.png" alt="Notes 白板工作区"><figcaption>白板画布与自由排版</figcaption></figure>
+</div>
+
 ## 选择工作目录
 
 首次进入 Notes 时选择一个有读写权限的本地目录，也可以在设置中更换 Notes 路径。建议为不同项目使用清晰目录，并了解更换路径后旧文件不会自动移动。云盘、网络盘或版本控制目录可以使用，但同步冲突与文件锁由相应工具负责。

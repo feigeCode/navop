@@ -217,6 +217,14 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 |:-:|
 | [![扩展市场](extension.png)](extension.png) |
 
+| Markdown 笔记 | 富文本笔记 |
+|:-:|:-:|
+| [![Markdown 笔记](markdown.png)](markdown.png) | [![富文本笔记](richtext.png)](richtext.png) |
+
+| 白板笔记 |
+|:-:|
+| [![白板笔记](whiteboard.png)](whiteboard.png) |
+
 ## 安装
 
 请从 [Releases](https://github.com/feigeCode/navop/releases/latest) 页面下载最新版本。

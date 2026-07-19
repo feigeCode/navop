@@ -258,6 +258,14 @@ Sync connections and settings across devices with encrypted key storage based on
 |:-:|
 | [![Extensions](extension.png)](extension.png) |
 
+| Markdown Notes | Rich-text Notes |
+|:-:|:-:|
+| [![Markdown Notes](markdown.png)](markdown.png) | [![Rich-text Notes](richtext.png)](richtext.png) |
+
+| Whiteboard Notes |
+|:-:|
+| [![Whiteboard Notes](whiteboard.png)](whiteboard.png) |
+
 ## Install
 
 Download the latest build from the [Releases](https://github.com/feigeCode/navop/releases/latest) page.

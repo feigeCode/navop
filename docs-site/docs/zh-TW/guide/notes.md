@@ -2,6 +2,12 @@
 
 Notes 在你選擇的本機目錄管理 Markdown、富文字和白板，讓查詢記錄、維運步驟和專案資料留在連線工作旁。檔案仍由你管理，Navop 不能取代備份與版本控制。
 
+<div class="notes-screenshot-grid">
+  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作區"><figcaption>Markdown 文件、Mermaid 與數學公式</figcaption></figure>
+  <figure><img src="/images/richtext.png" alt="富文字 Notes 工作區"><figcaption>富文字區塊編輯與嵌入內容</figcaption></figure>
+  <figure><img src="/images/whiteboard.png" alt="Notes 白板工作區"><figcaption>白板畫布與自由排版</figcaption></figure>
+</div>
+
 ## 選擇工作目錄
 
 首次進入時選擇可讀寫的資料夾，也可在設定更換 Notes 路徑。不同專案使用清楚的目錄；更換設定不會自動搬移舊檔案。雲端硬碟、網路磁碟和 Git 目錄的同步衝突與鎖定仍由相應工具處理。
