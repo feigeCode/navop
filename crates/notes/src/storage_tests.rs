@@ -138,7 +138,7 @@ fn conversion_normalizes_rich_text_marks_that_markdown_cannot_preserve() -> Resu
 }
 
 #[test]
-fn conversion_exports_whiteboard_preview_and_editable_source() -> Result<()> {
+fn conversion_flattens_whiteboard_to_preview_image_only() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     storage.create_notebook("Notes", "")?;
@@ -163,10 +163,11 @@ fn conversion_exports_whiteboard_preview_and_editable_source() -> Result<()> {
 
     let converted = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
     let markdown = std::fs::read_to_string(&converted.absolute_path)?;
-    assert!(markdown.contains("cditor:whiteboard"));
+    assert!(!markdown.contains("cditor:whiteboard"));
+    assert!(markdown.contains("![Whiteboard](<Board.assets/whiteboard-1.svg>)"));
     let assets = converted.absolute_path.with_file_name("Board.assets");
     assert!(assets.join("whiteboard-1.svg").is_file());
-    assert!(assets.join("whiteboard-1.cditor-board.json").is_file());
+    assert!(!assets.join("whiteboard-1.cditor-board.json").exists());
     Ok(())
 }
 

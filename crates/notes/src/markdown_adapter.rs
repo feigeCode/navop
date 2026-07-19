@@ -41,11 +41,14 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
         &config.store,
     )?;
     let readonly = !matches!(imported.compatibility, MarkdownCompatibility::Editable);
+    let media_base_path = config.store.media_base_path()?;
     let (event_sender, events) = unbounded();
     let mut builder = Editor::builder()
         .document_id(config.document_id)
         .initial_document(imported.document)
         .persistence(MarkdownDocumentPersistence::new(config.store))
+        .media_base_path(media_base_path)
+        .markdown_native_blocks_only(true)
         .autosave(MARKDOWN_AUTOSAVE_INTERVAL)
         .readonly(readonly)
         .on_event(move |event| {

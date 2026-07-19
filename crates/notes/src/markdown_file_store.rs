@@ -37,6 +37,15 @@ struct MarkdownStoreState {
 }
 
 impl MarkdownFileStore {
+    pub(crate) fn media_base_path(&self) -> Result<PathBuf> {
+        let state = self.state()?;
+        Ok(state
+            .path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf())
+    }
+
     pub(crate) fn asset_directory(&self) -> Result<String> {
         let state = self.state()?;
         let stem = state

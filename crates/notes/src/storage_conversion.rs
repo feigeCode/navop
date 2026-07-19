@@ -49,6 +49,7 @@ impl NotesStorage {
             MarkdownExportMode::BestEffort,
             &MarkdownBundleOptions {
                 asset_directory: asset_directory.clone(),
+                preserve_whiteboard_source: false,
                 ..MarkdownBundleOptions::default()
             },
         )?;
