@@ -2,6 +2,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod context_menu_handler;
 mod endpoint;
+mod endpoint_switcher;
 mod file_list_panel;
 mod left_remote;
 mod left_remote_state;
@@ -9,7 +10,7 @@ mod ssh_config;
 
 use context_menu_handler::ContextMenuHandler;
 use endpoint::{
-    DragSource, LeftEndpointItem, LeftEndpointKind, PaneSide, TransferRoute, transfer_route,
+    DragSource, LeftEndpointKind, LeftEndpointValue, PaneSide, TransferRoute, transfer_route,
 };
 pub use file_list_panel::{
     DraggedFileItem, DraggedFileItems, FileItem, FileListPanel, FileListPanelEvent,
@@ -21,7 +22,7 @@ use gpui::{
     Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -31,7 +32,6 @@ use gpui_component::{
     popover::{Popover, PopoverState},
     progress::Progress,
     scroll::ScrollableElement,
-    select::{SearchableVec, Select, SelectEvent, SelectState},
     spinner::Spinner,
     tooltip::Tooltip,
     v_flex,
@@ -703,7 +703,6 @@ pub struct SftpView {
 
     local_panel: Entity<FileListPanel>,
     remote_panel: Entity<FileListPanel>,
-    left_endpoint_select: Entity<SelectState<SearchableVec<LeftEndpointItem>>>,
     left_remote: Option<LeftRemoteEndpoint>,
 
     local_path_editing: bool,
@@ -770,18 +769,6 @@ impl SftpView {
         });
 
         let remote_panel = cx.new(|cx| FileListPanel::new("/root".to_string(), true, window, cx));
-        let left_endpoint_items =
-            endpoint::endpoint_items(&conn, t!("Endpoint.local").to_string(), cx);
-        let left_endpoint_select = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(left_endpoint_items),
-                Some(IndexPath::default()),
-                window,
-                cx,
-            )
-            .searchable(true)
-        });
-
         let local_path_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.path").to_string()));
         let remote_path_input = cx
@@ -852,17 +839,6 @@ impl SftpView {
                 }
                 _ => {
                     this.handle_remote_context_menu_event(event, window, cx);
-                }
-            },
-        ));
-
-        subscriptions.push(cx.subscribe_in(
-            &left_endpoint_select,
-            window,
-            |this, _select, event: &SelectEvent<SearchableVec<LeftEndpointItem>>, window, cx| {
-                let SelectEvent::Confirm(value) = event;
-                if let Some(value) = value {
-                    this.switch_left_endpoint(value.clone(), window, cx);
                 }
             },
         ));
@@ -939,7 +915,6 @@ impl SftpView {
             remote_history_index: 0,
             local_panel,
             remote_panel,
-            left_endpoint_select,
             left_remote: None,
             local_path_editing: false,
             remote_path_editing: false,
@@ -5116,6 +5091,36 @@ impl SftpView {
         breadcrumb
     }
 
+    fn left_endpoint_title(&self) -> String {
+        self.left_remote.as_ref().map_or_else(
+            || t!("Endpoint.local").to_string(),
+            |endpoint| endpoint::connection_title(&endpoint.connection),
+        )
+    }
+
+    fn open_left_endpoint_switcher(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let active_value = self
+            .left_remote
+            .as_ref()
+            .and_then(|endpoint| endpoint.connection.id)
+            .map(LeftEndpointValue::Remote)
+            .unwrap_or(LeftEndpointValue::Local);
+        let entries = endpoint::endpoint_items(
+            &self.stored_connection,
+            t!("Endpoint.local").to_string(),
+            cx,
+        )
+        .into_iter()
+        .map(|item| endpoint_switcher::EndpointSwitcherEntry {
+            active: item.value() == &active_value,
+            value: item.value().clone(),
+            title: item.title_text().to_string().into(),
+            icon: item.icon(),
+        })
+        .collect();
+        endpoint_switcher::open_endpoint_switcher_dialog(cx.entity(), entries, window, cx);
+    }
+
     fn render_local_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_left_remote = self.left_remote.is_some();
         let breadcrumb = if is_left_remote {
@@ -5144,7 +5149,7 @@ impl SftpView {
         } else {
             self.local_favorite_paths()
         };
-        let left_endpoint_select = self.left_endpoint_select.clone();
+        let left_endpoint_title = self.left_endpoint_title();
         let left_ready = self
             .left_remote
             .as_ref()
@@ -5160,15 +5165,36 @@ impl SftpView {
                 h_flex()
                     .h_10()
                     .px_2()
-                    .gap_2()
+                    .gap_1()
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Select::new(&left_endpoint_select)
+                        Button::new("left_endpoint_switcher")
+                            .icon(if is_left_remote {
+                                IconName::Server
+                            } else {
+                                IconName::HardDrive
+                            })
+                            .ghost()
                             .small()
-                            .w(px(180.))
-                            .search_placeholder(t!("Endpoint.search").to_string()),
+                            .compact()
+                            .dropdown_caret(true)
+                            .tooltip(t!(
+                                "Endpoint.switch_tooltip",
+                                name = left_endpoint_title.clone()
+                            ))
+                            .child(
+                                div()
+                                    .max_w(px(96.))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(left_endpoint_title),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_left_endpoint_switcher(window, cx);
+                            })),
                     )
                     .child(
                         h_flex()
@@ -5416,7 +5442,7 @@ impl SftpView {
                 h_flex()
                     .h_10()
                     .px_2()
-                    .gap_2()
+                    .gap_1()
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
