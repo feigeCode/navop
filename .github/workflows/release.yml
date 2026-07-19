@@ -28,6 +28,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   prepare:
@@ -102,57 +104,7 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
-        with:
-          version: v0.16.0
-
-      - name: Configure R2 compiler cache
-        shell: bash
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
-        run: |
-          set -euo pipefail
-          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_R2_ACCESS_KEY_ID CLOUDFLARE_R2_SECRET_ACCESS_KEY CLOUDFLARE_R2_BUCKET; do
-            if [ -z "${!name}" ]; then
-              echo "::error::${name} secret is empty or not set"
-              exit 1
-            fi
-          done
-
-          sccache_bin="${SCCACHE_PATH:-$(command -v sccache)}"
-          if [ ! -x "$sccache_bin" ]; then
-            echo "::error::sccache binary is not executable: $sccache_bin"
-            exit 1
-          fi
-
-          sccache_endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          {
-            echo "RUSTC_WRAPPER=$sccache_bin"
-            echo "SCCACHE_ENDPOINT=$sccache_endpoint"
-            echo "SCCACHE_BUCKET=$CLOUDFLARE_R2_BUCKET"
-            echo "SCCACHE_REGION=auto"
-            echo "SCCACHE_S3_KEY_PREFIX=sccache/navop/"
-            echo "SCCACHE_BASEDIRS=$GITHUB_WORKSPACE"
-            echo "AWS_ACCESS_KEY_ID=$CLOUDFLARE_R2_ACCESS_KEY_ID"
-            echo "AWS_SECRET_ACCESS_KEY=$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
-          } >> "$GITHUB_ENV"
-
-          export RUSTC_WRAPPER="$sccache_bin"
-          export SCCACHE_ENDPOINT="$sccache_endpoint"
-          export SCCACHE_BUCKET="$CLOUDFLARE_R2_BUCKET"
-          export SCCACHE_REGION=auto
-          export SCCACHE_S3_KEY_PREFIX=sccache/navop/
-          export SCCACHE_BASEDIRS="$GITHUB_WORKSPACE"
-          export AWS_ACCESS_KEY_ID="$CLOUDFLARE_R2_ACCESS_KEY_ID"
-          export AWS_SECRET_ACCESS_KEY="$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
-
-          "$sccache_bin" --stop-server >/dev/null 2>&1 || true
-          "$sccache_bin" --start-server
-          "$sccache_bin" --zero-stats
-          echo "Configured $($sccache_bin --version) at $sccache_endpoint with prefix sccache/navop/"
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Free disk space (macOS)
         if: runner.os == 'macOS'
@@ -245,8 +197,6 @@ jobs:
           fi
           cargo --version
           rustc --version
-          echo "RUSTC_WRAPPER=${RUSTC_WRAPPER:-}"
-          "$RUSTC_WRAPPER" --version
           echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-}"
           echo "CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO:-}"
           echo "CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-}"
@@ -255,15 +205,7 @@ jobs:
       - name: Show sccache statistics
         if: always()
         shell: bash
-        run: |
-          set -euo pipefail
-          stats="$($RUSTC_WRAPPER --show-stats)"
-          echo "$stats"
-          requests="$(awk '$1 == "Compile" && $2 == "requests" && NF == 3 { print $3; exit }' <<< "$stats")"
-          if ! [[ "$requests" =~ ^[0-9]+$ ]] || [ "$requests" -eq 0 ]; then
-            echo "::error::sccache did not observe any rustc compile requests"
-            exit 1
-          fi
+        run: sccache --show-stats || true
 
       - name: Create macOS app bundle
         if: runner.os == 'macOS'
