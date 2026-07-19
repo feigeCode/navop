@@ -28,3 +28,19 @@ fn result_content_wrapper_provides_a_full_height_vertical_flex_context() {
     assert!(wrapper.contains(".flex_col()"));
     assert!(wrapper.contains(".size_full()"));
 }
+
+#[test]
+fn statement_scrollbar_has_an_explicit_overlay_boundary() {
+    let source = include_str!("sql_result_tab.rs");
+    let scrollbar = source
+        .split(".id(\"statement-list-container\")")
+        .nth(1)
+        .and_then(|source| source.split(".into_any_element()").next())
+        .expect("statement scrollbar boundary should exist");
+
+    assert!(scrollbar.contains("Scrollbar::vertical(&self.scroll_handle)"));
+    assert!(scrollbar.contains(".absolute()"));
+    assert!(scrollbar.contains(".top_0()"));
+    assert!(scrollbar.contains(".right_0()"));
+    assert!(scrollbar.contains(".bottom_0()"));
+}

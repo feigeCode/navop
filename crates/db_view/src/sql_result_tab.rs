@@ -1011,7 +1011,18 @@ impl SqlResultTabContainer {
                     .px_4()
                     .child(self.render_statement_list_content(item_count, cx)),
             )
-            .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(16.))
+                    .child(
+                        Scrollbar::vertical(&self.scroll_handle)
+                            .scrollbar_show(ScrollbarShow::Always),
+                    ),
+            )
             .into_any_element()
     }
 
