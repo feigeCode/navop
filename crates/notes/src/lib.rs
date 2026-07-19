@@ -17,6 +17,7 @@ mod model;
 mod notes_actions;
 mod notes_close;
 mod notes_conversion;
+mod notes_export;
 mod notes_notifications;
 mod notes_render;
 mod notes_setup;

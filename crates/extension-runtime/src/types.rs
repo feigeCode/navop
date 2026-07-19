@@ -70,6 +70,18 @@ pub struct RegisteredDocumentRenderer {
     pub priority: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredDocumentExporter {
+    pub extension_id: String,
+    pub id: String,
+    pub display_name: String,
+    pub runtime_id: String,
+    pub function: String,
+    pub formats: Vec<String>,
+    pub output_media_types: Vec<String>,
+    pub priority: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct WasmRuntimeBinding {
     #[cfg(feature = "wasm-components")]

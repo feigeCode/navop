@@ -185,3 +185,19 @@ Notes:
     en: Convert to Markdown (keep original document)
     zh-CN: 转换为 Markdown（保留原文档）
     zh-HK: 轉換為 Markdown（保留原始文件）
+  export:
+    en: Export
+    zh-CN: 导出
+    zh-HK: 匯出
+  select_export_directory:
+    en: Select an export directory
+    zh-CN: 选择导出目录
+    zh-HK: 選擇匯出目錄
+  export_unavailable:
+    en: The document export extension is not installed or unavailable
+    zh-CN: 文档导出扩展未安装或不可用
+    zh-HK: 文件匯出擴充功能未安裝或不可用
+  exported:
+    en: "Exported to %{path}"
+    zh-CN: 已导出到 %{path}
+    zh-HK: 已匯出到 %{path}

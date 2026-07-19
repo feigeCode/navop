@@ -12,8 +12,8 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 
 use super::registration::load_installed_composite_manifests;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentRenderer,
-    RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
+    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
 };
 
@@ -29,9 +29,13 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
     pub(super) html_preview_transforms: Vec<RegisteredHtmlPreviewTransform>,
     pub(super) document_renderers: Vec<RegisteredDocumentRenderer>,
+    pub(super) document_exporters: Vec<RegisteredDocumentExporter>,
     #[cfg(feature = "wasm-components")]
     pub(super) document_renderer_runtimes:
         Mutex<HashMap<String, Arc<extension_wasm::DocumentRendererRuntime>>>,
+    #[cfg(feature = "wasm-components")]
+    pub(super) document_exporter_runtimes:
+        Mutex<HashMap<String, Arc<extension_wasm::DocumentExporterRuntime>>>,
     pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
 }
 
@@ -61,8 +65,11 @@ impl ExtensionRuntimeCatalog {
             keybindings: Vec::new(),
             html_preview_transforms: Vec::new(),
             document_renderers: Vec::new(),
+            document_exporters: Vec::new(),
             #[cfg(feature = "wasm-components")]
             document_renderer_runtimes: Mutex::new(HashMap::new()),
+            #[cfg(feature = "wasm-components")]
+            document_exporter_runtimes: Mutex::new(HashMap::new()),
             remote_file_editors: Vec::new(),
         }
     }
@@ -154,6 +161,75 @@ impl ExtensionRuntimeCatalog {
                     .any(|kind| kind.eq_ignore_ascii_case(block_kind))
             })
             .max_by_key(|renderer| renderer.priority)
+    }
+
+    pub fn document_exporter_for_format(
+        &self,
+        format: &str,
+    ) -> Option<&RegisteredDocumentExporter> {
+        self.document_exporters
+            .iter()
+            .filter(|exporter| {
+                exporter
+                    .formats
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(format))
+            })
+            .max_by_key(|exporter| exporter.priority)
+    }
+
+    #[cfg(feature = "wasm-components")]
+    fn document_exporter_runtime(
+        &self,
+        exporter: &RegisteredDocumentExporter,
+    ) -> extension_wasm::WasmResult<Arc<extension_wasm::DocumentExporterRuntime>> {
+        let Some(binding) = self.wasm_runtimes.get(&exporter.runtime_id) else {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                exporter.runtime_id.clone(),
+            ));
+        };
+        if binding.kind != WasmRuntimeKind::Component {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                exporter.runtime_id.clone(),
+            ));
+        }
+        let mut runtimes = self
+            .document_exporter_runtimes
+            .lock()
+            .map_err(|error| extension_wasm::WasmError::ComponentLoad(error.to_string()))?;
+        if let Some(runtime) = runtimes.get(&exporter.runtime_id) {
+            return Ok(runtime.clone());
+        }
+        let runtime = Arc::new(
+            extension_wasm::DocumentExporterRuntime::from_file_with_config(
+                exporter.id.clone(),
+                &binding.module_path,
+                binding.config.clone(),
+            )?,
+        );
+        runtimes.insert(exporter.runtime_id.clone(), runtime.clone());
+        Ok(runtime)
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub fn prewarm_document_exporters(&self) -> extension_wasm::WasmResult<()> {
+        for exporter in &self.document_exporters {
+            self.document_exporter_runtime(exporter)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub async fn export_document(
+        &self,
+        mut request: extension_wasm::DocumentExportRequest,
+    ) -> extension_wasm::WasmResult<Option<extension_wasm::DocumentExportArtifact>> {
+        let Some(exporter) = self.document_exporter_for_format(&request.format) else {
+            return Ok(None);
+        };
+        request.exporter = exporter.id.clone();
+        let runtime = self.document_exporter_runtime(exporter)?;
+        runtime.export(request).await.map(Some)
     }
 
     #[cfg(feature = "wasm-components")]

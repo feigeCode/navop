@@ -5,9 +5,9 @@ use html_preview::resolve_extension_asset_url;
 use crate::{
     ExtensionRuntimeCatalog,
     extension::manifest::{
-        ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines,
-        HtmlPreviewTransformContrib, Manifest, MenuCommandRef, MenuContrib, RuntimeSection,
-        WasmRuntime, WasmRuntimeKind,
+        ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest,
+        DocumentExporterContrib, Engines, HtmlPreviewTransformContrib, Manifest, MenuCommandRef,
+        MenuContrib, RuntimeSection, WasmRuntime, WasmRuntimeKind,
         contributes::{
             RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
         },
@@ -111,6 +111,32 @@ fn runtime_catalog_registers_wasm_html_preview_transform_with_assets() {
         PathBuf::from("/tmp/com.example.tools/assets/app.css"),
         resolve_extension_asset_url("onet-extension://com.example.tools/app.css").unwrap()
     );
+}
+
+#[test]
+fn runtime_catalog_resolves_document_exporter_by_format() {
+    let mut manifest = base_manifest();
+    manifest.runtime.wasm.push(wasm_runtime("exporter"));
+    manifest
+        .contributes
+        .document_exporters
+        .push(DocumentExporterContrib {
+            id: "notes-documents".to_string(),
+            display_name: "HTML, PDF and Word".to_string(),
+            runtime_id: "exporter".to_string(),
+            function: "export-document".to_string(),
+            formats: vec!["html".to_string(), "pdf".to_string(), "docx".to_string()],
+            output_media_types: vec!["text/html".to_string(), "application/pdf".to_string()],
+            priority: 100,
+        });
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let exporter = catalog.document_exporter_for_format("PDF").unwrap();
+
+    assert_eq!("notes-documents", exporter.id);
+    assert_eq!("com.example.tools::exporter", exporter.runtime_id);
+    assert_eq!("export-document", exporter.function);
+    assert!(catalog.document_exporter_for_format("odt").is_none());
 }
 
 #[test]

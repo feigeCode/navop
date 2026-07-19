@@ -27,6 +27,8 @@ pub struct ContributesManifest {
     pub html_preview_transforms: Vec<HtmlPreviewTransformContrib>,
     #[serde(default, rename = "documentRenderers")]
     pub document_renderers: Vec<DocumentRendererContrib>,
+    #[serde(default, rename = "documentExporters")]
+    pub document_exporters: Vec<DocumentExporterContrib>,
     #[serde(default, rename = "remoteFileEditors")]
     pub remote_file_editors: Vec<RemoteFileEditorContrib>,
     #[serde(default)]
@@ -63,6 +65,7 @@ impl ContributesManifest {
             + self.keybindings.len()
             + self.html_preview_transforms.len()
             + self.document_renderers.len()
+            + self.document_exporters.len()
             + self.remote_file_editors.len()
             + self.views.len()
             + self.tasks.len()
@@ -141,6 +144,27 @@ pub struct DocumentRendererContrib {
     pub output_media_types: Vec<String>,
     #[serde(default)]
     pub priority: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DocumentExporterContrib {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(default, rename = "runtimeId")]
+    pub runtime_id: String,
+    #[serde(default = "default_document_export_function")]
+    pub function: String,
+    #[serde(default)]
+    pub formats: Vec<String>,
+    #[serde(default, rename = "outputMediaTypes")]
+    pub output_media_types: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
+}
+
+fn default_document_export_function() -> String {
+    "export-document".to_string()
 }
 
 fn default_document_render_function() -> String {

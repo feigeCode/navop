@@ -1,4 +1,5 @@
 use crate::notes_actions::CreateKind;
+use crate::notes_export::NotesExportFormat;
 use crate::notes_view::NotesLoadState;
 use crate::theme_provider::cditor_theme;
 use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
@@ -36,6 +37,7 @@ enum SidebarMenuAction {
     RevealInFileManager,
     Refresh,
     ConvertToMarkdown,
+    Export,
     Rename,
     Delete,
 }
@@ -63,6 +65,7 @@ fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> 
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
             SidebarMenuAction::ConvertToMarkdown,
+            SidebarMenuAction::Export,
             SidebarMenuAction::Rename,
             SidebarMenuAction::Delete,
         ],
@@ -71,6 +74,7 @@ fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> 
             SidebarMenuAction::NewMarkdown,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
+            SidebarMenuAction::Export,
             SidebarMenuAction::Rename,
             SidebarMenuAction::Delete,
         ],
@@ -465,7 +469,7 @@ fn build_sidebar_context_menu(
     directory: PathBuf,
     row: Option<TreeRow>,
     window: &mut Window,
-    _cx: &mut Context<PopupMenu>,
+    cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let actions = sidebar_menu_actions(target);
     for (index, action) in actions.iter().copied().enumerate() {
@@ -475,6 +479,7 @@ fn build_sidebar_context_menu(
                 SidebarMenuAction::RevealInFileManager
                     | SidebarMenuAction::Refresh
                     | SidebarMenuAction::ConvertToMarkdown
+                    | SidebarMenuAction::Export
                     | SidebarMenuAction::Rename
             )
         {
@@ -558,6 +563,27 @@ fn build_sidebar_context_menu(
                             view.convert_to_markdown(&row, window, cx);
                         })),
                 )
+            }
+            SidebarMenuAction::Export => {
+                let row = row.clone().expect("document context menu requires a row");
+                let submenu_view = view.clone();
+                let submenu = PopupMenu::build(window, cx, move |submenu, window, _cx| {
+                    NotesExportFormat::ALL
+                        .into_iter()
+                        .fold(submenu, |submenu, format| {
+                            let row = row.clone();
+                            let view = submenu_view.clone();
+                            submenu.item(PopupMenuItem::new(format.label()).on_click(
+                                window.listener_for(&view, move |view, _, window, cx| {
+                                    view.export_document(row.clone(), format, window, cx);
+                                }),
+                            ))
+                        })
+                });
+                menu.item(PopupMenuItem::submenu(
+                    t!("Notes.export").to_string(),
+                    submenu,
+                ))
             }
             SidebarMenuAction::Rename => {
                 let row = row.clone().expect("node context menu requires a row");
@@ -669,6 +695,14 @@ mod tests {
         assert!(
             !sidebar_menu_actions(SidebarContextTarget::MarkdownDocument)
                 .contains(&SidebarMenuAction::ConvertToMarkdown)
+        );
+        assert!(
+            sidebar_menu_actions(SidebarContextTarget::RichTextDocument)
+                .contains(&SidebarMenuAction::Export)
+        );
+        assert!(
+            sidebar_menu_actions(SidebarContextTarget::MarkdownDocument)
+                .contains(&SidebarMenuAction::Export)
         );
     }
 }

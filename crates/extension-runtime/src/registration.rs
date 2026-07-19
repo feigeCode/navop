@@ -12,8 +12,8 @@ use crate::extension::manifest::{
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentRenderer,
-    RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredDocumentExporter,
+    RegisteredDocumentRenderer, RegisteredHtmlPreviewTransform, RegisteredKeybindingContribution,
     RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
     command_descriptor, runtime_key, slot_item_from_menu,
 };
@@ -28,6 +28,7 @@ impl ExtensionRuntimeCatalog {
         self.register_wasm_runtimes(&manifest)?;
         self.register_html_preview_transforms(&manifest)?;
         self.register_document_renderers(&manifest)?;
+        self.register_document_exporters(&manifest)?;
         self.register_commands(&manifest)?;
         self.register_menu_slots(&manifest);
         self.register_toolbar_slots(&manifest);
@@ -160,6 +161,32 @@ impl ExtensionRuntimeCatalog {
                 block_kinds: renderer.block_kinds.clone(),
                 output_media_types: renderer.output_media_types.clone(),
                 priority: renderer.priority,
+            });
+        }
+        Ok(())
+    }
+
+    fn register_document_exporters(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<(), ExtensionRuntimeError> {
+        for exporter in &manifest.contributes.document_exporters {
+            let runtime_id = runtime_key(&manifest.id, &exporter.runtime_id);
+            if !self.wasm_runtimes.contains_key(&runtime_id) {
+                return Err(ExtensionRuntimeError::UnknownRuntime {
+                    command_id: exporter.id.clone(),
+                    runtime_id: exporter.runtime_id.clone(),
+                });
+            }
+            self.document_exporters.push(RegisteredDocumentExporter {
+                extension_id: manifest.id.clone(),
+                id: exporter.id.clone(),
+                display_name: exporter.display_name.clone(),
+                runtime_id,
+                function: exporter.function.clone(),
+                formats: exporter.formats.clone(),
+                output_media_types: exporter.output_media_types.clone(),
+                priority: exporter.priority,
             });
         }
         Ok(())

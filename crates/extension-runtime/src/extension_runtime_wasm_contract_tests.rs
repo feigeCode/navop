@@ -183,6 +183,48 @@ fn installed_math_extension_registers_and_renders_when_fixture_is_provided() {
 }
 
 #[test]
+fn installed_notes_exporter_registers_and_exports_all_formats_when_fixture_is_provided() {
+    let Ok(dir) = std::env::var("NAVOP_INSTALLED_NOTES_EXPORTER_EXTENSION") else {
+        return;
+    };
+    let manifest = crate::extension::manifest::load_from_dir(std::path::Path::new(&dir)).unwrap();
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+
+    assert_eq!(
+        "notes-documents",
+        catalog.document_exporter_for_format("docx").unwrap().id
+    );
+    catalog.prewarm_document_exporters().unwrap();
+    for (format, signature) in [
+        ("html", b"<!doctype html".as_slice()),
+        ("pdf", b"%PDF-1.7".as_slice()),
+        ("docx", b"PK".as_slice()),
+    ] {
+        let output = futures::executor::block_on(catalog.export_document(
+            extension_wasm::DocumentExportRequest {
+                exporter: String::new(),
+                format: format.to_owned(),
+                title: "导出测试".to_owned(),
+                source: "# 标题\n\n正文".to_owned(),
+                theme: extension_wasm::DocumentExportTheme {
+                    dark: false,
+                    background: 0xffffff,
+                    foreground: 0x222222,
+                    border: 0xdddddd,
+                    muted: 0x777777,
+                    accent: 0x2563eb,
+                    danger: 0xdc2626,
+                    font_family: String::new(),
+                },
+            },
+        ))
+        .unwrap()
+        .unwrap();
+        assert!(output.bytes.starts_with(signature));
+    }
+}
+
+#[test]
 fn wasm_open_view_output_builds_extension_widget_event() {
     let mut state = ComponentHostState::new("com.example.tools", NoopDbHost);
     state.set_action_context(extension_component::ActionContext {

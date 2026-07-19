@@ -75,6 +75,13 @@ pub fn refresh_global_runtime_catalog(cx: &mut impl BorrowAppContext) {
                             "预热文档渲染扩展失败"
                         );
                     }
+                    if let Err(error) = prewarm_catalog.prewarm_document_exporters() {
+                        tracing::warn!(
+                            target: "extension_loader",
+                            %error,
+                            "预热文档导出扩展失败"
+                        );
+                    }
                 });
             }
             cx.update_default_global::<GlobalExtensionRuntimeCatalog, _>(|global, _| {

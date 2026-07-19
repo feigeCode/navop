@@ -278,3 +278,34 @@ fn manifest_rejects_wasm_module_path_escape() {
         other => panic!("expected invalid wasm path, got {other:?}"),
     }
 }
+
+#[test]
+fn manifest_parses_document_exporters() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.navop.exporter.documents",
+            "name": "Document Exporter",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.7.0" },
+            "runtime": { "wasm": [{ "id": "main", "module": "wasm/main.wasm", "kind": "component" }] },
+            "contributes": {
+                "documentExporters": [{
+                    "id": "documents",
+                    "displayName": "HTML, PDF and Word",
+                    "runtimeId": "main",
+                    "formats": ["html", "pdf", "docx"],
+                    "outputMediaTypes": ["text/html", "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let exporter = &manifest.contributes.document_exporters[0];
+    assert_eq!("documents", exporter.id);
+    assert_eq!("export-document", exporter.function);
+    assert_eq!(vec!["html", "pdf", "docx"], exporter.formats);
+}
