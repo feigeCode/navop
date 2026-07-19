@@ -12,6 +12,7 @@ dirs.workspace = true
 dunce = "1"
 futures.workspace = true
 extension-runtime = { workspace = true, features = ["wasm-components"] }
+extension_view.workspace = true
 extension-wasm.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }

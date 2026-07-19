@@ -37,8 +37,42 @@ impl ExtensionManagerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx
-            .new(|cx| InputState::new(window, cx).placeholder(t!("Extension.search").to_string()));
+        Self::new_with_mode(
+            host,
+            ExtensionManagerMode::Installed,
+            String::new(),
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_marketplace_search(
+        host: Arc<dyn ExtensionViewHost>,
+        query: impl Into<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_mode(
+            host,
+            ExtensionManagerMode::Marketplace,
+            query.into(),
+            window,
+            cx,
+        )
+    }
+
+    fn new_with_mode(
+        host: Arc<dyn ExtensionViewHost>,
+        mode: ExtensionManagerMode,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("Extension.search").to_string())
+                .default_value(query)
+        });
         let search_sub =
             cx.subscribe_in(
                 &search,
@@ -54,7 +88,7 @@ impl ExtensionManagerView {
         let mut view = Self {
             host,
             focus_handle: cx.focus_handle(),
-            mode: ExtensionManagerMode::Installed,
+            mode,
             search,
             installed: Vec::new(),
             marketplace_entries: Vec::new(),

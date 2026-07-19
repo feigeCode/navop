@@ -7562,6 +7562,7 @@ dependencies = [
  "dunce",
  "extension-runtime",
  "extension-wasm",
+ "extension_view",
  "futures",
  "gpui",
  "gpui-component",
