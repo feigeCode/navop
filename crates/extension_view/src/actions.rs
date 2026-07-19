@@ -9,7 +9,10 @@ use crate::state::{
     marketplace_manifest_url_from_query, should_auto_load_marketplace,
 };
 use crate::status_message::{format_notification_error, format_status_error};
-use crate::{ExtensionManagerView, ExtensionSummary, MarketplaceEntry, MarketplaceInstallOutcome};
+use crate::{
+    ExtensionKind, ExtensionManagerView, ExtensionSummary, MarketplaceEntry,
+    MarketplaceInstallOutcome,
+};
 
 impl ExtensionManagerView {
     pub(crate) fn refresh_installed(&mut self, cx: &mut Context<Self>) {
@@ -100,26 +103,57 @@ impl ExtensionManagerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.host.uninstall(&summary) {
-            Ok(name) => {
-                self.status = t!("Extension.uninstalled", name = name.clone())
-                    .to_string()
-                    .into();
-                self.refresh_after_extension_change(cx);
-                window.push_notification(
-                    Notification::success(t!("Extension.uninstalled", name = name).to_string()),
-                    cx,
-                );
-            }
-            Err(err) => {
-                self.status =
-                    format_status_error(&t!("Extension.uninstall_failed").to_string(), &err).into();
-                window.push_notification(
-                    Notification::error(t!("Extension.uninstall_failed").to_string()),
-                    cx,
-                );
-            }
+        if self.busy.is_some() {
+            return;
         }
+
+        let name = summary.name.clone();
+        let kind = summary.kind;
+        self.busy = Some(format!("uninstall:{name}"));
+        self.status = t!("Extension.uninstalling", name = name).to_string().into();
+
+        let host = self.host.clone();
+        let task = cx.background_spawn(async move { host.uninstall(&summary) });
+        let entity = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let outcome = task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let Some(entity) = entity.upgrade() else {
+                    return;
+                };
+                entity.update(cx, |view, cx| {
+                    match outcome {
+                        Ok(name) => {
+                            view.status = t!("Extension.uninstalled", name = name.clone())
+                                .to_string()
+                                .into();
+                            view.refresh_after_extension_change(kind, cx);
+                            window.push_notification(
+                                Notification::success(
+                                    t!("Extension.uninstalled", name = name).to_string(),
+                                ),
+                                cx,
+                            );
+                        }
+                        Err(err) => {
+                            view.busy = None;
+                            view.status = format_status_error(
+                                &t!("Extension.uninstall_failed").to_string(),
+                                &err,
+                            )
+                            .into();
+                            window.push_notification(
+                                Notification::error(t!("Extension.uninstall_failed").to_string()),
+                                cx,
+                            );
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
         cx.notify();
     }
 
@@ -170,8 +204,8 @@ impl ExtensionManagerView {
         cx.notify();
     }
 
-    pub(crate) fn refresh_after_extension_change(&mut self, cx: &mut App) {
-        self.host.refresh_after_extension_change(cx);
+    pub(crate) fn refresh_after_extension_change(&mut self, kind: ExtensionKind, cx: &mut App) {
+        self.host.refresh_after_extension_change(kind, cx);
         self.refresh_installed_from_host();
     }
 
@@ -340,5 +374,27 @@ impl ExtensionManagerView {
             }
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn uninstall_runs_host_io_on_background_executor() {
+        let source = include_str!("actions.rs");
+        let uninstall = source
+            .split("pub(crate) fn uninstall_extension")
+            .nth(1)
+            .and_then(|rest| rest.split("pub(crate) fn reload_extension").next())
+            .expect("uninstall action should exist");
+
+        assert!(
+            uninstall.contains("cx.background_spawn"),
+            "uninstall must move host I/O off the UI thread"
+        );
+        assert!(
+            !uninstall.contains("match self.host.uninstall(&summary)"),
+            "uninstall must not call the synchronous host method from the click callback"
+        );
     }
 }

@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use futures::future::BoxFuture;
 use gpui::{App, http_client::HttpClient};
 
-use crate::{ExtensionSummary, MarketplaceEntry, MarketplaceInstallOutcome};
+use crate::{ExtensionKind, ExtensionSummary, MarketplaceEntry, MarketplaceInstallOutcome};
 
 pub trait ExtensionViewHost: Send + Sync {
     fn list_installed(&self) -> anyhow::Result<Vec<ExtensionSummary>>;
@@ -37,5 +37,5 @@ pub trait ExtensionViewHost: Send + Sync {
         cx: &mut App,
     ) -> anyhow::Result<Vec<ExtensionSummary>>;
 
-    fn refresh_after_extension_change(&self, cx: &mut App);
+    fn refresh_after_extension_change(&self, kind: ExtensionKind, cx: &mut App);
 }

@@ -25,7 +25,7 @@ impl ExtensionManagerView {
                 self.status = t!("Extension.installed_name", name = summary.name.clone())
                     .to_string()
                     .into();
-                self.refresh_after_extension_change(cx);
+                self.refresh_after_extension_change(summary.kind, cx);
                 window.push_notification(
                     Notification::success(t!("Extension.install_complete").to_string()),
                     cx,
@@ -92,7 +92,7 @@ impl ExtensionManagerView {
                 self.status = t!("Extension.installed_name", name = summary.name.clone())
                     .to_string()
                     .into();
-                self.refresh_after_extension_change(cx);
+                self.refresh_after_extension_change(summary.kind, cx);
                 window.push_notification(
                     Notification::success(t!("Extension.install_complete").to_string()),
                     cx,

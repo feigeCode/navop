@@ -167,6 +167,10 @@ Extension:
     en: "Uninstalled %{name}"
     zh-CN: "已卸载 %{name}"
     zh-HK: "已解除安裝 %{name}"
+  uninstalling:
+    en: "Uninstalling %{name}..."
+    zh-CN: "正在卸载 %{name}..."
+    zh-HK: "正在解除安裝 %{name}..."
   reloading:
     en: "Reloading %{name}..."
     zh-CN: "正在重新加载 %{name}..."

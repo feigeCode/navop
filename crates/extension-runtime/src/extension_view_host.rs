@@ -125,14 +125,14 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         if summary.kind == extension_view::ExtensionKind::Language {
             gpui_component::highlighter::LanguageRegistry::singleton().unregister(&summary.name);
         }
-        reload_extension_runtime(Some(summary.kind), cx);
+        reload_extension_runtime(summary.kind, cx);
         let installed = self.list_installed()?;
         ensure_reloaded_path_present(summary, &installed)?;
         Ok(installed)
     }
 
-    fn refresh_after_extension_change(&self, cx: &mut App) {
-        reload_extension_runtime(None, cx);
+    fn refresh_after_extension_change(&self, kind: extension_view::ExtensionKind, cx: &mut App) {
+        reload_extension_runtime(kind, cx);
     }
 }
 
@@ -179,19 +179,19 @@ fn should_reload_languages(kind: extension_view::ExtensionKind) -> bool {
     )
 }
 
-fn reload_extension_runtime(kind: Option<extension_view::ExtensionKind>, cx: &mut App) {
-    if kind.is_none_or(should_reload_languages) {
-        reload_language_extensions();
+fn reload_extension_runtime(kind: extension_view::ExtensionKind, cx: &mut App) {
+    if should_reload_languages(kind) {
+        refresh_language_extension_manifests();
     }
     crate::refresh_global_runtime_catalog(cx);
     crate::extension::refresh_runtime_contributions(cx);
 }
 
-fn reload_language_extensions() {
+fn refresh_language_extension_manifests() {
     let Some(root) = crate::extension::extensions_root() else {
         return;
     };
-    match crate::extension::load_language_extensions_from_root(&root) {
+    match crate::extension::register_language_extension_manifests_from_root(&root) {
         Ok(report) => {
             if !report.failed.is_empty() {
                 tracing::warn!("语言扩展重新加载失败: {:?}", report.failed);
@@ -419,6 +419,41 @@ mod tests {
                 "unexpected reload for {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn extension_change_refresh_is_scoped_to_changed_kind() {
+        let source = include_str!("extension_view_host.rs");
+        let refresh = source
+            .split("fn refresh_after_extension_change")
+            .nth(1)
+            .and_then(|rest| rest.split("\n    }").next())
+            .expect("extension change refresh should exist");
+
+        assert!(
+            refresh.contains("kind: extension_view::ExtensionKind"),
+            "refresh must receive the changed extension kind"
+        );
+        assert!(
+            refresh.contains("reload_extension_runtime(kind, cx)"),
+            "refresh must use the changed kind to avoid reloading all language WASM"
+        );
+    }
+
+    #[test]
+    fn language_refresh_registers_manifests_without_loading_wasm() {
+        let source = include_str!("extension_view_host.rs");
+        let refresh = source
+            .split("fn refresh_language_extension_manifests")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .expect("language manifest refresh should exist");
+
+        assert!(refresh.contains("register_language_extension_manifests_from_root"));
+        assert!(
+            !refresh.contains("load_language_extensions_from_root"),
+            "metadata refresh must not eagerly compile language WASM"
+        );
     }
 
     #[test]
