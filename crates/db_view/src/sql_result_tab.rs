@@ -1405,7 +1405,10 @@ impl Render for SqlResultTabContainer {
             .child(
                 div()
                     .id("sql-result-content")
+                    .flex()
+                    .flex_col()
                     .flex_1()
+                    .size_full()
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
