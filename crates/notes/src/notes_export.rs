@@ -179,14 +179,14 @@ impl NotesView {
 
     fn source_for_export(&self, row: &TreeRow, cx: &App) -> anyhow::Result<String> {
         let descriptor = self.storage()?.descriptor(&row.relative_path)?;
-        match descriptor.format {
+        let source = match descriptor.format {
             DocumentFormat::Markdown => {
                 if let Some((_, session)) = self
                     .markdown_sessions
                     .iter()
                     .find(|(_, session)| session.relative_path == row.relative_path)
                 {
-                    return match session.state.mode {
+                    match session.state.mode {
                         MarkdownViewMode::Source => {
                             Ok(session.source_editor.read(cx).value().to_string())
                         }
@@ -198,9 +198,10 @@ impl NotesView {
                                 &session.store,
                             )
                         }
-                    };
+                    }
+                } else {
+                    Ok(fs::read_to_string(descriptor.absolute_path)?)
                 }
-                Ok(fs::read_to_string(descriptor.absolute_path)?)
             }
             DocumentFormat::RichText => {
                 if let Some(cached) = self
@@ -209,13 +210,15 @@ impl NotesView {
                     .find(|cached| cached.relative_path == row.relative_path)
                 {
                     let document = cached.handle.get_document(cx)?;
-                    return export_rich_text_document(&document);
+                    export_rich_text_document(&document)
+                } else {
+                    let document =
+                        EditorDocument::from_json(&fs::read_to_string(descriptor.absolute_path)?)?;
+                    export_rich_text_document(&document)
                 }
-                let document =
-                    EditorDocument::from_json(&fs::read_to_string(descriptor.absolute_path)?)?;
-                export_rich_text_document(&document)
             }
-        }
+        }?;
+        Ok(strip_whiteboard_metadata_comments(&source))
     }
 }
 
@@ -258,6 +261,17 @@ fn without_comment_blocks(document: &EditorDocument) -> EditorDocument {
         .blocks
         .retain(|block| !excluded_ids.contains(&block.id));
     export_document
+}
+
+fn strip_whiteboard_metadata_comments(source: &str) -> String {
+    let mut filtered = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        if line.trim_start().starts_with("<!-- cditor:whiteboard ") && line.contains("-->") {
+            continue;
+        }
+        filtered.push_str(line);
+    }
+    filtered
 }
 
 fn export_theme(
@@ -314,7 +328,7 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 mod tests {
     use super::{
         DOCUMENT_EXPORTER_MARKETPLACE_QUERY, NotesExportFormat, export_rich_text_document,
-        next_export_path, without_comment_blocks,
+        next_export_path, strip_whiteboard_metadata_comments, without_comment_blocks,
     };
     use cditor_app::core::rich_text::{
         BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
@@ -402,6 +416,23 @@ mod tests {
         let filtered = without_comment_blocks(&document);
 
         assert_eq!(vec![whiteboard], filtered.blocks);
+    }
+
+    #[test]
+    fn whiteboard_metadata_comment_is_removed_without_removing_preview() {
+        let source = "Before\n<!-- cditor:whiteboard {\"block_id\":1} -->\n![Whiteboard](assets/whiteboard-1.svg)\nAfter";
+
+        assert_eq!(
+            "Before\n![Whiteboard](assets/whiteboard-1.svg)\nAfter",
+            strip_whiteboard_metadata_comments(source)
+        );
+    }
+
+    #[test]
+    fn ordinary_html_comments_are_not_removed() {
+        let source = "Before\n<!-- user note -->\nAfter";
+
+        assert_eq!(source, strip_whiteboard_metadata_comments(source));
     }
 
     fn editor_document(blocks: Vec<EditorBlock>) -> EditorDocument {
