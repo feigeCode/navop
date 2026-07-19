@@ -451,11 +451,13 @@ jobs:
           set -euo pipefail
           mkdir -p publish
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release download "$RELEASE_TAG" \
+            if ! gh release download "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --pattern "navop-*" \
               --pattern "navop_*" \
-              --dir publish
+              --dir publish; then
+              echo "No existing release assets found; publishing only newly built artifacts."
+            fi
           fi
           cp -a artifacts/. publish/
           cd publish

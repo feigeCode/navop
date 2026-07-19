@@ -310,6 +310,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(release, /SCCACHE_GHA_ENABLED: "true"/);
   assert.match(release, /release-cargo-inputs-/);
   assert.doesNotMatch(release, /release-cargo-[^\n]*github\.run_id/);
+  assert.match(release, /No existing release assets found/);
   assert.match(release, /cancel-in-progress: false/);
   assert.match(release, /gh release upload[\s\S]*--clobber/);
 
