@@ -641,11 +641,11 @@ pub fn init(cx: &mut App) {
     }
     terminal_view::init(cx);
     redis_view::init(cx);
-    crate::public_mcp_runtime::init(cx);
     crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
     #[cfg(not(all(feature = "builtin-redis", feature = "builtin-mongodb")))]
     init_native_data_driver_factories(cx);
+    crate::public_mcp_runtime::init(cx);
     remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
@@ -668,29 +668,21 @@ fn init_native_data_driver_factories(cx: &mut App) {
     let Some(root) = extension_runtime::extension::extensions_root() else {
         return;
     };
-    let Ok(registry) =
-        extension_host::NativeDriverRegistry::load_from_dir(&root.join("database_drivers"))
-    else {
-        return;
-    };
+    let driver_root = root.join("database_drivers");
     #[cfg(not(feature = "builtin-redis"))]
-    if let Some(manifest) = registry.find("redis", "redis") {
-        redis_view::init_with_factory(
-            cx,
-            redis_runtime::RedisConnectionFactory::Ipc(Box::new(manifest)),
-        );
+    if let Ok(registry) = extension_host::NativeDriverRegistry::load_from_dir(&driver_root) {
+        if let Some(manifest) = registry.find("redis", "redis") {
+            redis_view::init_with_factory(
+                cx,
+                redis_runtime::RedisConnectionFactory::Ipc(Box::new(manifest)),
+            );
+        }
     }
     #[cfg(not(feature = "builtin-mongodb"))]
-    if let Some(modern) = registry.find("mongodb", "mongodb-modern") {
-        let factory = match registry.find("mongodb", "mongodb-legacy") {
-            Some(legacy) => mongodb_runtime::MongoConnectionFactory::IpcWithLegacy {
-                modern: Box::new(modern),
-                legacy: Box::new(legacy),
-            },
-            None => mongodb_runtime::MongoConnectionFactory::Ipc(Box::new(modern)),
-        };
-        mongodb_view::init_with_factory(cx, factory);
-    }
+    mongodb_view::init_with_factory(
+        cx,
+        mongodb_runtime::MongoConnectionFactory::from_installed_root(driver_root),
+    );
 }
 
 pub fn refresh_keybindings(cx: &mut App) {
@@ -1240,6 +1232,42 @@ mod tests {
 
         assert!(new_fn.contains("on_window_should_close"));
         assert!(new_fn.contains("request_quit(window, cx)"));
+    }
+
+    #[test]
+    fn native_driver_factories_are_ready_before_public_mcp_init() {
+        let source = include_str!("onetcli_app.rs");
+        let redis_init = source.find("redis_view::init(cx);").unwrap();
+        let mongo_init = source.find("mongodb_view::init(cx);").unwrap();
+        let native_factories = source
+            .find("init_native_data_driver_factories(cx);")
+            .unwrap();
+        let public_mcp = source.find("crate::public_mcp_runtime::init(cx);").unwrap();
+
+        assert!(redis_init < native_factories);
+        assert!(mongo_init < native_factories);
+        assert!(native_factories < public_mcp);
+    }
+
+    #[test]
+    fn mongodb_open_strategy_guards_the_modern_native_driver() {
+        let source = include_str!("home/home_strategy.rs");
+        let strategy = source
+            .find("impl ConnectionOpenStrategy for MongoOpenStrategy")
+            .unwrap();
+        let body = &source[strategy..];
+        let requirement = body
+            .find("DEFAULT_MONGODB_MODERN_DRIVER_ID")
+            .expect("MongoDB modern driver requirement");
+        let guard = body
+            .find("open_native_driver_connection_with_guard")
+            .expect("native driver install guard");
+        let open = body
+            .find("open_mongodb_tab_with_mode")
+            .expect("MongoDB tab open callback");
+
+        assert!(requirement < guard);
+        assert!(guard < open);
     }
 
     #[test]

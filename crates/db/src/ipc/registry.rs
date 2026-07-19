@@ -19,6 +19,10 @@ fn default_driver_api() -> String {
     "database".to_string()
 }
 
+fn default_show_in_new_connection() -> bool {
+    true
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpcDriverManifest {
     pub id: String,
@@ -129,7 +133,7 @@ pub struct IpcDriverDialect {
     pub uses_schema_as_database: bool,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpcDriverUi {
     #[serde(default)]
     pub icon: String,
@@ -141,6 +145,21 @@ pub struct IpcDriverUi {
     pub default_port: Option<u16>,
     #[serde(default)]
     pub form: Option<DatabaseUiManifest>,
+    #[serde(default = "default_show_in_new_connection")]
+    pub show_in_new_connection: bool,
+}
+
+impl Default for IpcDriverUi {
+    fn default() -> Self {
+        Self {
+            icon: String::new(),
+            icon_color: None,
+            locales_dir: None,
+            default_port: None,
+            form: None,
+            show_in_new_connection: true,
+        }
+    }
 }
 
 impl Default for IpcDriverDialect {

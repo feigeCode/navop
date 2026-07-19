@@ -9,6 +9,7 @@ anyhow.workspace = true
 cditor-app.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+dunce = "1"
 futures.workspace = true
 extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension-wasm.workspace = true

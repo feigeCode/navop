@@ -83,8 +83,17 @@ impl NativeDriverRegistry {
             if !entry.file_type().map_err(HostError::Io)?.is_dir() {
                 continue;
             }
-            if let Some(driver) = Self::load_driver_from_dir(&entry.path())? {
-                drivers.push(driver);
+            let path = entry.path();
+            match Self::load_driver_from_dir(&path) {
+                Ok(Some(driver)) => drivers.push(driver),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %error,
+                        "skipping invalid native driver manifest"
+                    );
+                }
             }
         }
         Ok(Self::from_drivers(drivers))

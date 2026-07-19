@@ -24,7 +24,7 @@ use one_core::storage::{ActiveConnections, StoredConnection};
 use rust_i18n::t;
 use tracing::{error, info, warn};
 
-use crate::{GlobalMongoState, MongoManager, MongoNode, MongoNodeType};
+use crate::{GlobalMongoState, MongoError, MongoManager, MongoNode, MongoNodeType};
 
 /// 树形视图事件
 #[derive(Clone, Debug)]
@@ -35,6 +35,12 @@ pub enum MongoTreeViewEvent {
     CollectionOpenInTab { node_id: String },
     /// 连接建立
     ConnectionEstablished { node_id: String },
+    /// 连接所需的 native 驱动尚未安装
+    NativeDriverRequired {
+        node_id: String,
+        connection_name: String,
+        driver_id: String,
+    },
 }
 
 #[derive(Clone)]
@@ -252,11 +258,26 @@ impl MongoTreeView {
                     });
                 }
                 Err(error) => {
+                    let required_driver_id = error.downcast_ref::<MongoError>().and_then(|error| {
+                        if let MongoError::NativeDriverRequired { driver_id, .. } = error {
+                            Some(driver_id.clone())
+                        } else {
+                            None
+                        }
+                    });
                     let error_message = format!("{:#}", error);
                     error!("MongoDB 连接失败，节点 {}: {}", node_id, error_message);
+                    let connection_name = connection.name.clone();
                     _ = this.update(cx, |view, cx| {
                         view.loading_nodes.remove(&node_id);
                         view.error_nodes.insert(node_id.clone(), error_message);
+                        if let Some(driver_id) = required_driver_id {
+                            cx.emit(MongoTreeViewEvent::NativeDriverRequired {
+                                node_id: node_id.clone(),
+                                connection_name,
+                                driver_id,
+                            });
+                        }
                         cx.notify();
                     });
                 }

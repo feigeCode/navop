@@ -35,6 +35,9 @@ pub enum MongoError {
 
     #[error("MongoDB server is incompatible with the selected driver: {0}")]
     ServerIncompatible(String),
+
+    #[error("MongoDB native driver `{driver_id}` is required: {reason}")]
+    NativeDriverRequired { driver_id: String, reason: String },
 }
 
 impl MongoError {

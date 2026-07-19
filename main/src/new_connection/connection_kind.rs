@@ -177,6 +177,7 @@ fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKin
     registry
         .drivers()
         .iter()
+        .filter(|driver| driver.ui.show_in_new_connection)
         .filter(|driver| !is_builtin_external_driver(&driver.id))
         .map(|driver| {
             let icon_asset_path = driver.preferred_icon_asset_path();
@@ -213,6 +214,30 @@ mod tests {
             manifest("duckdb", "DuckDB"),
             manifest("custom", "Custom"),
         ]);
+
+        let ids: Vec<String> = external_database_kinds(&registry)
+            .into_iter()
+            .filter_map(|kind| match kind {
+                NewConnectionKind::ExternalDatabase { driver_id, .. } => Some(driver_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(ids, vec!["custom"]);
+    }
+
+    #[test]
+    fn external_database_kinds_respect_manifest_visibility() {
+        let hidden: IpcDriverManifest = serde_json::from_value(serde_json::json!({
+            "id": "redis",
+            "name": "Redis",
+            "api": "redis",
+            "entry": { "command": "./redis-driver" },
+            "transport": { "name": "redis.sock" },
+            "ui": { "show_in_new_connection": false }
+        }))
+        .unwrap();
+        let registry = IpcDriverRegistry::from_drivers(vec![hidden, manifest("custom", "Custom")]);
 
         let ids: Vec<String> = external_database_kinds(&registry)
             .into_iter()

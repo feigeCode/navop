@@ -6,6 +6,8 @@ use dashmap::DashMap;
 use gpui::Global;
 use mongodb_runtime::MongoConnectionFactory;
 use one_core::storage::MongoDBParams;
+#[cfg(not(feature = "builtin-mongodb"))]
+use one_core::storage::manager::get_config_dir;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use rust_i18n::t;
 use std::sync::Arc;
@@ -128,10 +130,15 @@ impl MongoManager {
     pub async fn test_connection(config: &MongoConnectionConfig) -> Result<(), MongoError> {
         #[cfg(not(feature = "builtin-mongodb"))]
         {
-            let _ = config;
-            return Err(MongoError::Internal(
-                "MongoDB IPC test requires a configured native driver manifest".into(),
-            ));
+            let root = get_config_dir()
+                .map_err(|error| MongoError::Internal(format!("resolve extensions root: {error}")))?
+                .join("extensions")
+                .join("database_drivers");
+            let factory = mongodb_runtime::MongoConnectionFactory::from_installed_root(root);
+            let mut connection = factory.create(config.clone()).await?;
+            connection.ping().await?;
+            connection.disconnect().await?;
+            Ok(())
         }
         #[cfg(feature = "builtin-mongodb")]
         {

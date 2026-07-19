@@ -24,7 +24,7 @@ impl NotesView {
             .storage()
             .and_then(|storage| storage.absolute_path(&relative_path))
         {
-            Ok(path) => cx.reveal_path(&path),
+            Ok(path) => cx.reveal_path(dunce::simplified(&path)),
             Err(error) => notify_operation_error(window, cx, error),
         }
     }

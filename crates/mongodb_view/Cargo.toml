@@ -9,6 +9,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 connection_tunnel.workspace = true
 dashmap.workspace = true
+extension-runtime = { workspace = true, default-features = false }
 futures-util.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true

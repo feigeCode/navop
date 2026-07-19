@@ -676,6 +676,21 @@ fn legacy_manifest_defaults_to_database_api() {
 }
 
 #[test]
+fn driver_ui_visibility_defaults_to_visible_and_can_opt_out() {
+    let visible: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"visible","name":"Visible","entry":{"command":"driver"},"transport":{"name":"visible.sock"}}"#,
+    )
+    .unwrap();
+    let hidden: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"hidden","name":"Hidden","entry":{"command":"driver"},"transport":{"name":"hidden.sock"},"ui":{"show_in_new_connection":false}}"#,
+    )
+    .unwrap();
+
+    assert!(visible.ui.show_in_new_connection);
+    assert!(!hidden.ui.show_in_new_connection);
+}
+
+#[test]
 fn registry_can_filter_drivers_by_api_without_cross_talk() {
     let mut redis = manifest("redis", "Redis");
     redis.api = "redis".into();
