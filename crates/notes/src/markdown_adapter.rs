@@ -3,8 +3,8 @@ use crate::markdown_persistence::MarkdownDocumentPersistence;
 use anyhow::Result;
 use cditor_app::{
     AiProvider, DocumentRendererProvider, Editor, EditorDocument, EditorEvent, EditorHandle,
-    MarkdownApplyMode, MarkdownCompatibility, MarkdownDiagnostic, MarkdownExportMode,
-    MarkdownImportResult, SyntaxHighlightProvider, ThemeProvider,
+    MarkdownApplyMode, MarkdownBundleOptions, MarkdownCompatibility, MarkdownDiagnostic,
+    MarkdownExportMode, MarkdownImportResult, SyntaxHighlightProvider, ThemeProvider,
 };
 use gpui::AppContext;
 use smol::channel::{Receiver, unbounded};
@@ -93,13 +93,20 @@ pub(crate) fn export_markdown_bundle<C: AppContext>(
     store: &MarkdownFileStore,
     cx: &C,
 ) -> Result<String> {
-    let exported = handle.export_markdown_bundle(
+    let document = handle.get_document(cx)?;
+    export_markdown_bundle_from_document(&document, store)
+}
+
+pub(crate) fn export_markdown_bundle_from_document(
+    document: &EditorDocument,
+    store: &MarkdownFileStore,
+) -> Result<String> {
+    let exported = document.export_markdown_bundle(
         MarkdownExportMode::BestEffort,
-        &cditor_app::MarkdownBundleOptions {
+        &MarkdownBundleOptions {
             asset_directory: store.asset_directory()?,
-            ..cditor_app::MarkdownBundleOptions::default()
+            ..MarkdownBundleOptions::default()
         },
-        cx,
     )?;
     store.write_assets(&exported.assets)?;
     Ok(exported.markdown)

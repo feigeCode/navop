@@ -5,6 +5,7 @@ use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Wi
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
 use rust_i18n::t;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -190,10 +191,11 @@ impl NotesView {
                             Ok(session.source_editor.read(cx).value().to_string())
                         }
                         MarkdownViewMode::Wysiwyg => {
-                            crate::markdown_adapter::export_markdown_bundle(
-                                &session.preview,
+                            let document = session.preview.get_document(cx)?;
+                            let document = without_comment_blocks(&document);
+                            crate::markdown_adapter::export_markdown_bundle_from_document(
+                                &document,
                                 &session.store,
-                                cx,
                             )
                         }
                     };
@@ -206,19 +208,56 @@ impl NotesView {
                     .values()
                     .find(|cached| cached.relative_path == row.relative_path)
                 {
-                    return Ok(cached
-                        .handle
-                        .export_markdown(MarkdownExportMode::BestEffort, cx)?
-                        .markdown);
+                    let document = cached.handle.get_document(cx)?;
+                    return export_rich_text_document(&document);
                 }
                 let document =
                     EditorDocument::from_json(&fs::read_to_string(descriptor.absolute_path)?)?;
-                Ok(document
-                    .export_markdown(MarkdownExportMode::BestEffort)?
-                    .markdown)
+                export_rich_text_document(&document)
             }
         }
     }
+}
+
+fn export_rich_text_document(document: &EditorDocument) -> anyhow::Result<String> {
+    Ok(without_comment_blocks(document)
+        .export_markdown(MarkdownExportMode::BestEffort)?
+        .markdown)
+}
+
+fn without_comment_blocks(document: &EditorDocument) -> EditorDocument {
+    let mut excluded_ids: HashSet<u64> = document
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block.payload.kind,
+                cditor_app::core::rich_text::RichBlockKind::Comment
+            )
+        })
+        .map(|block| block.id)
+        .collect();
+
+    loop {
+        let previous_len = excluded_ids.len();
+        for block in &document.blocks {
+            if block
+                .parent_id
+                .is_some_and(|parent_id| excluded_ids.contains(&parent_id))
+            {
+                excluded_ids.insert(block.id);
+            }
+        }
+        if excluded_ids.len() == previous_len {
+            break;
+        }
+    }
+
+    let mut export_document = document.clone();
+    export_document
+        .blocks
+        .retain(|block| !excluded_ids.contains(&block.id));
+    export_document
 }
 
 fn export_theme(
@@ -273,7 +312,15 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 
 #[cfg(test)]
 mod tests {
-    use super::{DOCUMENT_EXPORTER_MARKETPLACE_QUERY, NotesExportFormat, next_export_path};
+    use super::{
+        DOCUMENT_EXPORTER_MARKETPLACE_QUERY, NotesExportFormat, export_rich_text_document,
+        next_export_path, without_comment_blocks,
+    };
+    use cditor_app::core::rich_text::{
+        BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
+        kind_tag_for_rich_block_kind,
+    };
+    use cditor_app::{EditorBlock, EditorDocument};
 
     #[test]
     fn export_submenu_exposes_html_pdf_and_word() {
@@ -300,5 +347,109 @@ mod tests {
         std::fs::write(dir.path().join("ab.html"), b"old").unwrap();
         let path = next_export_path(dir.path(), "a/b", "html").unwrap();
         assert_eq!("ab (2).html", path.file_name().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn rich_text_export_excludes_comment_blocks() {
+        let document = editor_document(vec![
+            editor_block(1, None, RichBlockKind::Paragraph, "Before"),
+            editor_block(2, None, RichBlockKind::Comment, "Internal annotation"),
+            editor_block(
+                3,
+                None,
+                RichBlockKind::Paragraph,
+                "A normal comment remains",
+            ),
+            editor_block(4, None, RichBlockKind::Paragraph, "After"),
+        ]);
+
+        let markdown = export_rich_text_document(&document).unwrap();
+
+        assert_eq!("Before\n\nA normal comment remains\n\nAfter", markdown);
+        assert!(!markdown.contains("Internal annotation"));
+    }
+
+    #[test]
+    fn comment_descendants_are_excluded_from_export_snapshot() {
+        let document = editor_document(vec![
+            editor_block(1, None, RichBlockKind::Paragraph, "Before"),
+            editor_block(2, None, RichBlockKind::Comment, "Annotation"),
+            editor_block(3, Some(2), RichBlockKind::Paragraph, "Annotation detail"),
+            editor_block(4, None, RichBlockKind::Paragraph, "After"),
+        ]);
+
+        let filtered = without_comment_blocks(&document);
+
+        assert_eq!(
+            vec![1, 4],
+            filtered
+                .blocks
+                .iter()
+                .map(|block| block.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(4, document.blocks.len());
+    }
+
+    #[test]
+    fn filtering_comments_preserves_whiteboard_blocks_unchanged() {
+        let whiteboard = whiteboard_block(1, r#"{"elements":[]}"#);
+        let document = editor_document(vec![
+            whiteboard.clone(),
+            editor_block(2, None, RichBlockKind::Comment, "Annotation"),
+        ]);
+
+        let filtered = without_comment_blocks(&document);
+
+        assert_eq!(vec![whiteboard], filtered.blocks);
+    }
+
+    fn editor_document(blocks: Vec<EditorBlock>) -> EditorDocument {
+        EditorDocument {
+            schema_version: EditorDocument::CURRENT_SCHEMA_VERSION,
+            document_id: "export-test".to_owned(),
+            structure_version: 1,
+            blocks,
+        }
+    }
+
+    fn editor_block(
+        id: u64,
+        parent_id: Option<u64>,
+        kind: RichBlockKind,
+        text: &str,
+    ) -> EditorBlock {
+        EditorBlock {
+            id,
+            parent_id,
+            depth: u16::from(parent_id.is_some()),
+            kind_tag: kind_tag_for_rich_block_kind(&kind),
+            flags: 0,
+            estimated_height: 32.0,
+            payload: BlockPayloadRecord::rich_text(id, kind, text),
+            attrs: BlockAttrs::default(),
+            raw_fallback: None,
+        }
+    }
+
+    fn whiteboard_block(id: u64, scene_json: &str) -> EditorBlock {
+        EditorBlock {
+            id,
+            parent_id: None,
+            depth: 0,
+            kind_tag: kind_tag_for_rich_block_kind(&RichBlockKind::Whiteboard),
+            flags: 0,
+            estimated_height: 220.0,
+            payload: BlockPayloadRecord {
+                block_id: id,
+                content_version: 1,
+                kind: RichBlockKind::Whiteboard,
+                payload: BlockPayload::Whiteboard(WhiteboardPayload {
+                    scene_json: scene_json.to_owned(),
+                }),
+            },
+            attrs: BlockAttrs::default(),
+            raw_fallback: None,
+        }
     }
 }
