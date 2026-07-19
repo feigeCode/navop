@@ -2710,7 +2710,7 @@ impl HomePage {
         DropdownButton::new("local-terminal-dropdown")
             .button(
                 Button::new("local-terminal-button")
-                    .icon(IconName::TerminalColor.color())
+                    .icon(IconName::SquareTerminalColor.color())
                     .label(t!("Home.local_terminal").to_string())
                     .tooltip(t!("Home.local_terminal_tooltip").to_string())
                     .on_click(window.listener_for(&view, move |this, _, window, cx| {
