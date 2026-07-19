@@ -68,8 +68,8 @@ fn resolve_builtin_profile(
     kind: LocalTerminalProfileKind,
 ) -> Result<(Option<String>, Vec<String>)> {
     match kind {
-        LocalTerminalProfileKind::PowerShell => Ok((Some("pwsh".to_string()), Vec::new())),
-        LocalTerminalProfileKind::Cmd
+        LocalTerminalProfileKind::PowerShell
+        | LocalTerminalProfileKind::Cmd
         | LocalTerminalProfileKind::Wsl
         | LocalTerminalProfileKind::GitBash => {
             tracing::warn!("当前平台不支持所选 Windows 本地终端 profile，回退系统默认 shell");
@@ -229,5 +229,25 @@ mod tests {
             resolve_windows_profile(LocalTerminalProfileKind::GitBash).unwrap();
         assert!(git_bash.to_ascii_lowercase().ends_with("bash.exe"));
         assert_eq!(vec!["--login", "-i"], git_bash_args);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn windows_profiles_fall_back_to_system_shell_on_other_platforms() {
+        for kind in [
+            LocalTerminalProfileKind::PowerShell,
+            LocalTerminalProfileKind::Cmd,
+            LocalTerminalProfileKind::Wsl,
+            LocalTerminalProfileKind::GitBash,
+        ] {
+            let profile = LocalTerminalProfileSettings {
+                kind,
+                ..LocalTerminalProfileSettings::default()
+            };
+
+            let (shell, args) = super::resolve_profile(&profile).unwrap();
+            assert!(shell.is_none(), "{kind:?} should use the system shell");
+            assert!(args.is_empty(), "{kind:?} should not pass shell arguments");
+        }
     }
 }

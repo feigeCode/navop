@@ -63,7 +63,7 @@ use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
-use crate::local_terminal_profiles::launch_options;
+use crate::local_terminal_profiles::{effective_kind, launch_options};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
@@ -362,6 +362,7 @@ mod external_driver_form_tests {
 
         assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
         assert!(source.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
+        assert!(source.contains(".icon(IconName::TerminalColor)"));
         assert!(source.contains(".checked(kind == default_kind)"));
     }
 
@@ -2677,7 +2678,10 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let default_kind = AppSettings::global(cx).local_terminal_profile.kind;
+        let default_kind = effective_kind(
+            AppSettings::global(cx).local_terminal_profile.kind,
+            cfg!(target_os = "windows"),
+        );
         let custom_program = AppSettings::global(cx)
             .local_terminal_profile
             .custom_program
@@ -2687,7 +2691,7 @@ impl HomePage {
         DropdownButton::new("local-terminal-dropdown")
             .button(
                 Button::new("local-terminal-button")
-                    .icon(IconName::Terminal)
+                    .icon(IconName::TerminalColor)
                     .label(t!("Home.local_terminal").to_string())
                     .tooltip(t!("Home.local_terminal_tooltip").to_string())
                     .on_click(window.listener_for(&view, move |this, _, window, cx| {

@@ -5,7 +5,10 @@ use std::sync::Arc;
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
-use crate::local_terminal_profiles::setting_options as local_terminal_profile_options;
+use crate::local_terminal_profiles::{
+    effective_kind as effective_local_terminal_profile_kind,
+    setting_options as local_terminal_profile_options,
+};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -1030,7 +1033,13 @@ fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem
         SettingField::dropdown(
             local_terminal_profile_options(cfg!(target_os = "windows")),
             |cx: &App| {
-                SharedString::from(AppSettings::global(cx).local_terminal_profile.kind.as_str())
+                SharedString::from(
+                    effective_local_terminal_profile_kind(
+                        AppSettings::global(cx).local_terminal_profile.kind,
+                        cfg!(target_os = "windows"),
+                    )
+                    .as_str(),
+                )
             },
             |value: SharedString, cx: &mut App| {
                 AppSettings::update_and_save(cx, |settings| {

@@ -3,12 +3,10 @@ use one_core::settings::LocalTerminalProfileKind;
 use rust_i18n::t;
 
 pub(crate) fn kinds(include_windows: bool) -> Vec<LocalTerminalProfileKind> {
-    let mut kinds = vec![
-        LocalTerminalProfileKind::System,
-        LocalTerminalProfileKind::PowerShell,
-    ];
+    let mut kinds = vec![LocalTerminalProfileKind::System];
     if include_windows {
         kinds.extend([
+            LocalTerminalProfileKind::PowerShell,
             LocalTerminalProfileKind::Cmd,
             LocalTerminalProfileKind::Wsl,
             LocalTerminalProfileKind::GitBash,
@@ -16,6 +14,17 @@ pub(crate) fn kinds(include_windows: bool) -> Vec<LocalTerminalProfileKind> {
     }
     kinds.push(LocalTerminalProfileKind::Custom);
     kinds
+}
+
+pub(crate) fn effective_kind(
+    configured: LocalTerminalProfileKind,
+    include_windows: bool,
+) -> LocalTerminalProfileKind {
+    if kinds(include_windows).contains(&configured) {
+        configured
+    } else {
+        LocalTerminalProfileKind::System
+    }
 }
 
 pub(crate) fn label(kind: LocalTerminalProfileKind) -> String {
@@ -66,14 +75,13 @@ pub(crate) fn launch_options(
 mod tests {
     use one_core::settings::LocalTerminalProfileKind;
 
-    use super::{kinds, launch_options};
+    use super::{effective_kind, kinds, launch_options};
 
     #[test]
     fn kinds_match_platform_capabilities() {
         assert_eq!(
             vec![
                 LocalTerminalProfileKind::System,
-                LocalTerminalProfileKind::PowerShell,
                 LocalTerminalProfileKind::Custom,
             ],
             kinds(false)
@@ -88,6 +96,18 @@ mod tests {
                 LocalTerminalProfileKind::Custom,
             ],
             kinds(true)
+        );
+    }
+
+    #[test]
+    fn unavailable_configured_profile_falls_back_to_system() {
+        assert_eq!(
+            LocalTerminalProfileKind::System,
+            effective_kind(LocalTerminalProfileKind::PowerShell, false)
+        );
+        assert_eq!(
+            LocalTerminalProfileKind::PowerShell,
+            effective_kind(LocalTerminalProfileKind::PowerShell, true)
         );
     }
 
