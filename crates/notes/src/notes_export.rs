@@ -769,7 +769,10 @@ mod tests {
 
     #[test]
     fn pdf_and_word_images_are_normalized_by_the_host() {
-        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><text x="4" y="28" font-family="sans-serif" font-size="24">Start</text></svg>"#;
+        // Keep a font-independent shape in the fixture. Minimal Linux CI
+        // images may not provide any system font, in which case resvg
+        // correctly omits the text and a text-only SVG becomes transparent.
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="#2563eb"/><text x="4" y="28" fill="white" font-family="sans-serif" font-size="24">Start</text></svg>"##;
         let pixmap = rasterize_export_svg(svg).unwrap();
         assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
 
