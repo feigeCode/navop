@@ -41,6 +41,9 @@ impl NotesView {
                     ai_model_id: ai_model_id.as_deref(),
                     syntax_highlight_provider: self.syntax_highlight_provider.clone(),
                     theme_provider: self.theme_provider.clone(),
+                    source_editor_provider: Arc::new(
+                        crate::source_editor_provider::NotesSourceEditorProvider,
+                    ),
                     document_renderer_provider: self
                         .document_renderer_provider
                         .clone()

@@ -25,6 +25,7 @@ mod notes_setup_render;
 mod notes_view;
 mod path_policy;
 mod shortcuts;
+mod source_editor_provider;
 mod storage;
 mod storage_conversion;
 mod storage_location;

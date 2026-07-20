@@ -1217,6 +1217,7 @@ impl TextElement {
                 };
 
                 let sub_line: SharedString = line_text[range.clone()].to_string().into();
+                let line_runs = clamp_text_runs_to_utf8_boundaries(&sub_line, line_runs);
                 let shaped_line = window
                     .text_system()
                     .shape_line(sub_line, font_size, &line_runs, None);
@@ -2196,6 +2197,39 @@ pub(super) fn runs_for_range(
     result
 }
 
+/// GPUI text runs use UTF-8 byte lengths. Defensive normalization is required
+/// because syntax providers and combined highlight ranges can occasionally
+/// leave a run boundary inside a multibyte character while the user is editing.
+/// Passing such a run to the platform text system panics in `str::split_at`.
+fn clamp_text_runs_to_utf8_boundaries(text: &str, runs: Vec<TextRun>) -> Vec<TextRun> {
+    let mut result = Vec::with_capacity(runs.len());
+    let mut source_end = 0usize;
+    let mut output_end = 0usize;
+    for (index, run) in runs.iter().enumerate() {
+        source_end = source_end.saturating_add(run.len).min(text.len());
+        let mut safe_end = source_end;
+        while safe_end < text.len() && !text.is_char_boundary(safe_end) {
+            safe_end += 1;
+        }
+        if index + 1 == runs.len() {
+            safe_end = text.len();
+        }
+        if safe_end > output_end {
+            result.push(TextRun {
+                len: safe_end - output_end,
+                ..run.clone()
+            });
+            output_end = safe_end;
+        }
+    }
+    if output_end < text.len() {
+        if let Some(last) = result.last_mut() {
+            last.len += text.len() - output_end;
+        }
+    }
+    result
+}
+
 fn split_runs_by_bg_segments(
     start_offset: usize,
     runs: &[TextRun],
@@ -2371,6 +2405,32 @@ mod tests {
         assert_runs(runs_for_range(&runs, 3, &(0..3)), &[1, 2]);
         assert_runs(runs_for_range(&runs, 3, &(2..10)), &[4, 1, 3]);
         assert_runs(runs_for_range(&runs, 9, &(0..8)), &[1, 7]);
+    }
+
+    #[test]
+    fn text_runs_are_clamped_to_utf8_boundaries() {
+        let base = TextRun {
+            len: 0,
+            font: gpui::font(".SystemUIFont"),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = clamp_text_runs_to_utf8_boundaries(
+            "达梦",
+            vec![
+                TextRun {
+                    len: 2,
+                    ..base.clone()
+                },
+                TextRun { len: 4, ..base },
+            ],
+        );
+        assert_eq!(
+            runs.iter().map(|run| run.len).collect::<Vec<_>>(),
+            vec![3, 3]
+        );
     }
 
     #[test]

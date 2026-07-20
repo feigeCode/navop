@@ -4,6 +4,7 @@ use cditor_app::{
     DocumentRenderRequest, DocumentRenderTheme, DocumentRendererProvider, EditorDocument,
     MarkdownExportMode,
 };
+use futures::AsyncReadExt;
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
@@ -104,6 +105,7 @@ impl NotesView {
             cx,
         );
         let document_renderer = self.document_renderer_provider.clone();
+        let http_client = cx.http_client();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -150,6 +152,10 @@ impl NotesView {
             let result = cx
                 .background_spawn(async move {
                     let mut assets = export_source.assets;
+                    assets.extend(
+                        collect_remote_export_assets(&export_source.source, http_client.clone())
+                            .await,
+                    );
                     for pending in export_source.pending_renders {
                         let provider = document_renderer.as_ref().ok_or_else(|| {
                             anyhow::anyhow!(
@@ -344,14 +350,7 @@ fn collect_export_assets(
     let mut assets = Vec::new();
     let mut seen = HashSet::new();
     for target in export_asset_paths(source) {
-        let path = if let Some(target) = target.strip_prefix('<') {
-            target
-                .split_once('>')
-                .map(|(path, _)| path)
-                .unwrap_or(target)
-        } else {
-            target.split_whitespace().next().unwrap_or(target)
-        };
+        let path = export_asset_target(target);
         if path.is_empty()
             || path.contains("://")
             || path.starts_with("data:")
@@ -415,6 +414,80 @@ fn export_asset_paths(source: &str) -> Vec<&str> {
         cursor = end + 1;
     }
     paths
+}
+
+async fn collect_remote_export_assets(
+    source: &str,
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
+) -> Vec<extension_wasm::DocumentExportAsset> {
+    let mut assets = Vec::new();
+    let mut seen = HashSet::new();
+    for target in export_asset_paths(source) {
+        let path = export_asset_target(target);
+        if !(path.starts_with("https://") || path.starts_with("http://"))
+            || !seen.insert(path.to_owned())
+        {
+            continue;
+        }
+        let Ok(response) = http_client
+            .get(path, gpui::http_client::AsyncBody::default(), true)
+            .await
+        else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+        if body.read_to_end(&mut bytes).await.is_err() || bytes.is_empty() {
+            continue;
+        }
+        assets.push(extension_wasm::DocumentExportAsset {
+            path: path.to_owned(),
+            media_type: export_image_media_type(path, &bytes).to_owned(),
+            bytes,
+        });
+    }
+    assets
+}
+
+fn export_asset_target(target: &str) -> &str {
+    let target = target.trim();
+    if let Some(target) = target.strip_prefix('<') {
+        target
+            .split_once('>')
+            .map(|(path, _)| path)
+            .unwrap_or(target)
+    } else {
+        target.split_whitespace().next().unwrap_or(target)
+    }
+}
+
+fn export_image_media_type(path: &str, bytes: &[u8]) -> &'static str {
+    let trimmed = bytes
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .take(64)
+        .collect::<Vec<_>>();
+    if trimmed.starts_with(b"<svg") || trimmed.starts_with(b"<?xml") {
+        return "image/svg+xml";
+    }
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    }
 }
 
 fn html_export_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -595,8 +668,9 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::{
-        NotesExportFormat, collect_export_assets, document_for_preview, export_rich_text_document,
-        next_export_path, strip_whiteboard_metadata_comments, without_comment_blocks,
+        NotesExportFormat, collect_export_assets, document_for_preview, export_image_media_type,
+        export_rich_text_document, next_export_path, strip_whiteboard_metadata_comments,
+        without_comment_blocks,
     };
     use cditor_app::core::rich_text::{
         BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
@@ -774,6 +848,21 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, vec!["left.png", "right.png", "html.png"]);
+    }
+
+    #[test]
+    fn remote_export_image_media_type_detects_svg_responses_without_extensions() {
+        assert_eq!(
+            export_image_media_type(
+                "https://img.shields.io/badge/Navop-green?style=flat",
+                b"\n <svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+            ),
+            "image/svg+xml"
+        );
+        assert_eq!(
+            export_image_media_type("https://example.com/photo.jpeg?size=2", b"jpeg"),
+            "image/jpeg"
+        );
     }
 
     fn editor_document(blocks: Vec<EditorBlock>) -> EditorDocument {
