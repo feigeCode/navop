@@ -371,9 +371,9 @@ SSH:
     zh-CN: 禁用 Shell 集成
     zh-HK: 禁用 Shell 集成
   disable_shell_integration_desc:
-    en: Disable OSC shell hooks; command history, prompt status, working-directory tracking, and terminal/file-manager path sync will be unavailable
-    zh-CN: 关闭 OSC Shell hook，将无法使用命令历史、prompt 状态、工作目录跟踪，以及终端/文件管理器路径同步
-    zh-HK: 關閉 OSC Shell hook，將無法使用命令歷史、prompt 狀態、工作目錄追蹤，以及終端/文件管理器路徑同步
+    en: Disable OSC shell hooks for future connections; command history, prompt status, working-directory tracking, and terminal/file-manager path sync will be unavailable. This does not remove remote files; use Uninstall below when cleanup is needed.
+    zh-CN: 后续连接将禁用 OSC Shell hook，无法使用命令历史、prompt 状态、工作目录跟踪及终端/文件管理器路径同步。此选项不会删除远端文件；需要清理时请点击下方“卸载”。
+    zh-HK: 後續連線將禁用 OSC Shell hook，無法使用命令歷史、prompt 狀態、工作目錄追蹤及終端/檔案管理器路徑同步。此選項不會刪除遠端檔案；需要清理時請點擊下方「解除安裝」。
   remote_shell_integration:
     en: Remote Shell Integration
     zh-CN: 远端 Shell 集成

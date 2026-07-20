@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,7 +36,11 @@ fn shell_single_quote(input: &str) -> String {
 
 fn is_channel_open_failure(err: &anyhow::Error) -> bool {
     let msg = format!("{err:#}").to_ascii_lowercase();
-    msg.contains("channel open") || msg.contains("maxsessions")
+    msg.contains("channel open")
+        || msg.contains("open channel")
+        || msg.contains("maxsessions")
+        || msg.contains("administrativelyprohibited")
+        || msg.contains("administratively prohibited")
 }
 
 fn is_timeout_failure(err: &anyhow::Error) -> bool {
@@ -49,7 +54,7 @@ fn is_timeout_failure(err: &anyhow::Error) -> bool {
 fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
     if is_channel_open_failure(&err) {
         return err.context(
-            "服务器拒绝打开新 channel，可能是 MaxSessions 限制（可尝试在 SSH server 设置更大值）",
+            "服务器拒绝打开 SSH 会话 channel；请检查账号的交互式 CLI/EXEC 权限、设备 SSH service-type，以及 VTY/并发会话上限",
         );
     }
 
@@ -58,6 +63,45 @@ fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
     }
 
     err
+}
+
+#[async_trait]
+trait SshSessionAccess: Send + Sync {
+    type Client: SshClient;
+
+    async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>>;
+    async fn invalidate(&self);
+    async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup>;
+    async fn set_shell_integration(
+        &self,
+        client: &Arc<tokio::sync::Mutex<Self::Client>>,
+        setup: ShellIntegrationSetup,
+    );
+}
+
+#[async_trait]
+impl SshSessionAccess for SshSessionManager {
+    type Client = ssh::RusshClient;
+
+    async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>> {
+        SshSessionManager::client(self).await
+    }
+
+    async fn invalidate(&self) {
+        SshSessionManager::invalidate(self).await;
+    }
+
+    async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
+        SshSessionManager::cached_shell_integration(self).await
+    }
+
+    async fn set_shell_integration(
+        &self,
+        client: &Arc<tokio::sync::Mutex<Self::Client>>,
+        setup: ShellIntegrationSetup,
+    ) {
+        SshSessionManager::set_shell_integration(self, client, setup).await;
+    }
 }
 
 fn extract_marker_value(output: &str, marker: &str) -> Option<String> {
@@ -349,6 +393,10 @@ async fn apply_exec_effects(
 }
 
 impl SshBackend {
+    /// 用户显式触发的一次性远端清理操作。
+    ///
+    /// 卸载需要单独打开 exec channel，因此不能隐式塞进禁用 Shell 集成的连接流程；
+    /// 否则只允许一个 session channel 的交换机会在随后打开交互终端时拒绝请求。
     pub async fn uninstall_shell_integration(
         session_manager: Arc<SshSessionManager>,
     ) -> anyhow::Result<()> {
@@ -636,21 +684,40 @@ impl SshBackend {
         connection_id: Option<i64>,
         disable_shell_integration: bool,
     ) -> anyhow::Result<(Arc<tokio::sync::Mutex<ssh::RusshClient>>, ssh::RusshChannel)> {
+        Self::establish_channel_with_manager(
+            session_manager.as_ref(),
+            pty_config,
+            connection_id,
+            disable_shell_integration,
+        )
+        .await
+    }
+
+    async fn establish_channel_with_manager<M: SshSessionAccess>(
+        session_manager: &M,
+        pty_config: &PtyConfig,
+        connection_id: Option<i64>,
+        disable_shell_integration: bool,
+    ) -> anyhow::Result<(
+        Arc<tokio::sync::Mutex<M::Client>>,
+        <M::Client as SshClient>::Channel,
+    )> {
         let mut attempt = 0usize;
+        let mut plain_channel_only = disable_shell_integration;
         loop {
             let client = session_manager.client().await?;
             let cached = session_manager.cached_shell_integration().await;
 
             let result = {
                 let mut guard = client.lock().await;
-                Self::prepare_ssh_channel(
-                    &mut *guard,
-                    pty_config,
-                    connection_id,
-                    cached,
-                    disable_shell_integration,
-                )
-                .await
+                if plain_channel_only {
+                    Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
+                        .await
+                        .map(|channel| (channel, None))
+                } else {
+                    Self::prepare_ssh_channel(&mut *guard, pty_config, connection_id, cached, false)
+                        .await
+                }
             };
 
             match result {
@@ -664,10 +731,11 @@ impl SshBackend {
                     tracing::warn!(
                         target: "terminal.ssh.connect",
                         error = %err,
-                        "channel open 失败，尝试 invalidate 并重连一次（可能是 MaxSessions 限制）"
+                        "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
                     );
                     session_manager.invalidate().await;
                     attempt += 1;
+                    plain_channel_only = true;
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -682,12 +750,12 @@ impl SshBackend {
         cached: Option<ShellIntegrationSetup>,
         disable_shell_integration: bool,
     ) -> anyhow::Result<(C::Channel, Option<ShellIntegrationSetup>)> {
-        let (setup, new_setup) = if disable_shell_integration {
-            // 用户在连接配置里显式关闭了 shell integration:先 best-effort 卸载远端
-            // managed block,再走裸 request_shell 路径。
-            Self::try_uninstall_shell_integration(client).await;
-            (None, None)
-        } else if let Some(cached) = cached {
+        if disable_shell_integration {
+            let channel = Self::prepare_plain_ssh_channel(client, pty_config).await?;
+            return Ok((channel, None));
+        }
+
+        let (setup, new_setup) = if let Some(cached) = cached {
             (Some(cached), None)
         } else {
             // 首次连接：尝试安装 integration，失败降级为"无 integration"分支。
@@ -698,6 +766,15 @@ impl SshBackend {
         let mut channel = client.open_channel().await?;
         Self::start_interactive_shell(&mut channel, pty_config, setup.as_ref()).await?;
         Ok((channel, new_setup))
+    }
+
+    async fn prepare_plain_ssh_channel<C: SshClient>(
+        client: &mut C,
+        pty_config: &PtyConfig,
+    ) -> anyhow::Result<C::Channel> {
+        let mut channel = client.open_channel().await?;
+        Self::start_interactive_shell(&mut channel, pty_config, None).await?;
+        Ok(channel)
     }
 
     /// 打开一个临时 channel 跑 integration 安装脚本。任何失败（open 失败 / setup 出错 / 超时）
@@ -760,16 +837,6 @@ impl SshBackend {
                 );
                 None
             }
-        }
-    }
-
-    async fn try_uninstall_shell_integration<C: SshClient>(client: &mut C) {
-        if let Err(err) = Self::uninstall_shell_integration_for_client(client).await {
-            tracing::warn!(
-                target: "terminal.ssh.setup",
-                error = %err,
-                "卸载 shell integration 失败，继续使用裸 shell"
-            );
         }
     }
 
@@ -1061,12 +1128,24 @@ mod tests {
 
     struct MockClient {
         channels: VecDeque<MockChannel>,
+        open_error: Option<&'static str>,
     }
 
     impl MockClient {
         fn new(channels: impl IntoIterator<Item = MockChannel>) -> Self {
             Self {
                 channels: channels.into_iter().collect(),
+                open_error: None,
+            }
+        }
+
+        fn new_with_open_error(
+            channels: impl IntoIterator<Item = MockChannel>,
+            open_error: &'static str,
+        ) -> Self {
+            Self {
+                channels: channels.into_iter().collect(),
+                open_error: Some(open_error),
             }
         }
     }
@@ -1083,9 +1162,13 @@ mod tests {
         }
 
         async fn open_channel(&mut self) -> Result<Self::Channel> {
-            self.channels
-                .pop_front()
-                .ok_or_else(|| anyhow!("no more mock channels"))
+            if let Some(channel) = self.channels.pop_front() {
+                return Ok(channel);
+            }
+            if let Some(error) = self.open_error.take() {
+                return Err(anyhow!(error));
+            }
+            Err(anyhow!("no more mock channels"))
         }
 
         async fn disconnect(&mut self) -> Result<()> {
@@ -1094,6 +1177,58 @@ mod tests {
 
         fn is_connected(&self) -> bool {
             true
+        }
+    }
+
+    struct MockSessionManager {
+        clients: tokio::sync::Mutex<VecDeque<Arc<tokio::sync::Mutex<MockClient>>>>,
+        invalidations: AtomicU64,
+    }
+
+    impl MockSessionManager {
+        fn new(clients: impl IntoIterator<Item = MockClient>) -> Self {
+            Self {
+                clients: tokio::sync::Mutex::new(
+                    clients
+                        .into_iter()
+                        .map(|client| Arc::new(tokio::sync::Mutex::new(client)))
+                        .collect(),
+                ),
+                invalidations: AtomicU64::new(0),
+            }
+        }
+
+        fn invalidation_count(&self) -> u64 {
+            self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl SshSessionAccess for MockSessionManager {
+        type Client = MockClient;
+
+        async fn client(&self) -> Result<Arc<tokio::sync::Mutex<Self::Client>>> {
+            self.clients
+                .lock()
+                .await
+                .pop_front()
+                .ok_or_else(|| anyhow!("no more mock clients"))
+        }
+
+        async fn invalidate(&self) {
+            self.invalidations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
+            None
+        }
+
+        async fn set_shell_integration(
+            &self,
+            _client: &Arc<tokio::sync::Mutex<Self::Client>>,
+            _setup: ShellIntegrationSetup,
+        ) {
         }
     }
 
@@ -1321,19 +1456,10 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_ssh_channel_skips_setup_when_disabled() {
-        // 用户在连接配置里显式关闭 shell integration:先卸载远端 managed block,再开
-        // interactive channel 走裸 PTY + shell;且不向 manager 写入任何缓存。
-        let (uninstall_channel, uninstall_state) = MockChannel::new(
-            [
-                ChannelEvent::Data(
-                    b"__ONETCLI_UNINSTALL_HOME__=/tmp/home\n__ONETCLI_UNINSTALL_OK__\n".to_vec(),
-                ),
-                ChannelEvent::Close,
-            ],
-            false,
-        );
+        // 交换机等受限设备可能只允许一个 session channel。显式禁用时必须直接用这个
+        // channel 请求 PTY + shell，不能先开安装或卸载 channel。
         let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([uninstall_channel, interactive_channel]);
+        let mut client = MockClient::new([interactive_channel]);
 
         let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
             &mut client,
@@ -1350,14 +1476,59 @@ mod tests {
             "禁用路径不应向 manager 写入任何 integration 缓存"
         );
         assert_eq!(
-            recorded_ops(&uninstall_state),
-            vec![ChannelOp::Exec, ChannelOp::Close],
-            "禁用路径应先 best-effort 卸载远端 integration"
-        );
-        assert_eq!(
             recorded_ops(&interactive_state),
             vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
-            "禁用路径只跑 pty + shell,不调 set_env / exec wrapper"
+            "禁用路径必须只打开一个 channel，并且只跑 PTY + shell"
+        );
+    }
+
+    #[tokio::test]
+    async fn establish_channel_reconnects_with_one_plain_channel_after_russh_open_failure() {
+        let (setup_channel, setup_state) = MockChannel::new(
+            [
+                ChannelEvent::Data(
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                        .to_vec(),
+                ),
+                ChannelEvent::ExitStatus(0),
+            ],
+            false,
+        );
+        let first_client = MockClient::new_with_open_error(
+            [setup_channel],
+            "Failed to open channel (AdministrativelyProhibited)",
+        );
+
+        let (fallback_channel, fallback_state) = MockChannel::new([], false);
+        let second_client = MockClient::new([fallback_channel]);
+        let manager = MockSessionManager::new([first_client, second_client]);
+
+        let result = SshBackend::establish_channel_with_manager(
+            &manager,
+            &PtyConfig::default(),
+            Some(42),
+            false,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "russh open channel 错误后应以单通道模式重连"
+        );
+        assert_eq!(
+            manager.invalidation_count(),
+            1,
+            "首次失败后应清理旧 session"
+        );
+        assert_eq!(
+            recorded_ops(&setup_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "首次连接仍按默认配置尝试 integration"
+        );
+        assert_eq!(
+            recorded_ops(&fallback_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
+            "重连后必须把唯一 channel 直接用于交互 shell"
         );
     }
 
@@ -1386,8 +1557,18 @@ mod tests {
         let message = add_connect_error_context(err).to_string();
 
         assert!(
-            message.contains("服务器拒绝打开新 channel"),
-            "channel open 错误应补充 MaxSessions 提示，实际: {message}"
+            message.contains("服务器拒绝打开 SSH 会话 channel"),
+            "channel open 错误应补充设备权限和会话限制提示，实际: {message}"
+        );
+    }
+
+    #[test]
+    fn channel_open_failure_recognizes_russh_administratively_prohibited_text() {
+        let err = anyhow!("Failed to open channel (AdministrativelyProhibited)");
+
+        assert!(
+            is_channel_open_failure(&err),
+            "应识别截图中的 russh 原始错误文本并触发单通道重连"
         );
     }
 
