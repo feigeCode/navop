@@ -295,7 +295,6 @@ test("release builds keep size-optimized Cargo profile defaults", () => {
 test("release builds are cacheable and individually repairable", () => {
   const release = read(".github/workflows/release.yml");
   const trigger = read(".github/workflows/release-trigger.yml");
-  const arm = read(".github/workflows/build-arm-linux.yml");
 
   for (const platform of [
     "macos-arm64",
@@ -318,8 +317,11 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /tags:[\s\S]*- "v\*"/);
   assert.match(trigger, /gh workflow run release\.yml/);
   assert.match(trigger, /-f platform=all/);
-  assert.match(arm, /workflows:[\s\S]*- Release/);
-  assert.match(arm, /-f platform=linux-arm64/);
+  assert.match(
+    release,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64\]"/,
+  );
+  assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });
 
 test("Rust workflows share one cache strategy without archiving target", () => {

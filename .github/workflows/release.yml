@@ -74,7 +74,7 @@ jobs:
           windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","arm_linux":false}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$windows_x64]" ;;
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64]" ;;
             macos-arm64) matrix="[$macos_arm64]" ;;
             macos-x64) matrix="[$macos_x64]" ;;
             linux-x64) matrix="[$linux_x64]" ;;
