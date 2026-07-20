@@ -103,16 +103,30 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+          cache: false
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Initialize sccache
         shell: bash
         run: |
           set -euo pipefail
           sccache --start-server
+          sccache --zero-stats
           sccache --show-stats
+
+      - name: Restore shared Cargo inputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: navop-cargo-inputs-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            navop-cargo-inputs-v1-${{ runner.os }}-
+            release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Free disk space (macOS)
         if: runner.os == 'macOS'
@@ -155,17 +169,6 @@ jobs:
         shell: pwsh
         run: |
           cmake --version
-
-      - name: Cache Cargo inputs
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Set environment variables
         shell: bash

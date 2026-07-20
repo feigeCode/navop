@@ -306,9 +306,10 @@ test("release builds are cacheable and individually repairable", () => {
   ]) {
     assert.match(release, new RegExp(`- ${platform}`));
   }
-  assert.match(release, /mozilla-actions\/sccache-action@/);
+  assert.match(release, /mozilla-actions\/sccache-action@v0\.0\.10/);
   assert.match(release, /SCCACHE_GHA_ENABLED: "true"/);
-  assert.match(release, /release-cargo-inputs-/);
+  assert.match(release, /navop-cargo-inputs-v1-/);
+  assert.match(release, /cache: false/);
   assert.doesNotMatch(release, /release-cargo-[^\n]*github\.run_id/);
   assert.match(release, /No existing release assets found/);
   assert.match(release, /cancel-in-progress: false/);
@@ -319,6 +320,40 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(arm, /workflows:[\s\S]*- Release/);
   assert.match(arm, /-f platform=linux-arm64/);
+});
+
+test("Rust workflows share one cache strategy without archiving target", () => {
+  const workflows = [
+    read(".github/workflows/ci.yml"),
+    read(".github/workflows/release.yml"),
+    read(".github/workflows/build-windows-msi.yml"),
+  ];
+
+  for (const workflow of workflows) {
+    assert.match(workflow, /actions-rust-lang\/setup-rust-toolchain@v1/);
+    assert.match(workflow, /cache: false/);
+    assert.match(workflow, /mozilla-actions\/sccache-action@v0\.0\.10/);
+    assert.match(workflow, /RUSTC_WRAPPER: sccache/);
+    assert.match(workflow, /SCCACHE_GHA_ENABLED: "true"/);
+    assert.match(
+      workflow,
+      /key: navop-cargo-inputs-v1-\$\{\{ runner\.os \}\}-\$\{\{ hashFiles\('\*\*\/Cargo\.lock'\) \}\}/,
+    );
+    assert.doesNotMatch(workflow, /^\s+target\/$/m);
+  }
+
+  const ci = workflows[0];
+  assert.match(ci, /branches:\s*[\s\S]*?- dev/);
+  assert.match(ci, /x86_64-unknown-linux-gnu/);
+  assert.match(ci, /x86_64-pc-windows-msvc/);
+  assert.doesNotMatch(ci, /key: test-cargo-/);
+
+  const release = workflows[1];
+  assert.doesNotMatch(release, /key: release-cargo-inputs-/);
+
+  const windowsMsi = workflows[2];
+  assert.doesNotMatch(windowsMsi, /key: windows-msi-/);
+  assert.doesNotMatch(windowsMsi, /github\.run_id/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

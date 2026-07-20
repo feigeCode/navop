@@ -29,8 +29,9 @@ For a failed matrix job in the same workflow run, prefer **Re-run failed jobs**.
 
 ## Cache model
 
-- Cargo registry and Git dependency inputs use a stable cache keyed by runner, target, and `Cargo.lock`.
-- Rust compilation uses sccache with the GitHub Actions backend.
+- CI, Release, ARM Linux, and the standalone Windows MSI build use the same Cargo registry and Git dependency cache namespace, keyed only by runner OS and `Cargo.lock`. Linux x86_64 can therefore seed Linux ARM64 inputs, and macOS ARM64 can seed macOS x86_64 inputs.
+- Rust compilation uses sccache with the GitHub Actions backend in every Rust build workflow. Release and ARM Linux runs share compiler objects because both workflows run from the default `dev` branch.
+- The implicit `Swatinem/rust-cache` inside `actions-rust-lang/setup-rust-toolchain` is disabled, and `target/` is not stored by `actions/cache`. This avoids duplicating multi-gigabyte target archives that would evict useful sccache objects from GitHub's repository cache quota.
 - Release jobs explicitly start sccache and keep it alive through long linking and LTO phases so the final statistics cover the complete build.
 - Build caches are shared through workflow runs on the default `dev` branch instead of being isolated under each release tag.
 - ARM Linux uses two Cargo build jobs, thin LTO, and 16 codegen units to reduce peak memory while retaining release optimization.

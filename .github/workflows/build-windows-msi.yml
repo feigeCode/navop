@@ -15,6 +15,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_PROFILE_RELEASE_LTO: thin
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_IDLE_TIMEOUT: "7200"
 
 jobs:
   build:
@@ -38,19 +41,30 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: x86_64-pc-windows-msvc
+          cache: false
 
-      - name: Restore Cargo cache
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Initialize sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          sccache --start-server
+          sccache --zero-stats
+          sccache --show-stats
+
+      - name: Restore shared Cargo inputs
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: windows-msi-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          key: navop-cargo-inputs-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            release-cargo-Windows-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}-
-            test-cargo-x86_64-windows-msvc-${{ hashFiles('**/Cargo.lock') }}
+            navop-cargo-inputs-v1-${{ runner.os }}-
+            release-cargo-inputs-${{ runner.os }}-x86_64-pc-windows-msvc-
 
       - name: Verify build secrets
         shell: pwsh
@@ -73,6 +87,11 @@ jobs:
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
         run: cargo build --release -p main --target x86_64-pc-windows-msvc
+
+      - name: Show sccache statistics
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
 
       - name: Stage Windows package
         shell: pwsh
