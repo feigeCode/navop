@@ -343,14 +343,7 @@ fn collect_export_assets(
     let Some(base) = base else { return Vec::new() };
     let mut assets = Vec::new();
     let mut seen = HashSet::new();
-    for line in source.lines() {
-        let Some(start) = line.find("](") else {
-            continue;
-        };
-        let Some(end) = line[start + 2..].find(')') else {
-            continue;
-        };
-        let target = line[start + 2..start + 2 + end].trim();
+    for target in export_asset_paths(source) {
         let path = if let Some(target) = target.strip_prefix('<') {
             target
                 .split_once('>')
@@ -391,6 +384,54 @@ fn collect_export_assets(
         });
     }
     assets
+}
+
+fn export_asset_paths(source: &str) -> Vec<&str> {
+    let mut paths = Vec::new();
+    let mut remaining = source;
+    while let Some(start) = remaining.find("![") {
+        remaining = &remaining[start + 2..];
+        let Some(label_end) = remaining.find("](") else {
+            break;
+        };
+        let target_start = label_end + 2;
+        let Some(target_end) = remaining[target_start..].find(')') else {
+            break;
+        };
+        paths.push(remaining[target_start..target_start + target_end].trim());
+        remaining = &remaining[target_start + target_end + 1..];
+    }
+    let lower = source.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(relative) = lower[cursor..].find("<img") {
+        let start = cursor + relative;
+        let Some(end) = source[start..].find('>').map(|offset| start + offset) else {
+            break;
+        };
+        let tag = &source[start..=end];
+        if let Some(path) = html_export_attribute(tag, "src") {
+            paths.push(path);
+        }
+        cursor = end + 1;
+    }
+    paths
+}
+
+fn html_export_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let lower = tag.to_ascii_lowercase();
+    let marker = format!("{name}=");
+    let start = lower.find(&marker)? + marker.len();
+    let quote = tag.as_bytes().get(start).copied()?;
+    if quote == b'\'' || quote == b'"' {
+        let value_start = start + 1;
+        let end = tag[value_start..].find(quote as char)? + value_start;
+        return Some(&tag[value_start..end]);
+    }
+    let end = tag[start..]
+        .find(|character: char| character.is_whitespace() || character == '>')
+        .map(|offset| start + offset)
+        .unwrap_or(tag.len());
+    Some(&tag[start..end])
 }
 
 fn export_rich_text_document(document: &EditorDocument) -> anyhow::Result<String> {
@@ -712,6 +753,27 @@ mod tests {
         assert_eq!("diagram.png", assets[0].path);
         assert_eq!("image/png", assets[0].media_type);
         assert_eq!(b"png-data", assets[0].bytes.as_slice());
+    }
+
+    #[test]
+    fn table_and_html_images_are_all_attached_to_export_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["left.png", "right.png", "html.png"] {
+            std::fs::write(dir.path().join(name), name.as_bytes()).unwrap();
+        }
+        let source = concat!(
+            "| 左 | 右 |\n| --- | --- |\n",
+            "| ![左](left.png) | ![右](right.png) |\n\n",
+            "<figure><img src=\"html.png\" alt=\"HTML\"></figure>"
+        );
+
+        let assets = collect_export_assets(source, Some(dir.path()));
+        let paths = assets
+            .iter()
+            .map(|asset| asset.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["left.png", "right.png", "html.png"]);
     }
 
     fn editor_document(blocks: Vec<EditorBlock>) -> EditorDocument {
