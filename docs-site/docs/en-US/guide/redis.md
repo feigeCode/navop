@@ -6,7 +6,7 @@ The Redis workspace supports standalone, Sentinel, and Cluster deployments. It i
 
 Choose standalone, Sentinel, or Cluster and enter nodes, port, user, password, and database where applicable. Enable TLS when required and use an SSH tunnel for restricted networks. Sentinel needs the correct service name. Cluster clients must reach every node address returned by redirects.
 
-Test authentication and networking before saving. Use a restricted production account and confirm whether INFO, Slow Log, scanning, and Pub/Sub commands are permitted.
+Test authentication and networking before saving. If the native Redis driver is not installed, opening the connection prompts you to download it; after a successful installation Navop continues opening the same connection without a restart. Prepare a compatible driver extension in advance for offline environments. Use a restricted production account and confirm whether INFO, Slow Log, scanning, and Pub/Sub commands are permitted.
 
 ## Search and inspect keys
 

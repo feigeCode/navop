@@ -58,15 +58,13 @@
   </p>
 </div>
 
-## What's New in v0.8.11
+## What's New in v0.8.12
 
-- **Server-to-server SFTP** — added a searchable endpoint switcher and direct file or directory copy between two remote servers without staging data on the local machine.
-- **Local terminals and AI** — added launch-time terminal profile selection, platform-aware shell choices, and the terminal AI sidebar for local sessions with live terminal context.
-- **Notes document export** — added extension-backed export to self-contained HTML, PDF, and Word DOCX files through a sandboxed Rust WASM exporter.
-- **Database workspace polish** — added context menus for database object rows, stable result-panel scrolling, and fixes for SQL result summaries and pinned scrollbars.
-- **Remote desktop performance** — RDP and VNC providers now stream incremental frame updates for more responsive sessions, with improved recovery for stalled VNC connections.
-- **Connections and credentials** — the home workspace now separates personal and team keys, while SFTP endpoint headers make the active local or remote side explicit.
-- **Extensions, CLI, and release reliability** — Redis and MongoDB native drivers moved into installable extensions, the global Navop CLI/Skill workflow is documented, and release builds can be repaired independently across platforms.
+- **Richer Notes Markdown rendering** — standard Markdown syntax, safely restricted HTML blocks, and images inside Markdown tables render in the document view; relative media resolves from the current document directory, and whiteboard conversions produce portable previews.
+- **Faster syntax highlighting** — highlighters are reused per language, full-document updates use correct edit positions, and language WASM parsers stay lazily loaded.
+- **Smoother extension lifecycle** — install, reload, and uninstall refresh only the affected extension kind; background uninstall progress avoids blocking the extension manager.
+- **Redis drivers on demand** — Navop discovers drivers from the installed extension directory, prompts when the Redis driver is missing, and continues opening the connection immediately after installation.
+- **Release recovery** — release jobs now handle missing or asset-empty GitHub Releases and can republish existing build artifacts without rebuilding every platform.
 
 
 ## Why Navop?
@@ -112,7 +110,7 @@ Use the dedicated Redis viewer for multi-database key browsing, server-side pagi
 
 ### Notes
 
-The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Document locations, editor shortcuts, and AI Providers are configurable. Extension-provided renderers can add or update document formats independently, and a sandboxed WASM exporter can produce self-contained HTML, PDF, and Word DOCX files.
+The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Its Markdown view handles standard syntax, safely restricted HTML blocks, relative media, and images inside Markdown tables while keeping source editing available; rendering remains bounded for safety and portability rather than acting as a full browser page. Document locations, editor shortcuts, and AI Providers are configurable. Extension-provided renderers can add or update document formats independently, and a sandboxed WASM exporter can produce self-contained HTML, PDF, and Word DOCX files.
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
@@ -261,6 +259,8 @@ Sync connections and settings across devices with encrypted key storage based on
 | Markdown Notes | Rich-text Notes |
 |:-:|:-:|
 | [![Markdown Notes](markdown.png)](markdown.png) | [![Rich-text Notes](richtext.png)](richtext.png) |
+
+The Markdown workspace renders standard Markdown syntax, safely restricted HTML blocks, and images inside Markdown tables, while keeping source editing available.
 
 | Whiteboard Notes |
 |:-:|

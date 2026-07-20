@@ -3,7 +3,7 @@
 Notes 在你選擇的本機目錄管理 Markdown、富文字和白板，讓查詢記錄、維運步驟和專案資料留在連線工作旁。檔案仍由你管理，Navop 不能取代備份與版本控制。
 
 <div class="notes-screenshot-grid">
-  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作區"><figcaption>Markdown 文件、Mermaid 與數學公式</figcaption></figure>
+  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作區"><figcaption>Markdown 語法、受限 HTML 與表格圖片</figcaption></figure>
   <figure><img src="/images/richtext.png" alt="富文字 Notes 工作區"><figcaption>富文字區塊編輯與嵌入內容</figcaption></figure>
   <figure><img src="/images/whiteboard.png" alt="Notes 白板工作區"><figcaption>白板畫布與自由排版</figcaption></figure>
 </div>
@@ -16,9 +16,9 @@ Notes 在你選擇的本機目錄管理 Markdown、富文字和白板，讓查�
 
 ## Markdown、富文字與白板
 
-Markdown 適合技術說明和程式碼，富文字適合快速排版，白板適合自由整理圖形與想法。長期內容應選擇可維護格式，進階效果在不同渲染器間可能不同。
+Markdown 適合技術說明和程式碼，富文字適合快速排版，白板適合自由整理圖形與想法。Markdown 文件檢視支援標準語法、受限 HTML 安全渲染，以及 Markdown 表格內圖片顯示；它不是不受限制的瀏覽器渲染環境。長期內容應選擇可維護格式，進階效果在不同渲染器間可能不同。
 
-系統開啟 `.md` 時會進入 Notes Markdown 編輯器。相對圖片與連結仍以檔案位置為基礎；白板與富文字需要保留完整資源目錄，不要只複製主檔。
+系統開啟 `.md` 時會進入 Notes Markdown 編輯器。相對圖片與媒體資源會以目前 Markdown 檔案所在目錄解析。含白板的富文字文件轉成 Markdown 時，Navop 會匯出白板預覽圖，不會把可編輯白板來源資料寫入 Markdown；若仍需編輯白板，請保留原始文件與完整資源目錄。
 
 ## 編輯、儲存與快捷鍵
 

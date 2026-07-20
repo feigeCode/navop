@@ -10,7 +10,7 @@ A product name in a compatibility list does not mean its driver is installed. Ch
 
 ## Install, update, and reload
 
-Review publisher, description, permissions, and release notes before installation. Reload extensions or restart when requested. Save work before updating a driver or provider because connection behavior may change.
+Review publisher, description, permissions, and release notes before installation. Reload extensions or restart when requested. Navop refreshes capabilities by extension kind and keeps language parsers lazy, so an unrelated extension change does not compile every language WASM parser. Save work before updating a driver or provider because connection behavior may change.
 
 For failures, disable and re-enable or reload the extension, then inspect logs and versions. Do not update the driver currently handling a production task.
 
@@ -28,6 +28,6 @@ WASM document renderers and controlled runtimes have resource and timeout limits
 
 ## Uninstall and report issues
 
-Close dependent connections, ACP sessions, and remote desktops before uninstalling. Removal usually deletes the capability, not the remote data; saved connections may work again after reinstalling a compatible extension.
+Close dependent connections, ACP sessions, and remote desktops before uninstalling. Removal runs in the background and reports its current state; do not start another install, reload, or removal until it finishes. Removal usually deletes the capability, not the remote data; saved connections may work again after reinstalling a compatible extension.
 
 Reports should include Navop version, extension and version, platform, steps, and redacted logs. Never attach passwords, private keys, API keys, master keys, or complete import files.

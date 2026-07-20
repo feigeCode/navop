@@ -3,7 +3,7 @@
 Notes manages Markdown, rich-text, and whiteboard material in a local folder, keeping query records, operational procedures, and project knowledge beside active connections. Files remain in the directory you choose; Navop is not a replacement for backup or version control.
 
 <div class="notes-screenshot-grid">
-  <figure><img src="/images/markdown.png" alt="Markdown Notes workspace"><figcaption>Markdown documents, Mermaid, and math</figcaption></figure>
+  <figure><img src="/images/markdown.png" alt="Markdown Notes workspace"><figcaption>Markdown syntax, restricted HTML, and table images</figcaption></figure>
   <figure><img src="/images/richtext.png" alt="Rich-text Notes workspace"><figcaption>Rich-text blocks and embedded content</figcaption></figure>
   <figure><img src="/images/whiteboard.png" alt="Notes whiteboard workspace"><figcaption>Whiteboard canvas and freeform layout</figcaption></figure>
 </div>
@@ -16,9 +16,9 @@ Do not store database passwords, SSH private keys, master keys, or tokens in not
 
 ## Create Markdown, rich text, and whiteboards
 
-Markdown works well for technical text and portable code samples; rich text favors quick visual formatting; whiteboards organize free-form diagrams and ideas. Choose a durable format for long-lived content because advanced features can vary across renderers.
+Markdown works well for technical text and portable code samples; rich text favors quick visual formatting; whiteboards organize free-form diagrams and ideas. The Markdown document view renders standard syntax, safely restricted HTML, and images inside Markdown tables; it is not an unrestricted browser rendering environment. Choose a durable format for long-lived content because advanced features can vary across renderers.
 
-Opening a `.md` file through the operating system sends it to the Notes Markdown editor. Relative images and links still depend on that file's location. Preserve the complete resource folder for whiteboards and rich documents rather than copying only a primary file.
+Opening a `.md` file through the operating system sends it to the Notes Markdown editor. Relative images and media resolve from the directory containing that Markdown file. When a rich-text document with a whiteboard is converted to Markdown, Navop exports a preview image rather than editable whiteboard source data. Keep the original document and complete resource directory if the whiteboard must remain editable.
 
 ## Edit and use shortcuts
 

@@ -3,7 +3,7 @@
 Notes 用于在本地目录中管理 Markdown、富文本和白板内容，把查询记录、运维步骤和项目资料放在连接工作流旁边。文件仍保存在你选择的目录中，Navop 不替代版本控制和备份。
 
 <div class="notes-screenshot-grid">
-  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作区"><figcaption>Markdown 文档、Mermaid 与数学公式</figcaption></figure>
+  <figure><img src="/images/markdown.png" alt="Markdown Notes 工作区"><figcaption>Markdown 语法、受限 HTML 与表格图片</figcaption></figure>
   <figure><img src="/images/richtext.png" alt="富文本 Notes 工作区"><figcaption>富文本块编辑与嵌入内容</figcaption></figure>
   <figure><img src="/images/whiteboard.png" alt="Notes 白板工作区"><figcaption>白板画布与自由排版</figcaption></figure>
 </div>
@@ -16,9 +16,9 @@ Notes 用于在本地目录中管理 Markdown、富文本和白板内容，把�
 
 ## Markdown、富文本与白板
 
-Markdown 适合技术说明、代码片段和可移植文档；富文本适合快速排版；白板用于自由组织图形和思路。创建文件时选择适合长期维护的格式，复杂内容在不同渲染器之间可能存在兼容性差异。
+Markdown 适合技术说明、代码片段和可移植文档；富文本适合快速排版；白板用于自由组织图形和思路。Markdown 文档视图支持标准语法、受限 HTML 安全渲染，以及 Markdown 表格内图片展示；它不是不受限制的浏览器渲染环境。创建文件时选择适合长期维护的格式，复杂内容在不同渲染器之间可能存在兼容性差异。
 
-通过系统打开 `.md` 文件时，Navop 会进入 Notes Markdown 编辑器。外部文件的相对图片和链接仍以文件位置为基础；移动文件后应检查资源路径。白板或富文本的具体资源格式应保留完整目录，不要只复制主文件。
+通过系统打开 `.md` 文件时，Navop 会进入 Notes Markdown 编辑器。相对图片和媒体资源以当前 Markdown 文件所在目录为基础；移动文件后应检查资源路径。把包含白板的富文本文档转换为 Markdown 时，Navop 会导出白板预览图，而不会把可编辑白板源数据写入 Markdown；如需继续编辑白板，请保留原始文档及完整资源目录。
 
 ## 编辑、保存与快捷键
 
