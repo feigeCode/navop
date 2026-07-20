@@ -64,6 +64,11 @@ pub fn extensions_root() -> Option<PathBuf> {
     Some(base.join("extensions"))
 }
 
+pub(crate) fn is_active_install_dir_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    !name.starts_with(['.', '_']) && !name.contains(".backup-")
+}
+
 pub fn load_language_extensions_from_root(root: &std::path::Path) -> anyhow::Result<LoadReport> {
     load_extensions_dir(
         &root.join(ExtensionKind::Language.dir_name()),

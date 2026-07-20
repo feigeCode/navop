@@ -13,6 +13,16 @@ fn composite_provider_lists_compatible_extensions_and_skips_noise() {
     write_manifest(tmp.path(), "foo", &valid_manifest("com.example.foo", "Foo"));
     write_manifest(
         tmp.path(),
+        "foo.backup-0.9.0",
+        &valid_manifest("com.example.foo", "Foo Backup"),
+    );
+    write_manifest(
+        tmp.path(),
+        ".foo.install-backup-1-0",
+        &valid_manifest("com.example.foo", "Foo Transaction Backup"),
+    );
+    write_manifest(
+        tmp.path(),
         "bad",
         r#"{
             "schema_version": 1,

@@ -6,6 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use serde_json::Value;
 
+use crate::extension::is_active_install_dir_name;
 use crate::extension::manifest::{
     HostApiVersions, Manifest, ManifestError, current_host_version, load_and_check,
 };
@@ -410,7 +411,7 @@ fn is_candidate_composite_dir(entry: &std::fs::DirEntry) -> bool {
     let Ok(file_type) = entry.file_type() else {
         return false;
     };
-    file_type.is_dir() && !entry.file_name().to_string_lossy().starts_with('_')
+    file_type.is_dir() && is_active_install_dir_name(&entry.file_name())
 }
 
 fn command_titles(manifest: &Manifest) -> BTreeMap<&str, String> {

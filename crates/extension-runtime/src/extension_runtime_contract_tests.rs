@@ -231,6 +231,42 @@ fn runtime_catalog_loads_compatible_extensions_from_composite_root() {
             }
         }"#,
     );
+    write_composite_manifest(
+        root.path(),
+        "com.example.echo.backup-0.0.9",
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.echo",
+            "name": "Echo Backup",
+            "version": "0.0.9",
+            "engines": { "onetcli": ">=0.1.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "main",
+                    "module": "./wasm/plugin.wasm",
+                    "kind": "component"
+                }]
+            }
+        }"#,
+    );
+    write_composite_manifest(
+        root.path(),
+        ".com.example.echo.install-backup-1-0",
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.echo",
+            "name": "Echo Transaction Backup",
+            "version": "0.0.8",
+            "engines": { "onetcli": ">=0.1.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "main",
+                    "module": "./wasm/plugin.wasm",
+                    "kind": "component"
+                }]
+            }
+        }"#,
+    );
     std::fs::create_dir_all(root.path().join("_staging")).unwrap();
     std::fs::create_dir_all(root.path().join("noise")).unwrap();
 
