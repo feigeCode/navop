@@ -128,6 +128,9 @@ mod appearance;
 mod clipboard;
 mod clipboard_image;
 mod close;
+mod command_bar;
+mod command_bar_events;
+mod command_bar_model;
 mod connection_overlay;
 mod constructors;
 mod helpers;
@@ -157,6 +160,7 @@ mod text_input;
 mod tool_dock;
 mod vi_input;
 
+use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
 use helpers::*;
 use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
@@ -179,6 +183,8 @@ pub struct TerminalView {
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
     sidebar: Entity<TerminalSidebar>,
+    /// 终端底部命令输入栏
+    command_bar: Entity<TerminalCommandBar>,
     sidebar_toolbar: Entity<TerminalSidebarToolbar>,
     sidebar_tool_panels: HashMap<SidebarPanel, Entity<TerminalSidebarToolPanel>>,
 

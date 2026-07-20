@@ -16,6 +16,10 @@ pub mod traits;
 #[path = "team_key_cache_tests.rs"]
 mod team_key_cache_tests;
 
+#[cfg(test)]
+#[path = "quick_command_defaults_tests.rs"]
+mod quick_command_defaults_tests;
+
 use gpui::App;
 pub use manager::*;
 pub use models::*;

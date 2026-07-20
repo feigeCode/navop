@@ -288,6 +288,7 @@ impl RenderOnce for Input {
             state.size = self.size;
             state.caret_color = self.caret_color;
             state.placeholder_color = self.local_style.map(|style| style.muted_foreground);
+            state.background_color = self.local_style.map(|style| style.background);
 
             // Only for single line mode
             if state.mode.is_single_line() {

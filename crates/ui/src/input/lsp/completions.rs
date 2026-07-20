@@ -2,7 +2,7 @@ use anyhow::Result;
 use gpui::{Context, EntityInputHandler, Task, Window};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionResponse, InlineCompletionContext,
-    InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind,
+    InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind, InsertTextFormat,
     request::Completion,
 };
 use ropey::Rope;
@@ -141,6 +141,25 @@ impl Default for InlineCompletion {
 }
 
 impl InputState {
+    /// Set a precomputed inline completion suffix to render after the caret.
+    pub fn set_inline_completion_text(
+        &mut self,
+        insert_text: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.inline_completion.item =
+            insert_text
+                .filter(|text| !text.is_empty())
+                .map(|insert_text| InlineCompletionItem {
+                    insert_text,
+                    filter_text: None,
+                    range: None,
+                    command: None,
+                    insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+                });
+        cx.notify();
+    }
+
     pub(crate) fn handle_completion_trigger(
         &mut self,
         range: &Range<usize>,

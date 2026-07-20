@@ -140,6 +140,64 @@ fn terminal_internal_dock_keeps_bottom_inside_center_column() {
 }
 
 #[test]
+fn terminal_command_bar_is_between_viewport_and_optional_bottom_tool() {
+    let render_source = include_str!("../render_layout.rs");
+    let viewport = render_source
+        .find("render_terminal_viewport")
+        .expect("terminal viewport should be rendered");
+    let command_bar = render_source
+        .find(".child(self.command_bar.clone())")
+        .expect("bottom command bar should be rendered");
+    let bottom_tool = render_source
+        .find("when_some(state.bottom_panel")
+        .expect("optional bottom tool should be rendered");
+
+    assert!(viewport < command_bar);
+    assert!(command_bar < bottom_tool);
+}
+
+#[test]
+fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
+    let interaction_source = include_str!("../command_bar/interaction.rs");
+    let quick_interaction_source = include_str!("../command_bar/quick_interaction.rs");
+    let render_source = include_str!("../command_bar/render.rs");
+    let quick_source = include_str!("../command_bar/quick_render.rs");
+    let suggestion_source = include_str!("../command_bar/suggestion_render.rs");
+
+    for key in ["\"up\"", "\"down\"", "\"tab\"", "\"escape\""] {
+        assert!(interaction_source.contains(key));
+    }
+    let refresh = interaction_source
+        .split("fn refresh_suggestions")
+        .nth(1)
+        .and_then(|source| source.split("fn submit").next())
+        .expect("refresh suggestions implementation should exist");
+    assert!(refresh.contains("build_command_suggestions"));
+    assert!(refresh.contains("command_inline_suffix"));
+    assert!(refresh.contains("set_inline_completion_text"));
+    assert!(!refresh.contains("reset_overlays"));
+    assert!(render_source.contains("toggle_collapsed"));
+    assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
+    assert!(interaction_source.contains("auto_grow(2, 8)"));
+    assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 52.0"));
+    assert!(render_source.contains("with_size(Size::Medium)"));
+    assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
+    assert!(render_source.contains("when(self.quick_commands_open"));
+    assert!(quick_interaction_source.contains("QuickCommandUse::PasteTerminal"));
+    for key in ["\"arrowup\"", "\"arrowdown\"", "\"home\"", "\"end\""] {
+        assert!(quick_interaction_source.contains(key));
+    }
+    assert!(suggestion_source.contains("bottom(relative(1.0))"));
+    assert!(suggestion_source.contains("bg(self.colors.background)"));
+    assert!(suggestion_source.contains("let mut content"));
+    assert!(suggestion_source.contains("overflow_y_scrollbar"));
+    assert!(suggestion_source.contains("relative(0.96)"));
+    assert!(quick_source.contains("group_quick_commands"));
+    assert!(quick_source.contains("bottom(relative(1.0))"));
+    assert!(quick_source.contains("relative(0.96)"));
+}
+
+#[test]
 fn terminal_selection_has_window_mouse_up_fallback() {
     let source = [
         include_str!("../mouse_selection.rs"),

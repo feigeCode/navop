@@ -1853,6 +1853,11 @@ impl Element for TextElement {
         let bounds = prepaint.bounds;
         let selected_range = self.state.read(cx).selected_range;
         let text_align = prepaint.last_layout.text_align;
+        let editor_background = self
+            .state
+            .read(cx)
+            .background_color
+            .unwrap_or_else(|| cx.theme().editor_background());
 
         window.handle_input(
             &focus_handle,
@@ -2010,7 +2015,7 @@ impl Element for TextElement {
                             line_height,
                         ),
                     );
-                    window.paint_quad(fill(ghost_bounds, cx.theme().editor_background()));
+                    window.paint_quad(fill(ghost_bounds, editor_background));
 
                     // Paint ghost line text
                     _ = ghost_line.paint(
@@ -2124,7 +2129,7 @@ impl Element for TextElement {
 
                     // Paint background to cover any existing text
                     let bg_bounds = Bounds::new(p, size(first_line.width + px(4.), line_height));
-                    window.paint_quad(fill(bg_bounds, cx.theme().editor_background()));
+                    window.paint_quad(fill(bg_bounds, editor_background));
 
                     // Paint first line completion text
                     _ = first_line.paint(p, line_height, text_align, None, window, cx);

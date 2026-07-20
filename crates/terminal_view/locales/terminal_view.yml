@@ -1195,19 +1195,79 @@ HistoryCommand:
     zh-CN: 暂无命令
     zh-HK: 暫無命令
 
-RichInput:
-  command_placeholder:
-    en: Command
-    zh-CN: 命令
-    zh-HK: 命令
-  clear:
-    en: Clear
-    zh-CN: 清除
-    zh-HK: 清除
-  send:
-    en: Send
-    zh-CN: 发送
-    zh-HK: 傳送
+TerminalCommandBar:
+  title:
+    en: Command Input
+    zh-CN: 命令输入
+    zh-HK: 命令輸入
+  placeholder:
+    en: Enter a command. Use Up/Down to choose, Tab to complete, Enter to run
+    zh-CN: 输入命令，↑/↓ 选择，Tab 补全，Enter 执行
+    zh-HK: 輸入命令，↑/↓ 選擇，Tab 補全，Enter 執行
+  search_quick_commands:
+    en: Search quick commands
+    zh-CN: 搜索快捷指令
+    zh-HK: 搜尋快速指令
+  ungrouped:
+    en: Ungrouped
+    zh-CN: 未分组
+    zh-HK: 未分組
+  no_quick_commands:
+    en: No matching quick commands
+    zh-CN: 没有匹配的快捷指令
+    zh-HK: 沒有符合的快速指令
+  quick_commands:
+    en: Quick Commands
+    zh-CN: 快捷指令
+    zh-HK: 快速指令
+  all_groups:
+    en: All Commands
+    zh-CN: 全部指令
+    zh-HK: 全部指令
+  history:
+    en: Command History
+    zh-CN: 命令历史
+    zh-HK: 命令歷史
+  quick_source:
+    en: Quick
+    zh-CN: 快捷
+    zh-HK: 快速
+  history_source:
+    en: History
+    zh-CN: 历史
+    zh-HK: 歷史
+  keyboard_hint:
+    en: Up/Down select · Tab complete · Enter run
+    zh-CN: ↑/↓ 选择 · Tab 补全 · Enter 执行
+    zh-HK: ↑/↓ 選擇 · Tab 補全 · Enter 執行
+  expand:
+    en: Expand command input
+    zh-CN: 展开命令输入
+    zh-HK: 展開命令輸入
+  collapse:
+    en: Collapse command input
+    zh-CN: 收起命令输入
+    zh-HK: 收起命令輸入
+  open_quick_commands:
+    en: Open quick commands
+    zh-CN: 打开快捷指令
+    zh-HK: 開啟快速指令
+  close_quick_commands:
+    en: Close quick commands
+    zh-CN: 关闭快捷指令
+    zh-HK: 關閉快速指令
+  local_shell:
+    en: Local Shell
+    zh-CN: 本地终端
+    zh-HK: 本機終端
+  remote_shell:
+    en: Remote Shell
+    zh-CN: 远程终端
+    zh-HK: 遠端終端
+  serial_terminal:
+    en: Serial Terminal
+    zh-CN: 串口终端
+    zh-HK: 串口終端
 
 Sidebar:
   remove_from_sidebar:

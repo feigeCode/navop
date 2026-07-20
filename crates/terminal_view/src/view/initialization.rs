@@ -36,6 +36,18 @@ impl TerminalView {
             .as_ref()
             .and_then(TerminalPublicMcpRegistration::agent_resource);
 
+        let command_bar = cx.new(|cx| {
+            TerminalCommandBar::new(
+                TerminalCommandBarConfig {
+                    terminal: terminal.clone(),
+                    connection_id,
+                    colors: default_theme.colors(),
+                },
+                window,
+                cx,
+            )
+        });
+
         // 创建侧边栏（传递 StoredConnection 用于文件管理器）
         let sidebar = cx.new(|cx| {
             TerminalSidebar::new(
@@ -72,6 +84,8 @@ impl TerminalView {
 
         // 订阅 Terminal 事件
         let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
+        let command_bar_subscription =
+            cx.subscribe_in(&command_bar, window, Self::handle_command_bar_event);
 
         // 订阅 BlinkCursor 变化
         let blink_subscription = cx.observe(&blink_manager, |this, _, cx| {
@@ -97,6 +111,7 @@ impl TerminalView {
         let mut subscriptions = Vec::new();
         subscriptions.push(sidebar_subscription);
         subscriptions.push(terminal_subscription);
+        subscriptions.push(command_bar_subscription);
         subscriptions.push(blink_subscription);
         subscriptions.push(focus_subscription);
         subscriptions.push(blur_subscription);
@@ -127,6 +142,7 @@ impl TerminalView {
             },
             blink_manager,
             sidebar,
+            command_bar,
             sidebar_toolbar,
             sidebar_tool_panels,
             font_size: default_font_size,

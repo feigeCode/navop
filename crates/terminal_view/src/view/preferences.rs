@@ -3,6 +3,9 @@ use super::*;
 impl TerminalView {
     pub fn sync_sidebar_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.current_theme.clone();
+        self.command_bar.update(cx, |command_bar, cx| {
+            command_bar.set_colors(theme.colors(), cx);
+        });
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.update_current_theme(&theme, window, cx);
         });
@@ -18,6 +21,9 @@ impl TerminalView {
     }
 
     pub fn apply_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.command_bar.update(cx, |command_bar, cx| {
+            command_bar.set_autocomplete_enabled(enabled, cx);
+        });
         if self.autocomplete_enabled == enabled {
             return;
         }

@@ -174,6 +174,7 @@ impl TerminalView {
             .min_w_0()
             .overflow_hidden()
             .child(self.render_terminal_viewport(state.font_family, cx))
+            .child(self.command_bar.clone())
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))
             })
