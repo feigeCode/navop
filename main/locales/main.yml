@@ -1713,9 +1713,9 @@ Settings:
         zh-CN: 添加或更新
         zh-HK: 新增或更新
       runtime_requirements:
-        en: Node.js and npx
-        zh-CN: Node.js 与 npx
-        zh-HK: Node.js 與 npx
+        en: npx
+        zh-CN: npx
+        zh-HK: npx
       runtime_requirements_desc:
         en: External MCP clients launch @navop/mcp@latest through npx; npm resolves and caches the current package on demand, not from the extension marketplace
         zh-CN: 外部 MCP 客户端通过 npx 启动 @navop/mcp@latest；npm 按需解析并缓存当前包，无需从扩展市场安装
@@ -1725,9 +1725,9 @@ Settings:
         zh-CN: "%{package} 将通过 %{path} 按需启动；无需全局安装 npm 包"
         zh-HK: "%{package} 將透過 %{path} 按需啟動；無需全域安裝 npm 套件"
       runtime_requirements_missing:
-        en: "Node.js/npx is unavailable: %{error}"
-        zh-CN: "Node.js/npx 不可用：%{error}"
-        zh-HK: "Node.js/npx 無法使用：%{error}"
+        en: "npx is unavailable: %{error}"
+        zh-CN: "npx 不可用：%{error}"
+        zh-HK: "npx 無法使用：%{error}"
       install_codex_config:
         en: Codex MCP Configuration
         zh-CN: Codex MCP 配置
@@ -1852,10 +1852,6 @@ Settings:
         en: "Package version is outdated; update the managed entry to %{package}"
         zh-CN: "npm 包版本已过期，请更新为 %{package}"
         zh-HK: "npm 套件版本已過期，請更新為 %{package}"
-      client_config_status_node_unavailable:
-        en: Node.js is unavailable; install Node.js 20 or newer and restart Navop
-        zh-CN: Node.js 不可用；请安装 Node.js 20 或更高版本并重启 Navop
-        zh-HK: Node.js 無法使用；請安裝 Node.js 20 或更高版本並重新啟動 Navop
       client_config_status_npx_unavailable:
         en: npx is unavailable; install an npm distribution that includes npx and restart Navop
         zh-CN: npx 不可用；请安装包含 npx 的 npm 发行版并重启 Navop

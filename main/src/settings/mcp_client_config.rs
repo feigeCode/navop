@@ -283,9 +283,6 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
         ClientConfigHealth::PackageVersionOutdated => {
             "Settings.General.Mcp.client_config_status_package_outdated"
         }
-        ClientConfigHealth::NodeUnavailable => {
-            "Settings.General.Mcp.client_config_status_node_unavailable"
-        }
         ClientConfigHealth::NpxUnavailable => {
             "Settings.General.Mcp.client_config_status_npx_unavailable"
         }
@@ -303,7 +300,6 @@ fn client_config_action_enabled(health: ClientConfigHealth) -> bool {
         health,
         ClientConfigHealth::MissingHelper
             | ClientConfigHealth::UnusableHelper
-            | ClientConfigHealth::NodeUnavailable
             | ClientConfigHealth::NpxUnavailable
     )
 }

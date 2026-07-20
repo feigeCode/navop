@@ -212,10 +212,14 @@ fn npx_install_uses_latest_package_tag_and_navop_server_name() {
     let npx = dir.path().join("npx");
     write_usable_helper(&npx);
     let install = ClientConfigInstall::from_npx_path(&npx, "/tmp/navop/public-mcp.json", "latest");
+    assert_eq!("npx", install.launch_spec.command);
+    assert_eq!(npx, install.launcher_path);
+
     let config_path = dir.path().join("config.toml");
     install_codex_config(&config_path, &install).unwrap();
     let text = std::fs::read_to_string(config_path).unwrap();
     assert!(text.contains("[mcp_servers.navop]"));
+    assert!(text.contains(r#"command = "npx""#));
     assert!(text.contains("@navop/mcp@latest"));
 }
 

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 const SERVER_NAME: &str = "navop";
 const LEGACY_SERVER_NAME: &str = "onetcli";
 const PACKAGE_NAME: &str = "@navop/mcp";
+const NPX_COMMAND: &str = "npx";
 /// npm distribution tag used for the external MCP stdio launcher.
 /// The launcher resolves the current published package at startup.
 pub const NAVOP_MCP_CLIENT_TAG: &str = "latest";
@@ -40,7 +41,6 @@ pub enum ClientConfigHealth {
     NeedsMigration,
     NeedsRepair,
     PackageVersionOutdated,
-    NodeUnavailable,
     NpxUnavailable,
     MissingHelper,
     UnusableHelper,
@@ -48,10 +48,8 @@ pub enum ClientConfigHealth {
 
 impl ClientConfigInstall {
     pub fn from_current_app() -> Result<Self> {
-        let node =
-            resolve_program("node").ok_or_else(|| anyhow::anyhow!("Node.js is unavailable"))?;
-        let npx = resolve_program("npx").ok_or_else(|| anyhow::anyhow!("npx is unavailable"))?;
-        let _ = node;
+        let npx =
+            resolve_program(NPX_COMMAND).ok_or_else(|| anyhow::anyhow!("npx is unavailable"))?;
         Ok(Self::from_npx_path(
             npx,
             crate::discovery::public_mcp_discovery_path(),
@@ -76,7 +74,7 @@ impl ClientConfigInstall {
         ];
         Self {
             launch_spec: McpLaunchSpec {
-                command: path_string(&launcher_path),
+                command: NPX_COMMAND.to_string(),
                 args,
                 env: BTreeMap::new(),
                 package_version: Some(version),
@@ -106,7 +104,7 @@ impl ClientConfigInstall {
 }
 
 pub fn default_helper_install_path() -> PathBuf {
-    resolve_program("npx").unwrap_or_else(|| PathBuf::from("npx"))
+    resolve_program(NPX_COMMAND).unwrap_or_else(|| PathBuf::from(NPX_COMMAND))
 }
 
 pub fn helper_install_path_from_data_dir(_data_dir: impl AsRef<Path>) -> PathBuf {

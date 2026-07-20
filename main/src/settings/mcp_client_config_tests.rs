@@ -32,10 +32,6 @@ fn client_config_health_labels_match_config_states() {
         client_config_health_label_key(ClientConfigHealth::UnusableHelper)
     );
     assert_eq!(
-        "Settings.General.Mcp.client_config_status_node_unavailable",
-        client_config_health_label_key(ClientConfigHealth::NodeUnavailable)
-    );
-    assert_eq!(
         "Settings.General.Mcp.client_config_status_npx_unavailable",
         client_config_health_label_key(ClientConfigHealth::NpxUnavailable)
     );
