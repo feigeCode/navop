@@ -226,7 +226,7 @@ impl UpdateDialogView {
             return;
         }
 
-        let Some(download_path) = self.downloaded_path.clone() else {
+        let Some(download_path) = self.downloaded_path.clone().filter(|path| path.is_file()) else {
             self.error_message = Some(t!("Update.missing_download_file").to_string());
             self.status_message = t!("Update.apply_failed").to_string();
             self.completed = false;

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use futures::AsyncReadExt;
@@ -6,6 +6,14 @@ use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http};
 use sha2::{Digest, Sha256};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+
+const STALE_DOWNLOAD_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+
+#[path = "download_path.rs"]
+mod download_path;
+
+pub(crate) use download_path::build_download_path;
+use download_path::{partial_download_path, update_root_for_download};
 
 pub(crate) async fn download_update_file<F>(
     http_client: Arc<dyn HttpClient>,
@@ -16,24 +24,32 @@ pub(crate) async fn download_update_file<F>(
 where
     F: FnMut(u64, Option<u64>),
 {
-    if let Some(parent) = download_path.parent() {
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|err| format!("创建下载目录失败: {}", err))?;
+    prepare_download_directory(download_path).await?;
+    let partial_path = partial_download_path(download_path)?;
+    let result = download_to_file(http_client, download_url, &partial_path, &mut on_progress).await;
 
-        // 设置目录权限为仅当前用户可访问，防止 TOCTOU 攻击
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o700);
-            std::fs::set_permissions(parent, permissions)
-                .map_err(|err| format!("设置下载目录权限失败: {}", err))?;
-        }
-
-        // 清理目录中超过 7 天的旧下载文件
-        cleanup_old_downloads(parent).await;
+    if let Err(err) = result {
+        let _ = fs::remove_file(&partial_path).await;
+        return Err(err);
     }
 
+    if let Err(err) = fs::rename(&partial_path, download_path).await {
+        let _ = fs::remove_file(&partial_path).await;
+        return Err(format!("提交更新文件失败: {err}"));
+    }
+
+    Ok(())
+}
+
+async fn download_to_file<F>(
+    http_client: Arc<dyn HttpClient>,
+    download_url: &str,
+    destination: &Path,
+    on_progress: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
     let request = Request::builder()
         .method(Method::GET)
         .uri(download_url)
@@ -57,7 +73,7 @@ where
         .and_then(|value| value.parse::<u64>().ok());
 
     let mut body = response.into_body();
-    let mut file = fs::File::create(download_path)
+    let mut file = fs::File::create(destination)
         .await
         .map_err(|err| format!("创建更新文件失败: {}", err))?;
 
@@ -113,54 +129,11 @@ where
         .await
         {
             Ok(()) => return Ok(()),
-            Err(err) => {
-                let _ = std::fs::remove_file(download_path);
-                last_error = Some(err);
-            }
+            Err(err) => last_error = Some(err),
         }
     }
 
     Err(last_error.unwrap_or_else(|| "缺少可用的更新下载源".to_string()))
-}
-
-pub(crate) fn build_download_path(version: &str, download_url: &str) -> Result<PathBuf, String> {
-    let file_name = download_file_name(version, download_url);
-    let dir = std::env::temp_dir().join("onetcli-update");
-    Ok(dir.join(file_name))
-}
-
-fn download_file_name(version: &str, download_url: &str) -> String {
-    let parsed = http::Uri::try_from(download_url).ok();
-    let extension = parsed
-        .and_then(|uri| uri.path().rsplit('/').next().map(|path| path.to_string()))
-        .map(|name| archive_extension(&name))
-        .unwrap_or_default();
-
-    let base_name = format!("onetcli-update-{}", version.replace('/', "-"));
-    if extension.is_empty() {
-        base_name
-    } else {
-        format!("{base_name}{extension}")
-    }
-}
-
-fn archive_extension(file_name: &str) -> String {
-    if file_name.ends_with(".tar.gz") {
-        return ".tar.gz".to_string();
-    }
-
-    if file_name.ends_with(".tgz") {
-        return ".tgz".to_string();
-    }
-
-    if file_name.ends_with(".zip") {
-        return ".zip".to_string();
-    }
-
-    Path::new(file_name)
-        .extension()
-        .map(|extension| format!(".{}", extension.to_string_lossy()))
-        .unwrap_or_default()
 }
 
 /// 校验下载文件的 SHA256 哈希值。
@@ -189,76 +162,58 @@ async fn cleanup_old_downloads(dir: &Path) {
 
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
-        if path.is_file() {
-            if let Ok(metadata) = fs::metadata(&path).await {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(age) = modified.elapsed() {
-                        if age > std::time::Duration::from_secs(7 * 24 * 3600) {
-                            let _ = fs::remove_file(&path).await;
-                        }
-                    }
-                }
-            }
+        if !is_stale_download(&path).await {
+            continue;
+        }
+
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path).await;
+        } else {
+            let _ = fs::remove_file(&path).await;
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
+async fn prepare_download_directory(download_path: &Path) -> Result<(), String> {
+    let parent = download_path
+        .parent()
+        .ok_or_else(|| format!("更新文件缺少父目录: {}", download_path.display()))?;
+    fs::create_dir_all(parent)
+        .await
+        .map_err(|err| format!("创建下载目录失败: {err}"))?;
+    set_private_directory_permissions(parent)?;
 
-    use gpui::http_client::{AsyncBody, HttpClient, http};
-
-    use super::{download_file_name, download_update_file_from_sources};
-    use crate::update::test_support::FakeHttpClient;
-
-    #[test]
-    fn download_file_name_preserves_tar_gz_suffix() {
-        let file_name = download_file_name(
-            "0.3.2",
-            "https://example.com/navop-x86_64-apple-darwin.tar.gz",
-        );
-
-        assert_eq!(file_name, "onetcli-update-0.3.2.tar.gz");
+    if let Some(root) = update_root_for_download(download_path) {
+        set_private_directory_permissions(root)?;
+        cleanup_old_downloads(root).await;
     }
-
-    #[test]
-    fn download_file_name_preserves_zip_suffix() {
-        let file_name = download_file_name(
-            "0.3.2",
-            "https://example.com/navop-x86_64-pc-windows-msvc.zip",
-        );
-
-        assert_eq!(file_name, "onetcli-update-0.3.2.zip");
-    }
-
-    #[tokio::test]
-    async fn download_update_file_from_sources_falls_back_to_second_url() {
-        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
-        let download_path = temp_dir.path().join("onetcli.tar.gz");
-        let client = Arc::new(FakeHttpClient::new(vec![
-            http::Response::builder()
-                .status(503)
-                .body(AsyncBody::from(Vec::new()))
-                .map_err(|err| anyhow::anyhow!("构建响应失败: {}", err)),
-            FakeHttpClient::response(200, "github-package"),
-        ]));
-        let http_client: Arc<dyn HttpClient> = client.clone();
-        let urls = vec![
-            "https://onetcli.pdyyds.cn/releases/v9.9.9/navop-x86_64-unknown-linux-gnu.tar.gz"
-                .to_string(),
-            "https://github.com/feigeCode/navop/releases/download/v9.9.9/navop-x86_64-unknown-linux-gnu.tar.gz"
-                .to_string(),
-        ];
-
-        download_update_file_from_sources(http_client, &urls, &download_path, |_, _| {})
-            .await
-            .expect("应从第二个下载源成功下载");
-
-        assert_eq!(std::fs::read(&download_path).unwrap(), b"github-package");
-        let requests = client.take_requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].uri, urls[0]);
-        assert_eq!(requests[1].uri, urls[1]);
-    }
+    Ok(())
 }
+
+#[cfg(unix)]
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = std::fs::Permissions::from_mode(0o700);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|err| format!("设置下载目录权限失败: {err}"))
+}
+
+#[cfg(not(unix))]
+fn set_private_directory_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+async fn is_stale_download(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path).await else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified.elapsed().is_ok_and(|age| age > STALE_DOWNLOAD_AGE)
+}
+
+#[cfg(test)]
+#[path = "download_tests.rs"]
+mod tests;

@@ -12,6 +12,10 @@ const CURRENT_APP_BUNDLE_NAME: &str = "Navop.app";
 const LEGACY_APP_BUNDLE_NAME: &str = "OnetCli.app";
 
 pub(crate) fn start_install_update(download_path: PathBuf) -> Result<UpdateInstallAction, String> {
+    if !download_path.is_file() {
+        return Err(format!("更新归档不存在: {}", download_path.display()));
+    }
+
     let staging_dir = create_staging_dir()?;
     extract_archive(&download_path, &staging_dir)?;
 
@@ -69,7 +73,7 @@ pub(super) fn cleanup_stale_update_backups() {
 }
 
 fn create_staging_dir() -> Result<PathBuf, String> {
-    let root = std::env::temp_dir().join("onetcli-update");
+    let root = std::env::temp_dir().join("navop-update");
     fs::create_dir_all(&root).map_err(|err| format!("创建更新临时目录失败: {err}"))?;
 
     let now = SystemTime::now()
@@ -478,7 +482,23 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::replace_target_with_backup;
+    use super::{replace_target_with_backup, start_install_update};
+
+    #[test]
+    fn start_install_update_rejects_missing_archive_before_staging() {
+        let temp_dir = TestDir::new("missing-update-archive");
+        let missing_archive = temp_dir.path.join("navop-update.tar.gz");
+
+        let err = match start_install_update(missing_archive) {
+            Err(err) => err,
+            Ok(_) => panic!("缺失归档应直接失败"),
+        };
+
+        assert!(
+            err.contains("更新归档不存在"),
+            "错误应明确说明文件缺失: {err}"
+        );
+    }
 
     #[test]
     fn replace_target_with_backup_rolls_back_on_replace_error() {
