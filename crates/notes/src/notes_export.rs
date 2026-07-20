@@ -1,6 +1,9 @@
 use crate::notes_notifications::notify_operation_error;
 use crate::{DocumentFormat, MarkdownViewMode, NotesView, TreeRow};
-use cditor_app::{EditorDocument, MarkdownExportMode};
+use cditor_app::{
+    DocumentRenderRequest, DocumentRenderTheme, DocumentRendererProvider, EditorDocument,
+    MarkdownExportMode,
+};
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
@@ -92,6 +95,15 @@ impl NotesView {
             cx.theme().primary,
             cx.theme().danger,
         );
+        window.push_notification(
+            Notification::info(
+                "将按预览效果导出：数学公式、Mermaid 等渲染为图片，HTML 按页面效果输出，普通代码块保留源码。"
+                    .to_owned(),
+            )
+            .autohide(true),
+            cx,
+        );
+        let document_renderer = self.document_renderer_provider.clone();
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -137,13 +149,48 @@ impl NotesView {
             });
             let result = cx
                 .background_spawn(async move {
+                    let mut assets = export_source.assets;
+                    for pending in export_source.pending_renders {
+                        let provider = document_renderer.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "块 {} 当前为预览态，但文档渲染扩展不可用；请切换为源码态后重试",
+                                pending.block_id
+                            )
+                        })?;
+                        let rendered = provider
+                            .render(DocumentRenderRequest {
+                                renderer: pending.renderer.to_owned(),
+                                source: pending.source,
+                                available_width: 720.0,
+                                scale_factor: 1.0,
+                                theme: DocumentRenderTheme {
+                                    dark: theme.dark,
+                                    background: theme.background,
+                                    foreground: theme.foreground,
+                                    border: theme.border,
+                                    muted: theme.muted,
+                                    accent: theme.accent,
+                                    danger: theme.danger,
+                                    font_family:
+                                        "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif"
+                                            .to_owned(),
+                                },
+                            })
+                            .await
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                        assets.push(extension_wasm::DocumentExportAsset {
+                            path: pending.path,
+                            media_type: rendered.media_type,
+                            bytes: rendered.bytes,
+                        });
+                    }
                     let artifact = catalog
                         .export_document(extension_wasm::DocumentExportRequest {
                             exporter: String::new(),
                             format: format_name,
                             title: title.clone(),
                             source: export_source.source,
-                            assets: export_source.assets,
+                            assets,
                             theme,
                         })
                         .await
@@ -214,19 +261,37 @@ impl NotesView {
                 {
                     match session.state.mode {
                         MarkdownViewMode::Source => {
-                            Ok(session.source_editor.read(cx).value().to_string())
+                            let source = session.source_editor.read(cx).value().to_string();
+                            let document = EditorDocument::from_markdown("notes-export", &source)?;
+                            let (document, pending_renders) = document_for_preview(&document);
+                            Ok(PreparedExportSource {
+                                source:
+                                    crate::markdown_adapter::export_markdown_bundle_from_document(
+                                        &document,
+                                        &session.store,
+                                    )?,
+                                pending_renders,
+                            })
                         }
                         MarkdownViewMode::Wysiwyg => {
                             let document = session.preview.get_document(cx)?;
                             let document = without_comment_blocks(&document);
-                            crate::markdown_adapter::export_markdown_bundle_from_document(
-                                &document,
-                                &session.store,
-                            )
+                            let (document, pending_renders) = document_for_preview(&document);
+                            Ok(PreparedExportSource {
+                                source:
+                                    crate::markdown_adapter::export_markdown_bundle_from_document(
+                                        &document,
+                                        &session.store,
+                                    )?,
+                                pending_renders,
+                            })
                         }
                     }
                 } else {
-                    Ok(fs::read_to_string(&source_path)?)
+                    Ok(PreparedExportSource {
+                        source: fs::read_to_string(&source_path)?,
+                        pending_renders: Vec::new(),
+                    })
                 }
             }
             DocumentFormat::RichText => {
@@ -236,22 +301,39 @@ impl NotesView {
                     .find(|cached| cached.relative_path == row.relative_path)
                 {
                     let document = cached.handle.get_document(cx)?;
-                    export_rich_text_document(&document)
+                    export_document_preview(&without_comment_blocks(&document))
                 } else {
                     let document = EditorDocument::from_json(&fs::read_to_string(&source_path)?)?;
-                    export_rich_text_document(&document)
+                    export_document_preview(&without_comment_blocks(&document))
                 }
             }
         }?;
-        let source = strip_whiteboard_metadata_comments(&source);
-        let assets = collect_export_assets(&source, source_path.parent());
-        Ok(ExportSource { source, assets })
+        let source_text = strip_whiteboard_metadata_comments(&source.source);
+        let assets = collect_export_assets(&source_text, source_path.parent());
+        Ok(ExportSource {
+            source: source_text,
+            assets,
+            pending_renders: source.pending_renders,
+        })
     }
 }
 
 struct ExportSource {
     source: String,
     assets: Vec<extension_wasm::DocumentExportAsset>,
+    pending_renders: Vec<PendingDocumentRender>,
+}
+
+struct PreparedExportSource {
+    source: String,
+    pending_renders: Vec<PendingDocumentRender>,
+}
+
+struct PendingDocumentRender {
+    block_id: u64,
+    renderer: &'static str,
+    source: String,
+    path: String,
 }
 
 fn collect_export_assets(
@@ -315,6 +397,62 @@ fn export_rich_text_document(document: &EditorDocument) -> anyhow::Result<String
     Ok(without_comment_blocks(document)
         .export_markdown(MarkdownExportMode::BestEffort)?
         .markdown)
+}
+
+fn export_document_preview(document: &EditorDocument) -> anyhow::Result<PreparedExportSource> {
+    let (document, pending_renders) = document_for_preview(document);
+    Ok(PreparedExportSource {
+        source: export_rich_text_document(&document)?,
+        pending_renders,
+    })
+}
+
+fn document_for_preview(document: &EditorDocument) -> (EditorDocument, Vec<PendingDocumentRender>) {
+    use cditor_app::core::rich_text::{
+        BlockPayload, ImagePayload, RichBlockKind, kind_tag_for_rich_block_kind,
+    };
+
+    let mut document = document.clone();
+    let mut pending = Vec::new();
+    for block in &mut document.blocks {
+        let renderer = match &block.payload.kind {
+            RichBlockKind::Math => Some("math"),
+            RichBlockKind::Mermaid => Some("mermaid"),
+            RichBlockKind::Code { language }
+                if language.as_deref().is_some_and(|language| {
+                    matches!(
+                        language.trim().to_ascii_lowercase().as_str(),
+                        "math" | "latex" | "tex" | "katex"
+                    )
+                }) =>
+            {
+                Some("math")
+            }
+            _ => None,
+        };
+        let Some(renderer) = renderer else { continue };
+        let source = block.payload.plain_text();
+        let path = format!("navop-export/rendered-block-{}.svg", block.id);
+        pending.push(PendingDocumentRender {
+            block_id: block.id,
+            renderer,
+            source,
+            path: path.clone(),
+        });
+        block.kind_tag = kind_tag_for_rich_block_kind(&RichBlockKind::Image);
+        block.payload.kind = RichBlockKind::Image;
+        block.payload.payload = BlockPayload::Image(ImagePayload {
+            source: path,
+            alt: if renderer == "math" {
+                "数学公式".to_owned()
+            } else {
+                "Mermaid 图表".to_owned()
+            },
+            caption: String::new(),
+            display_width_ratio_milli: None,
+        });
+    }
+    (document, pending)
 }
 
 fn without_comment_blocks(document: &EditorDocument) -> EditorDocument {
@@ -416,8 +554,8 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::{
-        NotesExportFormat, collect_export_assets, export_rich_text_document, next_export_path,
-        strip_whiteboard_metadata_comments, without_comment_blocks,
+        NotesExportFormat, collect_export_assets, document_for_preview, export_rich_text_document,
+        next_export_path, strip_whiteboard_metadata_comments, without_comment_blocks,
     };
     use cditor_app::core::rich_text::{
         BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
@@ -447,6 +585,37 @@ mod tests {
             "Notes Word Exporter",
             NotesExportFormat::Word.marketplace_query()
         );
+    }
+
+    #[test]
+    fn export_snapshot_always_uses_preview_semantics() {
+        let mut html_preview = editor_block(3, None, RichBlockKind::Html, "");
+        html_preview.payload.payload = BlockPayload::Html {
+            html: "<strong>preview</strong>".to_owned(),
+            sanitized: false,
+        };
+        let mut html_source = editor_block(4, None, RichBlockKind::Html, "");
+        html_source.payload.payload = BlockPayload::Html {
+            html: "<em>source</em>".to_owned(),
+            sanitized: false,
+        };
+        let document = editor_document(vec![
+            editor_block(1, None, RichBlockKind::Math, "x^2"),
+            editor_block(2, None, RichBlockKind::Mermaid, "flowchart TD\nA-->B"),
+            html_preview,
+            html_source,
+        ]);
+        let (prepared, pending) = document_for_preview(&document);
+        let markdown = export_rich_text_document(&prepared).unwrap();
+
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].renderer, "math");
+        assert_eq!(pending[1].renderer, "mermaid");
+        assert!(markdown.contains("![数学公式](<navop-export/rendered-block-1.svg>)"));
+        assert!(markdown.contains("![Mermaid 图表](<navop-export/rendered-block-2.svg>)"));
+        assert!(markdown.contains("<strong>preview</strong>"));
+        assert!(markdown.contains("<em>source</em>"));
+        assert!(!markdown.contains("```html"));
     }
 
     #[test]
