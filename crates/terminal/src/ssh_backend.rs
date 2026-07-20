@@ -28,7 +28,11 @@ use crate::{
 };
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
-const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
+const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(3);
+/// 显式卸载属于用户主动操作，允许比自动探测更长的完成时间。
+const SHELL_INTEGRATION_UNINSTALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// 没有 OSC prompt 信号时，多行初始化命令之间留出设备处理和显示交互提示的时间。
+const PLAIN_INIT_COMMAND_DELAY: Duration = Duration::from_millis(250);
 
 fn shell_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
@@ -70,7 +74,7 @@ trait SshSessionAccess: Send + Sync {
     type Client: SshClient;
 
     async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>>;
-    async fn invalidate(&self);
+    async fn disconnect(&self) -> anyhow::Result<()>;
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup>;
     async fn set_shell_integration(
         &self,
@@ -87,8 +91,8 @@ impl SshSessionAccess for SshSessionManager {
         SshSessionManager::client(self).await
     }
 
-    async fn invalidate(&self) {
-        SshSessionManager::invalidate(self).await;
+    async fn disconnect(&self) -> anyhow::Result<()> {
+        SshSessionManager::disconnect(self).await
     }
 
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -347,15 +351,15 @@ fn build_terminal_control_handle(command_tx: UnboundedSender<SshCommand>) -> Ter
     })
 }
 
-async fn send_terminal_data(channel: &mut ssh::RusshChannel, data: &[u8]) -> bool {
+async fn send_terminal_data<C: SshChannel + ?Sized>(channel: &mut C, data: &[u8]) -> bool {
     tokio::time::timeout(Duration::from_secs(30), channel.send_data(data))
         .await
         .is_ok_and(|result| result.is_ok())
 }
 
-async fn apply_exec_effects(
+async fn apply_exec_effects<C: SshChannel + ?Sized>(
     effects: Vec<ExecEffect>,
-    channel: &mut ssh::RusshChannel,
+    channel: &mut C,
     command_tx: &UnboundedSender<SshCommand>,
     results: &mut HashMap<u64, ExecResultSender>,
 ) -> bool {
@@ -386,6 +390,44 @@ async fn apply_exec_effects(
                     tokio::time::sleep(duration).await;
                     let _ = tx.send(SshCommand::ExecTimeout { id, phase });
                 });
+            }
+        }
+    }
+    true
+}
+
+async fn send_init_commands<C: SshChannel + ?Sized>(
+    channel: &mut C,
+    commands: &str,
+    inter_command_delay: Option<Duration>,
+    exec_supervisor: &mut ExecSupervisor,
+    command_tx: &UnboundedSender<SshCommand>,
+    exec_results: &mut HashMap<u64, ExecResultSender>,
+) -> bool {
+    let lines = commands
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut command = line.as_bytes().to_vec();
+            // 终端 Enter 应发送 CR。Linux PTY 会通过 ICRNL 转成换行，网络设备 CLI 也普遍只认 CR。
+            command.push(b'\r');
+            command
+        })
+        .collect::<Vec<_>>();
+    let last_index = lines.len().saturating_sub(1);
+    for (index, cmd_data) in lines.into_iter().enumerate() {
+        let effects = exec_supervisor.on_input(TerminalInputSource::InitCommand, &cmd_data);
+        if !apply_exec_effects(effects, channel, command_tx, exec_results).await
+            || !send_terminal_data(channel, &cmd_data).await
+        {
+            return false;
+        }
+
+        if index < last_index {
+            if let Some(delay) = inter_command_delay {
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
             }
         }
     }
@@ -426,7 +468,7 @@ impl SshBackend {
         init_commands: Option<String>,
         disable_shell_integration: bool,
     ) -> anyhow::Result<Self> {
-        let (client, mut channel) = Self::establish_channel(
+        let (client, mut channel, shell_integration_active) = Self::establish_channel(
             &session_manager,
             &pty_config,
             connection_id,
@@ -437,7 +479,7 @@ impl SshBackend {
         // 关联变量，避免 clippy 警告未使用。
         let _keep_client = client;
 
-        // ③ init_commands 改为等 shell ready 后发送
+        // 有 Shell Integration 时等待 OSC 133;B；裸终端在收到第一段远端数据后即可发送。
         let pending_init = init_commands;
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
@@ -453,8 +495,7 @@ impl SshBackend {
             let mut processor: Processor<StdSyncHandler> = Processor::new();
             let mut exec_supervisor = ExecSupervisor::new();
             let mut exec_results = HashMap::new();
-            // 用来判断 shell 是否已经 ready（收到第一个 133;B 后才发 init_commands）
-            let mut shell_ready = false;
+            let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
 
             loop {
@@ -618,23 +659,19 @@ impl SshBackend {
                                 if shell_ready && !init_sent {
                                     init_sent = true;
                                     if let Some(ref commands) = pending_init {
-                                        for line in commands.lines() {
-                                            if !line.trim().is_empty() {
-                                                let mut cmd_data = line.as_bytes().to_vec();
-                                                cmd_data.push(b'\n');
-                                                let effects = exec_supervisor.on_input(
-                                                    TerminalInputSource::InitCommand,
-                                                    &cmd_data,
-                                                );
-                                                if !apply_exec_effects(
-                                                    effects,
-                                                    &mut channel,
-                                                    &task_command_tx,
-                                                    &mut exec_results,
-                                                ).await || !send_terminal_data(&mut channel, &cmd_data).await {
-                                                    break;
-                                                }
-                                            }
+                                        let inter_command_delay = (!shell_integration_active)
+                                            .then_some(PLAIN_INIT_COMMAND_DELAY);
+                                        if !send_init_commands(
+                                            &mut channel,
+                                            commands,
+                                            inter_command_delay,
+                                            &mut exec_supervisor,
+                                            &task_command_tx,
+                                            &mut exec_results,
+                                        )
+                                        .await
+                                        {
+                                            break;
                                         }
                                     }
                                 }
@@ -676,14 +713,18 @@ impl SshBackend {
         })
     }
 
-    /// 获取一个 interactive channel，封装了"channel open 失败时 invalidate 并重试一次"的重连逻辑。
+    /// 获取一个 interactive channel，封装了"channel open 失败时断开旧 session 并重试一次"的重连逻辑。
     /// 同时把首次 setup 成功的 `ShellIntegrationSetup` 写回 manager，供其他 terminal 复用。
     async fn establish_channel(
         session_manager: &Arc<SshSessionManager>,
         pty_config: &PtyConfig,
         connection_id: Option<i64>,
         disable_shell_integration: bool,
-    ) -> anyhow::Result<(Arc<tokio::sync::Mutex<ssh::RusshClient>>, ssh::RusshChannel)> {
+    ) -> anyhow::Result<(
+        Arc<tokio::sync::Mutex<ssh::RusshClient>>,
+        ssh::RusshChannel,
+        bool,
+    )> {
         Self::establish_channel_with_manager(
             session_manager.as_ref(),
             pty_config,
@@ -701,6 +742,7 @@ impl SshBackend {
     ) -> anyhow::Result<(
         Arc<tokio::sync::Mutex<M::Client>>,
         <M::Client as SshClient>::Channel,
+        bool,
     )> {
         let mut attempt = 0usize;
         let mut plain_channel_only = disable_shell_integration;
@@ -713,19 +755,25 @@ impl SshBackend {
                 if plain_channel_only {
                     Self::prepare_plain_ssh_channel(&mut *guard, pty_config)
                         .await
-                        .map(|channel| (channel, None))
+                        .map(|channel| (channel, None, false))
                 } else {
+                    let cached_setup_available = cached.is_some();
                     Self::prepare_ssh_channel(&mut *guard, pty_config, connection_id, cached, false)
                         .await
+                        .map(|(channel, new_setup)| {
+                            let shell_integration_active =
+                                cached_setup_available || new_setup.is_some();
+                            (channel, new_setup, shell_integration_active)
+                        })
                 }
             };
 
             match result {
-                Ok((channel, new_setup)) => {
+                Ok((channel, new_setup, shell_integration_active)) => {
                     if let Some(setup) = new_setup {
                         session_manager.set_shell_integration(&client, setup).await;
                     }
-                    return Ok((client, channel));
+                    return Ok((client, channel, shell_integration_active));
                 }
                 Err(err) if attempt == 0 && is_channel_open_failure(&err) => {
                     tracing::warn!(
@@ -733,7 +781,13 @@ impl SshBackend {
                         error = %err,
                         "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
                     );
-                    session_manager.invalidate().await;
+                    if let Err(disconnect_error) = session_manager.disconnect().await {
+                        tracing::warn!(
+                            target: "terminal.ssh.connect",
+                            error = %disconnect_error,
+                            "释放被拒绝 channel 所在的旧 SSH session 失败，继续尝试重连"
+                        );
+                    }
                     attempt += 1;
                     plain_channel_only = true;
                     continue;
@@ -845,7 +899,7 @@ impl SshBackend {
     ) -> anyhow::Result<()> {
         let mut channel = client.open_channel().await?;
         let result = tokio::time::timeout(
-            SHELL_INTEGRATION_SETUP_TIMEOUT,
+            SHELL_INTEGRATION_UNINSTALL_TIMEOUT,
             Self::run_shell_integration_uninstall(&mut channel),
         )
         .await;
@@ -855,7 +909,7 @@ impl SshBackend {
             Ok(result) => result,
             Err(_) => anyhow::bail!(
                 "shell integration uninstall timed out after {}s",
-                SHELL_INTEGRATION_SETUP_TIMEOUT.as_secs()
+                SHELL_INTEGRATION_UNINSTALL_TIMEOUT.as_secs()
             ),
         }
     }
@@ -1005,6 +1059,7 @@ mod tests {
     enum ChannelOp {
         Exec,
         SetEnv(String, String),
+        SendData(Vec<u8>),
         RequestPty,
         RequestShell,
         Close,
@@ -1087,7 +1142,12 @@ mod tests {
             Ok(())
         }
 
-        async fn send_data(&mut self, _data: &[u8]) -> Result<()> {
+        async fn send_data(&mut self, data: &[u8]) -> Result<()> {
+            self.state
+                .lock()
+                .expect("mock channel state should lock")
+                .ops
+                .push(ChannelOp::SendData(data.to_vec()));
             Ok(())
         }
 
@@ -1182,7 +1242,7 @@ mod tests {
 
     struct MockSessionManager {
         clients: tokio::sync::Mutex<VecDeque<Arc<tokio::sync::Mutex<MockClient>>>>,
-        invalidations: AtomicU64,
+        disconnects: AtomicU64,
     }
 
     impl MockSessionManager {
@@ -1194,12 +1254,12 @@ mod tests {
                         .map(|client| Arc::new(tokio::sync::Mutex::new(client)))
                         .collect(),
                 ),
-                invalidations: AtomicU64::new(0),
+                disconnects: AtomicU64::new(0),
             }
         }
 
-        fn invalidation_count(&self) -> u64 {
-            self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
+        fn disconnect_count(&self) -> u64 {
+            self.disconnects.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1215,9 +1275,10 @@ mod tests {
                 .ok_or_else(|| anyhow!("no more mock clients"))
         }
 
-        async fn invalidate(&self) {
-            self.invalidations
+        async fn disconnect(&self) -> Result<()> {
+            self.disconnects
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
         }
 
         async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -1238,6 +1299,34 @@ mod tests {
             .expect("mock channel state should lock")
             .ops
             .clone()
+    }
+
+    #[tokio::test]
+    async fn plain_init_commands_send_enable_and_password_as_separate_lines() {
+        let (mut channel, state) = MockChannel::new([], false);
+        let (command_tx, _command_rx) = unbounded_channel();
+        let mut exec_supervisor = ExecSupervisor::new();
+        let mut exec_results = HashMap::new();
+
+        let sent = send_init_commands(
+            &mut channel,
+            "enable\n\npassword\n",
+            Some(Duration::ZERO),
+            &mut exec_supervisor,
+            &command_tx,
+            &mut exec_results,
+        )
+        .await;
+
+        assert!(sent, "裸终端初始化脚本应成功发送");
+        assert_eq!(
+            recorded_ops(&state),
+            vec![
+                ChannelOp::SendData(b"enable\r".to_vec()),
+                ChannelOp::SendData(b"password\r".to_vec()),
+            ],
+            "空行应跳过，enable 和密码必须模拟终端 Enter，以 CR 分行发送"
+        );
     }
 
     #[tokio::test]
@@ -1503,22 +1592,24 @@ mod tests {
         let second_client = MockClient::new([fallback_channel]);
         let manager = MockSessionManager::new([first_client, second_client]);
 
-        let result = SshBackend::establish_channel_with_manager(
-            &manager,
-            &PtyConfig::default(),
-            Some(42),
-            false,
-        )
-        .await;
+        let (_client, _channel, shell_integration_active) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("russh open channel 错误后应以单通道模式重连");
 
         assert!(
-            result.is_ok(),
-            "russh open channel 错误后应以单通道模式重连"
+            !shell_integration_active,
+            "单通道降级后不能继续等待 OSC Shell Integration 信号"
         );
         assert_eq!(
-            manager.invalidation_count(),
+            manager.disconnect_count(),
             1,
-            "首次失败后应清理旧 session"
+            "首次失败后应主动断开旧 session，立即释放交换机 VTY"
         );
         assert_eq!(
             recorded_ops(&setup_state),
@@ -1533,8 +1624,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn try_install_shell_integration_times_out_in_ten_seconds() {
-        // 测试里用短 timeout 验证逻辑；生产路径仍走 10s 常量。
+    async fn establish_channel_reports_shell_integration_active_after_successful_setup() {
+        let (setup_channel, _) = MockChannel::new(
+            [
+                ChannelEvent::Data(
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                        .to_vec(),
+                ),
+                ChannelEvent::ExitStatus(0),
+            ],
+            false,
+        );
+        let (interactive_channel, _) = MockChannel::new([], false);
+        let manager =
+            MockSessionManager::new([MockClient::new([setup_channel, interactive_channel])]);
+
+        let (_client, _channel, shell_integration_active) =
+            SshBackend::establish_channel_with_manager(
+                &manager,
+                &PtyConfig::default(),
+                Some(42),
+                false,
+            )
+            .await
+            .expect("标准 Shell 应完成 integration setup");
+
+        assert!(
+            shell_integration_active,
+            "安装成功后应继续等待 OSC 133;B 再发送初始化脚本"
+        );
+        assert_eq!(manager.disconnect_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn try_install_shell_integration_respects_configured_timeout() {
+        // 测试里用短 timeout 验证逻辑；生产自动探测走 3s，显式卸载仍走 10s。
         let (setup_channel, _) = MockChannel::new_with_delay(
             [ChannelEvent::Data(b"pending...".to_vec())],
             false,
@@ -1548,7 +1672,7 @@ mod tests {
             Duration::from_millis(1),
         )
         .await;
-        assert!(res.is_none(), "10s 超时后应降级为 None");
+        assert!(res.is_none(), "探测超时后应降级为 None");
     }
 
     #[test]
