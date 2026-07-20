@@ -345,13 +345,19 @@ test("Rust workflows share one cache strategy without archiving target", () => {
   }
 
   const ci = workflows[0];
-  assert.match(ci, /branches:\s*[\s\S]*?- dev/);
+  assert.match(ci, /branches:\s*[\s\S]*?- main/);
+  assert.doesNotMatch(ci, /branches:\s*[\s\S]*?- dev/);
+  assert.doesNotMatch(ci, /^\s+tags:/m);
   assert.match(ci, /x86_64-unknown-linux-gnu/);
   assert.match(ci, /x86_64-pc-windows-msvc/);
   assert.doesNotMatch(ci, /key: test-cargo-/);
 
   const release = workflows[1];
   assert.doesNotMatch(release, /key: release-cargo-inputs-/);
+  assert.match(release, /actions\/cache\/restore@v4/);
+  assert.match(release, /actions\/cache\/save@v4/);
+  assert.match(release, /cache-primary-key/);
+  assert.match(release, /needs\.prepare\.outputs\.platform != 'all'/);
 
   const windowsMsi = workflows[2];
   assert.doesNotMatch(windowsMsi, /key: windows-msi-/);
