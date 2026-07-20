@@ -84,6 +84,64 @@ mod tests {
     }
 
     #[test]
+    fn html_blocks_survive_preview_edit_save_and_reload_independently() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("html-note.md");
+        let source = concat!(
+            "# Before\n\n",
+            "<section>\n<strong>first</strong>\n</section>\n\n",
+            "<aside>\nsecond\n</aside>\n\n",
+            "After"
+        );
+        fs::write(&path, source).unwrap();
+        let persistence = MarkdownDocumentPersistence::new(MarkdownFileStore::new(path.clone()));
+        let document = persistence
+            .load("html-doc")
+            .unwrap()
+            .expect("markdown document should load");
+
+        let html_blocks = document
+            .blocks
+            .iter()
+            .filter(|block| {
+                matches!(
+                    block.payload.kind,
+                    cditor_app::core::rich_text::RichBlockKind::Html
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(2, html_blocks.len());
+        assert!(html_blocks[0].payload.plain_text().contains("first"));
+        assert!(html_blocks[1].payload.plain_text().contains("second"));
+
+        persistence
+            .save(EditorSaveRequest {
+                document_id: "html-doc".to_owned(),
+                document,
+                document_version: 1,
+                reason: EditorSaveReason::Manual,
+            })
+            .unwrap();
+        assert_eq!(source, fs::read_to_string(&path).unwrap());
+
+        let reloaded = persistence
+            .load("html-doc")
+            .unwrap()
+            .expect("saved markdown document should reload");
+        assert_eq!(
+            2,
+            reloaded
+                .blocks
+                .iter()
+                .filter(|block| matches!(
+                    block.payload.kind,
+                    cditor_app::core::rich_text::RichBlockKind::Html
+                ))
+                .count()
+        );
+    }
+
+    #[test]
     fn external_change_fails_cditor_save() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("note.md");
