@@ -12,7 +12,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotesExportFormat {
@@ -95,14 +95,6 @@ impl NotesView {
             cx.theme().border,
             cx.theme().primary,
             cx.theme().danger,
-        );
-        window.push_notification(
-            Notification::info(
-                "将按预览效果导出：数学公式、Mermaid 等渲染为图片，HTML 按页面效果输出，普通代码块保留源码。"
-                    .to_owned(),
-            )
-            .autohide(true),
-            cx,
         );
         let document_renderer = self.document_renderer_provider.clone();
         let http_client = cx.http_client();
@@ -190,6 +182,7 @@ impl NotesView {
                             bytes: rendered.bytes,
                         });
                     }
+                    prepare_export_image_assets(&format_name, &mut assets)?;
                     let artifact = catalog
                         .export_document(extension_wasm::DocumentExportRequest {
                             exporter: String::new(),
@@ -490,6 +483,78 @@ fn export_image_media_type(path: &str, bytes: &[u8]) -> &'static str {
     }
 }
 
+static EXPORT_SVG_FONT_DB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut font_db = resvg::usvg::fontdb::Database::new();
+    font_db.load_system_fonts();
+    Arc::new(font_db)
+});
+
+fn prepare_export_image_assets(
+    format: &str,
+    assets: &mut [extension_wasm::DocumentExportAsset],
+) -> anyhow::Result<()> {
+    let pdf = format.eq_ignore_ascii_case("pdf");
+    let word = format.eq_ignore_ascii_case("docx");
+    if !pdf && !word {
+        return Ok(());
+    }
+    for asset in assets.iter_mut() {
+        let png = match asset.media_type.as_str() {
+            "image/svg+xml" => {
+                let pixmap = rasterize_export_svg(&asset.bytes).map_err(|error| {
+                    anyhow::anyhow!("rasterize {format} SVG asset {}: {error}", asset.path)
+                })?;
+                pixmap.encode_png().map_err(|error| {
+                    anyhow::anyhow!("encode {format} SVG asset {}: {error}", asset.path)
+                })?
+            }
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
+                normalize_export_raster_image(&asset.bytes).map_err(|error| {
+                    anyhow::anyhow!("normalize {format} image asset {}: {error}", asset.path)
+                })?
+            }
+            _ => continue,
+        };
+        asset.bytes = png;
+        asset.media_type = "image/png".to_owned();
+    }
+    Ok(())
+}
+
+fn normalize_export_raster_image(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let image =
+        image::load_from_memory(bytes).map_err(|error| anyhow::anyhow!("decode image: {error}"))?;
+    let image = if image.width() > 400 || image.height() > 300 {
+        image.thumbnail(400, 300)
+    } else {
+        image
+    };
+    let mut output = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|error| anyhow::anyhow!("encode PNG: {error}"))?;
+    Ok(output.into_inner())
+}
+
+fn rasterize_export_svg(svg: &[u8]) -> anyhow::Result<resvg::tiny_skia::Pixmap> {
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb = Arc::clone(&EXPORT_SVG_FONT_DB);
+    let tree = resvg::usvg::Tree::from_data(svg, &options)
+        .map_err(|error| anyhow::anyhow!("parse SVG: {error}"))?;
+    let size = tree.size();
+    let scale = (400.0 / size.width()).min(300.0 / size.height()).min(1.0);
+    let width = (size.width() * scale).round().max(1.0) as u32;
+    let height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| anyhow::anyhow!("SVG raster size is invalid"))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap)
+}
+
 fn html_export_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let lower = tag.to_ascii_lowercase();
     let marker = format!("{name}=");
@@ -669,8 +734,8 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 mod tests {
     use super::{
         NotesExportFormat, collect_export_assets, document_for_preview, export_image_media_type,
-        export_rich_text_document, next_export_path, strip_whiteboard_metadata_comments,
-        without_comment_blocks,
+        export_rich_text_document, next_export_path, prepare_export_image_assets,
+        rasterize_export_svg, strip_whiteboard_metadata_comments, without_comment_blocks,
     };
     use cditor_app::core::rich_text::{
         BlockAttrs, BlockPayload, BlockPayloadRecord, RichBlockKind, WhiteboardPayload,
@@ -703,6 +768,47 @@ mod tests {
     }
 
     #[test]
+    fn pdf_and_word_images_are_normalized_by_the_host() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><text x="4" y="28" font-family="sans-serif" font-size="24">Start</text></svg>"#;
+        let pixmap = rasterize_export_svg(svg).unwrap();
+        assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
+
+        let mut large_png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(800, 600)
+            .write_to(&mut large_png, image::ImageFormat::Png)
+            .unwrap();
+        let assets = vec![
+            extension_wasm::DocumentExportAsset {
+                path: "https://img.shields.io/badge/Navop-green?style=flat".to_owned(),
+                media_type: "image/svg+xml".to_owned(),
+                bytes: svg.to_vec(),
+            },
+            extension_wasm::DocumentExportAsset {
+                path: "screenshot.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                bytes: large_png.into_inner(),
+            },
+        ];
+        let mut pdf_assets = assets.clone();
+        prepare_export_image_assets("pdf", &mut pdf_assets).unwrap();
+        for asset in &pdf_assets {
+            assert_eq!(asset.media_type, "image/png");
+            assert!(asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        }
+        let normalized = image::load_from_memory(&pdf_assets[1].bytes).unwrap();
+        assert_eq!((normalized.width(), normalized.height()), (400, 300));
+
+        let mut word_assets = assets;
+        prepare_export_image_assets("docx", &mut word_assets).unwrap();
+        for asset in &word_assets {
+            assert_eq!(asset.media_type, "image/png");
+            assert!(asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        }
+        let normalized = image::load_from_memory(&word_assets[1].bytes).unwrap();
+        assert_eq!((normalized.width(), normalized.height()), (400, 300));
+    }
+
+    #[test]
     fn export_snapshot_always_uses_preview_semantics() {
         let mut html_preview = editor_block(3, None, RichBlockKind::Html, "");
         html_preview.payload.payload = BlockPayload::Html {
@@ -731,6 +837,21 @@ mod tests {
         assert!(markdown.contains("<strong>preview</strong>"));
         assert!(markdown.contains("<em>source</em>"));
         assert!(!markdown.contains("```html"));
+    }
+
+    #[test]
+    fn escaped_renderable_fences_are_preserved_without_pending_renders() {
+        for source in [
+            "\\```mermaid\nflowchart TD\nA --> B\n\\```",
+            "\\```math\nx^2 + y^2\n\\```",
+        ] {
+            let document = EditorDocument::from_markdown("escaped-export", source).unwrap();
+            assert_eq!(RichBlockKind::RawMarkdown, document.blocks[0].payload.kind);
+
+            let (prepared, pending) = document_for_preview(&document);
+            assert!(pending.is_empty(), "source={source:?}");
+            assert_eq!(source, export_rich_text_document(&prepared).unwrap());
+        }
     }
 
     #[test]
