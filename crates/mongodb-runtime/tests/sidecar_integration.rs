@@ -28,6 +28,7 @@ async fn sidecar_round_trips_bson_commands_and_find() {
     let config = MongoConnectionConfig {
         id: "it".into(),
         name: "MongoDB 7 integration".into(),
+        driver_id: "mongodb-modern".into(),
         connection_string: "mongodb://127.0.0.1:27018".into(),
         direct_host: "127.0.0.1".into(),
         direct_port: 27018,

@@ -354,10 +354,12 @@ impl RedisConnectionConfig {
             (None, Some(pass)) => format!("default:{}@", percent_encode_userinfo(pass)),
             _ => String::new(),
         };
-        format!(
-            "{}://{}{}:{}/{}",
-            scheme, auth, self.host, self.port, self.db_index
-        )
+        let host = if self.host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("{scheme}://{auth}{host}:{}/{}", self.port, self.db_index)
     }
 
     /// 服务器信息显示
@@ -399,15 +401,34 @@ impl RedisConnectionMode {
 fn percent_encode_userinfo(value: &str) -> String {
     let mut encoded = String::with_capacity(value.len());
     for &byte in value.as_bytes() {
-        let needs_encoding =
-            byte <= 0x1F || byte == 0x7F || matches!(byte, b'@' | b':' | b'/' | b'?' | b'#' | b'%');
-        if needs_encoding {
-            encoded.push_str(&format!("%{:02X}", byte));
-        } else {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
             encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
         }
     }
     encoded
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::RedisConnectionConfig;
+
+    #[test]
+    fn redis_url_encodes_utf8_credentials_and_brackets_ipv6() {
+        let config = RedisConnectionConfig {
+            host: "::1".into(),
+            port: 6379,
+            username: Some("用户".into()),
+            password: Some("p@ss %".into()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            "redis://%E7%94%A8%E6%88%B7:p%40ss%20%25@[::1]:6379/0",
+            config.to_url()
+        );
+    }
 }
 
 /// Redis 服务器信息

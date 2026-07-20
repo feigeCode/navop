@@ -517,8 +517,32 @@ impl RedisParams {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MongoDriverVariant {
+    Modern,
+    Legacy,
+}
+
+impl Default for MongoDriverVariant {
+    fn default() -> Self {
+        Self::Modern
+    }
+}
+
+impl MongoDriverVariant {
+    pub fn driver_id(&self) -> &'static str {
+        match self {
+            Self::Modern => "mongodb-modern",
+            Self::Legacy => "mongodb-legacy",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MongoDBParams {
+    #[serde(default)]
+    pub driver_variant: MongoDriverVariant,
     #[serde(default)]
     pub connection_string: String,
     #[serde(default)]
@@ -1601,6 +1625,7 @@ mod tests {
         );
 
         let mongo = MongoDBParams {
+            driver_variant: MongoDriverVariant::Modern,
             connection_string: String::new(),
             host: "mongo.internal".to_string(),
             port: Some(27017),
@@ -1824,6 +1849,7 @@ mod tests {
 
         assert_eq!("mongo.internal", params.host);
         assert_eq!(Some(27017), params.port);
+        assert!(matches!(params.driver_variant, MongoDriverVariant::Modern));
         assert_eq!(None, params.ssh_tunnel);
     }
 
@@ -1836,6 +1862,7 @@ mod tests {
             },
         );
         let mut mongo = MongoDBParams {
+            driver_variant: MongoDriverVariant::Modern,
             connection_string: String::new(),
             host: "mongo.internal".to_string(),
             port: Some(27018),

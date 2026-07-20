@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
+use connection_tunnel::{TunnelGuard, resolve_connection_target};
 use extension_host::{NativeDriverManifest, ProcessRpcSession};
 use extension_protocol::blob::WireBytes;
 use extension_protocol::conn::{ConnOpenParams, ConnOpenResult};
@@ -25,6 +26,7 @@ pub struct IpcRedisConnection {
     config: RedisConnectionConfig,
     session: Arc<ProcessRpcSession>,
     conn_id: u64,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl IpcRedisConnection {
@@ -32,6 +34,10 @@ impl IpcRedisConnection {
         manifest: &NativeDriverManifest,
         config: RedisConnectionConfig,
     ) -> Result<Self, RedisError> {
+        let target =
+            resolve_connection_target(&config.host, config.port, config.ssh_tunnel.as_ref())
+                .await
+                .map_err(|error| RedisError::connection(error.to_string()))?;
         let session_config = manifest
             .process_session_config(env!("CARGO_PKG_VERSION"), uuid::Uuid::new_v4().to_string());
         let session = Arc::new(
@@ -39,15 +45,7 @@ impl IpcRedisConnection {
                 .await
                 .map_err(host_error)?,
         );
-        let wire_config = WireRedisConnectionConfig {
-            host: config.host.clone(),
-            port: config.port,
-            username: config.username.clone(),
-            password: config.password.clone(),
-            database: config.db_index,
-            use_tls: config.use_tls,
-            connect_timeout_ms: Some(seconds_to_millis(config.timeout)),
-        };
+        let wire_config = wire_config_for_target(&config, &target.host, target.port);
         let open = ConnOpenParams::new(
             manifest.id.clone(),
             serde_json::to_value(wire_config).map_err(serialization_error)?,
@@ -63,6 +61,7 @@ impl IpcRedisConnection {
             config,
             session,
             conn_id: result.conn_id,
+            tunnel: target.tunnel,
         })
     }
 
@@ -149,6 +148,7 @@ impl RedisConnection for IpcRedisConnection {
 
     async fn disconnect(&mut self) -> Result<(), RedisError> {
         self.shutdown().await;
+        self.tunnel = None;
         Ok(())
     }
 
@@ -732,20 +732,13 @@ impl IpcRedisConnection {
                 vec![
                     vec![b"TYPE".to_vec(), key.as_bytes().to_vec()],
                     vec![b"TTL".to_vec(), key.as_bytes().to_vec()],
-                    vec![
-                        b"MEMORY".to_vec(),
-                        b"USAGE".to_vec(),
-                        key.as_bytes().to_vec(),
-                    ],
                 ],
             )
             .await?;
         let key_type = parse_key_type(&value_string(values[0].clone())?);
         let ttl = value_integer(values[1].clone())?;
-        let memory_usage = match values[2].clone() {
-            RedisValue::Nil => None,
-            value => Some(value_integer(value)?),
-        };
+        let memory_usage =
+            optional_integer(self.command(Some(db), &["MEMORY", "USAGE", key]).await);
         let size = match key_type {
             RedisKeyType::String => Some(value_integer(
                 self.command(Some(db), &["STRLEN", key]).await?,
@@ -804,6 +797,10 @@ fn value_integer(value: RedisValue) -> Result<i64, RedisError> {
         expected: "integer".into(),
         actual: value.to_display_string(),
     })
+}
+
+fn optional_integer(result: Result<RedisValue, RedisError>) -> Option<i64> {
+    result.ok()?.as_integer()
 }
 
 fn value_string(value: RedisValue) -> Result<String, RedisError> {
@@ -943,6 +940,22 @@ fn seconds_to_millis(seconds: u64) -> u32 {
     seconds.saturating_mul(1_000).min(u32::MAX as u64) as u32
 }
 
+fn wire_config_for_target(
+    config: &RedisConnectionConfig,
+    host: &str,
+    port: u16,
+) -> WireRedisConnectionConfig {
+    WireRedisConnectionConfig {
+        host: host.to_string(),
+        port,
+        username: config.username.clone(),
+        password: config.password.clone(),
+        database: config.db_index,
+        use_tls: config.use_tls,
+        connect_timeout_ms: Some(seconds_to_millis(config.timeout)),
+    }
+}
+
 fn wire_bytes(bytes: Vec<u8>) -> WireBytes {
     match String::from_utf8(bytes) {
         Ok(value) => WireBytes::Utf8(value),
@@ -1010,5 +1023,27 @@ mod tests {
             ])]),
             value
         );
+    }
+
+    #[test]
+    fn optional_integer_ignores_unsupported_metadata_commands() {
+        let unsupported = Err(RedisError::command("unknown command 'MEMORY'"));
+
+        assert_eq!(None, optional_integer(unsupported));
+        assert_eq!(Some(128), optional_integer(Ok(RedisValue::Integer(128))));
+    }
+
+    #[test]
+    fn wire_config_uses_the_resolved_tunnel_endpoint() {
+        let config = RedisConnectionConfig {
+            host: "redis.internal".into(),
+            port: 6379,
+            ..Default::default()
+        };
+
+        let wire = wire_config_for_target(&config, "127.0.0.1", 49152);
+
+        assert_eq!("127.0.0.1", wire.host);
+        assert_eq!(49152, wire.port);
     }
 }

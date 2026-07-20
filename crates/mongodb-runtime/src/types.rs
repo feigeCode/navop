@@ -81,6 +81,7 @@ impl MongoError {
 pub struct MongoConnectionConfig {
     pub id: String,
     pub name: String,
+    pub driver_id: String,
     pub connection_string: String,
     pub direct_host: String,
     pub direct_port: u16,

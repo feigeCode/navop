@@ -161,6 +161,13 @@ struct MongoOpenStrategy {
     workspace: Option<Workspace>,
 }
 
+fn mongodb_driver_id(connection: &StoredConnection) -> String {
+    connection
+        .to_mongodb_params()
+        .map(|params| params.driver_variant.driver_id().to_string())
+        .unwrap_or_else(|_| mongodb_runtime::DEFAULT_MONGODB_MODERN_DRIVER_ID.to_string())
+}
+
 impl ConnectionOpenStrategy for MongoOpenStrategy {
     fn open(
         self: Box<Self>,
@@ -174,11 +181,10 @@ impl ConnectionOpenStrategy for MongoOpenStrategy {
             workspace,
         } = *self;
         let connection_name = connection.name.clone();
+        let driver_id = mongodb_driver_id(&connection);
         let requirement = extension_runtime::database_driver_install::required_native_driver(
             "mongodb",
-            extension_runtime::database_driver_install::NativeDriverBackend::Ipc {
-                driver_id: mongodb_runtime::DEFAULT_MONGODB_MODERN_DRIVER_ID.to_string(),
-            },
+            extension_runtime::database_driver_install::NativeDriverBackend::Ipc { driver_id },
         );
         extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
             home,
@@ -258,5 +264,39 @@ impl ConnectionOpenStrategy for NoopOpenStrategy {
         _window: &mut Window,
         _cx: &mut Context<HomePage>,
     ) {
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mongodb_driver_id;
+    use one_core::storage::{MongoDBParams, MongoDriverVariant, StoredConnection};
+
+    #[test]
+    fn mongodb_driver_id_follows_the_saved_variant() {
+        let connection = StoredConnection::new_mongodb(
+            "legacy mongo".to_string(),
+            MongoDBParams {
+                driver_variant: MongoDriverVariant::Legacy,
+                connection_string: String::new(),
+                host: "127.0.0.1".to_string(),
+                port: Some(27017),
+                database: None,
+                username: None,
+                password: None,
+                auth_source: None,
+                replica_set: None,
+                read_preference: None,
+                use_srv_record: false,
+                direct_connection: false,
+                use_tls: false,
+                connect_timeout_seconds: None,
+                application_name: None,
+                ssh_tunnel: None,
+            },
+            None,
+        );
+
+        assert_eq!("mongodb-legacy", mongodb_driver_id(&connection));
     }
 }

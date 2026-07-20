@@ -51,6 +51,15 @@ impl GlobalRedisState {
         *self.factory.write().await = factory;
     }
 
+    pub async fn test_connection(&self, config: &RedisConnectionConfig) -> Result<(), RedisError> {
+        let factory = self.factory.read().await.clone();
+        let mut connection = factory.create(config.clone()).await?;
+        let ping_result = connection.ping().await;
+        let disconnect_result = connection.disconnect().await;
+        ping_result?;
+        disconnect_result
+    }
+
     /// 创建并存储新连接
     pub async fn create_connection(
         &self,
@@ -116,25 +125,6 @@ impl GlobalRedisState {
 pub struct RedisManager;
 
 impl RedisManager {
-    /// 测试连接配置
-    pub async fn test_connection(config: &RedisConnectionConfig) -> Result<(), RedisError> {
-        #[cfg(feature = "builtin-redis")]
-        {
-            let mut conn = redis_runtime::BuiltinRedisConnection::new(config.clone());
-            conn.connect().await?;
-            conn.ping().await?;
-            conn.disconnect().await?;
-            Ok(())
-        }
-        #[cfg(not(feature = "builtin-redis"))]
-        {
-            let _ = config;
-            Err(RedisError::NotSupported(
-                "Redis test connection requires the builtin backend or an IPC factory".into(),
-            ))
-        }
-    }
-
     /// 从 StoredConnection 创建配置
     pub fn config_from_stored(
         stored: &one_core::storage::StoredConnection,
@@ -164,5 +154,22 @@ impl RedisManager {
             mode,
             ssh_tunnel: params.ssh_tunnel,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_connection_uses_the_configured_factory() {
+        let state = GlobalRedisState::new_with_factory(RedisConnectionFactory::Unavailable);
+        let error = state
+            .test_connection(&RedisConnectionConfig::default())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RedisError::Connection { .. }));
+        assert!(error.to_string().contains("native driver is not installed"));
     }
 }

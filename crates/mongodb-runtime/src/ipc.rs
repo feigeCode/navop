@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use base64::Engine as _;
 use bson::{Bson, Document, doc};
+use connection_tunnel::{TunnelGuard, resolve_connection_target};
 use extension_host::{HostError, NativeDriverManifest, ProcessRpcSession};
 use extension_protocol::blob::WireBytes;
 use extension_protocol::blob::{BlobReadResult, DEFAULT_BLOB_CHUNK_BYTES};
@@ -11,6 +12,7 @@ use extension_protocol::mongodb::{
 };
 use std::sync::Arc;
 
+use crate::uri::replace_mongodb_uri_authority;
 use crate::{MongoConnection, MongoConnectionConfig, MongoError, MongoFindOptions};
 
 /// IPC facade placeholder for the UI/runtime boundary.
@@ -25,6 +27,7 @@ pub struct IpcMongoConnection {
     manifest: Option<NativeDriverManifest>,
     session: Option<Arc<ProcessRpcSession>>,
     conn_id: Option<u64>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl IpcMongoConnection {
@@ -34,6 +37,7 @@ impl IpcMongoConnection {
             manifest: None,
             session: None,
             conn_id: None,
+            tunnel: None,
         }
     }
 
@@ -43,6 +47,7 @@ impl IpcMongoConnection {
             manifest: Some(manifest),
             session: None,
             conn_id: None,
+            tunnel: None,
         }
     }
 }
@@ -56,6 +61,18 @@ impl MongoConnection for IpcMongoConnection {
         let manifest = self.manifest.clone().ok_or_else(|| {
             MongoError::Internal("MongoDB native driver is not configured".into())
         })?;
+        let target = resolve_connection_target(
+            &self.config.direct_host,
+            self.config.direct_port,
+            self.config.ssh_tunnel.as_ref(),
+        )
+        .await
+        .map_err(|error| MongoError::connection(error.to_string()))?;
+        let connection_string = if target.tunnel.is_some() {
+            replace_mongodb_uri_authority(&self.config.connection_string, &target.host, target.port)
+        } else {
+            self.config.connection_string.clone()
+        };
         let session = Arc::new(
             ProcessRpcSession::start(manifest.process_session_config(
                 env!("CARGO_PKG_VERSION"),
@@ -65,9 +82,9 @@ impl MongoConnection for IpcMongoConnection {
             .map_err(host_error)?,
         );
         let wire = extension_protocol::mongodb::MongoConnectionConfig {
-            connection_string: self.config.connection_string.clone(),
-            direct_host: Some(self.config.direct_host.clone()),
-            direct_port: Some(self.config.direct_port),
+            connection_string,
+            direct_host: Some(target.host),
+            direct_port: Some(target.port),
         };
         let open = ConnOpenParams::new(
             manifest.id,
@@ -82,6 +99,7 @@ impl MongoConnection for IpcMongoConnection {
             .map_err(host_error)?;
         self.session = Some(session);
         self.conn_id = Some(result.conn_id);
+        self.tunnel = target.tunnel;
         Ok(())
     }
     async fn disconnect(&mut self) -> Result<(), MongoError> {
@@ -93,6 +111,7 @@ impl MongoConnection for IpcMongoConnection {
         }
         self.session = None;
         self.conn_id = None;
+        self.tunnel = None;
         Ok(())
     }
     async fn ping(&self) -> Result<(), MongoError> {

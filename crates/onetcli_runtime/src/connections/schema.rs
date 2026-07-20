@@ -415,6 +415,12 @@ fn redis_schema() -> Value {
 fn mongodb_schema() -> Value {
     json!([
         field("name", "string", true, Value::Null),
+        enum_field(
+            "driver_variant",
+            &["modern", "legacy"],
+            false,
+            json!("modern")
+        ),
         field("connection_string", "string", false, Value::Null),
         field("host", "string", false, Value::Null),
         field("port", "integer", false, json!(27017)),

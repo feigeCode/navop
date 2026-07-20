@@ -1246,15 +1246,15 @@ mod tests {
     }
 
     #[test]
-    fn mongodb_open_strategy_guards_the_modern_native_driver() {
+    fn mongodb_open_strategy_guards_the_saved_native_driver_variant() {
         let source = include_str!("home/home_strategy.rs");
         let strategy = source
             .find("impl ConnectionOpenStrategy for MongoOpenStrategy")
             .unwrap();
         let body = &source[strategy..];
         let requirement = body
-            .find("DEFAULT_MONGODB_MODERN_DRIVER_ID")
-            .expect("MongoDB modern driver requirement");
+            .find("mongodb_driver_id(&connection)")
+            .expect("MongoDB saved driver requirement");
         let guard = body
             .find("open_native_driver_connection_with_guard")
             .expect("native driver install guard");

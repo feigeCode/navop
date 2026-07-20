@@ -1,4 +1,3 @@
-use extension_protocol::error::{ProtocolError, error_codes};
 use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
@@ -75,24 +74,6 @@ pub fn native_driver_is_installed(api: &str, driver_id: &str) -> bool {
     db::ipc::IpcDriverRegistry::load_default()
         .find_by_api(api, driver_id)
         .is_some()
-}
-
-/// Returns an explicit fallback requirement only for a structured server
-/// incompatibility. This keeps auth, TLS, timeout and other operational errors
-/// from silently switching driver implementations.
-pub fn fallback_native_driver_for_error(
-    api: impl Into<String>,
-    fallback_driver_id: impl Into<String>,
-    error: &ProtocolError,
-) -> Option<NativeDriverRequirement> {
-    (error.code == error_codes::SERVER_INCOMPATIBLE).then(|| {
-        required_native_driver(
-            api,
-            NativeDriverBackend::Ipc {
-                driver_id: fallback_driver_id.into(),
-            },
-        )
-    })
 }
 
 pub trait DatabaseDriverConnectionOpener: Sized + 'static {

@@ -9750,6 +9750,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "connection_tunnel",
  "extension-host",
  "extension-protocol",
  "futures",

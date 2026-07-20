@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub mod connection;
 pub mod ipc;
 pub mod types;
+mod uri;
 
 #[cfg(feature = "builtin-mongodb")]
 mod builtin;
@@ -32,10 +33,6 @@ pub const LEGACY_MONGODB_DRIVER_ID: &str = "mongodb-legacy";
 #[derive(Clone)]
 pub enum MongoConnectionFactory {
     Ipc(Box<extension_host::NativeDriverManifest>),
-    IpcWithLegacy {
-        modern: Box<extension_host::NativeDriverManifest>,
-        legacy: Box<extension_host::NativeDriverManifest>,
-    },
     InstalledRegistry(PathBuf),
     #[cfg(feature = "builtin-mongodb")]
     Builtin,
@@ -55,19 +52,10 @@ impl MongoConnectionFactory {
             Self::InstalledRegistry(root) => {
                 let registry = extension_host::NativeDriverRegistry::load_from_dir(root)
                     .map_err(|error| MongoError::Internal(error.to_string()))?;
-                let legacy_installed = registry.find("mongodb", LEGACY_MONGODB_DRIVER_ID).is_some();
-                let selected = Self::select_from_registry(&registry)?;
-                match selected.create_ipc(config).await {
-                    Err(MongoError::ServerIncompatible(reason)) if !legacy_installed => {
-                        Err(MongoError::NativeDriverRequired {
-                            driver_id: LEGACY_MONGODB_DRIVER_ID.to_string(),
-                            reason,
-                        })
-                    }
-                    result => result,
-                }
+                let selected = Self::select_from_registry(&registry, &config.driver_id)?;
+                selected.create_ipc(config).await
             }
-            Self::Ipc(_) | Self::IpcWithLegacy { .. } => self.create_ipc(config).await,
+            Self::Ipc(_) => self.create_ipc(config).await,
             #[cfg(feature = "builtin-mongodb")]
             Self::Builtin => {
                 let mut connection = BuiltinMongoConnection::new(config);
@@ -82,17 +70,15 @@ impl MongoConnectionFactory {
 
     fn select_from_registry(
         registry: &extension_host::NativeDriverRegistry,
+        driver_id: &str,
     ) -> Result<Self, MongoError> {
-        let modern = registry
-            .find("mongodb", DEFAULT_MONGODB_MODERN_DRIVER_ID)
-            .ok_or_else(|| MongoError::Internal("MongoDB native driver is not installed".into()))?;
-        Ok(match registry.find("mongodb", LEGACY_MONGODB_DRIVER_ID) {
-            Some(legacy) => Self::IpcWithLegacy {
-                modern: Box::new(modern),
-                legacy: Box::new(legacy),
-            },
-            None => Self::Ipc(Box::new(modern)),
-        })
+        let manifest = registry.find("mongodb", driver_id).ok_or_else(|| {
+            MongoError::NativeDriverRequired {
+                driver_id: driver_id.to_string(),
+                reason: "selected MongoDB native driver is not installed".into(),
+            }
+        })?;
+        Ok(Self::Ipc(Box::new(manifest)))
     }
 
     async fn create_ipc(
@@ -105,20 +91,6 @@ impl MongoConnectionFactory {
                     IpcMongoConnection::with_manifest((**manifest).clone(), config);
                 connection.connect().await?;
                 Ok(Box::new(connection))
-            }
-            Self::IpcWithLegacy { modern, legacy } => {
-                let mut modern_connection =
-                    IpcMongoConnection::with_manifest((**modern).clone(), config.clone());
-                match modern_connection.connect().await {
-                    Ok(()) => Ok(Box::new(modern_connection)),
-                    Err(MongoError::ServerIncompatible(_)) => {
-                        let mut legacy_connection =
-                            IpcMongoConnection::with_manifest((**legacy).clone(), config);
-                        legacy_connection.connect().await?;
-                        Ok(Box::new(legacy_connection))
-                    }
-                    Err(error) => Err(error),
-                }
             }
             _ => Err(MongoError::Internal(
                 "MongoDB IPC driver selection is invalid".into(),
@@ -175,32 +147,37 @@ mod tests {
     }
 
     #[test]
-    fn registry_selection_pairs_modern_and_legacy_manifests() {
+    fn registry_selection_uses_the_requested_driver() {
         let root = tempfile::TempDir::new().unwrap();
-        write_driver(root.path(), DEFAULT_MONGODB_MODERN_DRIVER_ID);
         write_driver(root.path(), LEGACY_MONGODB_DRIVER_ID);
         let registry = extension_host::NativeDriverRegistry::load_from_dir(root.path()).unwrap();
 
-        let factory = MongoConnectionFactory::select_from_registry(&registry).unwrap();
+        let factory =
+            MongoConnectionFactory::select_from_registry(&registry, LEGACY_MONGODB_DRIVER_ID)
+                .unwrap();
 
-        assert!(matches!(
-            factory,
-            MongoConnectionFactory::IpcWithLegacy { .. }
-        ));
+        assert!(matches!(factory, MongoConnectionFactory::Ipc(_)));
     }
 
     #[test]
-    fn registry_selection_requires_modern_as_the_primary_driver() {
+    fn registry_selection_reports_the_requested_missing_driver() {
         let root = tempfile::TempDir::new().unwrap();
         write_driver(root.path(), LEGACY_MONGODB_DRIVER_ID);
         let registry = extension_host::NativeDriverRegistry::load_from_dir(root.path()).unwrap();
 
-        let error = match MongoConnectionFactory::select_from_registry(&registry) {
-            Ok(_) => panic!("legacy-only registry must not be selected"),
+        let error = match MongoConnectionFactory::select_from_registry(
+            &registry,
+            DEFAULT_MONGODB_MODERN_DRIVER_ID,
+        ) {
+            Ok(_) => panic!("missing requested driver must not be selected"),
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("not installed"));
+        assert!(matches!(
+            error,
+            MongoError::NativeDriverRequired { driver_id, .. }
+                if driver_id == DEFAULT_MONGODB_MODERN_DRIVER_ID
+        ));
     }
 
     fn write_driver(root: &std::path::Path, id: &str) {

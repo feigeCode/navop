@@ -325,6 +325,18 @@ MongoManager:
     zh-HK: "主機不能為空。"
 
 MongoForm:
+  driver_variant_label:
+    en: "Driver version"
+    zh-CN: "驱动版本"
+    zh-HK: "驅動版本"
+  driver_variant_modern:
+    en: "Modern (MongoDB 4.2+)"
+    zh-CN: "Modern（MongoDB 4.2+）"
+    zh-HK: "Modern（MongoDB 4.2+）"
+  driver_variant_legacy:
+    en: "Legacy (MongoDB 3.6–4.0)"
+    zh-CN: "Legacy（MongoDB 3.6–4.0）"
+    zh-HK: "Legacy（MongoDB 3.6–4.0）"
   edit_connection_title:
     en: "Edit MongoDB Connection"
     zh-CN: "编辑 MongoDB 连接"

@@ -85,7 +85,16 @@ fn invalid_fields(input: &Value) -> Vec<Value> {
     let values = input.get("values").unwrap_or(&Value::Null);
     let mut invalid = Vec::new();
     match kind {
-        "database" | "ssh_sftp" | "mongodb" => add_invalid_u16(values, "port", &mut invalid),
+        "database" | "ssh_sftp" => add_invalid_u16(values, "port", &mut invalid),
+        "mongodb" => {
+            add_invalid_u16(values, "port", &mut invalid);
+            add_invalid_enum(
+                values,
+                "driver_variant",
+                &["modern", "legacy"],
+                &mut invalid,
+            );
+        }
         "redis" => {
             add_invalid_u16(values, "port", &mut invalid);
             add_invalid_u8(values, "db_index", &mut invalid);

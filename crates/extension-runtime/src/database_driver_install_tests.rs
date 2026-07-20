@@ -3,14 +3,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use extension_protocol::error::{ProtocolError, error_codes};
 use futures::FutureExt;
 use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 
 use crate::database_driver_install::{
-    DriverRequirement, NativeDriverBackend, NativeDriverRequirement,
-    fallback_native_driver_for_error, find_database_driver_entry,
+    DriverRequirement, NativeDriverBackend, NativeDriverRequirement, find_database_driver_entry,
     install_database_driver_from_marketplace_with_registry, required_driver_for_config,
     required_native_driver,
 };
@@ -22,27 +20,6 @@ fn builtin_mysql_does_not_require_marketplace_driver() {
     assert_eq!(
         DriverRequirement::NotRequired,
         required_driver_for_config(&config(DatabaseType::MySQL))
-    );
-}
-
-#[test]
-fn legacy_fallback_requires_structured_server_incompatibility() {
-    let incompatible = ProtocolError::new(
-        error_codes::SERVER_INCOMPATIBLE,
-        "server wire version is too old",
-    );
-    assert_eq!(
-        Some(NativeDriverRequirement::Required {
-            api: "mongodb".to_string(),
-            driver_id: "mongodb-legacy".to_string(),
-        }),
-        fallback_native_driver_for_error("mongodb", "mongodb-legacy", &incompatible)
-    );
-
-    let auth = ProtocolError::new(error_codes::AUTH_FAILED, "bad password");
-    assert_eq!(
-        None,
-        fallback_native_driver_for_error("mongodb", "mongodb-legacy", &auth)
     );
 }
 

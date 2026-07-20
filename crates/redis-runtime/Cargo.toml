@@ -9,6 +9,7 @@ async-trait.workspace = true
 anyhow = { workspace = true, optional = true }
 chrono.workspace = true
 base64.workspace = true
+connection_tunnel.workspace = true
 extension-host.workspace = true
 extension-protocol.workspace = true
 futures = { workspace = true, optional = true }

@@ -6,23 +6,17 @@ use dashmap::DashMap;
 use gpui::Global;
 use mongodb_runtime::MongoConnectionFactory;
 use one_core::storage::MongoDBParams;
-#[cfg(not(feature = "builtin-mongodb"))]
-use one_core::storage::manager::get_config_dir;
-use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use rust_i18n::t;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url::form_urlencoded;
 
-const MONGO_USERINFO_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b':')
-    .add(b'/')
-    .add(b'?')
-    .add(b'#')
-    .add(b'[')
-    .add(b']')
-    .add(b'@');
-const MONGO_PATH_SEGMENT_ENCODE_SET: &AsciiSet = &CONTROLS.add(b'/').add(b'?').add(b'#');
+const MONGO_URI_COMPONENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 /// MongoDB 连接存储
 type ConnectionMap = DashMap<String, Arc<RwLock<Box<dyn MongoConnection>>>>;
@@ -59,6 +53,20 @@ impl GlobalMongoState {
             connections: Arc::new(DashMap::new()),
             factory: Arc::new(RwLock::new(factory)),
         }
+    }
+
+    pub async fn test_parameters(
+        &self,
+        name: String,
+        params: &MongoDBParams,
+    ) -> Result<(), MongoError> {
+        let config = MongoManager::config_from_parameters("test".to_string(), name, params)?;
+        let factory = self.factory.read().await.clone();
+        let mut connection = factory.create(config).await?;
+        let ping_result = connection.ping().await;
+        let disconnect_result = connection.disconnect().await;
+        ping_result?;
+        disconnect_result
     }
 
     pub async fn create_connection(
@@ -127,29 +135,6 @@ impl GlobalMongoState {
 pub struct MongoManager;
 
 impl MongoManager {
-    pub async fn test_connection(config: &MongoConnectionConfig) -> Result<(), MongoError> {
-        #[cfg(not(feature = "builtin-mongodb"))]
-        {
-            let root = get_config_dir()
-                .map_err(|error| MongoError::Internal(format!("resolve extensions root: {error}")))?
-                .join("extensions")
-                .join("database_drivers");
-            let factory = mongodb_runtime::MongoConnectionFactory::from_installed_root(root);
-            let mut connection = factory.create(config.clone()).await?;
-            connection.ping().await?;
-            connection.disconnect().await?;
-            Ok(())
-        }
-        #[cfg(feature = "builtin-mongodb")]
-        {
-            let mut connection = mongodb_runtime::BuiltinMongoConnection::new(config.clone());
-            connection.connect().await?;
-            connection.ping().await?;
-            connection.disconnect().await?;
-            Ok(())
-        }
-    }
-
     pub fn build_connection_string(params: &MongoDBParams) -> Result<String, MongoError> {
         let host_value = params.host.trim().to_string();
         if host_value.is_empty() {
@@ -177,26 +162,28 @@ impl MongoManager {
             .as_ref()
             .map(|value| value.trim())
             .unwrap_or("");
-        let password_value = params
-            .password
-            .as_ref()
-            .map(|value| value.trim())
-            .unwrap_or("");
+        let password_value = params.password.as_ref().map(String::as_str).unwrap_or("");
 
         if !username_value.is_empty() {
             connection_string.push_str(
-                &utf8_percent_encode(username_value, MONGO_USERINFO_ENCODE_SET).to_string(),
+                &utf8_percent_encode(username_value, MONGO_URI_COMPONENT_ENCODE_SET).to_string(),
             );
             if !password_value.is_empty() {
                 connection_string.push(':');
                 connection_string.push_str(
-                    &utf8_percent_encode(password_value, MONGO_USERINFO_ENCODE_SET).to_string(),
+                    &utf8_percent_encode(password_value, MONGO_URI_COMPONENT_ENCODE_SET)
+                        .to_string(),
                 );
             }
             connection_string.push('@');
         }
 
-        if params.use_srv_record || host_value.contains(':') || host_value.contains(',') {
+        if params.use_srv_record || host_value.contains(',') {
+            connection_string.push_str(&host_value);
+        } else if host_value.parse::<std::net::Ipv6Addr>().is_ok() {
+            let port_value = params.port.unwrap_or(27017);
+            connection_string.push_str(&format!("[{host_value}]:{port_value}"));
+        } else if host_value.contains(':') {
             connection_string.push_str(&host_value);
         } else {
             let port_value = params.port.unwrap_or(27017);
@@ -211,7 +198,7 @@ impl MongoManager {
         if !database_value.is_empty() {
             connection_string.push('/');
             connection_string.push_str(
-                &utf8_percent_encode(database_value, MONGO_PATH_SEGMENT_ENCODE_SET).to_string(),
+                &utf8_percent_encode(database_value, MONGO_URI_COMPONENT_ENCODE_SET).to_string(),
             );
         }
 
@@ -285,17 +272,21 @@ impl MongoManager {
         Ok(connection_string)
     }
 
-    pub async fn test_parameters(name: String, params: &MongoDBParams) -> Result<(), MongoError> {
+    pub fn config_from_parameters(
+        id: String,
+        name: String,
+        params: &MongoDBParams,
+    ) -> Result<MongoConnectionConfig, MongoError> {
         let connection_string = Self::build_connection_string(params)?;
-        let config = MongoConnectionConfig {
-            id: "test".to_string(),
+        Ok(MongoConnectionConfig {
+            id,
             name,
+            driver_id: params.driver_variant.driver_id().to_string(),
             connection_string,
             direct_host: params.host.clone(),
             direct_port: params.port.unwrap_or(27017),
             ssh_tunnel: params.ssh_tunnel.clone(),
-        };
-        Self::test_connection(&config).await
+        })
     }
 
     pub fn config_from_stored(
@@ -304,34 +295,31 @@ impl MongoManager {
         let parameters = stored
             .to_mongodb_params()
             .map_err(|e| MongoError::Serialization(e.to_string()))?;
-        let connection_string = Self::build_connection_string(&parameters)?;
-
-        Ok(MongoConnectionConfig {
-            id: stored.id.map(|id| id.to_string()).unwrap_or_default(),
-            name: stored.name.clone(),
-            connection_string,
-            direct_host: parameters.host.clone(),
-            direct_port: parameters.port.unwrap_or(27017),
-            ssh_tunnel: parameters.ssh_tunnel,
-        })
+        Self::config_from_parameters(
+            stored.id.map(|id| id.to_string()).unwrap_or_default(),
+            stored.name.clone(),
+            &parameters,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MongoManager;
+    use super::{GlobalMongoState, MongoManager};
     use connection_tunnel::SshTunnelConfig;
+    use mongodb_runtime::MongoConnectionFactory;
     use one_core::storage::{MongoDBParams, StoredConnection};
 
     #[test]
     fn build_connection_string_encodes_userinfo_and_query_values() {
         let params = MongoDBParams {
+            driver_variant: Default::default(),
             connection_string: String::new(),
             host: "localhost".to_string(),
             port: Some(27017),
             database: Some("app/db".to_string()),
             username: Some("user:name".to_string()),
-            password: Some("p@ss/word?#[]".to_string()),
+            password: Some(" p@ss/word?#[]% 文 ".to_string()),
             auth_source: Some("admin db".to_string()),
             replica_set: Some("rs 0".to_string()),
             read_preference: Some("secondary preferred".to_string()),
@@ -346,13 +334,41 @@ mod tests {
         let uri = MongoManager::build_connection_string(&params).expect("构造连接串失败");
         assert_eq!(
             uri,
-            "mongodb://user%3Aname:p%40ss%2Fword%3F%23%5B%5D@localhost:27017/app%2Fdb?authSource=admin+db&replicaSet=rs+0&readPreference=secondary+preferred&directConnection=true&tls=true&connectTimeoutMS=3000&appName=onet+cli"
+            "mongodb://user%3Aname:%20p%40ss%2Fword%3F%23%5B%5D%25%20%E6%96%87%20@localhost:27017/app%2Fdb?authSource=admin+db&replicaSet=rs+0&readPreference=secondary+preferred&directConnection=true&tls=true&connectTimeoutMS=3000&appName=onet+cli"
+        );
+    }
+
+    #[test]
+    fn build_connection_string_brackets_ipv6_host() {
+        let params = MongoDBParams {
+            driver_variant: Default::default(),
+            connection_string: String::new(),
+            host: "::1".to_string(),
+            port: Some(27018),
+            database: None,
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: None,
+            application_name: None,
+            ssh_tunnel: None,
+        };
+
+        assert_eq!(
+            "mongodb://[::1]:27018",
+            MongoManager::build_connection_string(&params).unwrap()
         );
     }
 
     #[test]
     fn build_connection_string_ignores_raw_connection_string_and_uses_fields() {
         let params = MongoDBParams {
+            driver_variant: Default::default(),
             connection_string: "mongodb://raw-host:27017/?authSource=admin".to_string(),
             host: "localhost".to_string(),
             port: Some(27017),
@@ -379,6 +395,7 @@ mod tests {
     #[test]
     fn build_connection_string_uses_raw_uri_when_host_is_empty() {
         let params = MongoDBParams {
+            driver_variant: Default::default(),
             connection_string: "  mongodb://user:pass@localhost:27017/app?authSource=admin  "
                 .to_string(),
             host: String::new(),
@@ -409,6 +426,7 @@ mod tests {
     #[test]
     fn build_connection_string_rejects_missing_host_and_raw_uri() {
         let params = MongoDBParams {
+            driver_variant: Default::default(),
             connection_string: "  ".to_string(),
             host: "  ".to_string(),
             port: None,
@@ -434,6 +452,7 @@ mod tests {
         let stored = StoredConnection::new_mongodb(
             "prod mongo".to_string(),
             MongoDBParams {
+                driver_variant: Default::default(),
                 connection_string: String::new(),
                 host: "mongo.internal".to_string(),
                 port: Some(27018),
@@ -470,5 +489,35 @@ mod tests {
                 .as_ref()
                 .and_then(|tunnel| tunnel.connection_id)
         );
+    }
+
+    #[tokio::test]
+    async fn test_parameters_uses_the_configured_factory() {
+        let state = GlobalMongoState::new_with_factory(MongoConnectionFactory::Unavailable);
+        let params = MongoDBParams {
+            driver_variant: Default::default(),
+            connection_string: String::new(),
+            host: "127.0.0.1".to_string(),
+            port: Some(27017),
+            database: None,
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: None,
+            application_name: None,
+            ssh_tunnel: None,
+        };
+
+        let error = state
+            .test_parameters("test".to_string(), &params)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("native driver is not installed"));
     }
 }

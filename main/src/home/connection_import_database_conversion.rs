@@ -98,6 +98,7 @@ fn mongodb_params(
     mode: ConversionMode,
 ) -> Result<MongoDBParams, String> {
     Ok(MongoDBParams {
+        driver_variant: Default::default(),
         connection_string: String::new(),
         host: host_for_native_external(draft, mode)?,
         port: Some(optional_port(&draft.port)?.unwrap_or(27017)),

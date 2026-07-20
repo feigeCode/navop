@@ -26,12 +26,13 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionType, MongoDBParams, MongoSshTunnelConfig, StoredConnection, Workspace,
+    ConnectionType, MongoDBParams, MongoDriverVariant, MongoSshTunnelConfig, StoredConnection,
+    Workspace,
 };
 use rust_i18n::t;
 use tracing::error;
 
-use crate::MongoManager;
+use crate::GlobalMongoState;
 
 /// MongoDB 表单窗口配置
 pub struct MongoFormWindowConfig {
@@ -154,6 +155,7 @@ pub struct MongoFormWindow {
     read_preference_input: Entity<InputState>,
     connect_timeout_seconds_input: Entity<InputState>,
     application_name_input: Entity<InputState>,
+    driver_variant: MongoDriverVariant,
 
     use_srv_record: bool,
     direct_connection: bool,
@@ -390,6 +392,10 @@ impl MongoFormWindow {
             .as_ref()
             .map(|parameters| parameters.use_srv_record)
             .unwrap_or(false);
+        let driver_variant = existing_parameters
+            .as_ref()
+            .map(|parameters| parameters.driver_variant)
+            .unwrap_or_default();
         let direct_connection = existing_parameters
             .as_ref()
             .map(|parameters| parameters.direct_connection)
@@ -532,6 +538,7 @@ impl MongoFormWindow {
             read_preference_input,
             connect_timeout_seconds_input,
             application_name_input,
+            driver_variant,
             use_srv_record,
             direct_connection,
             use_tls,
@@ -683,7 +690,6 @@ impl MongoFormWindow {
         };
 
         let password_value = self.password_input.read(cx).text().to_string();
-        let password_value = password_value.trim().to_string();
         let password = if password_value.is_empty() {
             None
         } else {
@@ -739,6 +745,7 @@ impl MongoFormWindow {
         };
 
         let mut params = MongoDBParams {
+            driver_variant: self.driver_variant,
             connection_string: String::new(),
             host: host_value,
             port: port_value,
@@ -786,10 +793,12 @@ impl MongoFormWindow {
         self.is_testing = true;
         self.test_result = None;
         cx.notify();
+        let global_state = cx.global::<GlobalMongoState>().clone();
 
         cx.spawn(async move |this, cx| {
             let test_result: Result<(), String> = Tokio::spawn_result(cx, async move {
-                MongoManager::test_parameters(test_name, &parameters)
+                global_state
+                    .test_parameters(test_name, &parameters)
                     .await
                     .map_err(anyhow::Error::new)
             })
@@ -927,6 +936,31 @@ impl MongoFormWindow {
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
+            .child(
+                self.render_form_row(
+                    t!("MongoForm.driver_variant_label").as_ref(),
+                    h_flex()
+                        .gap_4()
+                        .child(
+                            Radio::new("mongo-driver-modern")
+                                .label(t!("MongoForm.driver_variant_modern").to_string())
+                                .checked(self.driver_variant == MongoDriverVariant::Modern)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.driver_variant = MongoDriverVariant::Modern;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Radio::new("mongo-driver-legacy")
+                                .label(t!("MongoForm.driver_variant_legacy").to_string())
+                                .checked(self.driver_variant == MongoDriverVariant::Legacy)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.driver_variant = MongoDriverVariant::Legacy;
+                                    cx.notify();
+                                })),
+                        ),
+                ),
+            )
             .child(self.render_form_row(
                 t!("MongoForm.name_label").as_ref(),
                 Input::new(&self.name_input),
@@ -1215,6 +1249,7 @@ mod tests {
         StoredConnection::new_mongodb(
             name.to_string(),
             MongoDBParams {
+                driver_variant: Default::default(),
                 connection_string: String::new(),
                 host: "127.0.0.1".to_string(),
                 port: Some(27017),

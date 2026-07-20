@@ -6,7 +6,7 @@ use db::ipc::{IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTra
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
-use one_core::storage::{ConnectionRepository, DatabaseType};
+use one_core::storage::{ConnectionRepository, DatabaseType, MongoDriverVariant};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -362,6 +362,26 @@ fn get_schema_supports_all_creatable_connection_types() {
 }
 
 #[test]
+fn mongodb_schema_exposes_explicit_driver_variants() {
+    let registry = connection_tool_registry(repo());
+
+    let result = futures::executor::block_on(registry.call(
+        "connections.get_schema",
+        json!({ "kind": "mongodb" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("schema tool should run");
+
+    let fields = result.structured_content["fields"]
+        .as_array()
+        .expect("fields should be an array");
+    let variant = field_by_name(fields, "driver_variant");
+
+    assert_eq!(json!(["modern", "legacy"]), variant["enum"]);
+    assert_eq!(json!("modern"), variant["default"]);
+}
+
+#[test]
 fn database_schema_uses_database_specific_connection_form() {
     let registry = connection_tool_registry(repo());
 
@@ -605,6 +625,63 @@ fn create_database_connection_persists_mysql_config() {
         "<redacted>",
         result.structured_content["connection"]["summary"]["password"]
     );
+}
+
+#[test]
+fn create_mongodb_connection_persists_legacy_driver_variant() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo.clone());
+
+    let id = create_connection(
+        &registry,
+        json!({
+            "kind": "mongodb",
+            "values": {
+                "name": "legacy mongo",
+                "driver_variant": "legacy",
+                "host": "mongo.internal",
+                "port": 27017
+            }
+        }),
+    );
+
+    let stored = repo
+        .get(id)
+        .expect("connection should be readable")
+        .expect("connection should exist");
+    let params = stored.to_mongodb_params().expect("params should parse");
+
+    assert_eq!(MongoDriverVariant::Legacy, params.driver_variant);
+}
+
+#[test]
+fn validate_rejects_unknown_mongodb_driver_variant() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo.clone());
+
+    let result = futures::executor::block_on(registry.call(
+        "connections.validate",
+        json!({
+            "kind": "mongodb",
+            "values": {
+                "name": "invalid mongo",
+                "driver_variant": "automatic",
+                "host": "mongo.internal"
+            }
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("validate tool should run");
+
+    assert_eq!(json!(false), result.structured_content["ok"]);
+    assert_eq!(
+        json!([{
+            "field": "driver_variant",
+            "message": "must be one of modern, legacy"
+        }]),
+        result.structured_content["invalid_fields"]
+    );
+    assert_eq!(0, repo.count().expect("count should run"));
 }
 
 #[test]

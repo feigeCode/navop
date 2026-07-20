@@ -114,6 +114,15 @@ fn build_redis(input: &Value) -> Result<StoredConnection, ToolError> {
 fn build_mongodb(input: &Value) -> Result<StoredConnection, ToolError> {
     let values = required_object(input, "values")?;
     let params = MongoDBParams {
+        driver_variant: match optional_value_str(values, "driver_variant").unwrap_or("modern") {
+            "modern" => one_core::storage::MongoDriverVariant::Modern,
+            "legacy" => one_core::storage::MongoDriverVariant::Legacy,
+            value => {
+                return Err(tool_error(format!(
+                    "unsupported MongoDB driver_variant `{value}`"
+                )));
+            }
+        },
         connection_string: optional_value_str(values, "connection_string")
             .unwrap_or_default()
             .to_string(),

@@ -31,7 +31,7 @@ use one_core::storage::{
 use rust_i18n::t;
 use tracing::error;
 
-use crate::{RedisConnectionConfig, RedisConnectionMode, RedisManager};
+use crate::{GlobalRedisState, RedisConnectionConfig, RedisConnectionMode};
 
 /// Redis 表单窗口配置
 pub struct RedisFormWindowConfig {
@@ -806,10 +806,12 @@ impl RedisFormWindow {
         cx.notify();
 
         let config = self.get_config(cx);
+        let global_state = cx.global::<GlobalRedisState>().clone();
 
         cx.spawn(async move |this, cx| {
             let test_result: Result<(), String> = Tokio::spawn_result(cx, async move {
-                RedisManager::test_connection(&config)
+                global_state
+                    .test_connection(&config)
                     .await
                     .map_err(anyhow::Error::new)
             })

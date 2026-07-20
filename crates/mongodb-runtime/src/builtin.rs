@@ -1,5 +1,6 @@
 //! MongoDB 连接实现
 
+use crate::uri::replace_mongodb_uri_authority;
 use crate::{MongoConnection, MongoConnectionConfig, MongoError, MongoFindOptions};
 use async_trait::async_trait;
 use bson::{Bson, Document, doc};
@@ -9,59 +10,6 @@ use mongodb::Client;
 use mongodb::options::FindOptions as SdkFindOptions;
 use rust_i18n::t;
 use tracing::{error, info, warn};
-
-fn replace_mongodb_uri_authority(connection_string: &str, host: &str, port: u16) -> String {
-    let Some((scheme, rest)) = connection_string.split_once("://") else {
-        return connection_string.to_string();
-    };
-    let scheme = if scheme.eq_ignore_ascii_case("mongodb+srv") {
-        "mongodb"
-    } else {
-        scheme
-    };
-    let split_at = rest
-        .char_indices()
-        .find(|(_, char)| matches!(char, '/' | '?'))
-        .map(|(idx, _)| idx)
-        .unwrap_or(rest.len());
-    let (authority, suffix) = rest.split_at(split_at);
-    let userinfo = authority
-        .rfind('@')
-        .map(|idx| &authority[..=idx])
-        .unwrap_or("");
-
-    format!("{scheme}://{userinfo}{host}:{port}{suffix}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::replace_mongodb_uri_authority;
-
-    #[test]
-    fn replace_mongodb_uri_authority_preserves_userinfo_path_and_query() {
-        let uri = replace_mongodb_uri_authority(
-            "mongodb://user:p%40ss@mongo.internal:27017/app?authSource=admin",
-            "127.0.0.1",
-            49152,
-        );
-
-        assert_eq!(
-            "mongodb://user:p%40ss@127.0.0.1:49152/app?authSource=admin",
-            uri
-        );
-    }
-
-    #[test]
-    fn replace_mongodb_uri_authority_converts_srv_scheme_for_tunnel() {
-        let uri = replace_mongodb_uri_authority(
-            "mongodb+srv://mongo.example.com/app?retryWrites=true",
-            "127.0.0.1",
-            49152,
-        );
-
-        assert_eq!("mongodb://127.0.0.1:49152/app?retryWrites=true", uri);
-    }
-}
 
 /// MongoDB 连接 trait
 
