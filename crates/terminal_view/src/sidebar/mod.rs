@@ -323,7 +323,10 @@ impl SidebarPanel {
     }
 
     pub(crate) fn needs_internal_tool_frame_header(&self) -> bool {
-        !matches!(self, SidebarPanel::AiChat | SidebarPanel::FileManager)
+        !matches!(
+            self,
+            SidebarPanel::AiChat | SidebarPanel::FileExplorer | SidebarPanel::FileManager
+        )
     }
 }
 
