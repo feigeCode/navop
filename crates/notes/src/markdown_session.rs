@@ -104,6 +104,23 @@ impl MarkdownSessionState {
     pub(crate) fn conflict(&mut self) {
         self.sync_state = MarkdownSyncState::Conflict;
     }
+
+    /// Mark the conflict as resolved by keeping the local changes,
+    /// which were just force-written to disk.
+    pub(crate) fn conflict_resolved(&mut self) {
+        self.persisted_revision = self.source_revision;
+        self.sync_state = MarkdownSyncState::Clean;
+    }
+
+    /// Reset the session after the document was reloaded from disk,
+    /// discarding local changes.
+    pub(crate) fn external_reloaded(&mut self) {
+        let mode = self.mode;
+        *self = MarkdownSessionState {
+            mode,
+            ..MarkdownSessionState::default()
+        };
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,34 @@ Notes:
     en: The file was changed by another program and was not overwritten
     zh-CN: 文件已被其他程序修改，未覆盖
     zh-HK: 文件已被其他程式修改，未覆蓋
+  markdown_conflict_banner:
+    en: This file was changed by another program and conflicts with your changes
+    zh-CN: 文件已被其他程序修改，与本地修改冲突
+    zh-HK: 文件已被其他程式修改，與本地修改衝突
+  markdown_conflict_keep_local:
+    en: Keep My Changes
+    zh-CN: 保留我的修改
+    zh-HK: 保留我的修改
+  markdown_conflict_use_external:
+    en: Load External Version
+    zh-CN: 加载外部版本
+    zh-HK: 載入外部版本
+  markdown_conflict_discard:
+    en: Discard My Changes
+    zh-CN: 放弃我的修改
+    zh-HK: 放棄我的修改
+  markdown_conflict_cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  unsaved_markdown_close_title:
+    en: Changes Could Not Be Saved
+    zh-CN: 修改无法保存
+    zh-HK: 修改無法保存
+  unsaved_markdown_close_message:
+    en: The file was changed by another program. Keep your changes (overwrite the external file) or discard them before closing.
+    zh-CN: 文件已被其他程序修改。可以保留我的修改（覆盖外部文件），或放弃我的修改后关闭。
+    zh-HK: 文件已被其他程式修改。可以保留我的修改（覆蓋外部文件），或放棄我的修改後關閉。
   operation_failed:
     en: "Operation failed: %{error}"
     zh-CN: 操作失败：%{error}

@@ -118,6 +118,19 @@ impl MarkdownFileStore {
         Ok(MarkdownSaveOutcome::Saved(fingerprint))
     }
 
+    /// Overwrite the file on disk regardless of external changes.
+    ///
+    /// Used when the user explicitly chooses to keep their local changes
+    /// after an external-modification conflict.
+    pub(crate) fn force_save(&self, source: &str) -> Result<FileFingerprint> {
+        let mut state = self.state()?;
+        let path = state.path.clone();
+        write_text_atomic(&path, source)?;
+        let fingerprint = snapshot(&path, source.to_owned())?.fingerprint;
+        state.fingerprint = Some(fingerprint.clone());
+        Ok(fingerprint)
+    }
+
     fn state(&self) -> Result<std::sync::MutexGuard<'_, MarkdownStoreState>> {
         self.state
             .lock()
@@ -176,6 +189,24 @@ mod tests {
         let outcome = store.save("local")?;
         assert!(matches!(outcome, MarkdownSaveOutcome::Conflict(_)));
         assert_eq!("external", fs::read_to_string(path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn force_save_overwrites_external_changes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("note.md");
+        fs::write(&path, "first")?;
+        let store = MarkdownFileStore::new(path.clone());
+        store.load()?;
+        fs::write(&path, "external")?;
+
+        store.force_save("local")?;
+        assert_eq!("local", fs::read_to_string(&path)?);
+        // Subsequent normal saves see a clean fingerprint again.
+        let outcome = store.save("second")?;
+        assert!(matches!(outcome, MarkdownSaveOutcome::Saved(_)));
+        assert_eq!("second", fs::read_to_string(path)?);
         Ok(())
     }
 

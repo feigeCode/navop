@@ -4,6 +4,11 @@ use cditor_app::{
     MarkdownBundleOptions, MarkdownExportMode,
 };
 
+/// Error message emitted by [`MarkdownDocumentPersistence`] when the file on
+/// disk was modified externally. Used to distinguish conflicts from other
+/// save failures in editor events.
+pub(crate) const CONFLICT_MESSAGE: &str = "Markdown file changed outside Navop";
+
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownDocumentPersistence {
     store: MarkdownFileStore,
@@ -47,9 +52,7 @@ impl EditorPersistence for MarkdownDocumentPersistence {
             .map_err(persistence_error)?
         {
             MarkdownSaveOutcome::Saved(_) => Ok(()),
-            MarkdownSaveOutcome::Conflict(_) => Err(EditorPersistenceError::new(
-                "Markdown file changed outside Navop",
-            )),
+            MarkdownSaveOutcome::Conflict(_) => Err(EditorPersistenceError::new(CONFLICT_MESSAGE)),
         }
     }
 }

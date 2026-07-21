@@ -1,8 +1,9 @@
+use crate::markdown_session::MarkdownSyncState;
 use crate::{MarkdownViewMode, NotesView};
 use cditor_app::{EditorSaveState, MarkdownCompatibility};
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable,
+    ActiveTheme, Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
@@ -29,8 +30,56 @@ impl NotesView {
             .size_full()
             .min_h_0()
             .child(self.render_markdown_toolbar(document_id, mode, cx))
+            .when(
+                matches!(session.state.sync_state, MarkdownSyncState::Conflict),
+                |this| this.child(self.render_conflict_banner(document_id, cx)),
+            )
             .child(div().flex_1().min_h_0().min_w_0().child(content))
             .into_any_element()
+    }
+
+    fn render_conflict_banner(
+        &self,
+        document_id: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let keep_id = document_id.to_owned();
+        let external_id = document_id.to_owned();
+        h_flex()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .items_center()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().warning.opacity(0.12))
+            .child(
+                Icon::new(IconName::TriangleAlert)
+                    .small()
+                    .text_color(cx.theme().warning),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .child(t!("Notes.markdown_conflict_banner").to_string()),
+            )
+            .child(
+                Button::new("markdown-conflict-keep-local")
+                    .label(t!("Notes.markdown_conflict_keep_local").to_string())
+                    .small()
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.resolve_markdown_conflict_keep_local(&keep_id, window, cx)
+                    })),
+            )
+            .child(
+                Button::new("markdown-conflict-use-external")
+                    .label(t!("Notes.markdown_conflict_use_external").to_string())
+                    .small()
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.resolve_markdown_conflict_use_external(&external_id, window, cx)
+                    })),
+            )
     }
 
     fn render_markdown_toolbar(

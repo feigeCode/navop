@@ -7,6 +7,7 @@ mod document_persistence;
 mod document_rendering;
 mod file_manager;
 mod markdown_adapter;
+mod markdown_conflict;
 mod markdown_file_store;
 mod markdown_persistence;
 mod markdown_render;
