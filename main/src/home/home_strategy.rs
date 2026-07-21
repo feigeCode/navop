@@ -299,4 +299,32 @@ mod tests {
 
         assert_eq!("mongodb-legacy", mongodb_driver_id(&connection));
     }
+
+    #[test]
+    fn mongodb_driver_id_supports_the_mongodb_3_2_variant() {
+        let connection = StoredConnection::new_mongodb(
+            "mongo 3.2".to_string(),
+            MongoDBParams {
+                driver_variant: MongoDriverVariant::Legacy32,
+                connection_string: String::new(),
+                host: "127.0.0.1".to_string(),
+                port: Some(27017),
+                database: None,
+                username: None,
+                password: None,
+                auth_source: None,
+                replica_set: None,
+                read_preference: None,
+                use_srv_record: false,
+                direct_connection: false,
+                use_tls: false,
+                connect_timeout_seconds: None,
+                application_name: None,
+                ssh_tunnel: None,
+            },
+            None,
+        );
+
+        assert_eq!("mongodb-legacy-3-2", mongodb_driver_id(&connection));
+    }
 }

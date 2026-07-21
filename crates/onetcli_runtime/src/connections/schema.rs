@@ -417,7 +417,7 @@ fn mongodb_schema() -> Value {
         field("name", "string", true, Value::Null),
         enum_field(
             "driver_variant",
-            &["modern", "legacy"],
+            &["modern", "legacy", "legacy_3_2"],
             false,
             json!("modern")
         ),

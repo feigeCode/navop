@@ -10,7 +10,7 @@ use gpui::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, Size,
+    ActiveTheme, Disableable, IconName, IndexPath, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -133,6 +133,43 @@ impl SelectItem for SshConnectionSelectItem {
     }
 }
 
+#[derive(Clone, PartialEq)]
+struct DriverVariantSelectItem {
+    variant: MongoDriverVariant,
+    label: String,
+}
+
+impl DriverVariantSelectItem {
+    fn all() -> Vec<Self> {
+        vec![
+            Self {
+                variant: MongoDriverVariant::Modern,
+                label: t!("MongoForm.driver_variant_modern").to_string(),
+            },
+            Self {
+                variant: MongoDriverVariant::Legacy,
+                label: t!("MongoForm.driver_variant_legacy").to_string(),
+            },
+            Self {
+                variant: MongoDriverVariant::Legacy32,
+                label: t!("MongoForm.driver_variant_legacy_3_2").to_string(),
+            },
+        ]
+    }
+}
+
+impl SelectItem for DriverVariantSelectItem {
+    type Value = MongoDriverVariant;
+
+    fn title(&self) -> SharedString {
+        self.label.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.variant
+    }
+}
+
 /// MongoDB 连接表单窗口
 pub struct MongoFormWindow {
     focus_handle: FocusHandle,
@@ -155,7 +192,7 @@ pub struct MongoFormWindow {
     read_preference_input: Entity<InputState>,
     connect_timeout_seconds_input: Entity<InputState>,
     application_name_input: Entity<InputState>,
-    driver_variant: MongoDriverVariant,
+    driver_variant_select: Entity<SelectState<Vec<DriverVariantSelectItem>>>,
 
     use_srv_record: bool,
     direct_connection: bool,
@@ -396,6 +433,13 @@ impl MongoFormWindow {
             .as_ref()
             .map(|parameters| parameters.driver_variant)
             .unwrap_or_default();
+        let driver_variant_items = DriverVariantSelectItem::all();
+        let driver_variant_index = driver_variant_items
+            .iter()
+            .position(|item| item.variant == driver_variant)
+            .map(IndexPath::new);
+        let driver_variant_select =
+            cx.new(|cx| SelectState::new(driver_variant_items, driver_variant_index, window, cx));
         let direct_connection = existing_parameters
             .as_ref()
             .map(|parameters| parameters.direct_connection)
@@ -538,7 +582,7 @@ impl MongoFormWindow {
             read_preference_input,
             connect_timeout_seconds_input,
             application_name_input,
-            driver_variant,
+            driver_variant_select,
             use_srv_record,
             direct_connection,
             use_tls,
@@ -745,7 +789,12 @@ impl MongoFormWindow {
         };
 
         let mut params = MongoDBParams {
-            driver_variant: self.driver_variant,
+            driver_variant: self
+                .driver_variant_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
             connection_string: String::new(),
             host: host_value,
             port: port_value,
@@ -936,31 +985,10 @@ impl MongoFormWindow {
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
-            .child(
-                self.render_form_row(
-                    t!("MongoForm.driver_variant_label").as_ref(),
-                    h_flex()
-                        .gap_4()
-                        .child(
-                            Radio::new("mongo-driver-modern")
-                                .label(t!("MongoForm.driver_variant_modern").to_string())
-                                .checked(self.driver_variant == MongoDriverVariant::Modern)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.driver_variant = MongoDriverVariant::Modern;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Radio::new("mongo-driver-legacy")
-                                .label(t!("MongoForm.driver_variant_legacy").to_string())
-                                .checked(self.driver_variant == MongoDriverVariant::Legacy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.driver_variant = MongoDriverVariant::Legacy;
-                                    cx.notify();
-                                })),
-                        ),
-                ),
-            )
+            .child(self.render_form_row(
+                t!("MongoForm.driver_variant_label").as_ref(),
+                Select::new(&self.driver_variant_select).w_full(),
+            ))
             .child(self.render_form_row(
                 t!("MongoForm.name_label").as_ref(),
                 Input::new(&self.name_input),

@@ -337,6 +337,10 @@ MongoForm:
     en: "Legacy (MongoDB 3.6–4.0)"
     zh-CN: "Legacy（MongoDB 3.6–4.0）"
     zh-HK: "Legacy（MongoDB 3.6–4.0）"
+  driver_variant_legacy_3_2:
+    en: "Legacy 3.2 (MongoDB 3.2–3.4)"
+    zh-CN: "Legacy 3.2（MongoDB 3.2–3.4）"
+    zh-HK: "Legacy 3.2（MongoDB 3.2–3.4）"
   edit_connection_title:
     en: "Edit MongoDB Connection"
     zh-CN: "编辑 MongoDB 连接"

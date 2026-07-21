@@ -91,7 +91,7 @@ fn invalid_fields(input: &Value) -> Vec<Value> {
             add_invalid_enum(
                 values,
                 "driver_variant",
-                &["modern", "legacy"],
+                &["modern", "legacy", "legacy_3_2"],
                 &mut invalid,
             );
         }

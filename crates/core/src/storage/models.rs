@@ -522,6 +522,7 @@ impl RedisParams {
 pub enum MongoDriverVariant {
     Modern,
     Legacy,
+    Legacy32,
 }
 
 impl Default for MongoDriverVariant {
@@ -535,6 +536,7 @@ impl MongoDriverVariant {
         match self {
             Self::Modern => "mongodb-modern",
             Self::Legacy => "mongodb-legacy",
+            Self::Legacy32 => "mongodb-legacy-3-2",
         }
     }
 }

@@ -117,6 +117,7 @@ fn build_mongodb(input: &Value) -> Result<StoredConnection, ToolError> {
         driver_variant: match optional_value_str(values, "driver_variant").unwrap_or("modern") {
             "modern" => one_core::storage::MongoDriverVariant::Modern,
             "legacy" => one_core::storage::MongoDriverVariant::Legacy,
+            "legacy_3_2" => one_core::storage::MongoDriverVariant::Legacy32,
             value => {
                 return Err(tool_error(format!(
                     "unsupported MongoDB driver_variant `{value}`"

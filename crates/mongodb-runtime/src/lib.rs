@@ -29,6 +29,7 @@ pub enum MongoBackendKind {
 
 pub const DEFAULT_MONGODB_MODERN_DRIVER_ID: &str = "mongodb-modern";
 pub const LEGACY_MONGODB_DRIVER_ID: &str = "mongodb-legacy";
+pub const LEGACY_32_MONGODB_DRIVER_ID: &str = "mongodb-legacy-3-2";
 
 #[derive(Clone)]
 pub enum MongoConnectionFactory {

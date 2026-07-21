@@ -377,7 +377,7 @@ fn mongodb_schema_exposes_explicit_driver_variants() {
         .expect("fields should be an array");
     let variant = field_by_name(fields, "driver_variant");
 
-    assert_eq!(json!(["modern", "legacy"]), variant["enum"]);
+    assert_eq!(json!(["modern", "legacy", "legacy_3_2"]), variant["enum"]);
     assert_eq!(json!("modern"), variant["default"]);
 }
 
@@ -677,7 +677,7 @@ fn validate_rejects_unknown_mongodb_driver_variant() {
     assert_eq!(
         json!([{
             "field": "driver_variant",
-            "message": "must be one of modern, legacy"
+            "message": "must be one of modern, legacy, legacy_3_2"
         }]),
         result.structured_content["invalid_fields"]
     );
