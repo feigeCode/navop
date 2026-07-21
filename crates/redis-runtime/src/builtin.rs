@@ -517,11 +517,11 @@ impl RedisConnectionImpl {
     async fn scan_set_members(
         conn: &mut ConnectionManager,
         key: &str,
-    ) -> Result<Vec<String>, RedisError> {
+    ) -> Result<Vec<Vec<u8>>, RedisError> {
         let mut cursor: u64 = 0;
-        let mut members: Vec<String> = Vec::new();
+        let mut members: Vec<Vec<u8>> = Vec::new();
         loop {
-            let (next, batch): (u64, Vec<String>) = redis_client::cmd("SSCAN")
+            let (next, batch): (u64, Vec<Vec<u8>>) = redis_client::cmd("SSCAN")
                 .arg(key)
                 .arg(cursor)
                 .arg("COUNT")
@@ -551,7 +551,7 @@ impl RedisConnectionImpl {
         let mut cursor: u64 = 0;
         let mut fields: Vec<HashField> = Vec::new();
         loop {
-            let (next, batch): (u64, Vec<(String, String)>) = redis_client::cmd("HSCAN")
+            let (next, batch): (u64, Vec<(Vec<u8>, Vec<u8>)>) = redis_client::cmd("HSCAN")
                 .arg(key)
                 .arg(cursor)
                 .arg("COUNT")
@@ -582,7 +582,7 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<ZSetMember>, RedisError> {
-        let result: Vec<(String, f64)> = conn
+        let result: Vec<(Vec<u8>, f64)> = conn
             .zrange_withscores(key, 0, (MAX_COLLECTION_ELEMENTS - 1) as isize)
             .await
             .map_err(|e| {
@@ -601,7 +601,7 @@ impl RedisConnectionImpl {
         conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<StreamEntry>, RedisError> {
-        let result: Vec<(String, Vec<(String, String)>)> = redis_client::cmd("XRANGE")
+        let result: Vec<(String, Vec<(Vec<u8>, Vec<u8>)>)> = redis_client::cmd("XRANGE")
             .arg(key)
             .arg("-")
             .arg("+")
@@ -619,7 +619,10 @@ impl RedisConnectionImpl {
             .into_iter()
             .map(|(id, fields)| StreamEntry {
                 id,
-                fields: fields.into_iter().collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|(field, value)| HashField { field, value })
+                    .collect(),
             })
             .collect())
     }
@@ -718,9 +721,9 @@ impl RedisConnection for RedisConnectionImpl {
         self.client.is_some()
     }
 
-    async fn get(&self, key: &str) -> Result<Option<String>, RedisError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, RedisError> {
         let mut conn = self.get_conn().await?;
-        let result: RedisResult<Option<String>> = conn.get(key).await;
+        let result: RedisResult<Option<Vec<u8>>> = conn.get(key).await;
         result.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "GET").to_string(),
@@ -985,7 +988,7 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn hgetall(&self, key: &str) -> Result<Vec<HashField>, RedisError> {
         let mut conn = self.get_conn().await?;
-        let result: Vec<(String, String)> = conn.hgetall(key).await.map_err(|e| {
+        let result: Vec<(Vec<u8>, Vec<u8>)> = conn.hgetall(key).await.map_err(|e| {
             RedisError::command_with_source(
                 t!("RedisConnection.command_failed", command = "HGETALL").to_string(),
                 e,
@@ -1042,7 +1045,7 @@ impl RedisConnection for RedisConnectionImpl {
         })
     }
 
-    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RedisError> {
+    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<Vec<u8>>, RedisError> {
         let mut conn = self.get_conn().await?;
         conn.lrange(key, start as isize, stop as isize)
             .await
@@ -1113,7 +1116,7 @@ impl RedisConnection for RedisConnectionImpl {
         })
     }
 
-    async fn smembers(&self, key: &str) -> Result<Vec<String>, RedisError> {
+    async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>, RedisError> {
         let mut conn = self.get_conn().await?;
         conn.smembers(key).await.map_err(|e| {
             RedisError::command_with_source(
@@ -1168,7 +1171,7 @@ impl RedisConnection for RedisConnectionImpl {
         stop: i64,
     ) -> Result<Vec<ZSetMember>, RedisError> {
         let mut conn = self.get_conn().await?;
-        let result: Vec<(String, f64)> = conn
+        let result: Vec<(Vec<u8>, f64)> = conn
             .zrange_withscores(key, start as isize, stop as isize)
             .await
             .map_err(|e| {
@@ -1240,7 +1243,7 @@ impl RedisConnection for RedisConnectionImpl {
         if let Some(c) = count {
             cmd.arg("COUNT").arg(c);
         }
-        let result: Vec<(String, Vec<(String, String)>)> =
+        let result: Vec<(String, Vec<(Vec<u8>, Vec<u8>)>)> =
             cmd.query_async(&mut conn).await.map_err(|e| {
                 RedisError::command_with_source(
                     t!("RedisConnection.command_failed", command = "XRANGE").to_string(),
@@ -1252,7 +1255,10 @@ impl RedisConnection for RedisConnectionImpl {
             .into_iter()
             .map(|(id, fields)| StreamEntry {
                 id,
-                fields: fields.into_iter().collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|(field, value)| HashField { field, value })
+                    .collect(),
             })
             .collect())
     }

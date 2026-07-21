@@ -9,7 +9,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt as _,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
@@ -127,6 +127,14 @@ fn escape_binary_redis_string(value: &[u8]) -> String {
 
 fn is_binary_redis_string(value: &[u8]) -> bool {
     std::str::from_utf8(value).is_err()
+}
+
+fn redis_bytes_text(value: &[u8]) -> Option<String> {
+    std::str::from_utf8(value).ok().map(str::to_string)
+}
+
+fn display_redis_bytes(value: &[u8]) -> String {
+    format_redis_string_value(value, ViewFormat::Raw)
 }
 
 fn large_text_preview_title(label: &str, context: Option<&str>) -> String {
@@ -326,7 +334,7 @@ impl KeyValueView {
     }
 
     /// 应用筛选到字符串列表
-    fn apply_filter(&self, items: &[String]) -> Vec<(usize, String)> {
+    fn apply_filter(&self, items: &[Vec<u8>]) -> Vec<(usize, Vec<u8>)> {
         items
             .iter()
             .enumerate()
@@ -334,6 +342,7 @@ impl KeyValueView {
                 if self.filter_text.is_empty() {
                     return true;
                 }
+                let item = display_redis_bytes(item);
                 if self.filter_exact_match {
                     item.contains(&self.filter_text)
                 } else {
@@ -354,7 +363,11 @@ impl KeyValueView {
                 if self.filter_text.is_empty() {
                     return true;
                 }
-                let search_text = format!("{} {}", item.field, item.value);
+                let search_text = format!(
+                    "{} {}",
+                    display_redis_bytes(&item.field),
+                    display_redis_bytes(&item.value)
+                );
                 if self.filter_exact_match {
                     search_text.contains(&self.filter_text)
                 } else {
@@ -376,10 +389,11 @@ impl KeyValueView {
                 if self.filter_text.is_empty() {
                     return true;
                 }
+                let member = display_redis_bytes(&item.member);
                 if self.filter_exact_match {
-                    item.member.contains(&self.filter_text)
+                    member.contains(&self.filter_text)
                 } else {
-                    item.member
+                    member
                         .to_lowercase()
                         .contains(&self.filter_text.to_lowercase())
                 }
@@ -2416,7 +2430,7 @@ impl KeyValueView {
     }
 
     /// 渲染 List 视图
-    fn render_list_view(&self, items: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_list_view(&self, items: &[Vec<u8>], cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
         // 应用筛选
         let items = self.apply_filter(items);
@@ -2437,9 +2451,11 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let value_for_copy = item.clone();
-                    let value_for_edit = item.clone();
-                    let value_for_preview = item.clone();
+                    let display_value = display_redis_bytes(&item);
+                    let editable_value = redis_bytes_text(&item);
+                    let value_for_copy = display_value.clone();
+                    let value_for_edit = editable_value.clone().unwrap_or_default();
+                    let value_for_preview = display_value.clone();
                     let preview_title =
                         large_text_preview_title("List item", Some(&format!("#{}", idx + 1)));
 
@@ -2466,7 +2482,7 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(div().flex_1().text_base().truncate().child(item.clone()))
+                                .child(div().flex_1().text_base().truncate().child(display_value))
                                 .child(
                                     Button::new(("preview-list", idx))
                                         .icon(IconName::Maximize)
@@ -2516,6 +2532,7 @@ impl KeyValueView {
                                         .icon(IconName::Edit)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_value.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let value = value_for_edit.clone();
@@ -2551,7 +2568,7 @@ impl KeyValueView {
     }
 
     /// 渲染 Set 视图
-    fn render_set_view(&self, items: &[String], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_set_view(&self, items: &[Vec<u8>], cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
         // 应用筛选
         let items = self.apply_filter(items);
@@ -2571,10 +2588,12 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let value_for_copy = item.clone();
-                    let value_for_delete = item.clone();
-                    let value_for_edit = item.clone();
-                    let value_for_preview = item.clone();
+                    let display_value = display_redis_bytes(&item);
+                    let editable_member = redis_bytes_text(&item);
+                    let value_for_copy = display_value.clone();
+                    let value_for_delete = editable_member.clone().unwrap_or_default();
+                    let value_for_edit = editable_member.clone().unwrap_or_default();
+                    let value_for_preview = display_value.clone();
                     let preview_title = large_text_preview_title("Set member", None);
 
                     h_flex()
@@ -2598,7 +2617,7 @@ impl KeyValueView {
                                         .with_size(Size::Small)
                                         .text_color(cx.theme().muted_foreground),
                                 )
-                                .child(div().flex_1().text_base().truncate().child(item.clone()))
+                                .child(div().flex_1().text_base().truncate().child(display_value))
                                 .child(
                                     Button::new(("preview-set", idx))
                                         .icon(IconName::Maximize)
@@ -2648,6 +2667,7 @@ impl KeyValueView {
                                         .icon(IconName::Edit)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_member.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let member = value_for_edit.clone();
@@ -2667,6 +2687,7 @@ impl KeyValueView {
                                         .icon(IconName::Remove)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_member.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let member = value_for_delete.clone();
@@ -2724,11 +2745,13 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(display_idx, (original_idx, item))| {
                     let view = view.clone();
-                    let value_for_copy = format!("{}: {}", item.score, item.member);
-                    let member_for_edit = item.member.clone();
+                    let display_member = display_redis_bytes(&item.member);
+                    let editable_member = redis_bytes_text(&item.member);
+                    let value_for_copy = format!("{}: {}", item.score, display_member);
+                    let member_for_edit = editable_member.clone().unwrap_or_default();
                     let score_for_edit = item.score;
-                    let member_for_delete = item.member.clone();
-                    let member_for_preview = item.member.clone();
+                    let member_for_delete = editable_member.clone().unwrap_or_default();
+                    let member_for_preview = display_member.clone();
                     let preview_title = large_text_preview_title(
                         "ZSet member",
                         Some(&format!("score {:.2}", item.score)),
@@ -2809,13 +2832,7 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_base()
-                                        .truncate()
-                                        .child(item.member.clone()),
-                                )
+                                .child(div().flex_1().text_base().truncate().child(display_member))
                                 .child(
                                     Button::new(("preview-zset", original_idx))
                                         .icon(IconName::Maximize)
@@ -2865,6 +2882,7 @@ impl KeyValueView {
                                         .icon(IconName::Edit)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_member.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let member = member_for_edit.clone();
@@ -2886,6 +2904,7 @@ impl KeyValueView {
                                         .icon(IconName::Remove)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_member.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let member = member_for_delete.clone();
@@ -2923,12 +2942,17 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let field_for_copy = format!("{}: {}", item.field, item.value);
-                    let field_for_edit = item.field.clone();
-                    let value_for_edit = item.value.clone();
-                    let field_for_delete = item.field.clone();
-                    let value_for_preview = item.value.clone();
-                    let preview_title = large_text_preview_title("Hash value", Some(&item.field));
+                    let field_display = display_redis_bytes(&item.field);
+                    let value_display = display_redis_bytes(&item.value);
+                    let editable_field = redis_bytes_text(&item.field);
+                    let editable_value = redis_bytes_text(&item.value);
+                    let field_for_copy = format!("{}: {}", field_display, value_display);
+                    let field_for_edit = editable_field.clone().unwrap_or_default();
+                    let value_for_edit = editable_value.clone().unwrap_or_default();
+                    let field_for_delete = editable_field.clone().unwrap_or_default();
+                    let value_for_preview = value_display.clone();
+                    let preview_title =
+                        large_text_preview_title("Hash value", Some(&field_display));
 
                     h_flex()
                         .id(("hash-row", idx))
@@ -2946,7 +2970,7 @@ impl KeyValueView {
                                 .text_base()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .truncate()
-                                .child(item.field.clone()),
+                                .child(field_display),
                         )
                         .child(
                             h_flex()
@@ -2954,13 +2978,7 @@ impl KeyValueView {
                                 .min_w_0()
                                 .gap_1()
                                 .items_center()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_base()
-                                        .truncate()
-                                        .child(item.value.clone()),
-                                )
+                                .child(div().flex_1().text_base().truncate().child(value_display))
                                 .child(
                                     Button::new(("preview-hash", idx))
                                         .icon(IconName::Maximize)
@@ -3010,6 +3028,9 @@ impl KeyValueView {
                                         .icon(IconName::Edit)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(
+                                            editable_field.is_none() || editable_value.is_none(),
+                                        )
                                         .on_click({
                                             let view = view.clone();
                                             let field = field_for_edit.clone();
@@ -3031,6 +3052,7 @@ impl KeyValueView {
                                         .icon(IconName::Remove)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .disabled(editable_field.is_none())
                                         .on_click({
                                             let view = view.clone();
                                             let field = field_for_delete.clone();
@@ -3118,12 +3140,14 @@ impl KeyValueView {
                         .children(entry.fields.iter().enumerate().map({
                             let view = view.clone();
                             let entry_id = entry.id.clone();
-                            move |(field_idx, (k, v))| {
+                            move |(field_idx, field)| {
+                                let field_display = display_redis_bytes(&field.field);
+                                let value_display = display_redis_bytes(&field.value);
                                 let title = large_text_preview_title(
                                     "Stream value",
-                                    Some(&format!("{} @ {}", k, entry_id)),
+                                    Some(&format!("{} @ {}", field_display, entry_id)),
                                 );
-                                let value = v.clone();
+                                let value = value_display.clone();
                                 let view = view.clone();
 
                                 h_flex()
@@ -3134,7 +3158,7 @@ impl KeyValueView {
                                             .text_xs()
                                             .text_color(muted_foreground)
                                             .w(px(100.0))
-                                            .child(k.clone()),
+                                            .child(field_display),
                                     )
                                     .child(
                                         div()
@@ -3142,7 +3166,7 @@ impl KeyValueView {
                                             .min_w_0()
                                             .text_sm()
                                             .truncate()
-                                            .child(v.clone()),
+                                            .child(value_display),
                                     )
                                     .child(
                                         Button::new((
@@ -3274,8 +3298,8 @@ impl EventEmitter<TabContentEvent> for KeyValueView {}
 #[cfg(test)]
 mod tests {
     use super::{
-        ViewFormat, format_redis_string_value, is_binary_redis_string, large_text_preview_title,
-        should_replace_set_member,
+        ViewFormat, display_redis_bytes, format_redis_string_value, is_binary_redis_string,
+        large_text_preview_title, redis_bytes_text, should_replace_set_member,
     };
 
     #[test]
@@ -3314,6 +3338,21 @@ mod tests {
     fn redis_string_binary_detection_protects_non_utf8_values_from_text_editing() {
         assert!(!is_binary_redis_string("普通文本".as_bytes()));
         assert!(is_binary_redis_string(&[0xac, 0xed, 0x00, 0x05]));
+    }
+
+    #[test]
+    fn collection_binary_values_are_lossless_and_read_only() {
+        let value = [0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00];
+
+        assert_eq!(
+            "\\x0b\\xcf\\xdb\\xde\\x01\\x00",
+            display_redis_bytes(&value)
+        );
+        assert_eq!(None, redis_bytes_text(&value));
+        assert_eq!(
+            Some("普通 member".into()),
+            redis_bytes_text("普通 member".as_bytes())
+        );
     }
 
     #[test]

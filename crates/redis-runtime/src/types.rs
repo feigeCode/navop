@@ -3,7 +3,6 @@
 use one_core::storage::RedisSshTunnelConfig;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::str::FromStr;
 use thiserror::Error;
@@ -265,14 +264,14 @@ impl KeyInfo {
 /// Hash 字段值对
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HashField {
-    pub field: String,
-    pub value: String,
+    pub field: Vec<u8>,
+    pub value: Vec<u8>,
 }
 
 /// ZSet 成员（带分数）
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZSetMember {
-    pub member: String,
+    pub member: Vec<u8>,
     pub score: f64,
 }
 
@@ -280,7 +279,7 @@ pub struct ZSetMember {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StreamEntry {
     pub id: String,
-    pub fields: HashMap<String, String>,
+    pub fields: Vec<HashField>,
 }
 
 /// Redis 连接配置
@@ -584,9 +583,9 @@ pub enum KeyValueContent {
     /// String 类型（Redis String 是二进制安全的，因此保留原始字节）
     String(Vec<u8>),
     /// List 类型
-    List(Vec<String>),
+    List(Vec<Vec<u8>>),
     /// Set 类型
-    Set(Vec<String>),
+    Set(Vec<Vec<u8>>),
     /// ZSet 类型
     ZSet(Vec<ZSetMember>),
     /// Hash 类型

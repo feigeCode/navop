@@ -161,10 +161,10 @@ impl RedisConnection for IpcRedisConnection {
         !self.session.is_closed()
     }
 
-    async fn get(&self, key: &str) -> Result<Option<String>, RedisError> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, RedisError> {
         match self.command(None, &["GET", key]).await? {
             RedisValue::Nil => Ok(None),
-            value => Ok(Some(value_string(value)?)),
+            value => Ok(Some(value_bytes(value)?)),
         }
     }
 
@@ -339,8 +339,8 @@ impl RedisConnection for IpcRedisConnection {
         value_integer(self.command(None, &["HLEN", key]).await?)
     }
 
-    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RedisError> {
-        value_strings(
+    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<Vec<u8>>, RedisError> {
+        value_byte_strings(
             self.command_owned(
                 None,
                 vec![
@@ -394,8 +394,8 @@ impl RedisConnection for IpcRedisConnection {
         value_integer(self.command(None, &["LLEN", key]).await?)
     }
 
-    async fn smembers(&self, key: &str) -> Result<Vec<String>, RedisError> {
-        value_strings(self.command(None, &["SMEMBERS", key]).await?)
+    async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>, RedisError> {
+        value_byte_strings(self.command(None, &["SMEMBERS", key]).await?)
     }
 
     async fn sadd(&self, key: &str, members: &[&str]) -> Result<i64, RedisError> {
@@ -548,10 +548,10 @@ impl RedisConnection for IpcRedisConnection {
                 RedisValue::Binary(value) => KeyValueContent::String(value),
                 value => KeyValueContent::String(value_string(value)?.into_bytes()),
             },
-            RedisKeyType::List => KeyValueContent::List(value_strings(
+            RedisKeyType::List => KeyValueContent::List(value_byte_strings(
                 self.command(Some(db), &["LRANGE", key, "0", "999"]).await?,
             )?),
-            RedisKeyType::Set => KeyValueContent::Set(value_strings(
+            RedisKeyType::Set => KeyValueContent::Set(value_byte_strings(
                 self.command(Some(db), &["SMEMBERS", key]).await?,
             )?),
             RedisKeyType::ZSet => KeyValueContent::ZSet(parse_zset(
@@ -818,9 +818,32 @@ fn value_string(value: RedisValue) -> Result<String, RedisError> {
     }
 }
 
+fn value_bytes(value: RedisValue) -> Result<Vec<u8>, RedisError> {
+    match value {
+        RedisValue::String(value) | RedisValue::Status(value) => Ok(value.into_bytes()),
+        RedisValue::Binary(value) => Ok(value),
+        RedisValue::Integer(value) => Ok(value.to_string().into_bytes()),
+        RedisValue::Float(value) => Ok(value.to_string().into_bytes()),
+        value => Err(RedisError::TypeMismatch {
+            expected: "byte string".into(),
+            actual: value.to_display_string(),
+        }),
+    }
+}
+
 fn value_strings(value: RedisValue) -> Result<Vec<String>, RedisError> {
     match value {
         RedisValue::Bulk(values) => values.into_iter().map(value_string).collect(),
+        value => Err(RedisError::TypeMismatch {
+            expected: "array".into(),
+            actual: value.to_display_string(),
+        }),
+    }
+}
+
+fn value_byte_strings(value: RedisValue) -> Result<Vec<Vec<u8>>, RedisError> {
+    match value {
+        RedisValue::Bulk(values) => values.into_iter().map(value_bytes).collect(),
         value => Err(RedisError::TypeMismatch {
             expected: "array".into(),
             actual: value.to_display_string(),
@@ -852,7 +875,7 @@ fn parse_key_type(value: &str) -> RedisKeyType {
 }
 
 fn parse_hash_fields(value: RedisValue) -> Result<Vec<HashField>, RedisError> {
-    let values = value_strings(value)?;
+    let values = value_byte_strings(value)?;
     if values.len() % 2 != 0 {
         return Err(RedisError::Serialization(
             "HGETALL response has an odd number of fields".into(),
@@ -868,7 +891,12 @@ fn parse_hash_fields(value: RedisValue) -> Result<Vec<HashField>, RedisError> {
 }
 
 fn parse_zset(value: RedisValue) -> Result<Vec<ZSetMember>, RedisError> {
-    let values = value_strings(value)?;
+    let RedisValue::Bulk(values) = value else {
+        return Err(RedisError::TypeMismatch {
+            expected: "array".into(),
+            actual: value.to_display_string(),
+        });
+    };
     if values.len() % 2 != 0 {
         return Err(RedisError::Serialization(
             "ZRANGE WITHSCORES response has an odd number of fields".into(),
@@ -878,8 +906,8 @@ fn parse_zset(value: RedisValue) -> Result<Vec<ZSetMember>, RedisError> {
         .chunks_exact(2)
         .map(|pair| {
             Ok(ZSetMember {
-                member: pair[0].clone(),
-                score: pair[1]
+                member: value_bytes(pair[0].clone())?,
+                score: value_string(pair[1].clone())?
                     .parse::<f64>()
                     .map_err(|error| RedisError::Serialization(error.to_string()))?,
             })
@@ -903,7 +931,7 @@ fn parse_stream_entries(value: RedisValue) -> Result<Vec<StreamEntry>, RedisErro
             if parts.len() != 2 {
                 return Err(RedisError::Serialization("invalid stream entry".into()));
             }
-            let fields = value_strings(parts.pop().expect("length checked"))?;
+            let fields = value_byte_strings(parts.pop().expect("length checked"))?;
             if fields.len() % 2 != 0 {
                 return Err(RedisError::Serialization(
                     "stream field list has odd length".into(),
@@ -914,7 +942,10 @@ fn parse_stream_entries(value: RedisValue) -> Result<Vec<StreamEntry>, RedisErro
                 id,
                 fields: fields
                     .chunks_exact(2)
-                    .map(|pair| (pair[0].clone(), pair[1].clone()))
+                    .map(|pair| HashField {
+                        field: pair[0].clone(),
+                        value: pair[1].clone(),
+                    })
                     .collect(),
             })
         })
@@ -1008,6 +1039,63 @@ mod tests {
     fn non_utf8_values_remain_binary() {
         let value = domain_value(RedisRespValue::Bytes(WireBytes::Base64("AP8=".into())));
         assert_eq!(RedisValue::Binary(vec![0, 0xff]), value);
+    }
+
+    #[test]
+    fn zset_members_preserve_non_utf8_bytes() {
+        let bytes = vec![0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00];
+        let members = parse_zset(RedisValue::Bulk(vec![
+            RedisValue::Binary(bytes.clone()),
+            RedisValue::String("42.5".into()),
+        ]))
+        .expect("binary ZSet members should remain readable");
+
+        assert_eq!(bytes.as_slice(), members[0].member.as_slice());
+        assert_eq!(42.5, members[0].score);
+    }
+
+    #[test]
+    fn list_and_set_members_preserve_non_utf8_bytes() {
+        let bytes = vec![0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00];
+        let values = value_byte_strings(RedisValue::Bulk(vec![
+            RedisValue::String("text".into()),
+            RedisValue::Binary(bytes.clone()),
+        ]))
+        .expect("binary collection members should remain readable");
+
+        assert_eq!(b"text", values[0].as_slice());
+        assert_eq!(bytes, values[1]);
+    }
+
+    #[test]
+    fn hash_fields_and_values_preserve_non_utf8_bytes() {
+        let field = vec![0xff, 0x00, b'f'];
+        let value = vec![0x0b, 0xcf, 0xdb, 0xde];
+        let fields = parse_hash_fields(RedisValue::Bulk(vec![
+            RedisValue::Binary(field.clone()),
+            RedisValue::Binary(value.clone()),
+        ]))
+        .expect("binary Hash fields and values should remain readable");
+
+        assert_eq!(field, fields[0].field);
+        assert_eq!(value, fields[0].value);
+    }
+
+    #[test]
+    fn stream_fields_and_values_preserve_non_utf8_bytes() {
+        let field = vec![0xff, 0x00, b'f'];
+        let value = vec![0x0b, 0xcf, 0xdb, 0xde];
+        let entries = parse_stream_entries(RedisValue::Bulk(vec![RedisValue::Bulk(vec![
+            RedisValue::String("1-0".into()),
+            RedisValue::Bulk(vec![
+                RedisValue::Binary(field.clone()),
+                RedisValue::Binary(value.clone()),
+            ]),
+        ])]))
+        .expect("binary Stream fields and values should remain readable");
+
+        assert_eq!(field, entries[0].fields[0].field);
+        assert_eq!(value, entries[0].fields[0].value);
     }
 
     #[test]

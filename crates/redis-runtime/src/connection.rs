@@ -24,7 +24,7 @@ pub trait RedisConnection: Send + Sync {
     // === 基础键操作 ===
 
     /// 获取键的值（String 类型）
-    async fn get(&self, key: &str) -> Result<Option<String>, RedisError>;
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, RedisError>;
 
     /// 设置键的值
     async fn set(&self, key: &str, value: &str, ttl: Option<i64>) -> Result<(), RedisError>;
@@ -125,7 +125,7 @@ pub trait RedisConnection: Send + Sync {
     // === List 操作 ===
 
     /// 获取 List 范围内的元素
-    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RedisError>;
+    async fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<Vec<u8>>, RedisError>;
 
     /// 从左边推入元素
     async fn lpush(&self, key: &str, values: &[&str]) -> Result<i64, RedisError>;
@@ -154,7 +154,7 @@ pub trait RedisConnection: Send + Sync {
     // === Set 操作 ===
 
     /// 获取 Set 所有成员
-    async fn smembers(&self, key: &str) -> Result<Vec<String>, RedisError>;
+    async fn smembers(&self, key: &str) -> Result<Vec<Vec<u8>>, RedisError>;
 
     /// 添加成员到 Set
     async fn sadd(&self, key: &str, members: &[&str]) -> Result<i64, RedisError>;
