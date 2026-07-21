@@ -64,6 +64,87 @@ WorkspaceExplorer:
       en: No changes compared to HEAD
       zh-CN: 与 HEAD 相比没有差异
       zh-HK: 與 HEAD 相比沒有差異
+  branch:
+    manage:
+      en: Manage branches
+      zh-CN: 管理分支
+      zh-HK: 管理分支
+    search_placeholder:
+      en: Search branches
+      zh-CN: 搜索分支
+      zh-HK: 搜尋分支
+    name_placeholder:
+      en: Branch name
+      zh-CN: 分支名称
+      zh-HK: 分支名稱
+    local:
+      en: "Local (%{count})"
+      zh-CN: "本地（%{count}）"
+      zh-HK: "本機（%{count}）"
+    remote:
+      en: "Remote (%{count})"
+      zh-CN: "远程（%{count}）"
+      zh-HK: "遠端（%{count}）"
+    create:
+      en: Create branch
+      zh-CN: 创建分支
+      zh-HK: 建立分支
+    rename:
+      en: Rename branch
+      zh-CN: 重命名分支
+      zh-HK: 重新命名分支
+    merge:
+      en: Merge into current branch
+      zh-CN: 合并到当前分支
+      zh-HK: 合併到目前分支
+    delete:
+      en: Delete branch
+      zh-CN: 删除分支
+      zh-HK: 刪除分支
+    fetch:
+      en: Fetch remote branches
+      zh-CN: 拉取远程分支
+      zh-HK: 取得遠端分支
+    merge_confirm:
+      en: "Merge branch %{name} into the current branch?"
+      zh-CN: "将分支 %{name} 合并到当前分支？"
+      zh-HK: "將分支 %{name} 合併到目前分支？"
+    delete_confirm:
+      en: "Delete branch %{name}? Remote deletion will be pushed immediately."
+      zh-CN: "删除分支 %{name}？远程分支会立即从远程仓库删除。"
+      zh-HK: "刪除分支 %{name}？遠端分支會立即從遠端儲存庫刪除。"
+    loading:
+      en: Loading branches...
+      zh-CN: 正在加载分支...
+      zh-HK: 正在載入分支...
+    empty:
+      en: No matching branches
+      zh-CN: 没有匹配的分支
+      zh-HK: 沒有符合的分支
+    switched:
+      en: Branch switched
+      zh-CN: 已切换分支
+      zh-HK: 已切換分支
+    created:
+      en: Branch created and switched
+      zh-CN: 已创建并切换分支
+      zh-HK: 已建立並切換分支
+    renamed:
+      en: Branch renamed
+      zh-CN: 已重命名分支
+      zh-HK: 已重新命名分支
+    merged:
+      en: Branch merged
+      zh-CN: 分支合并完成
+      zh-HK: 分支合併完成
+    deleted:
+      en: Branch deleted
+      zh-CN: 分支已删除
+      zh-HK: 分支已刪除
+    fetched:
+      en: Remote branches updated
+      zh-CN: 远程分支已更新
+      zh-HK: 遠端分支已更新
   status:
     loading:
       en: Loading...

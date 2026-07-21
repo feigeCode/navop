@@ -11,6 +11,20 @@ pub struct GitRepository {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GitBranchKind {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GitBranch {
+    pub(crate) name: String,
+    pub(crate) kind: GitBranchKind,
+    pub(crate) current: bool,
+    pub(crate) upstream: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitChangeKind {
     Added,
     Modified,
@@ -64,6 +78,104 @@ pub(crate) fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>>
         return Err(git_command_error("git status", &output));
     }
     parse_porcelain_v1_z(&output.stdout)
+}
+
+pub(crate) fn load_branches(repository: &GitRepository) -> Result<Vec<GitBranch>> {
+    let output = run_git(
+        &repository.root,
+        [
+            "for-each-ref",
+            "--sort=refname",
+            "--format=%(refname)\t%(refname:short)\t%(HEAD)\t%(upstream:short)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git for-each-ref", &output));
+    }
+    parse_branches(&String::from_utf8_lossy(&output.stdout))
+}
+
+pub(crate) fn switch_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+    let args = match branch.kind {
+        GitBranchKind::Local => vec!["switch".to_string(), branch.name.clone()],
+        GitBranchKind::Remote => vec![
+            "switch".to_string(),
+            "--track".to_string(),
+            branch.name.clone(),
+        ],
+    };
+    run_git_operation(repository, "git switch", args)
+}
+
+pub(crate) fn create_branch(repository: &GitRepository, name: &str) -> Result<()> {
+    validate_branch_name(repository, name)?;
+    run_git_operation(
+        repository,
+        "git switch -c",
+        vec!["switch".to_string(), "-c".to_string(), name.to_string()],
+    )
+}
+
+pub(crate) fn rename_branch(
+    repository: &GitRepository,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    validate_branch_name(repository, new_name)?;
+    run_git_operation(
+        repository,
+        "git branch -m",
+        vec![
+            "branch".to_string(),
+            "-m".to_string(),
+            old_name.to_string(),
+            new_name.to_string(),
+        ],
+    )
+}
+
+pub(crate) fn merge_branch(repository: &GitRepository, name: &str) -> Result<()> {
+    run_git_operation(
+        repository,
+        "git merge",
+        vec![
+            "merge".to_string(),
+            "--no-edit".to_string(),
+            name.to_string(),
+        ],
+    )
+}
+
+pub(crate) fn delete_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+    let args = match branch.kind {
+        GitBranchKind::Local => vec!["branch".to_string(), "-d".to_string(), branch.name.clone()],
+        GitBranchKind::Remote => {
+            let (remote, name) = branch
+                .name
+                .split_once('/')
+                .ok_or_else(|| anyhow!("Invalid remote branch name: {}", branch.name))?;
+            vec![
+                "push".to_string(),
+                remote.to_string(),
+                "--delete".to_string(),
+                name.to_string(),
+            ]
+        }
+    };
+    run_git_operation(repository, "git branch delete", args)
+}
+
+pub(crate) fn fetch_branches(repository: &GitRepository) -> Result<()> {
+    run_git_operation(
+        repository,
+        "git fetch",
+        ["fetch", "--all", "--prune"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 pub(crate) fn load_diff(repository: &GitRepository, change: &GitChange) -> Result<String> {
@@ -151,6 +263,71 @@ fn current_branch(root: &Path) -> Option<String> {
     })
 }
 
+fn parse_branches(output: &str) -> Result<Vec<GitBranch>> {
+    let mut branches = Vec::new();
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        let mut fields = line.splitn(4, '\t');
+        let ref_name = fields
+            .next()
+            .ok_or_else(|| anyhow!("Invalid git branch entry"))?;
+        let name = fields
+            .next()
+            .ok_or_else(|| anyhow!("Invalid git branch entry"))?;
+        let head = fields
+            .next()
+            .ok_or_else(|| anyhow!("Invalid git branch entry"))?;
+        let upstream = fields
+            .next()
+            .ok_or_else(|| anyhow!("Invalid git branch entry"))?;
+        let kind = if ref_name.starts_with("refs/heads/") {
+            GitBranchKind::Local
+        } else if ref_name.starts_with("refs/remotes/") {
+            GitBranchKind::Remote
+        } else {
+            continue;
+        };
+        if kind == GitBranchKind::Remote && name.ends_with("/HEAD") {
+            continue;
+        }
+        branches.push(GitBranch {
+            name: name.to_string(),
+            kind,
+            current: head == "*",
+            upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+        });
+    }
+    Ok(branches)
+}
+
+fn validate_branch_name(repository: &GitRepository, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow!("Branch name cannot be empty"));
+    }
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "check-ref-format".to_string(),
+            "--branch".to_string(),
+            name.to_string(),
+        ],
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(git_command_error("Invalid branch name", &output))
+    }
+}
+
+fn run_git_operation(repository: &GitRepository, label: &str, args: Vec<String>) -> Result<()> {
+    let output = run_git_vec(&repository.root, args)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(git_command_error(label, &output))
+    }
+}
+
 fn git_diff_against_base(
     repository: &GitRepository,
     change: &GitChange,
@@ -226,6 +403,16 @@ fn untracked_file_diff(repository: &GitRepository, change: &GitChange) -> Result
 }
 
 fn run_git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<Output> {
+    let mut command = Command::new("git");
+    configure_background_child(&mut command);
+    command
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .context("Unable to run git")
+}
+
+fn run_git_vec(repo: &Path, args: Vec<String>) -> Result<Output> {
     let mut command = Command::new("git");
     configure_background_child(&mut command);
     command

@@ -1,3 +1,4 @@
+mod branches;
 mod frame;
 mod header;
 mod load;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use self::load::{WorkspaceSnapshot, load_workspace};
+use branches::BranchManager;
 
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 
@@ -28,6 +30,7 @@ pub struct WorkspaceExplorer {
     loading_directories: HashSet<PathBuf>,
     selected_path: Option<PathBuf>,
     repository: Option<GitRepository>,
+    branch_manager: Option<Entity<BranchManager>>,
     changes: Vec<GitChange>,
     changes_expanded: bool,
     files_expanded: bool,
@@ -76,6 +79,7 @@ impl WorkspaceExplorer {
             loading_directories: HashSet::new(),
             selected_path: None,
             repository: None,
+            branch_manager: None,
             changes: Vec::new(),
             changes_expanded: true,
             files_expanded: true,
@@ -118,6 +122,7 @@ impl WorkspaceExplorer {
         self.loading_directories.clear();
         self.selected_path = None;
         self.repository = None;
+        self.branch_manager = None;
         self.changes.clear();
         self.ignore_matcher = None;
         self.git_loading = false;
@@ -132,6 +137,9 @@ impl WorkspaceExplorer {
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if let Some(manager) = self.branch_manager.as_ref() {
+            manager.update(cx, |manager, cx| manager.reload(cx));
+        }
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let generation = self.refresh_generation;
         self.loading = true;
@@ -164,6 +172,9 @@ impl WorkspaceExplorer {
     }
 
     fn apply_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
+        if self.repository.as_ref().map(|repository| &repository.root) != Some(&snapshot.root) {
+            self.branch_manager = None;
+        }
         self.root = snapshot.root.clone();
         self.listings.clear();
         self.listings.insert(snapshot.root, snapshot.entries);

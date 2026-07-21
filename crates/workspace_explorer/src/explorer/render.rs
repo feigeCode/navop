@@ -2,8 +2,8 @@ use super::WorkspaceExplorer;
 use crate::git::{GitChange, GitChangeKind};
 use crate::model::{ExplorerRow, visible_rows};
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{Icon, IconName, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
@@ -167,7 +167,15 @@ impl WorkspaceExplorer {
 }
 
 impl Render for WorkspaceExplorer {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.branch_manager.is_none() {
+            if let Some(repository) = self.repository.clone() {
+                let explorer = cx.entity().downgrade();
+                self.branch_manager = Some(cx.new(|cx| {
+                    super::branches::BranchManager::new(repository, explorer, window, cx)
+                }));
+            }
+        }
         v_flex()
             .size_full()
             .min_w_0()

@@ -145,6 +145,61 @@ fn staged_rename_keeps_original_path_and_rename_diff() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn branch_parser_separates_local_and_remote_branches() {
+    let branches = parse_branches(
+        "refs/heads/dev\tdev\t*\torigin/dev\n\
+         refs/heads/main\tmain\t\torigin/main\n\
+         refs/remotes/origin/HEAD\torigin/HEAD\t\t\n\
+         refs/remotes/origin/dev\torigin/dev\t\t\n",
+    )
+    .unwrap();
+
+    assert_eq!(3, branches.len());
+    assert_eq!(GitBranchKind::Local, branches[0].kind);
+    assert_eq!("dev", branches[0].name);
+    assert!(branches[0].current);
+    assert_eq!(Some("origin/dev".to_string()), branches[0].upstream);
+    assert_eq!(GitBranchKind::Remote, branches[2].kind);
+    assert_eq!("origin/dev", branches[2].name);
+}
+
+#[test]
+fn local_branch_operations_create_switch_rename_and_merge() {
+    let root = initialized_repository();
+    let mut repository = discover_repository(&root).unwrap().unwrap();
+    let base_branch = repository.branch.clone().unwrap();
+    create_branch(&repository, "feature/test").unwrap();
+    repository.branch = current_branch(&root);
+    assert_eq!(Some("feature/test".to_string()), repository.branch);
+
+    rename_branch(&repository, "feature/test", "feature/renamed").unwrap();
+    std::fs::write(root.join("feature.txt"), "feature\n").unwrap();
+    run_test_git(&root, &["add", "feature.txt"]);
+    run_test_git(&root, &["commit", "-q", "-m", "feature"]);
+    run_test_git(&root, &["switch", "-q", &base_branch]);
+
+    merge_branch(&repository, "feature/renamed").unwrap();
+    assert_eq!(
+        "feature\n",
+        std::fs::read_to_string(root.join("feature.txt")).unwrap()
+    );
+
+    let branch = load_branches(&repository)
+        .unwrap()
+        .into_iter()
+        .find(|branch| branch.name == "feature/renamed")
+        .unwrap();
+    delete_branch(&repository, &branch).unwrap();
+    assert!(
+        load_branches(&repository)
+            .unwrap()
+            .iter()
+            .all(|branch| branch.name != "feature/renamed")
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn initialized_repository() -> PathBuf {
     let root = empty_repository();
     std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();

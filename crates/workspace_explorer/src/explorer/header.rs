@@ -1,14 +1,16 @@
 use super::WorkspaceExplorer;
 use super::frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 use gpui::{
-    Anchor, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    Anchor, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     Icon, IconName, Sizable as _, Size, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    popover::Popover,
 };
 use rust_i18n::t;
 
@@ -36,6 +38,7 @@ impl WorkspaceExplorer {
             .repository
             .as_ref()
             .and_then(|repository| repository.branch.clone());
+        let branch_manager = self.branch_manager.clone();
         h_flex()
             .items_center()
             .gap_1()
@@ -59,19 +62,21 @@ impl WorkspaceExplorer {
                     .font_semibold()
                     .child(label),
             )
-            .when_some(branch, |this, branch| {
+            .when_some(branch.zip(branch_manager), |this, (branch, manager)| {
+                let search_focus = manager.read(cx).search_input().focus_handle(cx);
                 this.child(
-                    div()
-                        .flex_shrink_0()
-                        .max_w(px(120.0))
-                        .truncate()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(self.theme.border)
-                        .px_1p5()
-                        .text_xs()
-                        .text_color(self.theme.muted_foreground)
-                        .child(branch),
+                    Popover::new("workspace-branch-manager")
+                        .anchor(Anchor::TopRight)
+                        .track_focus(&search_focus)
+                        .trigger(
+                            Button::new("workspace-current-branch")
+                                .label(branch)
+                                .icon(IconName::ChevronsUpDown)
+                                .ghost()
+                                .compact()
+                                .tooltip(t!("WorkspaceExplorer.branch.manage")),
+                        )
+                        .content(move |_, _, _| manager.clone()),
                 )
             })
             .child(self.render_header_actions(cx))

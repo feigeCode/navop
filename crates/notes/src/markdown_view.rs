@@ -271,7 +271,7 @@ fn switch_to_source(
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> anyhow::Result<Option<String>> {
-    if session.source_authoritative {
+    if source_must_remain_authoritative(session) {
         session.state.switch_to_source();
         focus_source_editor(session, window, cx);
         return Ok(None);
@@ -283,6 +283,14 @@ fn switch_to_source(
     session.state.switch_to_source();
     focus_source_editor(session, window, cx);
     Ok(Some(markdown))
+}
+
+fn source_must_remain_authoritative(session: &MarkdownSession) -> bool {
+    session.source_authoritative
+        || matches!(
+            session.compatibility,
+            cditor_app::MarkdownCompatibility::SourceOnly(_)
+        )
 }
 
 fn focus_source_editor(
