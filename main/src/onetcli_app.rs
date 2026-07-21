@@ -5,7 +5,7 @@ use crate::persistent_connection_sidebar::PersistentConnectionSidebar;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
-    Styled, Window, actions, div,
+    Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
@@ -16,6 +16,7 @@ use rust_i18n::t;
 #[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
 
@@ -966,6 +967,7 @@ pub struct OnetCliApp {
     connection_sidebar: Entity<PersistentConnectionSidebar>,
     home_page_style: HomePageStyle,
     quit_state: QuitRequestState,
+    main_window_size_save_task: Option<Task<()>>,
 }
 
 impl OnetCliApp {
@@ -977,11 +979,23 @@ impl OnetCliApp {
         let app = app_entity.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let _ = app.update(cx, |app, cx| {
-                app.save_main_window_size(window, cx);
                 app.request_quit(window, cx);
             });
             false
         });
+        cx.observe_window_bounds(window, |app, window, cx| {
+            app.main_window_size_save_task = Some(cx.spawn_in(window, async move |app, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(150))
+                    .await;
+                app.update_in(cx, |app, window, cx| {
+                    app.save_main_window_size(window, cx);
+                    app.main_window_size_save_task.take();
+                })
+                .ok();
+            }));
+        })
+        .detach();
 
         let settings = AppSettings::current(cx);
         let connection_sidebar_expanded = settings.connection_sidebar_expanded;
@@ -1108,6 +1122,7 @@ impl OnetCliApp {
             connection_sidebar,
             home_page_style,
             quit_state: QuitRequestState::default(),
+            main_window_size_save_task: None,
         }
     }
 
@@ -1200,10 +1215,14 @@ impl OnetCliApp {
         let Some(size) = MainWindowSize::new(width, height) else {
             return;
         };
+        if AppSettings::current(cx).main_window_size == Some(size) {
+            return;
+        }
         AppSettings::update_and_save(cx, |settings| settings.main_window_size = Some(size));
     }
 
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_main_window_size(window, cx);
         if self.quit_state.request() == QuitRequestDecision::OpenPrompt {
             self.show_quit_confirmation(window, cx);
         }
@@ -1386,6 +1405,20 @@ mod tests {
 
         assert!(new_fn.contains("on_window_should_close"));
         assert!(new_fn.contains("request_quit(window, cx)"));
+    }
+
+    #[test]
+    fn onetcli_app_persists_window_size_after_bounds_changes() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source.find("pub fn new").expect("OnetCliApp::new");
+        let end = source[start..]
+            .find("\n        let settings")
+            .map(|offset| start + offset)
+            .expect("OnetCliApp::new window setup");
+        let new_fn = &source[start..end];
+
+        assert!(new_fn.contains("observe_window_bounds"));
+        assert!(new_fn.contains("save_main_window_size(window, cx)"));
     }
 
     #[test]
