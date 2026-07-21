@@ -807,12 +807,25 @@ impl TextElement {
         style: &TextStyle,
         window: &mut Window,
     ) -> (Pixels, usize) {
-        let total_lines = text.lines_len();
-        let line_number_len = match total_lines {
-            0..=9999 => 5,
-            10000..=99999 => 6,
-            100000..=999999 => 7,
-            _ => 8,
+        let line_number_len = match state.line_decorations.as_ref() {
+            Some(decorations) => {
+                decorations
+                    .iter()
+                    .filter_map(|decoration| decoration.line_number)
+                    .max()
+                    .unwrap_or(0)
+                    .max(1)
+                    .to_string()
+                    .len()
+                    .max(4)
+                    + 1
+            }
+            None => match text.lines_len() {
+                0..=9999 => 5,
+                10000..=99999 => 6,
+                100000..=999999 => 7,
+                _ => 8,
+            },
         };
 
         let mut line_number_width = if state.mode.line_number() {
@@ -1799,10 +1812,25 @@ impl Element for TextElement {
                 .iter()
                 .zip(last_layout.visible_buffer_lines.iter())
             {
-                let line_no: SharedString =
-                    format!("{:>width$}", buffer_line + 1, width = line_number_len).into();
+                let line_number = state
+                    .line_decorations
+                    .as_ref()
+                    .map(|decorations| {
+                        decorations
+                            .get(buffer_line)
+                            .and_then(|decoration| decoration.line_number)
+                    })
+                    .unwrap_or(Some(buffer_line + 1));
+                let line_no: SharedString = format!(
+                    "{:>width$}",
+                    line_number
+                        .map(|line_number| line_number.to_string())
+                        .unwrap_or_default(),
+                    width = line_number_len
+                )
+                .into();
 
-                let runs = if current_row == Some(buffer_line) {
+                let runs = if !state.read_only && current_row == Some(buffer_line) {
                     &current_line_runs
                 } else {
                     &other_line_runs
@@ -1919,12 +1947,16 @@ impl Element for TextElement {
         let invisible_top_padding = prepaint.last_layout.visible_top;
         let active_line_color = {
             let state = self.state.read(cx);
-            state
-                .highlight_theme
-                .as_deref()
-                .unwrap_or_else(|| cx.theme().highlight_theme.as_ref())
-                .style
-                .editor_active_line
+            (!state.read_only)
+                .then(|| {
+                    state
+                        .highlight_theme
+                        .as_deref()
+                        .unwrap_or_else(|| cx.theme().highlight_theme.as_ref())
+                        .style
+                        .editor_active_line
+                })
+                .flatten()
         };
 
         // Paint active line
@@ -1953,9 +1985,42 @@ impl Element for TextElement {
             }
         }
 
+        // Paint caller-provided full-width row backgrounds before selections
+        // and text. This is used by read-only comparison editors to mark
+        // additions, removals, and alignment placeholders.
+        if let Some(decorations) = self.state.read(cx).line_decorations.as_ref() {
+            let mut offset_y = invisible_top_padding;
+            for (line, &buffer_line) in prepaint
+                .last_layout
+                .lines
+                .iter()
+                .zip(prepaint.last_layout.visible_buffer_lines.iter())
+            {
+                let height = line_height * line.wrapped_lines.len() as f32;
+                if let Some(background) = decorations
+                    .get(buffer_line)
+                    .and_then(|decoration| decoration.background)
+                {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(input_bounds.origin.x, origin.y + offset_y),
+                            size(input_bounds.size.width, height),
+                        ),
+                        background,
+                    ));
+                }
+                offset_y += height;
+            }
+        }
+
         // Paint indent guides
         if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, cx.theme().border.opacity(0.85));
+            let color = self
+                .state
+                .read(cx)
+                .indent_guide_color
+                .unwrap_or_else(|| cx.theme().border.opacity(0.85));
+            window.paint_path(path, color);
         }
 
         // Paint selections
@@ -2092,9 +2157,27 @@ impl Element for TextElement {
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
-                let is_active = prepaint.current_row == Some(buffer_line);
+                let state = self.state.read(cx);
+                let is_active = !state.read_only && prepaint.current_row == Some(buffer_line);
 
                 let height = line_height * lines.len() as f32;
+                if let Some(background) = state
+                    .line_decorations
+                    .as_ref()
+                    .and_then(|decorations| decorations.get(buffer_line))
+                    .and_then(|decoration| decoration.background)
+                {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            p,
+                            size(
+                                prepaint.last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN,
+                                height,
+                            ),
+                        ),
+                        background,
+                    ));
+                }
                 // paint active line number background
                 if is_active {
                     if let Some(bg_color) = active_line_color {

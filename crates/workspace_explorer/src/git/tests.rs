@@ -1,5 +1,8 @@
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEST_REPOSITORY_ID: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn porcelain_parser_handles_regular_untracked_and_renamed_entries() {
@@ -67,6 +70,62 @@ fn untracked_text_diff_marks_missing_final_newline() {
 }
 
 #[test]
+fn unchanged_file_yields_empty_diff_instead_of_error() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let change = GitChange {
+        path: PathBuf::from("main.rs"),
+        original_path: None,
+        kind: GitChangeKind::Modified,
+        staged: false,
+    };
+
+    let diff = load_diff(&repository, &change).unwrap();
+
+    assert!(diff.is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn unborn_repository_diff_includes_changes_after_staging() {
+    let root = empty_repository();
+    std::fs::write(root.join("main.rs"), "staged\n").unwrap();
+    run_test_git(&root, &["add", "main.rs"]);
+    std::fs::write(root.join("main.rs"), "working tree\n").unwrap();
+
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let change = load_changes(&repository)
+        .unwrap()
+        .into_iter()
+        .find(|change| change.path == Path::new("main.rs"))
+        .unwrap();
+    let diff = load_diff(&repository, &change).unwrap();
+
+    assert!(diff.contains("+working tree"));
+    assert!(!diff.contains("+staged"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn invalid_repository_still_reports_diff_failure() {
+    let root = unique_test_path();
+    std::fs::create_dir_all(&root).unwrap();
+    let repository = GitRepository {
+        root: root.clone(),
+        branch: None,
+    };
+    let change = GitChange {
+        path: PathBuf::from("main.rs"),
+        original_path: None,
+        kind: GitChangeKind::Modified,
+        staged: false,
+    };
+
+    assert!(load_diff(&repository, &change).is_err());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_rename_keeps_original_path_and_rename_diff() {
     let root = initialized_repository();
     run_test_git(&root, &["mv", "main.rs", "renamed.rs"]);
@@ -87,14 +146,15 @@ fn staged_rename_keeps_original_path_and_rename_diff() {
 }
 
 fn initialized_repository() -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!(
-        "workspace-explorer-git-{}-{nonce}",
-        std::process::id()
-    ));
+    let root = empty_repository();
+    std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+    run_test_git(&root, &["add", "main.rs"]);
+    run_test_git(&root, &["commit", "-q", "-m", "initial"]);
+    root
+}
+
+fn empty_repository() -> PathBuf {
+    let root = unique_test_path();
     std::fs::create_dir_all(&root).unwrap();
     run_test_git(&root, &["init", "-q"]);
     run_test_git(&root, &["config", "user.name", "Workspace Explorer Test"]);
@@ -102,10 +162,19 @@ fn initialized_repository() -> PathBuf {
         &root,
         &["config", "user.email", "workspace-explorer@example.invalid"],
     );
-    std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
-    run_test_git(&root, &["add", "main.rs"]);
-    run_test_git(&root, &["commit", "-q", "-m", "initial"]);
     root
+}
+
+fn unique_test_path() -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "workspace-explorer-git-{}-{nonce}-{}",
+        std::process::id(),
+        TEST_REPOSITORY_ID.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 fn run_test_git(root: &Path, args: &[&str]) {

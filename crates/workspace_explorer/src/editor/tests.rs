@@ -22,7 +22,8 @@ fn file_size_is_compact() {
 
 #[test]
 fn diff_documents_are_read_only_and_use_diff_language() {
-    let document = LoadedDocument::from_diff("@@ -1 +1 @@\n-old\n+new\n".to_string());
+    let document =
+        LoadedDocument::from_diff("@@ -1 +1 @@\n-old\n+new\n".to_string(), "text".to_string());
 
     assert!(document.read_only);
     assert_eq!("diff", document.language);

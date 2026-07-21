@@ -1,7 +1,9 @@
 use super::{
-    DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest, LoadedDocument,
-    PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, display_name,
+    DiffEditors, DocumentKey, DocumentPolicy, EditorTab, GitDiffRequest, LoadRequest,
+    LoadedDocument, PendingDocument, WorkspaceEditor, WorkspaceEditorEvent, diff_line_decorations,
+    display_name,
 };
+use crate::diff::{aligned_side_by_side, parse_side_by_side};
 use crate::file_system::load_file;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
@@ -13,6 +15,7 @@ use gpui_component::{
 };
 use rust_i18n::t;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 impl WorkspaceEditor {
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -146,7 +149,12 @@ impl WorkspaceEditor {
                 let repository = repository.clone();
                 let change = change.clone();
                 cx.background_spawn(async move {
-                    load_diff(&repository, &change).map(LoadedDocument::from_diff)
+                    let language = remote_file_editor::language_for_path(
+                        &change.path.to_string_lossy(),
+                        false,
+                    );
+                    load_diff(&repository, &change)
+                        .map(|diff| LoadedDocument::from_diff(diff, language))
                 })
             }
         };
@@ -179,6 +187,7 @@ impl WorkspaceEditor {
         };
         let document = completion.document;
         let initial_text = document.text.clone();
+        let diff_language = document.diff_language.clone();
         let editor = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
                 .code_editor(document.language)
@@ -200,6 +209,60 @@ impl WorkspaceEditor {
         tab.saved_text = document.text;
         tab.file_size = document.file_size;
         tab.policy = document.policy;
+        tab.diff = match tab.policy {
+            DocumentPolicy::Diff => {
+                let parsed = parse_side_by_side(&tab.saved_text);
+                (!parsed.rows.is_empty()).then(|| Rc::new(parsed))
+            }
+            _ => None,
+        };
+        tab.diff_change_cursor = None;
+        tab.diff_editors = match (&tab.diff, diff_language) {
+            (Some(diff), Some(language)) => {
+                let (left_side, right_side) = aligned_side_by_side(diff);
+                let left_decorations = diff_line_decorations(
+                    &left_side,
+                    self.theme.danger,
+                    self.theme.muted.opacity(0.35),
+                );
+                let right_decorations = diff_line_decorations(
+                    &right_side,
+                    self.theme.success,
+                    self.theme.muted.opacity(0.35),
+                );
+                let scroll_handle = tab.diff_scroll.clone();
+                let left_scroll_handle = scroll_handle.clone();
+                let left_language = language.clone();
+                let left = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx)
+                        .code_editor(left_language)
+                        .folding(false)
+                        .line_number(true)
+                        .searchable(true)
+                        .soft_wrap(false)
+                        .read_only(true)
+                        .shared_scroll_handle(left_scroll_handle)
+                        .line_decorations(left_decorations);
+                    state.set_value(left_side.text, window, cx);
+                    state
+                });
+                let right = cx.new(|cx| {
+                    let mut state = InputState::new(window, cx)
+                        .code_editor(language)
+                        .folding(false)
+                        .line_number(true)
+                        .searchable(true)
+                        .soft_wrap(false)
+                        .read_only(true)
+                        .shared_scroll_handle(scroll_handle)
+                        .line_decorations(right_decorations);
+                    state.set_value(right_side.text, window, cx);
+                    state
+                });
+                Some(DiffEditors { left, right })
+            }
+            _ => None,
+        };
         tab.loading = false;
         tab.saving = false;
         tab.read_only = document.read_only;

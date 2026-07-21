@@ -81,11 +81,13 @@ pub struct Input {
     cleanable: bool,
     mask_toggle: bool,
     disabled: bool,
+    read_only: bool,
     bordered: bool,
     focus_bordered: bool,
     caret_color: Option<Hsla>,
     local_style: Option<LocalInputStyle>,
     highlight_theme: Option<Arc<HighlightTheme>>,
+    indent_guide_color: Option<Hsla>,
     tab_index: isize,
     selected: bool,
     bare: bool,
@@ -129,11 +131,13 @@ impl Input {
             cleanable: false,
             mask_toggle: false,
             disabled: false,
+            read_only: false,
             bordered: true,
             focus_bordered: true,
             caret_color: None,
             local_style: None,
             highlight_theme: None,
+            indent_guide_color: None,
             tab_index: 0,
             selected: false,
             bare: false,
@@ -199,6 +203,12 @@ impl Input {
         self
     }
 
+    /// Override the indent-guide color for an embedded code editor.
+    pub fn indent_guide_color(mut self, color: Hsla) -> Self {
+        self.indent_guide_color = Some(color);
+        self
+    }
+
     /// Set whether to show the clear button when the input field is not empty, default is false.
     pub fn cleanable(mut self, cleanable: bool) -> Self {
         self.cleanable = cleanable;
@@ -214,6 +224,12 @@ impl Input {
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Set the input to read-only while keeping selection and copy available.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -318,11 +334,13 @@ impl RenderOnce for Input {
         self.state.update(cx, |state, _| {
             state.context_menu_builder = self.context_menu_builder.clone();
             state.disabled = self.disabled;
+            state.read_only = self.read_only;
             state.size = self.size;
             state.caret_color = self.caret_color;
             state.placeholder_color = self.local_style.map(|style| style.muted_foreground);
             state.background_color = self.local_style.map(|style| style.background);
             state.highlight_theme = self.highlight_theme.clone();
+            state.indent_guide_color = self.indent_guide_color;
 
             // Only for single line mode
             if state.mode.is_single_line() {
@@ -370,7 +388,7 @@ impl RenderOnce for Input {
             .key_context(crate::input::CONTEXT)
             .track_focus(&state.focus_handle.clone())
             .tab_index(self.tab_index)
-            .when(!state.disabled, |this| {
+            .when(!state.disabled && !state.read_only, |this| {
                 this.on_action(window.listener_for(&self.state, InputState::backspace))
                     .on_action(window.listener_for(&self.state, InputState::delete))
                     .on_action(
@@ -453,7 +471,7 @@ impl RenderOnce for Input {
             .when(!self.bare, |this| this.input_py(self.size))
             .when(!self.bare, |this| this.input_h(self.size))
             .input_text_size(self.size)
-            .when(!self.disabled, |this| this.cursor_text())
+            .when(!self.disabled && !self.read_only, |this| this.cursor_text())
             .when(!self.bare, |this| this.items_center())
             .when(state.mode.is_multi_line() && !self.bare, |this| {
                 this.h_auto()

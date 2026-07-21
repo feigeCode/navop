@@ -109,6 +109,17 @@ pub enum InputEvent {
     Blur,
 }
 
+/// Per-line presentation overrides for code-editor inputs.
+///
+/// When a decoration list is installed, `line_number` replaces the default
+/// one-based buffer row number. Use `None` for alignment placeholder rows that
+/// should not display a number.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InputLineDecoration {
+    pub line_number: Option<usize>,
+    pub background: Option<Hsla>,
+}
+
 pub type InputContextMenuActionFactory = Rc<dyn Fn() -> Box<dyn Action>>;
 pub type InputContextMenuClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -429,10 +440,13 @@ pub struct InputState {
     pub(super) selecting: bool,
     pub(super) size: Size,
     pub(super) disabled: bool,
+    pub(super) read_only: bool,
     pub(super) caret_color: Option<Hsla>,
     pub(super) placeholder_color: Option<Hsla>,
     pub(super) background_color: Option<Hsla>,
     pub(super) highlight_theme: Option<Arc<HighlightTheme>>,
+    pub(super) indent_guide_color: Option<Hsla>,
+    pub(super) line_decorations: Option<Rc<[InputLineDecoration]>>,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) soft_wrap: bool,
@@ -548,10 +562,13 @@ impl InputState {
             input_bounds: Bounds::default(),
             selecting: false,
             disabled: false,
+            read_only: false,
             caret_color: None,
             placeholder_color: None,
             background_color: None,
             highlight_theme: None,
+            indent_guide_color: None,
+            line_decorations: None,
             masked: false,
             clean_on_escape: false,
             soft_wrap: true,
@@ -641,6 +658,37 @@ impl InputState {
         self.searchable = true;
         self.auto_pair = true;
         self
+    }
+
+    /// Set this input to read-only while preserving focus, selection, search,
+    /// copying, and scrolling.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Use a shared scroll handle for this input.
+    ///
+    /// Multiple editors that share a handle keep both axes synchronized.
+    pub fn shared_scroll_handle(mut self, scroll_handle: ScrollHandle) -> Self {
+        self.scroll_handle = scroll_handle;
+        self
+    }
+
+    /// Override line numbers and backgrounds for individual buffer rows.
+    pub fn line_decorations(mut self, decorations: impl Into<Rc<[InputLineDecoration]>>) -> Self {
+        self.line_decorations = Some(decorations.into());
+        self
+    }
+
+    /// Update line presentation overrides at runtime.
+    pub fn set_line_decorations(
+        &mut self,
+        decorations: impl Into<Rc<[InputLineDecoration]>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.line_decorations = Some(decorations.into());
+        cx.notify();
     }
 
     /// 设置是否启用括号自动配对。
@@ -906,12 +954,15 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let was_disabled = self.disabled;
+        let was_read_only = self.read_only;
         self.disabled = false;
+        self.read_only = false;
         let text: SharedString = text.into();
         let range_utf16 = self.range_to_utf16(&(self.cursor()..self.cursor()));
         self.replace_text_in_range_silent(Some(range_utf16), &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
         self.disabled = was_disabled;
+        self.read_only = was_read_only;
     }
 
     /// Replace text at the current cursor position.
@@ -924,11 +975,14 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let was_disabled = self.disabled;
+        let was_read_only = self.read_only;
         self.disabled = false;
+        self.read_only = false;
         let text: SharedString = text.into();
         self.replace_text_in_range_silent(None, &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
         self.disabled = was_disabled;
+        self.read_only = was_read_only;
     }
 
     fn replace_text(
@@ -938,12 +992,15 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         let was_disabled = self.disabled;
+        let was_read_only = self.read_only;
         self.disabled = false;
+        self.read_only = false;
         let text: SharedString = text.into();
         let range = 0..self.text.chars().map(|c| c.len_utf16()).sum();
         self.replace_text_in_range_silent(Some(range), &text, window, cx);
         self.reset_highlighter(cx);
         self.disabled = was_disabled;
+        self.read_only = was_read_only;
     }
 
     /// Set with disabled mode.
@@ -1137,6 +1194,11 @@ impl InputState {
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.start(cx);
         });
+    }
+
+    /// Whether this input currently owns focus.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus_handle.is_focused(window)
     }
 
     pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -1900,6 +1962,28 @@ impl InputState {
         self.scroll_handle.offset()
     }
 
+    /// Scrolls a logical line near the top of the editor viewport.
+    pub fn scroll_to_line(&mut self, row: usize, cx: &mut Context<Self>) {
+        let Some(last_layout) = self.last_layout.as_ref() else {
+            return;
+        };
+        let row = row.min(self.text.lines_len().saturating_sub(1));
+        let line_height = last_layout.line_height;
+        let visible_rows = (0..row)
+            .map(|line| {
+                self.display_map
+                    .visible_wrap_row_count_for_buffer_line(line)
+            })
+            .sum::<usize>();
+        let row_offset_y = line_height * visible_rows as f32;
+        let current = self.scroll_handle.offset();
+        let top_margin = line_height * 2.0;
+        self.update_scroll_offset(
+            Some(point(current.x, (-row_offset_y + top_margin).min(px(0.0)))),
+            cx,
+        );
+    }
+
     /// Laid-out line height; `None` before first layout.
     pub fn line_height(&self) -> Option<gpui::Pixels> {
         self.last_layout.as_ref().map(|l| l.line_height)
@@ -2119,6 +2203,7 @@ impl InputState {
     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
         (self.focus_handle.is_focused(window) || self.is_context_menu_open(cx))
             && !self.disabled
+            && !self.read_only
             && self.blink_cursor.read(cx).visible()
             && window.is_window_active()
     }
@@ -2551,7 +2636,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || self.read_only {
             return;
         }
 
@@ -2648,7 +2733,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || self.read_only {
             return;
         }
 
@@ -2851,6 +2936,56 @@ mod tests {
     }
 
     #[gpui::test]
+    fn read_only_rejects_user_edits_but_allows_programmatic_updates(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("before", window, cx);
+                state.read_only = true;
+                state.replace_text_in_range(None, "blocked", window, cx);
+                assert_eq!("before", state.text.to_string());
+
+                state.set_value("after", window, cx);
+                assert_eq!("after", state.text.to_string());
+                assert!(state.read_only);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn line_decorations_preserve_blank_line_numbers(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let decorations: Rc<[InputLineDecoration]> = vec![
+            InputLineDecoration {
+                line_number: Some(10),
+                background: None,
+            },
+            InputLineDecoration {
+                line_number: None,
+                background: Some(gpui::red()),
+            },
+        ]
+        .into();
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_line_decorations(decorations.clone(), cx);
+                assert_eq!(
+                    Some(10),
+                    state.line_decorations.as_ref().unwrap()[0].line_number
+                );
+                assert_eq!(
+                    None,
+                    state.line_decorations.as_ref().unwrap()[1].line_number
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
     fn test_highlighting_preserved_after_fold(cx: &mut TestAppContext) {
         use crate::highlighter::HighlightTheme;
         use crate::input::display_map::FoldRange;
@@ -3014,6 +3149,39 @@ ORDER BY id
         assert!(
             after_select.3.y > before_scroll.y,
             "expected upward selection to move viewport up, bottom={bottom_offset}, target={target_offset}, before={before_scroll:?}, state={after_select:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn scroll_to_line_positions_the_requested_row_in_view(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let text = (0..120)
+            .map(|line| format!("select {line};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        });
+        draw_input(cx, &input);
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| state.scroll_to_line(80, cx));
+        });
+        draw_input(cx, &input);
+
+        let (offset, visible_range) = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                (state.scroll_offset(), state.visible_row_range())
+            })
+        });
+        assert!(offset.y < px(0.0));
+        assert!(
+            visible_range
+                .as_ref()
+                .is_some_and(|range| range.contains(&80)),
+            "expected row 80 to be visible, got {visible_range:?}"
         );
     }
 }

@@ -71,25 +71,70 @@ pub(crate) fn load_diff(repository: &GitRepository, change: &GitChange) -> Resul
         return untracked_file_diff(repository, change);
     }
 
-    let output = git_diff_against_head(repository, change)?;
+    let base = diff_base(repository)?;
+    if let Some(diff) = try_load_diff(repository, change, base, true)? {
+        return Ok(diff);
+    }
+    if let Some(diff) = try_load_diff(repository, change, base, false)? {
+        return Ok(diff);
+    }
+    Ok(String::new())
+}
+
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// Requests enough context lines for the side-by-side diff view to render the
+/// whole file instead of isolated hunks.
+const FULL_FILE_CONTEXT: &str = "--unified=1000000";
+
+fn diff_base(repository: &GitRepository) -> Result<&'static str> {
+    let output = run_git(
+        &repository.root,
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+    )?;
+    Ok(if output.status.success() {
+        "HEAD"
+    } else {
+        EMPTY_TREE
+    })
+}
+
+/// Loads the diff for a change, returning `Ok(None)` when the file no longer
+/// differs from HEAD (for example a stale change entry after a commit) or when
+/// the full-context command failed and the caller should retry with the
+/// default context window.
+fn try_load_diff(
+    repository: &GitRepository,
+    change: &GitChange,
+    base: &str,
+    full_context: bool,
+) -> Result<Option<String>> {
+    let output = git_diff_against_base(repository, change, base, full_context)?;
     if output.status.success() {
         let diff = String::from_utf8_lossy(&output.stdout).to_string();
         if !diff.is_empty() {
-            return Ok(diff);
+            return Ok(Some(diff));
         }
+        return Ok(None);
+    } else if full_context {
+        return Ok(None);
     }
 
     let mut combined = String::new();
+    let mut fallback_succeeded = false;
     for cached in [true, false] {
-        let fallback = git_diff(repository, change, cached)?;
+        let fallback = git_diff(repository, change, cached, full_context)?;
         if fallback.status.success() {
+            fallback_succeeded = true;
             combined.push_str(&String::from_utf8_lossy(&fallback.stdout));
         }
     }
-    if combined.is_empty() {
-        Err(git_command_error("git diff", &output))
+    if !combined.is_empty() {
+        Ok(Some(combined))
+    } else if fallback_succeeded {
+        Ok(None)
     } else {
-        Ok(combined)
+        Err(git_command_error("git diff", &output))
     }
 }
 
@@ -106,7 +151,12 @@ fn current_branch(root: &Path) -> Option<String> {
     })
 }
 
-fn git_diff_against_head(repository: &GitRepository, change: &GitChange) -> Result<Output> {
+fn git_diff_against_base(
+    repository: &GitRepository,
+    change: &GitChange,
+    base: &str,
+    full_context: bool,
+) -> Result<Output> {
     let mut command = Command::new("git");
     configure_background_child(&mut command);
     command.current_dir(&repository.root).args([
@@ -114,14 +164,21 @@ fn git_diff_against_head(repository: &GitRepository, change: &GitChange) -> Resu
         "--no-ext-diff",
         "--no-color",
         "--find-renames",
-        "HEAD",
-        "--",
     ]);
+    if full_context {
+        command.arg(FULL_FILE_CONTEXT);
+    }
+    command.args([base, "--"]);
     append_change_paths(&mut command, change);
     command.output().context("Unable to run git diff")
 }
 
-fn git_diff(repository: &GitRepository, change: &GitChange, cached: bool) -> Result<Output> {
+fn git_diff(
+    repository: &GitRepository,
+    change: &GitChange,
+    cached: bool,
+    full_context: bool,
+) -> Result<Output> {
     let mut command = Command::new("git");
     configure_background_child(&mut command);
     command.current_dir(&repository.root).args([
@@ -130,6 +187,9 @@ fn git_diff(repository: &GitRepository, change: &GitChange, cached: bool) -> Res
         "--no-color",
         "--find-renames",
     ]);
+    if full_context {
+        command.arg(FULL_FILE_CONTEXT);
+    }
     if cached {
         command.arg("--cached");
     }

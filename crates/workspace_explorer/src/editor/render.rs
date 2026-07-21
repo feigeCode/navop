@@ -1,9 +1,10 @@
-use super::{DocumentPolicy, WorkspaceEditor, format_size};
+use super::{DiffEditors, DocumentPolicy, WorkspaceEditor, format_size};
 use gpui::{
-    Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
+    AnyElement, Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Window, div, px,
 };
 use gpui_component::{
-    Disableable as _, Selectable as _, Sizable as _, Size,
+    Disableable as _, IconName, Selectable as _, Sizable as _, Size,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, LocalInputStyle},
@@ -64,6 +65,11 @@ impl WorkspaceEditor {
         let read_only = tab.is_none_or(|tab| tab.read_only);
         let unavailable = tab.is_none_or(|tab| tab.loading || tab.saving || tab.editor.is_none());
         let soft_wrap = tab.is_some_and(|tab| tab.soft_wrap);
+        let diff_available = tab.is_some_and(|tab| tab.diff.is_some());
+        let side_by_side = diff_available && tab.is_some_and(|tab| tab.diff_side_by_side);
+        let has_diff_changes = tab
+            .and_then(|tab| tab.diff.as_ref())
+            .is_some_and(|diff| !crate::diff::change_starts(diff).is_empty());
         h_flex()
             .items_center()
             .gap_2()
@@ -77,12 +83,45 @@ impl WorkspaceEditor {
             .child(self.toolbar_button(EditorAction::Replace, unavailable || read_only, cx))
             .child(self.toolbar_button(EditorAction::Reload, unavailable, cx))
             .child(
+                Button::new("workspace-diff-view")
+                    .label(t!("WorkspaceExplorer.action.side_by_side"))
+                    .selected(side_by_side)
+                    .with_size(Size::Small)
+                    .custom(self.theme.button_style(cx))
+                    .disabled(!diff_available)
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.toggle_diff_view(cx);
+                    })),
+            )
+            .child(
+                Button::new("workspace-diff-previous")
+                    .icon(IconName::ArrowUp)
+                    .ghost()
+                    .compact()
+                    .tooltip(t!("WorkspaceExplorer.action.previous_change"))
+                    .disabled(unavailable || !side_by_side || !has_diff_changes)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.previous_diff_change(cx);
+                    })),
+            )
+            .child(
+                Button::new("workspace-diff-next")
+                    .icon(IconName::ArrowDown)
+                    .ghost()
+                    .compact()
+                    .tooltip(t!("WorkspaceExplorer.action.next_change"))
+                    .disabled(unavailable || !side_by_side || !has_diff_changes)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.next_diff_change(cx);
+                    })),
+            )
+            .child(
                 Button::new("workspace-wrap")
                     .label(t!("WorkspaceExplorer.action.soft_wrap"))
                     .selected(soft_wrap)
                     .with_size(Size::Small)
                     .custom(self.theme.button_style(cx))
-                    .disabled(unavailable)
+                    .disabled(unavailable || side_by_side)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_soft_wrap(window, cx);
                     })),
@@ -129,7 +168,7 @@ impl WorkspaceEditor {
         }
     }
 
-    fn render_body(&self) -> impl IntoElement {
+    fn render_body(&self) -> AnyElement {
         let Some(tab) = self.active_tab() else {
             return v_flex().size_full().into_any_element();
         };
@@ -145,6 +184,20 @@ impl WorkspaceEditor {
         if let Some(error) = tab.load_error.as_ref() {
             return self.render_load_error(error);
         }
+        if matches!(tab.policy, DocumentPolicy::Diff) && tab.saved_text.trim().is_empty() {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .text_color(self.theme.muted_foreground)
+                .child(t!("WorkspaceExplorer.diff.empty"))
+                .into_any_element();
+        }
+        if tab.diff_side_by_side {
+            if let Some(editors) = tab.diff_editors.as_ref() {
+                return self.render_diff_view(editors);
+            }
+        }
         match tab.editor.as_ref() {
             Some(editor) => v_flex()
                 .size_full()
@@ -152,7 +205,7 @@ impl WorkspaceEditor {
                 .child(
                     Input::new(editor)
                         .size_full()
-                        .disabled(tab.read_only)
+                        .read_only(tab.read_only)
                         .highlight_theme(self.theme.highlight_theme())
                         .local_style(LocalInputStyle {
                             background: self.theme.background,
@@ -164,6 +217,82 @@ impl WorkspaceEditor {
                 .into_any_element(),
             None => v_flex().size_full().into_any_element(),
         }
+    }
+
+    fn render_diff_view(&self, editors: &DiffEditors) -> AnyElement {
+        let theme = self.theme;
+        let input_style = LocalInputStyle {
+            background: theme.background,
+            foreground: theme.foreground,
+            muted_foreground: theme.muted_foreground,
+            border: theme.border,
+        };
+
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .child(
+                h_flex()
+                    .w_full()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .bg(theme.muted)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_2()
+                            .py_1()
+                            .truncate()
+                            .child(t!("WorkspaceExplorer.diff.before")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .px_2()
+                            .py_1()
+                            .truncate()
+                            .border_l_1()
+                            .border_color(theme.border)
+                            .child(t!("WorkspaceExplorer.diff.after")),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(
+                        div().flex_1().min_w_0().h_full().overflow_hidden().child(
+                            Input::new(&editors.left)
+                                .size_full()
+                                .read_only(true)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .highlight_theme(theme.highlight_theme())
+                                .indent_guide_color(theme.border.opacity(0.28))
+                                .local_style(input_style),
+                        ),
+                    )
+                    .child(div().w(px(1.0)).h_full().flex_none().bg(theme.border))
+                    .child(
+                        div().flex_1().min_w_0().h_full().overflow_hidden().child(
+                            Input::new(&editors.right)
+                                .size_full()
+                                .read_only(true)
+                                .bordered(false)
+                                .focus_bordered(false)
+                                .highlight_theme(theme.highlight_theme())
+                                .indent_guide_color(theme.border.opacity(0.28))
+                                .local_style(input_style),
+                        ),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn render_load_error(&self, error: &str) -> gpui::AnyElement {

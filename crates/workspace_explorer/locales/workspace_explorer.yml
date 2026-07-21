@@ -22,6 +22,18 @@ WorkspaceExplorer:
       en: Wrap
       zh-CN: 自动换行
       zh-HK: 自動換行
+    side_by_side:
+      en: Side by side
+      zh-CN: 并排对比
+      zh-HK: 並排對比
+    previous_change:
+      en: Previous change
+      zh-CN: 上一个变更
+      zh-HK: 上一個變更
+    next_change:
+      en: Next change
+      zh-CN: 下一个变更
+      zh-HK: 下一個變更
     discard:
       en: Discard
       zh-CN: 放弃更改
@@ -35,6 +47,19 @@ WorkspaceExplorer:
       en: "%{name} (diff)"
       zh-CN: "%{name}（差异）"
       zh-HK: "%{name}（差異）"
+  diff:
+    before:
+      en: HEAD
+      zh-CN: HEAD 版本
+      zh-HK: HEAD 版本
+    after:
+      en: Working tree
+      zh-CN: 当前文件
+      zh-HK: 目前檔案
+    empty:
+      en: No changes compared to HEAD
+      zh-CN: 与 HEAD 相比没有差异
+      zh-HK: 與 HEAD 相比沒有差異
   status:
     loading:
       en: Loading...

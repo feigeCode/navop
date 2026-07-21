@@ -6,6 +6,7 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod diff;
 mod editor;
 mod explorer;
 mod file_system;
