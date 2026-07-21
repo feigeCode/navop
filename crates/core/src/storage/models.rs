@@ -927,6 +927,9 @@ pub struct Workspace {
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// 父工作区 ID；为空时表示根分组。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -965,6 +968,7 @@ impl Workspace {
             name,
             color: None,
             icon: None,
+            parent_id: None,
             created_at: None,
             updated_at: None,
             cloud_id: None,

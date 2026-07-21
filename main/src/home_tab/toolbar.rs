@@ -240,6 +240,10 @@ impl HomePage {
                             .tooltip(tooltip)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.connection_layout = this.connection_layout.toggle();
+                                let layout = this.connection_layout.into();
+                                AppSettings::update_and_save(cx, |settings| {
+                                    settings.home_connection_layout = layout;
+                                });
                                 cx.notify();
                             }))
                     })

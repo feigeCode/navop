@@ -25,6 +25,14 @@ TabSwitcher:
     zh-HK: 搜尋標籤頁
 
 Sidebar:
+  hide_navigation:
+    en: Hide connection tree
+    zh-CN: 收起连接树
+    zh-HK: 收起連線樹
+  show_navigation:
+    en: Show connection tree
+    zh-CN: 展开连接树
+    zh-HK: 展開連線樹
   hide_panel:
     en: Hide panel
     zh-CN: 隐藏面板

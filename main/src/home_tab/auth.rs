@@ -97,7 +97,7 @@ impl HomePage {
     }
 
     /// 显示登录对话框（OTP 模式）
-    pub(super) fn show_login_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn show_login_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity();
         show_auth_dialog(window, cx, view, |this, email, otp, cx| {
             this.verify_otp(email, otp, cx);

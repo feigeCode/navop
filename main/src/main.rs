@@ -15,6 +15,7 @@ mod license;
 mod local_terminal_profiles;
 pub mod new_connection;
 mod onetcli_app;
+mod persistent_connection_sidebar;
 mod personal_sync_conflicts;
 mod personal_sync_runtime;
 #[cfg(test)]
@@ -27,7 +28,6 @@ mod settings;
 mod sync_conflict_dialog;
 mod team_management;
 mod update;
-mod user_avatar;
 
 use crate::onetcli_app::OnetCliApp;
 use gpui::*;

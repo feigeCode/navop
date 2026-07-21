@@ -1,7 +1,12 @@
 use super::*;
 
 impl HomePage {
-    pub(super) fn match_connection_type(&self, conn: &StoredConnection) -> bool {
+    pub(crate) fn set_selected_filter(&mut self, filter: ConnectionType, cx: &mut Context<Self>) {
+        self.selected_filter = filter;
+        cx.notify();
+    }
+
+    pub(crate) fn match_connection_type(&self, conn: &StoredConnection) -> bool {
         match self.selected_filter {
             ConnectionType::All => true,
             filter_type => conn.connection_type == filter_type,

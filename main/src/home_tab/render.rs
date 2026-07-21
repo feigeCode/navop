@@ -32,6 +32,11 @@ impl TabContent for HomePage {
 
 impl Render for HomePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let global_user = GlobalCurrentUser::get_user(cx);
+        if global_user.is_none() && self.current_user.is_some() {
+            self.current_user = None;
+            self.team_options.clear();
+        }
         // 检测会话过期：token 刷新失败时由回调设置静态标志，在此处响应
         if crate::auth::check_and_reset_session_expired() {
             self.current_user = None;
@@ -83,28 +88,20 @@ impl Render for HomePage {
             .min_w_0()
             .track_focus(&self.focus_handle)
             .child(
-                h_flex()
+                v_flex()
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(self.render_sidebar(window, cx))
+                    .bg(cx.theme().background)
+                    .child(self.render_toolbar(window, cx))
                     .child(
-                        v_flex()
+                        div()
                             .flex_1()
+                            .w_full()
                             .min_w_0()
-                            .h_full()
                             .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .child(self.render_toolbar(window, cx))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .w_full()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .bg(cx.theme().muted)
-                                    .child(self.render_content_area(cx)),
-                            ),
+                            .bg(cx.theme().muted)
+                            .child(self.render_content_area(cx)),
                     ),
             )
     }

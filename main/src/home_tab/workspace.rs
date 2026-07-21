@@ -4,6 +4,7 @@ impl HomePage {
     pub(crate) fn handle_save_workspace(
         &mut self,
         workspace_id: Option<i64>,
+        parent_id: Option<i64>,
         name: String,
         sort_order: Option<i32>,
         cx: &mut Context<Self>,
@@ -20,11 +21,13 @@ impl HomePage {
                 .cloned()
                 .unwrap_or_else(|| Workspace::new(name.clone()));
             ws.name = name;
+            ws.parent_id = parent_id.or(ws.parent_id);
             ws.sort_order = sort_order.or(ws.sort_order);
             ws
         } else {
             // 新建模式
             let mut workspace = Workspace::new(name);
+            workspace.parent_id = parent_id;
             workspace.sort_order = sort_order;
             workspace
         };

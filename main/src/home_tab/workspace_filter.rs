@@ -93,9 +93,12 @@ impl HomePage {
                                                     view_new.read(cx).workspaces.len() as i32;
                                                 show_workspace_dialog(
                                                     view_new.clone(),
-                                                    None,
-                                                    String::new(),
-                                                    Some(sort_order),
+                                                    WorkspaceDialogConfig {
+                                                        workspace_id: None,
+                                                        parent_id: None,
+                                                        initial_name: String::new(),
+                                                        initial_sort_order: Some(sort_order),
+                                                    },
                                                     window,
                                                     cx,
                                                 );
@@ -176,11 +179,6 @@ impl HomePage {
 
     pub(super) fn clear_workspace_filter(&mut self, cx: &mut Context<Self>) {
         self.filtered_workspace_ids.clear();
-        cx.notify();
-    }
-
-    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
         cx.notify();
     }
 }

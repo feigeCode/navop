@@ -1,6 +1,15 @@
 use super::*;
 
 impl HomePage {
+    pub(crate) fn set_connection_layout(
+        &mut self,
+        layout: HomeConnectionLayout,
+        cx: &mut Context<Self>,
+    ) {
+        self.connection_layout = layout.into();
+        cx.notify();
+    }
+
     pub(super) fn render_content_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let search_query = self.search_query.read(cx).to_lowercase();
         let selected_id = self.selected_connection_id;

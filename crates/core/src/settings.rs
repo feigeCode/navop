@@ -88,6 +88,30 @@ pub enum StartupDefaultPage {
     AiWorkbench,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HomeConnectionLayout {
+    #[default]
+    Card,
+    List,
+}
+
+impl HomeConnectionLayout {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Card => "card",
+            Self::List => "list",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "list" => Self::List,
+            _ => Self::Card,
+        }
+    }
+}
+
 impl StartupDefaultPage {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -642,6 +666,10 @@ pub struct AppSettings {
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
     #[serde(default)]
     pub startup_default_page: StartupDefaultPage,
+    #[serde(default)]
+    pub home_connection_layout: HomeConnectionLayout,
+    #[serde(default = "default_true")]
+    pub connection_sidebar_expanded: bool,
     /// 是否启用SQL查询的自动保存功能
     #[serde(default = "default_true")]
     pub enable_sql_auto_save: bool,
@@ -925,6 +953,8 @@ impl Default for AppSettings {
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
+            home_connection_layout: HomeConnectionLayout::default(),
+            connection_sidebar_expanded: true,
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
             system_hotkey_macos: default_system_hotkey_macos(),
@@ -1109,7 +1139,7 @@ mod tests {
     use gpui_component::Theme;
 
     use super::{
-        AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        AppSettings, CustomFont, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
         LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
         default_grid_font_fallback_families, default_grid_monospace_font_family,
@@ -1264,6 +1294,26 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(StartupDefaultPage::Home, settings.startup_default_page);
+    }
+
+    #[test]
+    fn app_settings_default_keeps_home_cards_and_connection_tree_visible() {
+        let settings = AppSettings::default();
+
+        assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
+        assert!(settings.connection_sidebar_expanded);
+    }
+
+    #[test]
+    fn app_settings_deserializes_connection_display_preferences() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "home_connection_layout": "list",
+            "connection_sidebar_expanded": false
+        }))
+        .expect("connection display preferences should deserialize");
+
+        assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
+        assert!(!settings.connection_sidebar_expanded);
     }
 
     #[test]

@@ -233,7 +233,7 @@ impl HomePage {
         ))
     }
 
-    pub(super) fn open_team_management(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_team_management(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.team_management_url() {
             Ok(url) => cx.open_url(&url),
             Err(message) => window.push_notification(message, cx),

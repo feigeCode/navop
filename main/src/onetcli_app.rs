@@ -1,6 +1,7 @@
 use crate::home_tab::{
     HomePage, NewConnectionShortcut, OpenConnectionQuickOpen, OpenLocalTerminalShortcut,
 };
+use crate::persistent_connection_sidebar::PersistentConnectionSidebar;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
     Styled, Window, actions, div,
@@ -140,7 +141,7 @@ use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::settings::{AppSettings, MainWindowSize, StartupDefaultPage};
 use one_core::storage::manager::get_config_dir;
-use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
+use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistry, TabItem};
 use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
@@ -959,6 +960,7 @@ fn init_action_handlers(cx: &mut App) {
 
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
+    connection_sidebar: Entity<PersistentConnectionSidebar>,
     quit_state: QuitRequestState,
 }
 
@@ -977,12 +979,14 @@ impl OnetCliApp {
             false
         });
 
+        let connection_sidebar_expanded = AppSettings::current(cx).connection_sidebar_expanded;
         let tab_container = cx.new(|cx| {
             let mut container = TabContainer::new(window, cx)
                 .with_tab_bar_colors(
                     Some(gpui::rgb(0x2b2b2b).into()),
                     Some(gpui::rgb(0x1e1e1e).into()),
                 )
+                .with_navigation_sidebar_toggle(connection_sidebar_expanded)
                 .with_tab_item_colors(
                     Some(gpui::rgb(0x555555).into()),
                     Some(gpui::rgb(0x3a3a3a).into()),
@@ -993,7 +997,7 @@ impl OnetCliApp {
             #[cfg(target_os = "macos")]
             {
                 container = container
-                    .with_left_padding(px(80.0))
+                    .with_left_padding(px(0.0))
                     .with_top_padding(px(4.0));
             }
 
@@ -1026,15 +1030,19 @@ impl OnetCliApp {
         cx.set_global(GlobalTabContainer {
             tab_container: tab_container.clone(),
         });
+        let tab_container_clone = tab_container.clone();
+        let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
+        cx.set_global(GlobalHomePage {
+            home_page: home_page.clone(),
+        });
+        let connection_sidebar = cx.new(|cx| {
+            PersistentConnectionSidebar::new(home_page.clone(), connection_sidebar_expanded, cx)
+        });
+
         // Initialize fixed tabs before the scrollable workspace tabs.
         {
             let layout = initial_home_tab_layout(AppSettings::current(cx).startup_default_page);
-            let tab_container_clone = tab_container.clone();
             tab_container.update(cx, |tc, cx| {
-                let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
-                cx.set_global(GlobalHomePage {
-                    home_page: home_page.clone(),
-                });
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page);
                 tc.add_pinned_tab(home_tab, cx);
 
@@ -1057,10 +1065,34 @@ impl OnetCliApp {
             });
         }
 
+        cx.subscribe(&tab_container, |this, _, event: &TabContainerEvent, cx| {
+            if let TabContainerEvent::NavigationSidebarToggled { expanded } = event {
+                this.set_connection_sidebar_expanded(*expanded, cx);
+            }
+        })
+        .detach();
+
         Self {
             tab_container,
+            connection_sidebar,
             quit_state: QuitRequestState::default(),
         }
+    }
+
+    pub(crate) fn set_connection_sidebar_expanded(
+        &mut self,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        AppSettings::update_and_save(cx, |settings| {
+            settings.connection_sidebar_expanded = expanded;
+        });
+        self.connection_sidebar
+            .update(cx, |sidebar, cx| sidebar.set_tree_expanded(expanded, cx));
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_navigation_sidebar_expanded(expanded, cx)
+        });
+        cx.notify();
     }
 
     fn save_main_window_size(&self, window: &Window, cx: &mut App) {
@@ -1434,7 +1466,20 @@ impl Render for OnetCliApp {
             .size_full()
             .relative()
             .bg(cx.theme().background)
-            .child(div().size_full().child(self.tab_container.clone()))
+            .child(
+                gpui_component::h_flex()
+                    .size_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.connection_sidebar.clone())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(self.tab_container.clone()),
+                    ),
+            )
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

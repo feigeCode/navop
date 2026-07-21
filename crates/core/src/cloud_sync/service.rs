@@ -481,6 +481,7 @@ impl CloudSyncService {
             name: plain_data.name,
             color: plain_data.color,
             icon: plain_data.icon,
+            parent_id: None,
             created_at: None,
             updated_at: Some(cloud_data.updated_at / 1000),
             cloud_id: Some(cloud_data.id.clone()),
