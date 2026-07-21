@@ -122,6 +122,19 @@ fn seed_pre_scope_database(connection: &Connection) {
                 role TEXT,
                 key_verification TEXT
              );
+             CREATE TABLE quick_commands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                command TEXT NOT NULL,
+                description TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                connection_id INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                group_name TEXT,
+                group_color TEXT
+             );
              INSERT INTO team_key_cache VALUES (
                 'team-1', 'Platform', 1, 'unsafe-secret', 1, 1, 'admin', 'verify'
              );",
