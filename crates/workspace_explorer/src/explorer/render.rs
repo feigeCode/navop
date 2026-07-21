@@ -171,8 +171,9 @@ impl Render for WorkspaceExplorer {
         if self.branch_manager.is_none() {
             if let Some(repository) = self.repository.clone() {
                 let explorer = cx.entity().downgrade();
+                let theme = self.theme;
                 self.branch_manager = Some(cx.new(|cx| {
-                    super::branches::BranchManager::new(repository, explorer, window, cx)
+                    super::branches::BranchManager::new(repository, explorer, theme, window, cx)
                 }));
             }
         }

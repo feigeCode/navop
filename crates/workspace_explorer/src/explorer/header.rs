@@ -67,6 +67,7 @@ impl WorkspaceExplorer {
                 this.child(
                     Popover::new("workspace-branch-manager")
                         .anchor(Anchor::TopRight)
+                        .appearance(false)
                         .track_focus(&search_focus)
                         .trigger(
                             Button::new("workspace-current-branch")
@@ -74,6 +75,7 @@ impl WorkspaceExplorer {
                                 .icon(IconName::ChevronsUpDown)
                                 .ghost()
                                 .compact()
+                                .custom(self.theme.button_style(cx))
                                 .tooltip(t!("WorkspaceExplorer.branch.manage")),
                         )
                         .content(move |_, _, _| manager.clone()),

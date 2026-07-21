@@ -3,29 +3,23 @@ use crate::git::{
     GitBranch, GitBranchKind, GitRepository, create_branch, delete_branch, fetch_branches,
     load_branches, merge_branch, rename_branch, switch_branch,
 };
+use crate::theme::WorkspaceTheme;
 use gpui::{
     Anchor, AnyElement, AppContext as _, AsyncApp, Context, Entity, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _, Size,
-    WindowExt as _,
+    Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputEvent, InputState},
+    input::{Input, InputEvent, InputState, LocalInputStyle},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     notification::Notification,
     v_flex,
 };
 use rust_i18n::t;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BranchTab {
-    Local,
-    Remote,
-}
 
 enum BranchOperation {
     Switch(GitBranch),
@@ -52,8 +46,8 @@ impl BranchOperation {
 pub(super) struct BranchManager {
     repository: GitRepository,
     explorer: WeakEntity<WorkspaceExplorer>,
+    theme: WorkspaceTheme,
     branches: Vec<GitBranch>,
-    active_tab: BranchTab,
     search: Entity<InputState>,
     query: String,
     loading: bool,
@@ -66,6 +60,7 @@ impl BranchManager {
     pub(super) fn new(
         repository: GitRepository,
         explorer: WeakEntity<WorkspaceExplorer>,
+        theme: WorkspaceTheme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -82,8 +77,8 @@ impl BranchManager {
         let mut this = Self {
             repository,
             explorer,
+            theme,
             branches: Vec::new(),
-            active_tab: BranchTab::Local,
             search,
             query: String::new(),
             loading: false,
@@ -97,6 +92,11 @@ impl BranchManager {
 
     pub(super) fn search_input(&self) -> &Entity<InputState> {
         &self.search
+    }
+
+    pub(super) fn set_theme(&mut self, theme: WorkspaceTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
@@ -123,16 +123,7 @@ impl BranchManager {
         cx.notify();
     }
 
-    fn set_tab(&mut self, tab: BranchTab, cx: &mut Context<Self>) {
-        self.active_tab = tab;
-        cx.notify();
-    }
-
-    fn filtered_branches(&self) -> Vec<GitBranch> {
-        let kind = match self.active_tab {
-            BranchTab::Local => GitBranchKind::Local,
-            BranchTab::Remote => GitBranchKind::Remote,
-        };
+    fn filtered_branches(&self, kind: GitBranchKind) -> Vec<GitBranch> {
         self.branches
             .iter()
             .filter(|branch| {
@@ -186,7 +177,9 @@ impl BranchManager {
                         }
                     }
                     this.reload(cx);
-                    let _ = explorer.update(cx, |explorer, cx| explorer.refresh(cx));
+                    let _ = explorer.update(cx, |explorer, cx| {
+                        explorer.refresh_after_branch_operation(cx);
+                    });
                     cx.notify();
                 });
             });
@@ -361,9 +354,12 @@ impl BranchManager {
             .h(px(32.0))
             .px_2()
             .rounded(px(4.0))
+            .when(branch.current, |this| {
+                this.bg(self.theme.accent.opacity(0.32))
+            })
             .when(!branch.current && !self.operating, |this| {
                 this.cursor_pointer()
-                    .hover(|style| style.bg(cx.theme().muted))
+                    .hover(|style| style.bg(self.theme.muted))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.execute(
                             BranchOperation::Switch(branch_for_switch.clone()),
@@ -381,7 +377,12 @@ impl BranchManager {
                 } else {
                     IconName::Dash
                 })
-                .with_size(Size::XSmall),
+                .with_size(Size::XSmall)
+                .text_color(if branch.current {
+                    self.theme.accent
+                } else {
+                    self.theme.muted_foreground
+                }),
             )
             .child(
                 v_flex()
@@ -393,7 +394,7 @@ impl BranchManager {
                             div()
                                 .truncate()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(self.theme.muted_foreground)
                                 .child(upstream),
                         )
                     }),
@@ -411,16 +412,51 @@ impl BranchManager {
         .icon(IconName::Ellipsis)
         .ghost()
         .compact()
+        .custom(self.theme.button_style(cx))
         .disabled(self.operating)
         .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
             build_branch_actions_menu(menu, manager.clone(), branch.clone(), window, cx)
         })
     }
+
+    fn render_branch_section(
+        &self,
+        title: String,
+        branches: Vec<GitBranch>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .when(!branches.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .h(px(28.0))
+                        .px_2()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(self.theme.muted_foreground)
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .with_size(Size::XSmall)
+                                .text_color(self.theme.muted_foreground),
+                        )
+                        .child(title),
+                )
+                .children(
+                    branches
+                        .into_iter()
+                        .map(|branch| self.render_branch(branch, cx)),
+                )
+            })
+            .into_any_element()
+    }
 }
 
 impl Render for BranchManager {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let branches = self.filtered_branches();
+        let local = self.filtered_branches(GitBranchKind::Local);
+        let remote = self.filtered_branches(GitBranchKind::Remote);
         let local_count = self
             .branches
             .iter()
@@ -431,25 +467,48 @@ impl Render for BranchManager {
             .iter()
             .filter(|branch| branch.kind == GitBranchKind::Remote)
             .count();
+        let show_create = self.query.is_empty()
+            || t!("WorkspaceExplorer.branch.create")
+                .to_lowercase()
+                .contains(&self.query);
+        let show_fetch = self.query.is_empty()
+            || t!("WorkspaceExplorer.branch.fetch")
+                .to_lowercase()
+                .contains(&self.query);
+        let input_style = LocalInputStyle {
+            background: self.theme.muted,
+            foreground: self.theme.foreground,
+            muted_foreground: self.theme.muted_foreground,
+            border: self.theme.border,
+        };
         v_flex()
-            .w(px(380.0))
-            .max_h(px(500.0))
+            .w(px(420.0))
+            .max_h(px(560.0))
             .gap_2()
+            .p_3()
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.background)
+            .text_color(self.theme.foreground)
             .child(
                 h_flex()
                     .items_center()
                     .gap_1()
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Input::new(&self.search).w_full()),
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.search)
+                                .w_full()
+                                .prefix(Icon::new(IconName::Search))
+                                .local_style(input_style),
+                        ),
                     )
                     .child(
                         Button::new("workspace-branch-create")
                             .icon(IconName::Plus)
                             .ghost()
                             .compact()
+                            .custom(self.theme.button_style(cx))
                             .tooltip(t!("WorkspaceExplorer.branch.create"))
                             .disabled(self.operating)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -461,6 +520,7 @@ impl Render for BranchManager {
                             .icon(IconName::Refresh)
                             .ghost()
                             .compact()
+                            .custom(self.theme.button_style(cx))
                             .tooltip(t!("WorkspaceExplorer.branch.fetch"))
                             .disabled(self.operating)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -473,41 +533,13 @@ impl Render for BranchManager {
                             })),
                     ),
             )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("workspace-branches-local")
-                            .label(
-                                t!("WorkspaceExplorer.branch.local", count = local_count)
-                                    .to_string(),
-                            )
-                            .selected(self.active_tab == BranchTab::Local)
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_tab(BranchTab::Local, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("workspace-branches-remote")
-                            .label(
-                                t!("WorkspaceExplorer.branch.remote", count = remote_count)
-                                    .to_string(),
-                            )
-                            .selected(self.active_tab == BranchTab::Remote)
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_tab(BranchTab::Remote, cx);
-                            })),
-                    ),
-            )
             .when_some(self.error.clone(), |this, error| {
                 this.child(
                     div()
                         .px_2()
                         .py_1()
                         .text_xs()
-                        .text_color(cx.theme().danger)
+                        .text_color(self.theme.danger)
                         .child(error),
                 )
             })
@@ -515,31 +547,93 @@ impl Render for BranchManager {
                 v_flex()
                     .id("workspace-branch-list")
                     .min_h(px(120.0))
-                    .max_h(px(360.0))
+                    .max_h(px(430.0))
                     .overflow_y_scroll()
+                    .when(show_fetch, |this| {
+                        this.child(
+                            h_flex()
+                                .id("workspace-branch-action-fetch")
+                                .items_center()
+                                .gap_2()
+                                .h(px(34.0))
+                                .px_2()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(self.theme.muted))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.execute(
+                                        BranchOperation::Fetch,
+                                        t!("WorkspaceExplorer.branch.fetched").to_string(),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .child(
+                                    Icon::new(IconName::Refresh)
+                                        .with_size(Size::Small)
+                                        .text_color(self.theme.muted_foreground),
+                                )
+                                .child(t!("WorkspaceExplorer.branch.fetch")),
+                        )
+                    })
+                    .when(show_create, |this| {
+                        this.child(
+                            h_flex()
+                                .id("workspace-branch-action-create")
+                                .items_center()
+                                .gap_2()
+                                .h(px(34.0))
+                                .px_2()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(self.theme.muted))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.prompt_create(window, cx);
+                                }))
+                                .child(
+                                    Icon::new(IconName::Plus)
+                                        .with_size(Size::Small)
+                                        .text_color(self.theme.muted_foreground),
+                                )
+                                .child(t!("WorkspaceExplorer.branch.create")),
+                        )
+                    })
+                    .when(show_create || show_fetch, |this| {
+                        this.child(div().h(px(1.0)).my_2().mx_1().bg(self.theme.border))
+                    })
                     .when(self.loading, |this| {
                         this.child(
                             div()
                                 .p_3()
                                 .text_sm()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(self.theme.muted_foreground)
                                 .child(t!("WorkspaceExplorer.branch.loading")),
                         )
                     })
-                    .when(!self.loading && branches.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .p_3()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("WorkspaceExplorer.branch.empty")),
-                        )
-                    })
-                    .children(
-                        branches
-                            .into_iter()
-                            .map(|branch| self.render_branch(branch, cx)),
-                    ),
+                    .when(
+                        !self.loading && local.is_empty() && remote.is_empty(),
+                        |this| {
+                            this.child(
+                                div()
+                                    .p_3()
+                                    .text_sm()
+                                    .text_color(self.theme.muted_foreground)
+                                    .child(t!("WorkspaceExplorer.branch.empty")),
+                            )
+                        },
+                    )
+                    .when(!self.loading, |this| {
+                        this.child(self.render_branch_section(
+                            t!("WorkspaceExplorer.branch.local", count = local_count).to_string(),
+                            local,
+                            cx,
+                        ))
+                        .child(self.render_branch_section(
+                            t!("WorkspaceExplorer.branch.remote", count = remote_count).to_string(),
+                            remote,
+                            cx,
+                        ))
+                    }),
             )
     }
 }

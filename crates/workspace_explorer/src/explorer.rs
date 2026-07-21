@@ -131,6 +131,9 @@ impl WorkspaceExplorer {
 
     pub fn set_theme(&mut self, theme: WorkspaceTheme, cx: &mut Context<Self>) {
         self.theme = theme;
+        if let Some(manager) = self.branch_manager.as_ref() {
+            manager.update(cx, |manager, cx| manager.set_theme(theme, cx));
+        }
         self.editor
             .update(cx, |editor, cx| editor.set_theme(theme, cx));
         cx.notify();
@@ -140,6 +143,17 @@ impl WorkspaceExplorer {
         if let Some(manager) = self.branch_manager.as_ref() {
             manager.update(cx, |manager, cx| manager.reload(cx));
         }
+        self.refresh_workspace(cx);
+    }
+
+    /// Refreshes repository and file state after an operation initiated by the
+    /// branch manager. The manager refreshes itself before calling this method,
+    /// so updating it again here would recursively lease the same GPUI entity.
+    pub(super) fn refresh_after_branch_operation(&mut self, cx: &mut Context<Self>) {
+        self.refresh_workspace(cx);
+    }
+
+    fn refresh_workspace(&mut self, cx: &mut Context<Self>) {
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
         let generation = self.refresh_generation;
         self.loading = true;
