@@ -1,3 +1,4 @@
+use one_core::settings::StartupDefaultPage;
 use super::*;
 
 impl HomePage {
