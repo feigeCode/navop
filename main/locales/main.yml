@@ -2625,29 +2625,29 @@ Settings:
 # 许可证/订阅
 License:
   upgrade_title:
-    en: Upgrade to Pro
-    zh-CN: 升级到 Pro
-    zh-HK: 升級到 Pro
+    en: Enable Cloud Sync
+    zh-CN: 启用云同步
+    zh-HK: 啟用雲同步
   upgrade_message:
-    en: Unlock cloud sync to seamlessly sync your data across devices.
-    zh-CN: 解锁云同步功能，让你的数据在多设备间无缝同步。
-    zh-HK: 解鎖雲同步功能，讓你的數據在多設備間無縫同步。
+    en: Seamlessly sync your data across devices with cloud sync.
+    zh-CN: 使用云同步，在多设备间无缝同步数据。
+    zh-HK: 使用雲同步，在多裝置間無縫同步數據。
   upgrade_button:
     en: Learn More
     zh-CN: 了解更多
     zh-HK: 了解更多
   upgrade_to_pro:
-    en: Upgrade to Pro
-    zh-CN: 升级 Pro
-    zh-HK: 升級 Pro
+    en: Enable Cloud Sync
+    zh-CN: 启用云同步
+    zh-HK: 啟用雲同步
   feature_cloud_sync:
     en: Cloud Data Sync
     zh-CN: 云端数据同步
     zh-HK: 雲端數據同步
   pro_required:
-    en: This feature requires a Pro subscription
-    zh-CN: 此功能需要 Pro 订阅
-    zh-HK: 此功能需要 Pro 訂閱
+    en: Cloud sync is not enabled for the current account
+    zh-CN: 当前账户暂未启用云同步
+    zh-HK: 當前帳戶暫未啟用雲同步
   import_offline:
     en: Import Offline License
     zh-CN: 导入离线 License
