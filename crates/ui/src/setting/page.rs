@@ -6,8 +6,9 @@ use gpui::{
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme, Icon, IconName, Sizable, StyledExt,
-    button::{Button, ButtonVariants},
+    ActiveTheme, Icon, IconName, Sizable, StyledExt, WindowExt,
+    button::{Button, ButtonVariant, ButtonVariants},
+    dialog::DialogButtonProps,
     h_flex,
     label::Label,
     scroll::ScrollableElement,
@@ -168,7 +169,34 @@ impl SettingPage {
                                     .on_click({
                                         let page = self.clone();
                                         move |_, window, cx| {
-                                            page.reset_all(window, cx);
+                                            let page = page.clone();
+                                            window.open_alert_dialog(cx, move |alert, _, _| {
+                                                let page = page.clone();
+                                                alert
+                                                    .title(
+                                                        t!("Settings.reset_confirm_title")
+                                                            .to_string(),
+                                                    )
+                                                    .description(
+                                                        t!(
+                                                            "Settings.reset_confirm_description"
+                                                        )
+                                                        .to_string(),
+                                                    )
+                                                    .button_props(
+                                                        DialogButtonProps::default()
+                                                            .ok_text(
+                                                                t!("Settings.Reset All")
+                                                                    .to_string(),
+                                                            )
+                                                            .ok_variant(ButtonVariant::Danger)
+                                                            .show_cancel(true),
+                                                    )
+                                                    .on_ok(move |_, window, cx| {
+                                                        page.reset_all(window, cx);
+                                                        true
+                                                    })
+                                            });
                                         }
                                     }),
                             )

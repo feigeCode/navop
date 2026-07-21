@@ -254,6 +254,16 @@ Settings:
     zh-CN: 重置全部
     zh-HK: 重置全部
     it: Resetta Tutto
+  reset_confirm_title:
+    en: Reset All Settings?
+    zh-CN: 重置全部设置？
+    zh-HK: 重置全部設定？
+    it: Reimpostare tutte le impostazioni?
+  reset_confirm_description:
+    en: All settings on this page will be restored to their default values. This action cannot be undone.
+    zh-CN: 此页面的所有设置将恢复为默认值，此操作无法撤销。
+    zh-HK: 此頁面的所有設定將恢復為預設值，此操作無法復原。
+    it: Tutte le impostazioni di questa pagina verranno ripristinate ai valori predefiniti. Questa azione non può essere annullata.
 Pagination:
   previous:
     en: Previous
