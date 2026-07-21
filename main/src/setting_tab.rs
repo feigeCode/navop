@@ -66,7 +66,7 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
-    HomeConnectionLayout, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    HomeConnectionLayout, HomePageStyle, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
     LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
@@ -512,6 +512,50 @@ impl SettingsPanel {
                         .title(t!("Settings.General.ConnectionDisplay.group_title"))
                         .items(vec![
                             SettingItem::new(
+                                t!("Settings.General.ConnectionDisplay.home_style"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            HomePageStyle::Legacy.as_str().into(),
+                                            t!("Settings.General.ConnectionDisplay.home_style_legacy")
+                                                .into(),
+                                        ),
+                                        (
+                                            HomePageStyle::Modern.as_str().into(),
+                                            t!("Settings.General.ConnectionDisplay.home_style_modern")
+                                                .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).home_page_style.as_str(),
+                                        )
+                                    },
+                                    |value: SharedString, cx: &mut App| {
+                                        let style = HomePageStyle::from_value(&value);
+                                        let app = cx
+                                            .try_global::<GlobalOnetCliApp>()
+                                            .map(|global| global.app.clone());
+                                        if let Some(app) = app {
+                                            app.update(cx, |app, cx| {
+                                                app.set_home_page_style(style, cx)
+                                            });
+                                        } else {
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.home_page_style = style;
+                                            });
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.home_page_style.as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.ConnectionDisplay.home_style_desc")
+                                    .to_string(),
+                            ),
+                            SettingItem::new(
                                 t!("Settings.General.ConnectionDisplay.home_layout"),
                                 SettingField::dropdown(
                                     vec![
@@ -552,33 +596,6 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.ConnectionDisplay.home_layout_desc")
-                                    .to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.ConnectionDisplay.connection_tree"),
-                                SettingField::switch(
-                                    |cx: &App| {
-                                        AppSettings::global(cx).connection_sidebar_expanded
-                                    },
-                                    |expanded: bool, cx: &mut App| {
-                                        let app = cx
-                                            .try_global::<GlobalOnetCliApp>()
-                                            .map(|global| global.app.clone());
-                                        if let Some(app) = app {
-                                            app.update(cx, |app, cx| {
-                                                app.set_connection_sidebar_expanded(expanded, cx)
-                                            });
-                                        } else {
-                                            AppSettings::update_and_save(cx, |settings| {
-                                                settings.connection_sidebar_expanded = expanded;
-                                            });
-                                        }
-                                    },
-                                )
-                                .default_value(default_settings.connection_sidebar_expanded),
-                            )
-                            .description(
-                                t!("Settings.General.ConnectionDisplay.connection_tree_desc")
                                     .to_string(),
                             ),
                         ]),

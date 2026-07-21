@@ -142,7 +142,7 @@ use gpui::px;
 use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::{AppSettings, MainWindowSize, StartupDefaultPage};
+use one_core::settings::{AppSettings, HomePageStyle, MainWindowSize, StartupDefaultPage};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistry, TabItem};
 use one_core::tab_navigation::{
@@ -964,6 +964,7 @@ fn init_action_handlers(cx: &mut App) {
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
+    home_page_style: HomePageStyle,
     quit_state: QuitRequestState,
 }
 
@@ -982,14 +983,16 @@ impl OnetCliApp {
             false
         });
 
-        let connection_sidebar_expanded = AppSettings::current(cx).connection_sidebar_expanded;
+        let settings = AppSettings::current(cx);
+        let connection_sidebar_expanded = settings.connection_sidebar_expanded;
+        let home_page_style = settings.home_page_style;
+        let show_persistent_sidebar = home_page_style.uses_persistent_sidebar();
         let tab_container = cx.new(|cx| {
             let mut container = TabContainer::new(window, cx)
                 .with_tab_bar_colors(
                     Some(gpui::rgb(0x2b2b2b).into()),
                     Some(gpui::rgb(0x1e1e1e).into()),
                 )
-                .with_navigation_sidebar_toggle(connection_sidebar_expanded)
                 .with_tab_item_colors(
                     Some(gpui::rgb(0x555555).into()),
                     Some(gpui::rgb(0x3a3a3a).into()),
@@ -997,10 +1000,18 @@ impl OnetCliApp {
                 .with_inactive_tab_bg_color(Some(gpui::rgb(0x3a3a3a).into()))
                 .with_tab_content_colors(Some(gpui::white()), Some(gpui::rgb(0xaaaaaa).into()));
 
+            if show_persistent_sidebar {
+                container = container.with_navigation_sidebar_toggle(connection_sidebar_expanded);
+            }
+
             #[cfg(target_os = "macos")]
             {
                 container = container
-                    .with_left_padding(px(0.0))
+                    .with_left_padding(if show_persistent_sidebar {
+                        px(0.0)
+                    } else {
+                        px(80.0)
+                    })
                     .with_top_padding(px(4.0));
             }
 
@@ -1079,7 +1090,9 @@ impl OnetCliApp {
             &tab_container,
             |this, _, event: &TabContainerEvent, cx| match event {
                 TabContainerEvent::NavigationSidebarToggled { expanded } => {
-                    this.set_connection_sidebar_expanded(*expanded, cx);
+                    if this.home_page_style.uses_persistent_sidebar() {
+                        this.set_connection_sidebar_expanded(*expanded, cx);
+                    }
                 }
                 TabContainerEvent::LayoutChanged
                 | TabContainerEvent::TabActivated { .. }
@@ -1093,8 +1106,46 @@ impl OnetCliApp {
         Self {
             tab_container,
             connection_sidebar,
+            home_page_style,
             quit_state: QuitRequestState::default(),
         }
+    }
+
+    pub(crate) fn set_home_page_style(&mut self, style: HomePageStyle, cx: &mut Context<Self>) {
+        self.home_page_style = style;
+        AppSettings::update_and_save(cx, |settings| settings.home_page_style = style);
+
+        if let Some(home) = cx
+            .try_global::<GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        {
+            home.update(cx, |home, cx| {
+                home.set_home_page_style(style, cx);
+                home.set_persistent_sidebar_expanded(
+                    style.uses_persistent_sidebar()
+                        && AppSettings::current(cx).connection_sidebar_expanded,
+                    cx,
+                );
+            });
+        }
+
+        let expanded = self.connection_sidebar.read(cx).is_expanded();
+        self.tab_container.update(cx, |tabs, cx| {
+            tabs.set_navigation_sidebar_toggle(
+                style.uses_persistent_sidebar().then_some(expanded),
+                cx,
+            );
+            #[cfg(target_os = "macos")]
+            tabs.set_left_padding(
+                if style.uses_persistent_sidebar() {
+                    px(0.0)
+                } else {
+                    px(80.0)
+                },
+                cx,
+            );
+        });
+        cx.notify();
     }
 
     pub(crate) fn set_connection_sidebar_expanded(
@@ -1105,6 +1156,14 @@ impl OnetCliApp {
         AppSettings::update_and_save(cx, |settings| {
             settings.connection_sidebar_expanded = expanded;
         });
+        if let Some(home) = cx
+            .try_global::<GlobalHomePage>()
+            .map(|global| global.home_page.clone())
+        {
+            home.update(cx, |home, cx| {
+                home.set_persistent_sidebar_expanded(expanded, cx)
+            });
+        }
         self.connection_sidebar
             .update(cx, |sidebar, cx| sidebar.set_tree_expanded(expanded, cx));
         self.tab_container.update(cx, |tabs, cx| {
@@ -1244,6 +1303,21 @@ mod tests {
         assert!(source.contains("when(connection_sidebar_expanded"));
         assert!(sidebar_source.contains("fn is_expanded"));
         assert!(!sidebar_source.contains(".when(self.tree_expanded"));
+    }
+
+    #[test]
+    fn home_style_switches_between_legacy_home_and_modern_persistent_sidebar() {
+        let app = include_str!("onetcli_app.rs");
+        let home = include_str!("home_tab/render.rs");
+        let settings = include_str!("setting_tab.rs");
+
+        assert!(app.contains("home_page_style.uses_persistent_sidebar()"));
+        assert!(app.contains("set_navigation_sidebar_toggle("));
+        assert!(home.contains("HomePageStyle::Legacy"));
+        assert!(home.contains("self.render_sidebar(window, cx)"));
+        assert!(settings.contains("HomePageStyle::Legacy"));
+        assert!(settings.contains("HomePageStyle::Modern"));
+        assert!(!settings.contains("ConnectionDisplay.connection_tree"));
     }
 
     #[test]
@@ -1513,7 +1587,8 @@ impl Render for OnetCliApp {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
-        let connection_sidebar_expanded = self.connection_sidebar.read(cx).is_expanded();
+        let connection_sidebar_expanded = self.home_page_style.uses_persistent_sidebar()
+            && self.connection_sidebar.read(cx).is_expanded();
 
         div()
             .size_full()

@@ -107,7 +107,9 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
 
     assert!(toolbar.contains("Input::new(&self.search_input)"));
     assert!(content.contains("max_w(px(1160.0))"));
-    assert!(content.contains("w(px(280.0))"));
+    assert!(content.contains("MODERN_HOME_CARD_MIN_WIDTH"));
+    assert!(content.contains("MODERN_HOME_CARD_MAX_WIDTH"));
+    assert!(content.contains(".flex_grow(1.0)"));
     assert!(card.contains("h(px(76.0))"));
     assert!(!card.contains(".shadow_sm()\n            .group"));
 }
@@ -117,6 +119,48 @@ fn sidebar_search_aligns_with_home_toolbar_height() {
     let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
     assert!(tree.contains("fn render_tree_search"));
     assert!(tree.contains(".h_10()"));
+}
+
+#[test]
+fn legacy_and_modern_home_layouts_are_both_kept() {
+    let render = include_str!("../render.rs");
+    let content = include_str!("../content.rs");
+    let card = include_str!("../connection_card.rs");
+    let sidebar = include_str!("../sidebar.rs");
+
+    assert!(render.contains("self.home_page_style == HomePageStyle::Legacy"));
+    assert!(content.contains("slot.w(px(320.0)).flex_shrink_0()"));
+    assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
+    assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
+    assert!(sidebar.contains("legacy-home-sidebar-toggle"));
+    assert!(sidebar.contains("IconName::UserColor"));
+}
+
+#[test]
+fn modern_home_cards_are_small_and_fill_each_row() {
+    let home = include_str!("../../home_tab.rs");
+    let content = include_str!("../content.rs");
+
+    assert!(home.contains("MODERN_HOME_CARD_MIN_WIDTH: gpui::Pixels = px(220.0)"));
+    assert!(home.contains("MODERN_HOME_CARD_MAX_WIDTH: gpui::Pixels = px(260.0)"));
+    assert!(
+        content
+            .matches(".flex_basis(MODERN_HOME_CARD_MIN_WIDTH)")
+            .count()
+            >= 3
+    );
+    assert!(content.matches(".flex_grow(1.0)").count() >= 3);
+}
+
+#[test]
+fn collapsed_modern_sidebar_lets_home_content_use_the_full_width() {
+    let content = include_str!("../content.rs");
+    let app = include_str!("../../onetcli_app.rs");
+
+    assert!(content.contains("center_modern_content"));
+    assert!(content.contains("!legacy && self.persistent_sidebar_expanded"));
+    assert!(content.contains(".when(center_modern_content"));
+    assert!(app.contains("home.set_persistent_sidebar_expanded(expanded, cx)"));
 }
 
 #[test]

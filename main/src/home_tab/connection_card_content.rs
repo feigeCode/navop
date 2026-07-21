@@ -9,6 +9,7 @@ impl HomePage {
         let display_name = connection_display_name(conn);
         let name_tooltip: SharedString = display_name.clone().into();
         let connection_info = card_connection_info(conn);
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
 
         h_flex()
             .items_center()
@@ -16,13 +17,13 @@ impl HomePage {
             .w_full()
             .child(
                 div()
-                    .h(px(40.0))
-                    .w(px(40.0))
-                    .rounded(px(6.0))
+                    .h(if legacy { px(48.0) } else { px(40.0) })
+                    .when(!legacy, |icon| icon.w(px(40.0)))
+                    .rounded(if legacy { px(8.0) } else { px(6.0) })
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self.connection_icon(conn, px(34.0))),
+                    .child(self.connection_icon(conn, if legacy { px(40.0) } else { px(34.0) })),
             )
             .child(
                 v_flex()

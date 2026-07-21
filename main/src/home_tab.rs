@@ -37,7 +37,7 @@ use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
-use one_core::settings::{AppSettings, HomeConnectionLayout, SyncProvider};
+use one_core::settings::{AppSettings, HomeConnectionLayout, HomePageStyle, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
@@ -69,6 +69,7 @@ use crate::local_terminal_profiles::{effective_kind, launch_options};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
+use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
@@ -82,6 +83,10 @@ actions!(
     ]
 );
 
+const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
+const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
+const MODERN_HOME_CARD_MIN_WIDTH: gpui::Pixels = px(220.0);
+const MODERN_HOME_CARD_MAX_WIDTH: gpui::Pixels = px(260.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
 // HomePage Entity - 管理 home 页面的所有状态
 
@@ -125,6 +130,8 @@ pub struct HomePage {
     focus_handle: FocusHandle,
     pub(crate) selected_filter: ConnectionType,
     connection_layout: ConnectionLayout,
+    home_page_style: HomePageStyle,
+    persistent_sidebar_expanded: bool,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
     pub(crate) tab_container: Entity<TabContainer>,
@@ -159,6 +166,7 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
+    sidebar_collapsed: bool,
     team_options: Vec<TeamOption>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
@@ -188,6 +196,7 @@ mod keybindings;
 mod lifecycle;
 mod local_terminal;
 mod render;
+mod sidebar;
 mod sync_route;
 mod toolbar;
 mod workspace;

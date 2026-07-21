@@ -141,9 +141,13 @@ mod tests {
     fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
         let tabs_source = include_str!("home_tabs.rs");
         let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
 
         assert!(rail_source.contains("persistent-open-ai-workbench"));
         assert!(rail_source.contains("StartupDefaultPage::Home"));
+        assert!(legacy_sidebar_source.contains("legacy-open-ai-workbench"));
+        assert!(legacy_sidebar_source.contains("StartupDefaultPage::Home"));
+        assert!(legacy_sidebar_source.contains("home.add_ai_workbench_tab(window, cx)"));
         assert!(tabs_source.contains("fn add_ai_workbench_tab"));
         assert!(tabs_source.contains("with_tab_closeable(true)"));
         assert!(

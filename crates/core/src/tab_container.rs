@@ -886,6 +886,24 @@ impl TabContainer {
         }
     }
 
+    pub fn set_navigation_sidebar_toggle(
+        &mut self,
+        expanded: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.navigation_sidebar_expanded != expanded {
+            self.navigation_sidebar_expanded = expanded;
+            cx.notify();
+        }
+    }
+
+    pub fn set_left_padding(&mut self, padding: Pixels, cx: &mut Context<Self>) {
+        if self.left_padding != Some(padding) {
+            self.left_padding = Some(padding);
+            cx.notify();
+        }
+    }
+
     pub fn with_window_controls(mut self, show: bool) -> Self {
         self.show_window_controls = show;
         self

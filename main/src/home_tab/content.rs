@@ -1,6 +1,20 @@
 use super::*;
 
 impl HomePage {
+    pub(crate) fn set_home_page_style(&mut self, style: HomePageStyle, cx: &mut Context<Self>) {
+        self.home_page_style = style;
+        cx.notify();
+    }
+
+    pub(crate) fn set_persistent_sidebar_expanded(
+        &mut self,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.persistent_sidebar_expanded = expanded;
+        cx.notify();
+    }
+
     pub(crate) fn set_connection_layout(
         &mut self,
         layout: HomeConnectionLayout,
@@ -25,6 +39,8 @@ impl HomePage {
         layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
+        let center_modern_content = !legacy && self.persistent_sidebar_expanded;
         let workspaces_with_connections: Vec<_> = self
             .workspaces
             .iter()
@@ -66,11 +82,20 @@ impl HomePage {
                 .size_full()
                 .min_w_0()
                 .overflow_y_scroll()
-                .px_4()
-                .py_3()
-                .child(div().w_full().max_w(px(1160.0)).mx_auto().child(
-                    self.render_connection_uniform_list(unassigned_connections, selected_id, cx),
-                ))
+                .when(legacy, |content| content.p_6())
+                .when(!legacy, |content| content.px_4().py_3())
+                .child(
+                    div()
+                        .w_full()
+                        .when(center_modern_content, |content| {
+                            content.max_w(px(1160.0)).mx_auto()
+                        })
+                        .child(self.render_connection_uniform_list(
+                            unassigned_connections,
+                            selected_id,
+                            cx,
+                        )),
+                )
                 .into_any_element();
         }
 
@@ -79,47 +104,58 @@ impl HomePage {
             .size_full()
             .min_w_0()
             .overflow_y_scroll()
-            .px_4()
-            .py_3()
-            .child(div().w_full().max_w(px(1160.0)).mx_auto().child({
-                let mut container = v_flex().gap_5().w_full().min_w_0();
+            .when(legacy, |content| content.p_6())
+            .when(!legacy, |content| content.px_4().py_3())
+            .child(
+                div()
+                    .w_full()
+                    .when(center_modern_content, |content| {
+                        content.max_w(px(1160.0)).mx_auto()
+                    })
+                    .child({
+                        let mut container = v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .when(legacy, |content| content.gap_8())
+                            .when(!legacy, |content| content.gap_5());
 
-                // 过滤掉空的工作区
-                for (workspace, connections) in workspaces_with_connections {
-                    if connections.is_empty() {
-                        continue;
-                    }
-                    container = container.child(self.render_workspace_section(
-                        workspace,
-                        connections,
-                        selected_id,
-                        layout,
-                        cx,
-                    ));
-                }
+                        // 过滤掉空的工作区
+                        for (workspace, connections) in workspaces_with_connections {
+                            if connections.is_empty() {
+                                continue;
+                            }
+                            container = container.child(self.render_workspace_section(
+                                workspace,
+                                connections,
+                                selected_id,
+                                layout,
+                                cx,
+                            ));
+                        }
 
-                // 如果用户没有设置工作区，直接显示连接列表；否则显示未分配工作区
-                if !unassigned_connections.is_empty() {
-                    if has_workspaces {
-                        container = container.child(self.render_unassigned_section(
-                            unassigned_connections,
-                            selected_id,
-                            layout,
-                            cx,
-                        ));
-                    } else {
-                        // 没有工作区时，直接显示连接卡片
-                        container = container.child(self.render_connections_grid(
-                            unassigned_connections,
-                            selected_id,
-                            layout,
-                            cx,
-                        ));
-                    }
-                }
+                        // 如果用户没有设置工作区，直接显示连接列表；否则显示未分配工作区
+                        if !unassigned_connections.is_empty() {
+                            if has_workspaces {
+                                container = container.child(self.render_unassigned_section(
+                                    unassigned_connections,
+                                    selected_id,
+                                    layout,
+                                    cx,
+                                ));
+                            } else {
+                                // 没有工作区时，直接显示连接卡片
+                                container = container.child(self.render_connections_grid(
+                                    unassigned_connections,
+                                    selected_id,
+                                    layout,
+                                    cx,
+                                ));
+                            }
+                        }
 
-                container
-            }))
+                        container
+                    }),
+            )
             .into_any_element()
     }
 
@@ -132,16 +168,18 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let workspace_id = workspace.id;
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
+            .when(legacy, |content| content.gap_3())
+            .when(!legacy, |content| content.gap_2())
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .px_1()
-                    .py_0p5()
+                    .when(legacy, |header| header.px_2().py_1())
+                    .when(!legacy, |header| header.px_1().py_0p5())
                     .child(
                         Icon::new(IconName::AppsColor)
                             .color()
@@ -153,17 +191,17 @@ impl HomePage {
                                 "workspace-name-{}",
                                 workspace_id.unwrap_or(0)
                             ))))
-                            .text_sm()
+                            .when(legacy, |label| label.text_base())
+                            .when(!legacy, |label| label.text_sm())
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .child(workspace.name.clone()),
                     )
                     .child(
                         div()
-                            .px_1p5()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(cx.theme().muted)
+                            .when(!legacy, |badge| {
+                                badge.px_1p5().py_0p5().rounded_full().bg(cx.theme().muted)
+                            })
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
@@ -183,11 +221,22 @@ impl HomePage {
                         ConnectionLayout::List => container.child(
                             self.render_connection_list_item(conn.clone(), selected_id, idx, cx),
                         ),
-                        ConnectionLayout::Card => {
-                            container.child(div().w(px(280.0)).flex_shrink_0().child(
-                                self.render_connection_card(conn.clone(), selected_id, idx, cx),
-                            ))
-                        }
+                        ConnectionLayout::Card => container.child(
+                            div()
+                                .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
+                                .when(!legacy, |slot| {
+                                    slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
+                                        .max_w(MODERN_HOME_CARD_MAX_WIDTH)
+                                        .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
+                                        .flex_grow(1.0)
+                                })
+                                .child(self.render_connection_card(
+                                    conn.clone(),
+                                    selected_id,
+                                    idx,
+                                    cx,
+                                )),
+                        ),
                     };
                 }
 
@@ -207,11 +256,17 @@ impl HomePage {
         }
 
         let mut container = div().flex().flex_wrap().w_full().min_w_0().gap_3();
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
         for (idx, conn) in connections.into_iter().enumerate() {
             container = container.child(
                 div()
-                    .w(px(280.0))
-                    .flex_shrink_0()
+                    .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
+                    .when(!legacy, |slot| {
+                        slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
+                            .max_w(MODERN_HOME_CARD_MAX_WIDTH)
+                            .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
+                            .flex_grow(1.0)
+                    })
                     .child(self.render_connection_card(conn, selected_id, idx, cx)),
             );
         }
@@ -248,19 +303,22 @@ impl HomePage {
         layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
+            .when(legacy, |content| content.gap_3())
+            .when(!legacy, |content| content.gap_2())
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .px_1()
-                    .py_0p5()
+                    .when(legacy, |header| header.px_2().py_1())
+                    .when(!legacy, |header| header.px_1().py_0p5())
                     .child(
                         div()
-                            .text_sm()
+                            .when(legacy, |label| label.text_base())
+                            .when(!legacy, |label| label.text_sm())
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .child(
@@ -271,10 +329,9 @@ impl HomePage {
                     )
                     .child(
                         div()
-                            .px_1p5()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(cx.theme().muted)
+                            .when(!legacy, |badge| {
+                                badge.px_1p5().py_0p5().rounded_full().bg(cx.theme().muted)
+                            })
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
@@ -294,8 +351,13 @@ impl HomePage {
                             .child(self.render_connection_list_item(conn, selected_id, idx, cx)),
                         ConnectionLayout::Card => container.child(
                             div()
-                                .w(px(280.0))
-                                .flex_shrink_0()
+                                .when(legacy, |slot| slot.w(px(320.0)).flex_shrink_0())
+                                .when(!legacy, |slot| {
+                                    slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
+                                        .max_w(MODERN_HOME_CARD_MAX_WIDTH)
+                                        .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
+                                        .flex_grow(1.0)
+                                })
                                 .child(self.render_connection_card(conn, selected_id, idx, cx)),
                         ),
                     };

@@ -96,6 +96,34 @@ pub enum HomeConnectionLayout {
     List,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HomePageStyle {
+    Legacy,
+    #[default]
+    Modern,
+}
+
+impl HomePageStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Modern => "modern",
+        }
+    }
+
+    pub fn from_value(value: &str) -> Self {
+        match value {
+            "legacy" => Self::Legacy,
+            _ => Self::Modern,
+        }
+    }
+
+    pub fn uses_persistent_sidebar(self) -> bool {
+        self == Self::Modern
+    }
+}
+
 impl HomeConnectionLayout {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -668,6 +696,8 @@ pub struct AppSettings {
     pub startup_default_page: StartupDefaultPage,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
+    #[serde(default)]
+    pub home_page_style: HomePageStyle,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
     /// 是否启用SQL查询的自动保存功能
@@ -954,6 +984,7 @@ impl Default for AppSettings {
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
             home_connection_layout: HomeConnectionLayout::default(),
+            home_page_style: HomePageStyle::default(),
             connection_sidebar_expanded: true,
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
@@ -1139,12 +1170,12 @@ mod tests {
     use gpui_component::Theme;
 
     use super::{
-        AppSettings, CustomFont, HomeConnectionLayout, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
-        LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
-        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
-        resolve_installed_grid_monospace_font_family,
+        AppSettings, CustomFont, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
+        LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
+        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
+        StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1297,10 +1328,11 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_default_keeps_home_cards_and_connection_tree_visible() {
+    fn app_settings_defaults_to_modern_home_with_cards_and_expanded_sidebar() {
         let settings = AppSettings::default();
 
         assert_eq!(HomeConnectionLayout::Card, settings.home_connection_layout);
+        assert_eq!(HomePageStyle::Modern, settings.home_page_style);
         assert!(settings.connection_sidebar_expanded);
     }
 
@@ -1308,11 +1340,13 @@ mod tests {
     fn app_settings_deserializes_connection_display_preferences() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "home_connection_layout": "list",
+            "home_page_style": "legacy",
             "connection_sidebar_expanded": false
         }))
         .expect("connection display preferences should deserialize");
 
         assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
+        assert_eq!(HomePageStyle::Legacy, settings.home_page_style);
         assert!(!settings.connection_sidebar_expanded);
     }
 

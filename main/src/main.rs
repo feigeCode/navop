@@ -28,6 +28,7 @@ mod settings;
 mod sync_conflict_dialog;
 mod team_management;
 mod update;
+mod user_avatar;
 
 use crate::onetcli_app::OnetCliApp;
 use gpui::*;

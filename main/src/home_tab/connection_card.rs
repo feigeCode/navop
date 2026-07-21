@@ -24,6 +24,8 @@ impl HomePage {
         } else {
             connection_team_badge(conn.team_id.as_deref(), &self.team_options)
         };
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
+        let hover_border = cx.theme().list_active_border;
 
         v_flex()
             .justify_center()
@@ -32,26 +34,30 @@ impl HomePage {
                 conn.id.unwrap_or(0)
             )))
             .w_full()
-            .h(px(76.0))
-            .rounded(px(6.0))
+            .h(if legacy { px(90.0) } else { px(76.0) })
+            .rounded(if legacy { px(8.0) } else { px(6.0) })
             .bg(cx.theme().background)
-            .px_3()
-            .py_2()
+            .when(legacy, |card| card.p_3())
+            .when(!legacy, |card| card.px_3().py_2())
             .border_1()
             .relative()
             .overflow_hidden()
+            .when(legacy, |card| card.shadow_sm())
             .group("")
             .when(is_selected, |this| {
                 this.border_color(cx.theme().list_active_border)
-                    .shadow_md()
+                    .when(legacy, |card| card.shadow_lg())
+                    .when(!legacy, |card| card.shadow_md())
                     .border_l_3()
             })
             .when(!is_selected, |this| this.border_color(cx.theme().border))
             .cursor_pointer()
-            .hover(|style| {
-                style
-                    .shadow_sm()
-                    .border_color(cx.theme().list_active_border)
+            .hover(move |style| {
+                if legacy {
+                    style.shadow_lg().border_color(hover_border)
+                } else {
+                    style.shadow_sm().border_color(hover_border)
+                }
             })
             .on_double_click(cx.listener(move |this, _, window, cx| {
                 this.open_connection_from_quick(&open_connection, window, cx);

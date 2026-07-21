@@ -83,26 +83,36 @@ impl Render for HomePage {
             });
         }
 
+        let content = v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .child(self.render_toolbar(window, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .bg(cx.theme().muted)
+                    .child(self.render_content_area(cx)),
+            );
+
         div()
             .size_full()
             .min_w_0()
             .track_focus(&self.focus_handle)
             .child(
-                v_flex()
+                h_flex()
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .bg(cx.theme().background)
-                    .child(self.render_toolbar(window, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .bg(cx.theme().muted)
-                            .child(self.render_content_area(cx)),
-                    ),
+                    .when(self.home_page_style == HomePageStyle::Legacy, |layout| {
+                        layout.child(self.render_sidebar(window, cx))
+                    })
+                    .child(content),
             )
     }
 }

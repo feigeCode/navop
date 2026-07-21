@@ -39,13 +39,14 @@ impl HomePage {
         };
         let has_conflicts = conflict_count > 0;
 
+        let legacy = self.home_page_style == HomePageStyle::Legacy;
+
         h_flex()
             .w_full()
             .min_w_0()
             .flex_wrap()
-            .gap_2()
-            .px_3()
-            .py_1()
+            .when(legacy, |toolbar| toolbar.gap_3().px_4().py_2())
+            .when(!legacy, |toolbar| toolbar.gap_2().px_3().py_1())
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -218,7 +219,7 @@ impl HomePage {
                     .child(
                         Input::new(&self.search_input)
                             .cleanable(true)
-                            .w(px(220.0))
+                            .w(if legacy { px(240.0) } else { px(220.0) })
                             .bg(cx.theme().muted),
                     )
                     // 布局切换按钮
