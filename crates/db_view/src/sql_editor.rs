@@ -146,6 +146,9 @@ pub mod completion_priority {
     // Large boost to make context-relevant items appear before keywords
     pub const CONTEXT_BOOST: i32 = 2500;
     pub const PREFIX_MATCH_BOOST: i32 = 200;
+    /// Boost for matches right after a word boundary (e.g. `user` in `admin_user`).
+    /// Weaker than prefix match, stronger than plain substring match.
+    pub const BOUNDARY_MATCH_BOOST: i32 = 100;
 
     use super::SqlContext;
     use lsp_types::CompletionItemKind;
@@ -156,6 +159,24 @@ pub mod completion_priority {
         context: &SqlContext,
         item_kind: Option<CompletionItemKind>,
         matches_prefix: bool,
+    ) -> i32 {
+        let match_boost = if matches_prefix {
+            PREFIX_MATCH_BOOST
+        } else {
+            0
+        };
+        calculate_score_with_match(context, item_kind, match_boost)
+    }
+
+    /// Calculate priority score with a fine-grained match boost.
+    ///
+    /// Use [`PREFIX_MATCH_BOOST`] for prefix matches, [`BOUNDARY_MATCH_BOOST`]
+    /// for word-boundary matches and `0` for substring matches, so that
+    /// prefix matches rank first, then boundary matches, then substrings.
+    pub fn calculate_score_with_match(
+        context: &SqlContext,
+        item_kind: Option<CompletionItemKind>,
+        match_boost: i32,
     ) -> i32 {
         // Determine base score by item type
         let base_score = match item_kind {
@@ -195,15 +216,8 @@ pub mod completion_priority {
             _ => 0,
         };
 
-        // Apply prefix match boost
-        let prefix_boost = if matches_prefix {
-            PREFIX_MATCH_BOOST
-        } else {
-            0
-        };
-
         // Lower score = higher priority
-        base_score - context_boost - prefix_boost
+        base_score - context_boost - match_boost
     }
 
     /// Convert score to sort_text format.
@@ -213,6 +227,33 @@ pub mod completion_priority {
         // Lower score = higher priority, so use score directly
         format!("{:05}_{}", score.clamp(0, 99999), label)
     }
+}
+
+/// Identifier match rank against the current word (case-insensitive).
+///
+/// Lower is better:
+/// - `0`: prefix match (`user` matches `users`)
+/// - `1`: word-boundary match, i.e. right after `_` (`user` matches `admin_user`)
+/// - `2`: plain substring match (`ser` matches `users`)
+/// - `None`: no match
+///
+/// `word_upper` must already be uppercased.
+fn identifier_match_rank(label: &str, word_upper: &str) -> Option<i32> {
+    if word_upper.is_empty() {
+        return Some(0);
+    }
+    let upper = label.to_uppercase();
+    if upper.starts_with(word_upper) {
+        return Some(0);
+    }
+    let mut has_substring = false;
+    for (pos, _) in upper.match_indices(word_upper) {
+        if pos > 0 && upper.as_bytes()[pos - 1] == b'_' {
+            return Some(1);
+        }
+        has_substring = true;
+    }
+    has_substring.then_some(2)
 }
 
 // Built-in SQL keywords and docs
@@ -444,8 +485,16 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
 
             let mut items = Vec::new();
 
-            let matches_filter = |label: &str| -> bool {
-                current_word.is_empty() || label.to_uppercase().starts_with(&current_word)
+            let matches_filter =
+                |label: &str| -> bool { identifier_match_rank(label, &current_word).is_some() };
+
+            // Match-quality boost: prefix > word-boundary > substring.
+            let match_boost = |label: &str| -> i32 {
+                match identifier_match_rank(label, &current_word) {
+                    Some(0) => completion_priority::PREFIX_MATCH_BOOST,
+                    Some(1) => completion_priority::BOUNDARY_MATCH_BOOST,
+                    _ => 0,
+                }
             };
 
             let matched_prefix = |label: &str| -> String {
@@ -510,12 +559,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 if let Some(cols) = columns {
                     for (column, data_type, doc) in cols {
                         if matches_filter(column) {
-                            let matches_prefix = !current_word.is_empty()
-                                && column.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(column);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::FIELD),
-                                matches_prefix,
+                                boost,
                             );
                             // 在 detail 中显示类型信息
                             let detail = if data_type.is_empty() {
@@ -608,12 +656,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
             if show_tables {
                 for (table, doc) in &schema.tables {
                     if matches_filter(table) {
-                        let matches_prefix = !current_word.is_empty()
-                            && table.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(table);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::STRUCT),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: table.clone(),
@@ -735,12 +782,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                                     format!("{}: {}", column, data_type)
                                 };
 
-                                let matches_prefix = !current_word.is_empty()
-                                    && column.to_uppercase().starts_with(&current_word);
-                                let score = completion_priority::calculate_score(
+                                let boost = match_boost(&column);
+                                let score = completion_priority::calculate_score_with_match(
                                     &context,
                                     Some(CompletionItemKind::FIELD),
-                                    matches_prefix,
+                                    boost,
                                 );
                                 items.push(CompletionItem {
                                     label,
@@ -767,12 +813,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     // For other contexts (FunctionArgs, Start), show global columns
                     for (column, doc) in &schema.columns {
                         if matches_filter(column) {
-                            let matches_prefix = !current_word.is_empty()
-                                && column.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(column);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::FIELD),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: column.clone(),
@@ -802,12 +847,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 // Standard SQL keywords
                 for (keyword, doc) in SQL_KEYWORDS {
                     if matches_filter(keyword) {
-                        let matches_prefix = !current_word.is_empty()
-                            && keyword.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(keyword);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::KEYWORD),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: keyword.to_string(),
@@ -832,12 +876,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 if let Some(ref info) = db_info {
                     for (keyword, doc) in &info.keywords {
                         if matches_filter(keyword) {
-                            let matches_prefix = !current_word.is_empty()
-                                && keyword.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(keyword);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::KEYWORD),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: keyword.to_string(),
@@ -863,12 +906,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     // Database-specific operators - higher priority in Condition context
                     for (op, doc) in &info.operators {
                         if matches_filter(op) {
-                            let matches_prefix = !current_word.is_empty()
-                                && op.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(op);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::OPERATOR),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: op.to_string(),
@@ -897,12 +939,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 for (func, doc) in &schema.functions {
                     let func_name = func.split('(').next().unwrap_or("");
                     if matches_filter(func_name) {
-                        let matches_prefix = !current_word.is_empty()
-                            && func_name.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(func_name);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::FUNCTION),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: func.to_string(),
@@ -926,12 +967,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 for (func, doc) in SQL_FUNCTIONS {
                     let func_name = func.split('(').next().unwrap_or("");
                     if matches_filter(func_name) {
-                        let matches_prefix = !current_word.is_empty()
-                            && func_name.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(func_name);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::FUNCTION),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: func.to_string(),
@@ -955,12 +995,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     for (func, doc) in &info.functions {
                         let func_name = func.split('(').next().unwrap_or("");
                         if matches_filter(func_name) {
-                            let matches_prefix = !current_word.is_empty()
-                                && func_name.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(func_name);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::FUNCTION),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: func.to_string(),
@@ -997,12 +1036,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                     for (dtype, doc) in &info.data_types {
                         seen_types.insert(dtype.to_uppercase());
                         if matches_filter(dtype) {
-                            let matches_prefix = !current_word.is_empty()
-                                && dtype.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(dtype);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::TYPE_PARAMETER),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: dtype.to_string(),
@@ -1033,12 +1071,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                         continue;
                     }
                     if matches_filter(dtype) {
-                        let matches_prefix = !current_word.is_empty()
-                            && dtype.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(dtype);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::TYPE_PARAMETER),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: dtype.to_string(),
@@ -1071,12 +1108,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 ];
                 for (label, insert_text, doc) in default_snippets {
                     if matches_filter(label) {
-                        let matches_prefix = !current_word.is_empty()
-                            && label.to_uppercase().starts_with(&current_word);
-                        let score = completion_priority::calculate_score(
+                        let boost = match_boost(label);
+                        let score = completion_priority::calculate_score_with_match(
                             &context,
                             Some(CompletionItemKind::SNIPPET),
-                            matches_prefix,
+                            boost,
                         );
                         items.push(CompletionItem {
                             label: label.to_string(),
@@ -1100,12 +1136,11 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
                 if let Some(ref info) = db_info {
                     for (label, insert_text, doc) in &info.snippets {
                         if matches_filter(label) {
-                            let matches_prefix = !current_word.is_empty()
-                                && label.to_uppercase().starts_with(&current_word);
-                            let score = completion_priority::calculate_score(
+                            let boost = match_boost(label);
+                            let score = completion_priority::calculate_score_with_match(
                                 &context,
                                 Some(CompletionItemKind::SNIPPET),
-                                matches_prefix,
+                                boost,
                             );
                             items.push(CompletionItem {
                                 label: label.to_string(),
@@ -1296,17 +1331,16 @@ impl CompletionProvider for TableMentionCompletionProvider {
                 return Ok(CompletionResponse::Array(vec![]));
             };
 
-            let prefix_lower = prefix.to_lowercase();
             let start_pos = rope.offset_to_position(start_offset);
             let end_pos = rope.offset_to_position(offset);
             let replace_range = LspRange::new(start_pos, end_pos);
 
             let mut items = Vec::new();
             for (table, doc) in &schema.tables {
-                let table_lower = table.to_lowercase();
-                if !prefix_lower.is_empty() && !table_lower.starts_with(&prefix_lower) {
+                let Some(rank) = identifier_match_rank(table, &prefix.to_uppercase()) else {
                     continue;
-                }
+                };
+                let table_lower = table.to_lowercase();
                 let mention_text = TableMentionCompletionProvider::format_table_mention(table);
                 let documentation = if doc.is_empty() {
                     None
@@ -1328,7 +1362,7 @@ impl CompletionProvider for TableMentionCompletionProvider {
                     } else {
                         Some(prefix.clone())
                     },
-                    sort_text: Some(table_lower),
+                    sort_text: Some(format!("{}_{}", rank, table_lower)),
                     ..Default::default()
                 });
             }
@@ -1551,6 +1585,63 @@ impl Render for SqlEditor {
 
 #[cfg(test)]
 mod tests {
+    use super::{SqlContext, completion_priority, identifier_match_rank};
+    use lsp_types::CompletionItemKind;
+
+    #[test]
+    fn identifier_match_rank_prefers_prefix_then_boundary_then_substring() {
+        // Prefix match
+        assert_eq!(Some(0), identifier_match_rank("users", "USER"));
+        assert_eq!(Some(0), identifier_match_rank("Users", "USER"));
+        // Word-boundary match (right after `_`)
+        assert_eq!(Some(1), identifier_match_rank("admin_users", "USER"));
+        // Plain substring match
+        assert_eq!(Some(2), identifier_match_rank("users", "SER"));
+        assert_eq!(Some(2), identifier_match_rank("busers", "USER"));
+        // No match
+        assert_eq!(None, identifier_match_rank("orders", "USER"));
+        // Empty word matches everything as prefix
+        assert_eq!(Some(0), identifier_match_rank("anything", ""));
+    }
+
+    #[test]
+    fn infix_matches_still_outrank_irrelevant_context_items() {
+        // A substring-matched table in TableName context should score better
+        // than a prefix-matched keyword.
+        let table_score = completion_priority::calculate_score_with_match(
+            &SqlContext::TableName,
+            Some(CompletionItemKind::STRUCT),
+            0,
+        );
+        let keyword_score = completion_priority::calculate_score_with_match(
+            &SqlContext::TableName,
+            Some(CompletionItemKind::KEYWORD),
+            completion_priority::PREFIX_MATCH_BOOST,
+        );
+        assert!(table_score < keyword_score);
+    }
+
+    #[test]
+    fn match_boost_orders_prefix_before_boundary_before_substring() {
+        let prefix = completion_priority::calculate_score_with_match(
+            &SqlContext::TableName,
+            Some(CompletionItemKind::STRUCT),
+            completion_priority::PREFIX_MATCH_BOOST,
+        );
+        let boundary = completion_priority::calculate_score_with_match(
+            &SqlContext::TableName,
+            Some(CompletionItemKind::STRUCT),
+            completion_priority::BOUNDARY_MATCH_BOOST,
+        );
+        let substring = completion_priority::calculate_score_with_match(
+            &SqlContext::TableName,
+            Some(CompletionItemKind::STRUCT),
+            0,
+        );
+        assert!(prefix < boundary);
+        assert!(boundary < substring);
+    }
+
     #[test]
     fn sql_editor_render_uses_cached_font() {
         let source = include_str!("sql_editor.rs");
