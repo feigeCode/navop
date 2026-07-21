@@ -55,7 +55,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
 use workspace_explorer::{
-    WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceTheme,
+    ExplorerFramePlacement, WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig,
+    WorkspaceExplorerEvent, WorkspaceTheme,
 };
 
 pub(crate) fn workspace_theme_from_terminal_colors(colors: &TerminalColors) -> WorkspaceTheme {
@@ -76,6 +77,22 @@ pub(crate) fn workspace_theme_from_terminal_colors(colors: &TerminalColors) -> W
 pub(crate) struct LocalWorkspaceSidebar {
     pub(crate) root: PathBuf,
     pub(crate) editor: Entity<WorkspaceEditor>,
+}
+
+fn explorer_frame_placement(placement: SidebarPlacement) -> ExplorerFramePlacement {
+    match placement {
+        SidebarPlacement::Left => ExplorerFramePlacement::Left,
+        SidebarPlacement::Right => ExplorerFramePlacement::Right,
+        SidebarPlacement::Bottom => ExplorerFramePlacement::Bottom,
+    }
+}
+
+fn sidebar_placement_from_explorer(placement: ExplorerFramePlacement) -> SidebarPlacement {
+    match placement {
+        ExplorerFramePlacement::Left => SidebarPlacement::Left,
+        ExplorerFramePlacement::Right => SidebarPlacement::Right,
+        ExplorerFramePlacement::Bottom => SidebarPlacement::Bottom,
+    }
 }
 
 fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> String {
@@ -666,6 +683,7 @@ impl TerminalSidebar {
                         root,
                         editor,
                         theme,
+                        show_frame_controls: true,
                     },
                     cx,
                 )
@@ -841,6 +859,25 @@ impl TerminalSidebar {
                     },
                 );
             subs.push(fm_sub);
+        }
+
+        if let Some(ref explorer) = file_explorer_panel {
+            let explorer_sub = cx.subscribe(
+                explorer,
+                |this, _, event: &WorkspaceExplorerEvent, cx| match event {
+                    WorkspaceExplorerEvent::Close => {
+                        this.close_tool(SidebarPanel::FileExplorer, cx);
+                    }
+                    WorkspaceExplorerEvent::MoveTo(placement) => {
+                        this.move_tool(
+                            SidebarPanel::FileExplorer,
+                            sidebar_placement_from_explorer(*placement),
+                            cx,
+                        );
+                    }
+                },
+            );
+            subs.push(explorer_sub);
         }
 
         if let Some(ref monitor_panel) = server_monitor_panel {
@@ -1023,6 +1060,13 @@ impl TerminalSidebar {
                 if let Some(ref fm_panel) = self.file_manager_panel {
                     fm_panel.update(cx, |panel, cx| {
                         panel.set_frame_placement(placement, cx);
+                    });
+                }
+            }
+            SidebarPanel::FileExplorer => {
+                if let Some(ref explorer) = self.file_explorer_panel {
+                    explorer.update(cx, |explorer, cx| {
+                        explorer.set_frame_placement(explorer_frame_placement(placement), cx);
                     });
                 }
             }
@@ -1691,9 +1735,9 @@ mod tests {
     }
 
     #[test]
-    fn file_manager_uses_its_own_header_in_internal_tool_frame() {
+    fn self_header_panels_skip_the_internal_tool_frame_header() {
         assert!(!SidebarPanel::FileManager.needs_internal_tool_frame_header());
-        assert!(SidebarPanel::FileExplorer.needs_internal_tool_frame_header());
+        assert!(!SidebarPanel::FileExplorer.needs_internal_tool_frame_header());
         assert!(SidebarPanel::Settings.needs_internal_tool_frame_header());
         assert!(!SidebarPanel::AiChat.needs_internal_tool_frame_header());
         assert!(SidebarPanel::ServerMonitor.needs_internal_tool_frame_header());

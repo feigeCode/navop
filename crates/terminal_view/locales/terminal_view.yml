@@ -1268,6 +1268,10 @@ TerminalCommandBar:
     en: Close quick commands
     zh-CN: 关闭快捷指令
     zh-HK: 關閉快速指令
+  fill:
+    en: Fill
+    zh-CN: 填入
+    zh-HK: 填入
   local_shell:
     en: Local Shell
     zh-CN: 本地终端

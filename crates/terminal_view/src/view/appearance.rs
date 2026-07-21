@@ -163,6 +163,7 @@ impl TerminalView {
         }
         self.current_theme = theme.clone();
         self.sync_sidebar_theme(window, cx);
+        cx.emit(TabContentEvent::StateChanged);
         cx.notify();
     }
 

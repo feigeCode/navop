@@ -4,21 +4,21 @@ use gpui::{
     div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, Size,
+    ActiveTheme, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
 };
 use rust_i18n::t;
 
-const COMMAND_BAR_TOOLBAR_HEIGHT: f32 = 28.0;
-const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 52.0;
+const COMMAND_BAR_COLLAPSED_HEIGHT: f32 = 30.0;
+const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 46.0;
 
 impl TerminalCommandBar {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
-            .h(px(COMMAND_BAR_TOOLBAR_HEIGHT))
+            .h(px(COMMAND_BAR_COLLAPSED_HEIGHT))
             .items_center()
             .justify_between()
             .child(self.render_toolbar_context(cx))
@@ -75,10 +75,17 @@ impl TerminalCommandBar {
 
     fn render_quick_command_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("terminal-command-quick")
-            .icon(IconName::TerminalQuickCommandColor)
+            .icon(Icon::new(IconName::TerminalQuickCommandColor).color())
+            .label(format!(
+                "{} · {}",
+                t!("TerminalCommandBar.quick_commands"),
+                self.quick_commands.len()
+            ))
             .ghost()
             .small()
-            .selected(self.quick_commands_open)
+            .when(self.quick_commands_open, |button| {
+                button.bg(self.colors.muted)
+            })
             .tooltip(t!("TerminalCommandBar.open_quick_commands").to_string())
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_quick_commands(window, cx);
@@ -86,19 +93,44 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
-    fn render_input_row(&self, focused: bool) -> AnyElement {
+    fn render_input_row(&self, focused: bool, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
             .min_h(px(COMMAND_BAR_INPUT_MIN_HEIGHT))
             .gap_2()
             .items_center()
-            .border_t_1()
-            .border_color(if focused {
-                self.colors.accent
-            } else {
-                self.colors.border
-            })
-            .py_2()
+            .py_1()
+            .child(
+                Button::new("terminal-command-collapse-toggle")
+                    .icon(IconName::ChevronDown)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("TerminalCommandBar.collapse").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_collapsed(window, cx);
+                    })),
+            )
+            .child(
+                h_flex()
+                    .max_w(px(220.0))
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .gap_1()
+                    .items_center()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(if focused {
+                        self.colors.accent
+                    } else {
+                        self.colors.border
+                    })
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(self.colors.muted_foreground)
+                    .child(Icon::new(IconName::SquareTerminal).xsmall())
+                    .child(div().truncate().child(self.target_label(cx))),
+            )
             .child(Icon::new(IconName::ChevronRight).small().flex_shrink_0())
             .child(
                 Input::new(&self.input_state)
@@ -114,6 +146,7 @@ impl TerminalCommandBar {
                     .caret_color(self.colors.foreground)
                     .with_size(Size::Medium),
             )
+            .child(self.render_quick_command_button(cx))
             .into_any_element()
     }
 }
@@ -134,8 +167,7 @@ impl Render for TerminalCommandBar {
             .bg(self.colors.background)
             .text_color(self.colors.foreground)
             .px_3()
-            .py_1()
-            .shadow_lg()
+            .py_px()
             .on_key_down(cx.listener(Self::handle_key_down))
             .when(
                 focused && !self.collapsed && !self.suggestions.is_empty(),
@@ -144,9 +176,9 @@ impl Render for TerminalCommandBar {
             .when(self.quick_commands_open, |bar| {
                 bar.child(self.render_quick_commands(cx))
             })
-            .child(self.render_toolbar(cx))
+            .when(self.collapsed, |bar| bar.child(self.render_toolbar(cx)))
             .when(!self.collapsed, |bar| {
-                bar.child(self.render_input_row(focused))
+                bar.child(self.render_input_row(focused, cx))
             })
     }
 }

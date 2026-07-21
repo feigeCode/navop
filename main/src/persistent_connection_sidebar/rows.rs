@@ -4,38 +4,47 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
+    Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     h_flex,
 };
 use rust_i18n::t;
 
-use super::PersistentConnectionSidebar;
 use super::tree_model::ConnectionTreeRow;
+use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
 const TREE_INDENT: f32 = 16.0;
 const TREE_BASE_PADDING: f32 = 8.0;
+const TREE_ROW_HEIGHT: f32 = 32.0;
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_tree_row(
         &self,
         row: ConnectionTreeRow,
+        palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         match row {
-            row @ ConnectionTreeRow::Workspace { .. } => self.render_workspace_row(row, cx),
+            row @ ConnectionTreeRow::Workspace { .. } => {
+                self.render_workspace_row(row, palette, cx)
+            }
             ConnectionTreeRow::Connection { id, name, depth } => {
-                self.render_connection_row(id, name, depth, cx)
+                self.render_connection_row(id, name, depth, palette, cx)
             }
             ConnectionTreeRow::Unassigned {
                 connection_count,
                 expanded,
-            } => self.render_unassigned_row(connection_count, expanded, cx),
+            } => self.render_unassigned_row(connection_count, expanded, palette, cx),
         }
     }
 
-    fn render_workspace_row(&self, row: ConnectionTreeRow, cx: &gpui::Context<Self>) -> AnyElement {
+    fn render_workspace_row(
+        &self,
+        row: ConnectionTreeRow,
+        palette: SidebarPalette,
+        cx: &gpui::Context<Self>,
+    ) -> AnyElement {
         let ConnectionTreeRow::Workspace {
             id,
             name,
@@ -53,13 +62,16 @@ impl PersistentConnectionSidebar {
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
             .w_full()
-            .h(px(30.0))
+            .h(px(TREE_ROW_HEIGHT))
+            .border_l_2()
+            .border_color(gpui::transparent_black())
             .pl(px(TREE_BASE_PADDING + depth as f32 * TREE_INDENT))
             .pr_1()
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .hover(|this| this.bg(cx.theme().sidebar_accent))
+            .text_color(palette.foreground)
+            .hover(move |this| this.bg(palette.muted))
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
                     if !this.collapsed_workspaces.remove(&id) {
@@ -71,7 +83,7 @@ impl PersistentConnectionSidebar {
             .child(tree_chevron(has_children, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))
             .child(tree_label(name))
-            .child(tree_count(direct_connection_count, cx))
+            .child(tree_count(direct_connection_count, palette))
             .child(self.render_workspace_actions(id, group, cx))
             .into_any_element()
     }
@@ -111,6 +123,7 @@ impl PersistentConnectionSidebar {
         id: i64,
         name: String,
         depth: usize,
+        palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let home = self.home_page.clone();
@@ -120,14 +133,21 @@ impl PersistentConnectionSidebar {
             .iter()
             .find(|item| item.id == Some(id))
             .cloned();
+        let selected = home.read(cx).selected_connection_id == Some(id);
         let icon = connection
             .as_ref()
-            .map(|item| item.connection_type.icon())
-            .unwrap_or(IconName::Apps);
+            .map(|connection| home.read(cx).connection_icon(connection, px(16.0)))
+            .unwrap_or_else(|| Icon::new(IconName::Apps).with_size(Size::Small));
         h_flex()
             .id(SharedString::from(format!("persistent-connection-{id}")))
             .w_full()
-            .h(px(30.0))
+            .h(px(TREE_ROW_HEIGHT))
+            .border_l_2()
+            .border_color(if selected {
+                palette.accent
+            } else {
+                gpui::transparent_black()
+            })
             .pl(px(TREE_BASE_PADDING
                 + depth as f32 * TREE_INDENT
                 + TREE_INDENT))
@@ -135,7 +155,9 @@ impl PersistentConnectionSidebar {
             .gap_2()
             .items_center()
             .cursor_pointer()
-            .hover(|this| this.bg(cx.theme().sidebar_accent))
+            .text_color(palette.foreground)
+            .when(selected, |this| this.bg(palette.muted))
+            .hover(move |this| this.bg(palette.muted))
             .on_click(move |_, window, cx| {
                 if let Some(connection) = connection.as_ref() {
                     home.update(cx, |home, cx| {
@@ -143,7 +165,7 @@ impl PersistentConnectionSidebar {
                     });
                 }
             })
-            .child(Icon::new(icon).color().with_size(Size::Small))
+            .child(icon)
             .child(tree_label(name))
             .into_any_element()
     }
@@ -152,18 +174,22 @@ impl PersistentConnectionSidebar {
         &self,
         count: usize,
         expanded: bool,
+        palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
         h_flex()
             .id("persistent-unassigned")
             .w_full()
-            .h(px(30.0))
+            .h(px(TREE_ROW_HEIGHT))
+            .border_l_2()
+            .border_color(gpui::transparent_black())
             .px_2()
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .hover(|this| this.bg(cx.theme().sidebar_accent))
+            .text_color(palette.foreground)
+            .hover(move |this| this.bg(palette.muted))
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
                     this.unassigned_collapsed = !this.unassigned_collapsed;
@@ -173,7 +199,7 @@ impl PersistentConnectionSidebar {
             .child(tree_chevron(true, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))
             .child(tree_label(t!("Home.unassigned_workspace").to_string()))
-            .child(tree_count(count, cx))
+            .child(tree_count(count, palette))
             .into_any_element()
     }
 }
@@ -253,10 +279,13 @@ fn tree_label(label: String) -> AnyElement {
         .into_any_element()
 }
 
-fn tree_count(count: usize, cx: &gpui::App) -> AnyElement {
+fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
     div()
+        .px_1p5()
+        .rounded_full()
+        .bg(palette.muted)
         .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(palette.muted_foreground)
         .child(count.to_string())
         .into_any_element()
 }

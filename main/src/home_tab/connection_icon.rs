@@ -1,7 +1,7 @@
 use super::*;
 
 impl HomePage {
-    pub(super) fn connection_icon(&self, conn: &StoredConnection, size: gpui::Pixels) -> Icon {
+    pub(crate) fn connection_icon(&self, conn: &StoredConnection, size: gpui::Pixels) -> Icon {
         match conn.connection_type {
             ConnectionType::Database => conn
                 .to_db_connection()

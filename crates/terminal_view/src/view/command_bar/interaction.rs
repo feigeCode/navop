@@ -26,6 +26,8 @@ impl TerminalCommandBar {
             connection_id: config.connection_id,
             input_state,
             quick_search_state,
+            quick_group_scroll_handle: ScrollHandle::new(),
+            quick_scroll_handle: ScrollHandle::new(),
             quick_commands: Vec::new(),
             suggestions: Vec::new(),
             selected_suggestion: None,
@@ -180,8 +182,9 @@ impl TerminalCommandBar {
         else {
             return false;
         };
-        self.input_state
-            .update(cx, |state, cx| state.set_value(command, window, cx));
+        self.input_state.update(cx, |state, cx| {
+            set_command_input_value(state, command, window, cx);
+        });
         self.suggestions.clear();
         self.selected_suggestion = None;
         self.clear_inline_completion(cx);

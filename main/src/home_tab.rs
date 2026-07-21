@@ -131,7 +131,7 @@ pub struct HomePage {
     search_input: Entity<InputState>,
     search_query: Entity<String>,
     pub(crate) editing_connection_id: Option<i64>,
-    selected_connection_id: Option<i64>,
+    pub(crate) selected_connection_id: Option<i64>,
     connection_scroll_handle: UniformListScrollHandle,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,

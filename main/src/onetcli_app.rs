@@ -2,6 +2,7 @@ use crate::home_tab::{
     HomePage, NewConnectionShortcut, OpenConnectionQuickOpen, OpenLocalTerminalShortcut,
 };
 use crate::persistent_connection_sidebar::PersistentConnectionSidebar;
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
     Styled, Window, actions, div,
@@ -74,6 +75,7 @@ impl gpui::Global for GlobalOnetCliApp {}
 struct InitialPinnedTabLayout {
     home_tab_id: &'static str,
     workbench_tab_id: &'static str,
+    pin_workbench: bool,
     active_pinned_index: usize,
 }
 
@@ -122,6 +124,7 @@ fn initial_home_tab_layout(startup_default_page: StartupDefaultPage) -> InitialP
     InitialPinnedTabLayout {
         home_tab_id: "home",
         workbench_tab_id: "ai-workbench",
+        pin_workbench: startup_default_page == StartupDefaultPage::AiWorkbench,
         active_pinned_index: active_pinned_index_for_startup_default_page(startup_default_page),
     }
 }
@@ -1036,40 +1039,55 @@ impl OnetCliApp {
             home_page: home_page.clone(),
         });
         let connection_sidebar = cx.new(|cx| {
-            PersistentConnectionSidebar::new(home_page.clone(), connection_sidebar_expanded, cx)
+            PersistentConnectionSidebar::new(
+                home_page.clone(),
+                connection_sidebar_expanded,
+                window,
+                cx,
+            )
         });
 
         // Initialize fixed tabs before the scrollable workspace tabs.
         {
             let layout = initial_home_tab_layout(AppSettings::current(cx).startup_default_page);
             tab_container.update(cx, |tc, cx| {
-                let home_tab = TabItem::new(layout.home_tab_id, "app", home_page);
+                let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
                 tc.add_pinned_tab(home_tab, cx);
 
-                let connections = cx
-                    .global::<GlobalStorageState>()
-                    .storage
-                    .get::<ConnectionRepository>()
-                    .and_then(|repo| repo.list().ok())
-                    .unwrap_or_default();
-                let (scope, catalog, mentions) =
-                    ai_chat_view::build_workbench_resource_state(&connections);
-                let workbench = cx.new(|cx| {
-                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
-                        scope, catalog, mentions, window, cx,
-                    )
-                });
-                let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
-                tc.add_pinned_tab(workbench_tab, cx);
+                if layout.pin_workbench {
+                    let connections = cx
+                        .global::<GlobalStorageState>()
+                        .storage
+                        .get::<ConnectionRepository>()
+                        .and_then(|repo| repo.list().ok())
+                        .unwrap_or_default();
+                    let (scope, catalog, mentions) =
+                        ai_chat_view::build_workbench_resource_state(&connections);
+                    let workbench = cx.new(|cx| {
+                        ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
+                            scope, catalog, mentions, window, cx,
+                        )
+                    });
+                    let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
+                    tc.add_pinned_tab(workbench_tab, cx);
+                }
                 tc.activate_pinned_tab_at(layout.active_pinned_index, window, cx);
             });
         }
 
-        cx.subscribe(&tab_container, |this, _, event: &TabContainerEvent, cx| {
-            if let TabContainerEvent::NavigationSidebarToggled { expanded } = event {
-                this.set_connection_sidebar_expanded(*expanded, cx);
-            }
-        })
+        cx.subscribe(
+            &tab_container,
+            |this, _, event: &TabContainerEvent, cx| match event {
+                TabContainerEvent::NavigationSidebarToggled { expanded } => {
+                    this.set_connection_sidebar_expanded(*expanded, cx);
+                }
+                TabContainerEvent::LayoutChanged
+                | TabContainerEvent::TabActivated { .. }
+                | TabContainerEvent::TabClosed { .. } => {
+                    this.sync_connection_sidebar_theme(cx);
+                }
+            },
+        )
         .detach();
 
         Self {
@@ -1093,6 +1111,27 @@ impl OnetCliApp {
             tabs.set_navigation_sidebar_expanded(expanded, cx)
         });
         cx.notify();
+    }
+
+    fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
+        let colors = {
+            let tabs = self.tab_container.read(cx);
+            if tabs.is_pinned_tab_active() {
+                None
+            } else {
+                tabs.active_tab()
+                    .filter(|tab| tab.content().content_key(cx) == "Terminal")
+                    .and_then(|tab| {
+                        tab.content()
+                            .view()
+                            .downcast::<terminal_view::TerminalWorkspace>()
+                            .ok()
+                    })
+                    .map(|terminal| terminal.read(cx).current_theme(cx).colors())
+            }
+        };
+        self.connection_sidebar
+            .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
     }
 
     fn save_main_window_size(&self, window: &Window, cx: &mut App) {
@@ -1182,6 +1221,7 @@ mod tests {
 
         assert_eq!("home", layout.home_tab_id);
         assert_eq!("ai-workbench", layout.workbench_tab_id);
+        assert!(layout.pin_workbench);
         assert_eq!(1, layout.active_pinned_index);
     }
 
@@ -1190,8 +1230,20 @@ mod tests {
         let home_layout = initial_home_tab_layout(StartupDefaultPage::Home);
         let ai_layout = initial_home_tab_layout(StartupDefaultPage::AiWorkbench);
 
+        assert!(!home_layout.pin_workbench);
         assert_eq!(0, home_layout.active_pinned_index);
+        assert!(ai_layout.pin_workbench);
         assert_eq!(1, ai_layout.active_pinned_index);
+    }
+
+    #[test]
+    fn collapsed_connection_sidebar_hides_the_entire_sidebar() {
+        let source = include_str!("onetcli_app.rs");
+        let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
+
+        assert!(source.contains("when(connection_sidebar_expanded"));
+        assert!(sidebar_source.contains("fn is_expanded"));
+        assert!(!sidebar_source.contains(".when(self.tree_expanded"));
     }
 
     #[test]
@@ -1461,6 +1513,7 @@ impl Render for OnetCliApp {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
+        let connection_sidebar_expanded = self.connection_sidebar.read(cx).is_expanded();
 
         div()
             .size_full()
@@ -1471,7 +1524,9 @@ impl Render for OnetCliApp {
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(self.connection_sidebar.clone())
+                    .when(connection_sidebar_expanded, |layout| {
+                        layout.child(self.connection_sidebar.clone())
+                    })
                     .child(
                         div()
                             .flex_1()

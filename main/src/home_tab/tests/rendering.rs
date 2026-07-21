@@ -100,6 +100,26 @@ fn personal_and_team_keys_share_one_toolbar_menu() {
 }
 
 #[test]
+fn home_overview_is_compact_and_avoids_duplicate_search() {
+    let toolbar = include_str!("../toolbar.rs");
+    let content = include_str!("../content.rs");
+    let card = include_str!("../connection_card.rs");
+
+    assert!(toolbar.contains("Input::new(&self.search_input)"));
+    assert!(content.contains("max_w(px(1160.0))"));
+    assert!(content.contains("w(px(280.0))"));
+    assert!(card.contains("h(px(76.0))"));
+    assert!(!card.contains(".shadow_sm()\n            .group"));
+}
+
+#[test]
+fn sidebar_search_aligns_with_home_toolbar_height() {
+    let tree = include_str!("../../persistent_connection_sidebar/tree.rs");
+    assert!(tree.contains("fn render_tree_search"));
+    assert!(tree.contains(".h_10()"));
+}
+
+#[test]
 fn team_key_settings_tab_has_feature_guard() {
     let source = include_str!("../../home/home_tabs.rs");
     let entry = source

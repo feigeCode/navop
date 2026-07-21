@@ -1,14 +1,11 @@
 use super::*;
 use crate::view::command_bar_model::{QuickCommandGroup, group_quick_commands};
-use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled, px,
-    relative, rgb,
-};
+use gpui::{AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, px, rgb};
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 use rust_i18n::t;
 
-const QUICK_POPOVER_WIDTH: f32 = 860.0;
-const QUICK_POPOVER_MAX_HEIGHT: f32 = 520.0;
+const QUICK_POPOVER_WIDTH: f32 = 720.0;
+const QUICK_POPOVER_MAX_HEIGHT: f32 = 420.0;
 
 #[derive(Clone)]
 pub(super) struct QuickGroupSummary {
@@ -21,9 +18,10 @@ pub(super) struct QuickGroupSummary {
 impl TerminalCommandBar {
     pub(super) fn render_quick_commands(&self, cx: &mut Context<Self>) -> AnyElement {
         let groups = self.filtered_quick_groups();
+        let bottom_offset = if self.collapsed { 38.0 } else { 54.0 };
         v_flex()
             .absolute()
-            .bottom(relative(1.0))
+            .bottom(px(bottom_offset))
             .right_3()
             .w(px(QUICK_POPOVER_WIDTH))
             .max_w(gpui::relative(0.96))
@@ -36,8 +34,17 @@ impl TerminalCommandBar {
             .bg(self.colors.background)
             .shadow_lg()
             .on_key_down(cx.listener(Self::handle_quick_key_down))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                let command_bar = cx.entity().downgrade();
+                window.defer(cx, move |window, cx| {
+                    let _ = command_bar.update(cx, |this, cx| {
+                        if this.quick_commands_open {
+                            this.close_quick_commands(window, cx);
+                        }
+                    });
+                });
+                let _ = this;
+            }))
             .child(
                 h_flex()
                     .h(px(QUICK_POPOVER_MAX_HEIGHT))

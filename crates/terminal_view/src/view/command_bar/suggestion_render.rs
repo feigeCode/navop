@@ -2,7 +2,7 @@ use super::*;
 use crate::view::command_bar_model::{CommandSuggestion, CommandSuggestionKind};
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px, relative,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, h_flex, scroll::ScrollableElement, v_flex,
@@ -25,7 +25,7 @@ impl TerminalCommandBar {
         }
         v_flex()
             .absolute()
-            .bottom(relative(1.0))
+            .bottom(px(54.0))
             .left_3()
             .w(px(COMMAND_POPOVER_WIDTH))
             .max_w(gpui::relative(0.96))
@@ -147,7 +147,7 @@ impl TerminalCommandBar {
             .px_2()
             .py_px()
             .text_xs()
-            .child(Icon::new(icon).xsmall())
+            .child(Icon::new(icon).color().xsmall())
             .child(label)
             .into_any_element()
     }

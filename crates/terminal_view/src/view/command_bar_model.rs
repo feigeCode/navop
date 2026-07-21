@@ -23,12 +23,6 @@ pub(super) enum SelectionDirection {
     Next,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum QuickCommandUse {
-    FillInput(String),
-    PasteTerminal(String),
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct QuickCommandGroup {
     pub name: Option<String>,
@@ -169,14 +163,6 @@ pub(super) fn selected_quick_command(
     commands
         .get(selected.unwrap_or(0))
         .map(|command| command.command.clone())
-}
-
-pub(super) fn quick_command_use(command: &str, collapsed: bool) -> QuickCommandUse {
-    if collapsed {
-        QuickCommandUse::PasteTerminal(command.to_string())
-    } else {
-        QuickCommandUse::FillInput(command.to_string())
-    }
 }
 
 pub(super) fn command_submission_bytes(command: &str) -> Option<Vec<u8>> {

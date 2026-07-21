@@ -6,7 +6,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, input::Input, scroll::ScrollableElement,
+    ActiveTheme, Icon, IconName, Sizable, Size, h_flex,
+    input::{Input, LocalInputStyle},
+    scroll::ScrollableElement,
     v_flex,
 };
 use rust_i18n::t;
@@ -30,15 +32,32 @@ impl TerminalCommandBar {
                 v_flex()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .when(groups.is_empty(), |list| {
-                        list.child(self.render_quick_empty())
-                    })
-                    .children(index_quick_groups(groups).map(
-                        |(group_index, command_offset, group)| {
-                            self.render_quick_group(group_index, command_offset, group, cx)
-                        },
-                    )),
+                    .relative()
+                    .child(
+                        v_flex()
+                            .id("terminal-quick-command-scroll-view")
+                            .size_full()
+                            .track_scroll(&self.quick_scroll_handle)
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .when(groups.is_empty(), |list| {
+                                        list.child(self.render_quick_empty())
+                                    })
+                                    .children(index_quick_groups(groups).map(
+                                        |(group_index, command_offset, group)| {
+                                            self.render_quick_group(
+                                                group_index,
+                                                command_offset,
+                                                group,
+                                                cx,
+                                            )
+                                        },
+                                    )),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.quick_scroll_handle),
             )
             .into_any_element()
     }
@@ -56,7 +75,15 @@ impl TerminalCommandBar {
             .child(
                 Input::new(&self.quick_search_state)
                     .appearance(false)
+                    .local_style(LocalInputStyle {
+                        background: self.colors.background,
+                        foreground: self.colors.foreground,
+                        muted_foreground: self.colors.muted_foreground,
+                        border: self.colors.border,
+                    })
                     .w_full()
+                    .text_color(self.colors.foreground)
+                    .caret_color(self.colors.accent)
                     .with_size(Size::Small),
             )
             .into_any_element()
@@ -69,7 +96,11 @@ impl TerminalCommandBar {
             .justify_center()
             .gap_2()
             .text_color(self.colors.muted_foreground)
-            .child(Icon::new(IconName::TerminalQuickCommandColor).with_size(Size::Medium))
+            .child(
+                Icon::new(IconName::TerminalQuickCommandColor)
+                    .color()
+                    .with_size(Size::Medium),
+            )
             .child(
                 div()
                     .text_sm()
@@ -89,24 +120,27 @@ impl TerminalCommandBar {
             .name
             .unwrap_or_else(|| t!("TerminalCommandBar.ungrouped").to_string());
         let color = group_color(group.color.as_deref(), self.colors.accent);
+        let show_group_header = self.quick_group_filter == QuickGroupFilter::All;
         v_flex()
             .id(("terminal-quick-command-group", group_index))
             .w_full()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .px_3()
-                    .pt_3()
-                    .pb_1()
-                    .child(div().size_2().rounded_full().bg(color))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(title),
-                    ),
-            )
+            .when(show_group_header, |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .px_3()
+                        .pt_3()
+                        .pb_1()
+                        .child(div().size_2().rounded_full().bg(color))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(title),
+                        ),
+                )
+            })
             .children(
                 group
                     .commands
@@ -132,7 +166,10 @@ impl TerminalCommandBar {
         let (group_index, command_index) = item_index;
         let selected = self.selected_quick_command == Some(command_index);
         let value = command.command.clone();
-        let label = command.name.clone().unwrap_or_else(|| value.clone());
+        let label = command
+            .name
+            .clone()
+            .filter(|name| name.trim() != value.trim());
         h_flex()
             .id((
                 "terminal-quick-command-item",
@@ -153,11 +190,21 @@ impl TerminalCommandBar {
                 this.choose_command(value.clone(), window, cx);
             }))
             .child(self.render_quick_command_text(label, command))
-            .child(Icon::new(IconName::ChevronRight).xsmall())
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(self.colors.muted_foreground)
+                    .child(t!("TerminalCommandBar.fill").to_string()),
+            )
             .into_any_element()
     }
 
-    fn render_quick_command_text(&self, label: String, command: QuickCommand) -> AnyElement {
+    fn render_quick_command_text(
+        &self,
+        label: Option<String>,
+        command: QuickCommand,
+    ) -> AnyElement {
         v_flex()
             .min_w_0()
             .flex_1()
@@ -167,15 +214,19 @@ impl TerminalCommandBar {
                     .truncate()
                     .text_sm()
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(label),
-            )
-            .child(
-                div()
-                    .truncate()
-                    .text_xs()
-                    .text_color(self.colors.accent)
+                    .font_family("monospace")
+                    .text_color(self.colors.foreground)
                     .child(command.command),
             )
+            .when_some(label, |row, label| {
+                row.child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(self.colors.accent)
+                        .child(label),
+                )
+            })
             .when_some(command.description, |row, description| {
                 row.child(
                     div()

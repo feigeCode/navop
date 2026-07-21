@@ -1,3 +1,4 @@
+mod frame;
 mod header;
 mod load;
 mod render;
@@ -11,10 +12,14 @@ use crate::theme::WorkspaceTheme;
 use gpui::{
     AppContext as _, AsyncApp, Context, Entity, ScrollHandle, Subscription, WeakEntity, Window,
 };
+use ignore::gitignore::Gitignore;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use self::load::{WorkspaceSnapshot, load_workspace};
+
+pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 
 pub struct WorkspaceExplorer {
     root: PathBuf,
@@ -35,6 +40,11 @@ pub struct WorkspaceExplorer {
     editor: Entity<WorkspaceEditor>,
     theme: WorkspaceTheme,
     scroll_handle: ScrollHandle,
+    show_hidden: bool,
+    show_ignored: bool,
+    ignore_matcher: Option<Arc<Gitignore>>,
+    show_frame_controls: bool,
+    frame_placement: ExplorerFramePlacement,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -42,6 +52,7 @@ pub struct WorkspaceExplorerConfig {
     pub root: PathBuf,
     pub editor: Entity<WorkspaceEditor>,
     pub theme: WorkspaceTheme,
+    pub show_frame_controls: bool,
 }
 
 impl WorkspaceExplorer {
@@ -50,6 +61,7 @@ impl WorkspaceExplorer {
             root,
             editor,
             theme,
+            show_frame_controls,
         } = config;
         let editor_subscription =
             cx.subscribe(&editor, |this, _, event: &WorkspaceEditorEvent, cx| {
@@ -76,6 +88,11 @@ impl WorkspaceExplorer {
             editor,
             theme,
             scroll_handle: ScrollHandle::new(),
+            show_hidden: false,
+            show_ignored: false,
+            ignore_matcher: None,
+            show_frame_controls,
+            frame_placement: ExplorerFramePlacement::Right,
             _subscriptions: vec![editor_subscription],
         };
         this.refresh(cx);
@@ -102,6 +119,7 @@ impl WorkspaceExplorer {
         self.selected_path = None;
         self.repository = None;
         self.changes.clear();
+        self.ignore_matcher = None;
         self.git_loading = false;
         self.git_refresh_pending = false;
     }
@@ -122,7 +140,10 @@ impl WorkspaceExplorer {
         self.error = None;
         self.git_error = None;
         let root = self.root.clone();
-        let task = cx.background_spawn(async move { load_workspace(root) });
+        let show_hidden = self.show_hidden;
+        let show_ignored = self.show_ignored;
+        let task =
+            cx.background_spawn(async move { load_workspace(root, show_hidden, show_ignored) });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
@@ -151,6 +172,7 @@ impl WorkspaceExplorer {
         self.selected_path = None;
         self.repository = snapshot.repository;
         self.changes = snapshot.changes;
+        self.ignore_matcher = snapshot.ignore_matcher;
         self.git_loading = false;
         self.git_refresh_pending = false;
     }
@@ -214,7 +236,12 @@ impl WorkspaceExplorer {
         self.loading_directories.insert(path.clone());
         let generation = self.refresh_generation;
         let task_path = path.clone();
-        let task = cx.background_spawn(async move { read_directory(&task_path) });
+        let show_hidden = self.show_hidden;
+        let show_ignored = self.show_ignored;
+        let matcher = self.ignore_matcher.clone();
+        let task = cx.background_spawn(async move {
+            read_directory(&task_path, matcher.as_deref(), show_hidden, show_ignored)
+        });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;

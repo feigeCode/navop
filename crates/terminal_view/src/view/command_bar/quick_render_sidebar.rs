@@ -7,7 +7,9 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Sizable,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -23,24 +25,40 @@ impl TerminalCommandBar {
             .border_r_1()
             .border_color(self.colors.border)
             .bg(self.colors.muted)
-            .p_2()
-            .gap_1()
             .child(self.render_quick_sidebar_header(cx))
-            .children(
-                self.quick_group_summaries()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, group)| self.render_quick_group_filter(index, group, cx)),
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        v_flex()
+                            .id("terminal-quick-command-group-scroll-view")
+                            .size_full()
+                            .track_scroll(&self.quick_group_scroll_handle)
+                            .overflow_y_scroll()
+                            .child(v_flex().w_full().gap_1().p_2().children(
+                                self.quick_group_summaries().into_iter().enumerate().map(
+                                    |(index, group)| {
+                                        self.render_quick_group_filter(index, group, cx)
+                                    },
+                                ),
+                            )),
+                    )
+                    .vertical_scrollbar(&self.quick_group_scroll_handle),
             )
             .into_any_element()
     }
 
     fn render_quick_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
-            .h(px(32.0))
+            .h(px(48.0))
+            .flex_shrink_0()
             .items_center()
             .justify_between()
-            .px_2()
+            .px_3()
+            .border_b_1()
+            .border_color(self.colors.border)
             .child(
                 div()
                     .text_xs()

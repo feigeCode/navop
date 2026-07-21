@@ -1014,6 +1014,18 @@ Connection:
     en: "Connection \"%{conn_name}\" is in use and must be closed before deletion.\n\nPlease close the connection first before deleting."
     zh-CN: "连接 \"%{conn_name}\" 正在使用中，删除前需要先关闭该连接。\n\n请先关闭该连接后再进行删除。"
     zh-HK: "連線 \"%{conn_name}\" 正在使用中，刪除前需要先關閉該連線。\n\n請先關閉該連線後再進行刪除。"
+  connection_list:
+    en: Connections
+    zh-CN: 连接列表
+    zh-HK: 連接列表
+  collapse_all:
+    en: Collapse All
+    zh-CN: 全部折叠
+    zh-HK: 全部摺疊
+  search_placeholder:
+    en: Search connections or workspaces
+    zh-CN: 搜索连接或工作区
+    zh-HK: 搜尋連線或工作區
 
 # 新建连接
 NewConnection:
@@ -1159,9 +1171,9 @@ Settings:
         zh-CN: 默认启动页
         zh-HK: 預設啟動頁
       default_page_desc:
-        en: Select which fixed tab is active when the application opens
-        zh-CN: 选择应用启动时默认激活的固定标签页
-        zh-HK: 選擇應用程式啟動時預設啟用的固定標籤頁
+        en: AI Workbench is pinned at startup only when selected; otherwise it opens from the sidebar
+        zh-CN: 仅选择 AI 工作台时启动并固定显示；选择首页时可从侧边栏打开
+        zh-HK: 僅選擇 AI 工作台時啟動並固定顯示；選擇首頁時可從側邊欄開啟
       default_page_home:
         en: Home
         zh-CN: 首页

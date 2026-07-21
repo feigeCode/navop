@@ -119,6 +119,39 @@ mod tests {
     }
 
     #[test]
+    fn persistent_sidebar_uses_large_icons_with_compact_spacing() {
+        let source = include_str!("../persistent_connection_sidebar/rail.rs");
+
+        assert!(source.contains("items_center().gap_1().p_1()"));
+        assert!(source.matches(".large()").count() >= 2);
+        assert!(!source.contains(".ghost()\n                .small()"));
+    }
+
+    #[test]
+    fn persistent_sidebar_uses_color_user_avatar() {
+        let source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let icons = include_str!("../../../crates/ui/src/icon.rs");
+
+        assert!(source.contains("IconName::UserColor"));
+        assert!(icons.contains("UserColor"));
+        assert!(icons.contains("icons/user_color.svg"));
+    }
+
+    #[test]
+    fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
+        let tabs_source = include_str!("home_tabs.rs");
+        let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
+
+        assert!(rail_source.contains("persistent-open-ai-workbench"));
+        assert!(rail_source.contains("StartupDefaultPage::Home"));
+        assert!(tabs_source.contains("fn add_ai_workbench_tab"));
+        assert!(tabs_source.contains("with_tab_closeable(true)"));
+        assert!(
+            tabs_source.contains("activate_or_add_tab_lazy(\n                    \"ai-workbench\"")
+        );
+    }
+
+    #[test]
     fn redis_workspace_mode_groups_workspace_connections() {
         let active = redis_connection(1, "redis-a", Some(7));
         let peer = redis_connection(2, "redis-b", Some(7));
@@ -671,6 +704,34 @@ impl HomePage {
                     |window, cx| {
                         let notes = cx.new(|cx| NotesView::new(window, cx));
                         TabItem::new("notes", "home", notes)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_ai_workbench_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        let (scope, catalog, mentions) =
+            ai_chat_view::build_workbench_resource_state(&self.connections);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "ai-workbench",
+                    |window, cx| {
+                        let workbench = cx.new(|cx| {
+                            ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
+                                scope,
+                                catalog,
+                                mentions,
+                                window,
+                                cx,
+                            )
+                            .with_tab_closeable(true)
+                        });
+                        TabItem::new("ai-workbench", "home", workbench)
                     },
                     window,
                     cx,

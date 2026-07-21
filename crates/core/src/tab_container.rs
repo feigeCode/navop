@@ -2873,9 +2873,15 @@ impl TabContainer {
             .unwrap_or(theme.muted_foreground);
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
-        let left_padding = self.left_padding.unwrap_or(px(8.0));
+        let mut left_padding = self.left_padding.unwrap_or(px(8.0));
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
+
+        // When the application navigation sidebar is fully hidden on macOS,
+        // reserve the title-bar area occupied by the traffic-light controls.
+        if cfg!(target_os = "macos") && navigation_sidebar_expanded == Some(false) {
+            left_padding = px(80.0);
+        }
 
         // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
         let is_linux = cfg!(target_os = "linux");
@@ -3801,6 +3807,13 @@ mod tests {
             })
             .expect("window opens");
         });
+    }
+
+    #[test]
+    fn collapsed_navigation_sidebar_reserves_macos_titlebar_controls() {
+        let source = include_str!("tab_container.rs");
+        assert!(source.contains("navigation_sidebar_expanded == Some(false)"));
+        assert!(source.contains("left_padding = px(80.0)"));
     }
 
     #[gpui::test]

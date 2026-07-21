@@ -98,6 +98,7 @@ pub struct DefaultAgentChatPanel {
     show_sidebar_header: bool,
     show_sidebar_frame_controls: bool,
     sidebar_frame_placement: SidebarPlacement,
+    tab_closeable: bool,
     error: Option<String>,
 }
 
@@ -243,6 +244,7 @@ impl DefaultAgentChatPanel {
             show_sidebar_header: true,
             show_sidebar_frame_controls: false,
             sidebar_frame_placement: SidebarPlacement::Right,
+            tab_closeable: false,
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -250,6 +252,12 @@ impl DefaultAgentChatPanel {
         panel.subscribe_agent_tool_config_events(cx);
         panel.spawn_build_view(cx);
         panel
+    }
+
+    /// Configure whether this panel can be closed when hosted in a regular tab.
+    pub fn with_tab_closeable(mut self, closeable: bool) -> Self {
+        self.tab_closeable = closeable;
+        self
     }
 
     fn subscribe_provider_events(&mut self, cx: &mut Context<Self>) {
@@ -638,7 +646,7 @@ impl TabContent for DefaultAgentChatPanel {
     }
 
     fn closeable(&self, _cx: &App) -> bool {
-        false
+        self.tab_closeable
     }
 
     fn width_size(&self, _cx: &App) -> Option<Size> {

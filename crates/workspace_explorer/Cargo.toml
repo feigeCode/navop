@@ -8,6 +8,7 @@ edition.workspace = true
 anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+ignore = "0.4"
 process-util = { workspace = true }
 remote_file_editor = { workspace = true }
 rust-i18n = { workspace = true }

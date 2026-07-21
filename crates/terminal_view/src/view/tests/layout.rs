@@ -179,22 +179,43 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(render_source.contains("toggle_collapsed"));
     assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
     assert!(interaction_source.contains("auto_grow(2, 8)"));
-    assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 52.0"));
+    assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 46.0"));
     assert!(render_source.contains("with_size(Size::Medium)"));
     assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
-    assert!(quick_interaction_source.contains("QuickCommandUse::PasteTerminal"));
+    assert!(quick_interaction_source.contains("self.collapsed = false"));
+    assert!(quick_interaction_source.contains("set_command_input_value(state, command"));
+    assert!(interaction_source.contains("set_command_input_value(state, command"));
+    assert!(
+        include_str!("../command_bar/mod.rs")
+            .contains("state.set_cursor_position(end_position, window, cx)")
+    );
     for key in ["\"arrowup\"", "\"arrowdown\"", "\"home\"", "\"end\""] {
         assert!(quick_interaction_source.contains(key));
     }
-    assert!(suggestion_source.contains("bottom(relative(1.0))"));
+    assert!(suggestion_source.contains("bottom(px(54.0))"));
     assert!(suggestion_source.contains("bg(self.colors.background)"));
     assert!(suggestion_source.contains("let mut content"));
     assert!(suggestion_source.contains("overflow_y_scrollbar"));
     assert!(suggestion_source.contains("relative(0.96)"));
     assert!(quick_source.contains("group_quick_commands"));
-    assert!(quick_source.contains("bottom(relative(1.0))"));
+    assert!(quick_source.contains("bottom(px(bottom_offset))"));
     assert!(quick_source.contains("relative(0.96)"));
+    assert!(!quick_source.contains("on_scroll_wheel"));
+    assert!(!quick_source.contains("on_mouse_down(MouseButton::Left"));
+    assert!(quick_source.contains("on_mouse_down_out"));
+    assert!(quick_source.contains("window.defer(cx"));
+    assert!(quick_interaction_source.contains("window.defer(cx"));
+    assert!(quick_interaction_source.contains("quick_scroll_handle = ScrollHandle::new()"));
+    assert!(quick_source.contains("bottom(px(bottom_offset))"));
+    assert!(
+        include_str!("../command_bar/quick_render_list.rs")
+            .contains("vertical_scrollbar(&self.quick_scroll_handle)")
+    );
+    assert!(
+        include_str!("../command_bar/quick_render_sidebar.rs")
+            .contains("vertical_scrollbar(&self.quick_group_scroll_handle)")
+    );
 }
 
 #[test]

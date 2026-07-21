@@ -1,6 +1,9 @@
 use super::command_bar_model::CommandSuggestion;
 use crate::theme::TerminalColors;
-use gpui::{App, Entity, EventEmitter, FocusHandle, Focusable, Subscription};
+use gpui::{
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
+};
+use gpui_component::RopeExt as _;
 use gpui_component::input::InputState;
 use one_core::storage::QuickCommand;
 use terminal::terminal::Terminal;
@@ -16,7 +19,6 @@ mod suggestion_render;
 #[derive(Clone, Debug)]
 pub(super) enum TerminalCommandBarEvent {
     Submit(String),
-    PasteTerminal(String),
     FocusTerminal,
 }
 
@@ -39,6 +41,8 @@ pub(super) struct TerminalCommandBar {
     connection_id: Option<i64>,
     input_state: Entity<InputState>,
     quick_search_state: Entity<InputState>,
+    quick_group_scroll_handle: ScrollHandle,
+    quick_scroll_handle: ScrollHandle,
     quick_commands: Vec<QuickCommand>,
     suggestions: Vec<CommandSuggestion>,
     selected_suggestion: Option<usize>,
@@ -58,4 +62,16 @@ impl Focusable for TerminalCommandBar {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input_state.read(cx).focus_handle(cx)
     }
+}
+
+fn set_command_input_value(
+    state: &mut InputState,
+    command: String,
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+) {
+    let end_offset = command.len();
+    state.set_value(command, window, cx);
+    let end_position = state.text().offset_to_position(end_offset);
+    state.set_cursor_position(end_position, window, cx);
 }

@@ -188,18 +188,6 @@ fn quick_command_enter_uses_highlight_or_first_visible_command() {
 }
 
 #[test]
-fn quick_command_use_depends_on_command_bar_collapsed_state() {
-    assert_eq!(
-        QuickCommandUse::FillInput("git status".to_string()),
-        quick_command_use("git status", false)
-    );
-    assert_eq!(
-        QuickCommandUse::PasteTerminal("git status".to_string()),
-        quick_command_use("git status", true)
-    );
-}
-
-#[test]
 fn command_submission_trims_outer_whitespace_and_appends_enter() {
     assert_eq!(
         Some(b"printf 'hello'\r".to_vec()),

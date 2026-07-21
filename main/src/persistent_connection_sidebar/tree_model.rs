@@ -71,6 +71,47 @@ pub(crate) fn build_connection_tree_rows(
     builder.rows
 }
 
+pub(crate) fn filter_connection_tree_inputs(
+    workspaces: &mut Vec<WorkspaceNodeInput>,
+    connections: &mut Vec<ConnectionNodeInput>,
+    query: &str,
+) {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return;
+    }
+    let workspace_parent = workspaces
+        .iter()
+        .map(|workspace| (workspace.id, workspace.parent_id))
+        .collect::<HashMap<_, _>>();
+    let matched_workspace_ids = workspaces
+        .iter()
+        .filter(|workspace| workspace.name.to_lowercase().contains(&query))
+        .map(|workspace| workspace.id)
+        .collect::<HashSet<_>>();
+    let mut visible_workspace_ids = matched_workspace_ids.clone();
+    connections.retain(|connection| {
+        connection.name.to_lowercase().contains(&query)
+            || connection
+                .workspace_id
+                .is_some_and(|workspace_id| matched_workspace_ids.contains(&workspace_id))
+    });
+    visible_workspace_ids.extend(
+        connections
+            .iter()
+            .filter_map(|connection| connection.workspace_id),
+    );
+    let mut pending = visible_workspace_ids.iter().copied().collect::<Vec<_>>();
+    while let Some(workspace_id) = pending.pop() {
+        if let Some(Some(parent_id)) = workspace_parent.get(&workspace_id)
+            && visible_workspace_ids.insert(*parent_id)
+        {
+            pending.push(*parent_id);
+        }
+    }
+    workspaces.retain(|workspace| visible_workspace_ids.contains(&workspace.id));
+}
+
 struct TreeBuilder<'a> {
     workspace_by_id: HashMap<i64, &'a WorkspaceNodeInput>,
     children: HashMap<Option<i64>, Vec<i64>>,
@@ -236,6 +277,47 @@ mod tests {
         assert_eq!(
             vec![("workspace", 0), ("workspace", 0), ("workspace", 1)],
             row_shape(&rows)
+        );
+    }
+
+    #[test]
+    fn search_keeps_matching_connections_and_their_workspace_path() {
+        let mut workspaces = vec![
+            workspace(1, None, "Company"),
+            workspace(2, Some(1), "Production"),
+            workspace(3, None, "Personal"),
+        ];
+        let mut connections = vec![
+            connection(10, Some(2), "Primary MySQL"),
+            connection(20, Some(3), "Local Redis"),
+        ];
+
+        filter_connection_tree_inputs(&mut workspaces, &mut connections, "mysql");
+
+        assert_eq!(
+            vec![1, 2],
+            workspaces.iter().map(|item| item.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![10],
+            connections.iter().map(|item| item.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn workspace_search_keeps_direct_connections() {
+        let mut workspaces = vec![workspace(1, None, "Production")];
+        let mut connections = vec![connection(10, Some(1), "Primary MySQL")];
+
+        filter_connection_tree_inputs(&mut workspaces, &mut connections, "production");
+
+        assert_eq!(
+            vec![1],
+            workspaces.iter().map(|item| item.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![10],
+            connections.iter().map(|item| item.id).collect::<Vec<_>>()
         );
     }
 

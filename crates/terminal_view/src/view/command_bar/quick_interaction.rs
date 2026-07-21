@@ -1,7 +1,6 @@
 use super::*;
 use crate::view::command_bar_model::{
-    QuickCommandUse, SelectionDirection, bounded_selection, quick_command_use,
-    selected_quick_command,
+    SelectionDirection, bounded_selection, selected_quick_command,
 };
 use gpui::{AppContext, Context, KeyDownEvent, Window};
 use gpui_component::input::InputEvent;
@@ -30,6 +29,7 @@ impl TerminalCommandBar {
                 InputEvent::Change => {
                     this.quick_query = input.read(cx).value().to_string();
                     this.selected_quick_command = None;
+                    this.quick_scroll_handle = ScrollHandle::new();
                     cx.notify();
                 }
                 InputEvent::PressEnter { secondary } if !secondary => {
@@ -52,9 +52,14 @@ impl TerminalCommandBar {
         self.clear_inline_completion(cx);
         self.selected_quick_command = None;
         self.quick_group_filter = QuickGroupFilter::All;
+        self.quick_group_scroll_handle = ScrollHandle::new();
+        self.quick_scroll_handle = ScrollHandle::new();
         self.quick_search_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
-            state.focus(window, cx);
+        });
+        let quick_search = self.quick_search_state.clone();
+        window.defer(cx, move |window, cx| {
+            quick_search.update(cx, |state, cx| state.focus(window, cx));
         });
         cx.notify();
     }
@@ -65,25 +70,18 @@ impl TerminalCommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match quick_command_use(&command, self.collapsed) {
-            QuickCommandUse::FillInput(command) => {
-                self.input_state.update(cx, |state, cx| {
-                    state.set_value(command, window, cx);
-                    state.focus(window, cx);
-                });
-                self.reset_overlays(cx);
-            }
-            QuickCommandUse::PasteTerminal(command) => {
-                self.reset_overlays(cx);
-                cx.emit(TerminalCommandBarEvent::PasteTerminal(command));
-            }
-        }
+        self.collapsed = false;
+        self.input_state.update(cx, |state, cx| {
+            set_command_input_value(state, command, window, cx);
+        });
+        self.reset_overlays(cx);
         cx.notify();
     }
 
     pub(super) fn select_quick_group(&mut self, filter: QuickGroupFilter, cx: &mut Context<Self>) {
         self.quick_group_filter = filter;
         self.selected_quick_command = None;
+        self.quick_scroll_handle = ScrollHandle::new();
         cx.notify();
     }
 
@@ -149,7 +147,7 @@ impl TerminalCommandBar {
             .collect()
     }
 
-    fn close_quick_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_quick_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick_commands_open = false;
         self.selected_quick_command = None;
         if self.collapsed {

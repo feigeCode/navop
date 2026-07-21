@@ -11,7 +11,7 @@ fn non_repository_workspace_snapshot_keeps_the_requested_root() {
     std::fs::create_dir_all(&temp).unwrap();
     std::fs::write(temp.join("readme.txt"), "hello").unwrap();
 
-    let snapshot = load_workspace(temp.clone()).unwrap();
+    let snapshot = load_workspace(temp.clone(), false, false).unwrap();
 
     assert_eq!(temp.canonicalize().unwrap(), snapshot.root);
     assert!(snapshot.repository.is_none());

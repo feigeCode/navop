@@ -65,8 +65,12 @@ impl HomePage {
                 .id("home-content")
                 .size_full()
                 .min_w_0()
-                .p_6()
-                .child(self.render_connection_uniform_list(unassigned_connections, selected_id, cx))
+                .overflow_y_scroll()
+                .px_4()
+                .py_3()
+                .child(div().w_full().max_w(px(1160.0)).mx_auto().child(
+                    self.render_connection_uniform_list(unassigned_connections, selected_id, cx),
+                ))
                 .into_any_element();
         }
 
@@ -75,9 +79,10 @@ impl HomePage {
             .size_full()
             .min_w_0()
             .overflow_y_scroll()
-            .p_6()
-            .child({
-                let mut container = v_flex().gap_8().w_full().min_w_0();
+            .px_4()
+            .py_3()
+            .child(div().w_full().max_w(px(1160.0)).mx_auto().child({
+                let mut container = v_flex().gap_5().w_full().min_w_0();
 
                 // 过滤掉空的工作区
                 for (workspace, connections) in workspaces_with_connections {
@@ -114,7 +119,7 @@ impl HomePage {
                 }
 
                 container
-            })
+            }))
             .into_any_element()
     }
 
@@ -130,13 +135,13 @@ impl HomePage {
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_3()
+            .gap_2()
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .px_2()
-                    .py_1()
+                    .px_1()
+                    .py_0p5()
                     .child(
                         Icon::new(IconName::AppsColor)
                             .color()
@@ -148,13 +153,17 @@ impl HomePage {
                                 "workspace-name-{}",
                                 workspace_id.unwrap_or(0)
                             ))))
-                            .text_base()
+                            .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .child(workspace.name.clone()),
                     )
                     .child(
                         div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(cx.theme().muted)
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
@@ -175,7 +184,7 @@ impl HomePage {
                             self.render_connection_list_item(conn.clone(), selected_id, idx, cx),
                         ),
                         ConnectionLayout::Card => {
-                            container.child(div().w(px(320.0)).flex_shrink_0().child(
+                            container.child(div().w(px(280.0)).flex_shrink_0().child(
                                 self.render_connection_card(conn.clone(), selected_id, idx, cx),
                             ))
                         }
@@ -201,7 +210,7 @@ impl HomePage {
         for (idx, conn) in connections.into_iter().enumerate() {
             container = container.child(
                 div()
-                    .w(px(320.0))
+                    .w(px(280.0))
                     .flex_shrink_0()
                     .child(self.render_connection_card(conn, selected_id, idx, cx)),
             );
@@ -242,16 +251,16 @@ impl HomePage {
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_3()
+            .gap_2()
             .child(
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .px_2()
-                    .py_1()
+                    .px_1()
+                    .py_0p5()
                     .child(
                         div()
-                            .text_base()
+                            .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
                             .child(
@@ -262,6 +271,10 @@ impl HomePage {
                     )
                     .child(
                         div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(cx.theme().muted)
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(
@@ -281,7 +294,7 @@ impl HomePage {
                             .child(self.render_connection_list_item(conn, selected_id, idx, cx)),
                         ConnectionLayout::Card => container.child(
                             div()
-                                .w(px(320.0))
+                                .w(px(280.0))
                                 .flex_shrink_0()
                                 .child(self.render_connection_card(conn, selected_id, idx, cx)),
                         ),

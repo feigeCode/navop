@@ -43,9 +43,9 @@ impl HomePage {
             .w_full()
             .min_w_0()
             .flex_wrap()
-            .gap_3()
-            .px_4()
-            .py_2()
+            .gap_2()
+            .px_3()
+            .py_1()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -215,11 +215,10 @@ impl HomePage {
                     .flex_wrap()
                     .gap_1()
                     .items_center()
-                    // 搜索框
                     .child(
                         Input::new(&self.search_input)
                             .cleanable(true)
-                            .w(px(240.0))
+                            .w(px(220.0))
                             .bg(cx.theme().muted),
                     )
                     // 布局切换按钮

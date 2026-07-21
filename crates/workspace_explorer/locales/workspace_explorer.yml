@@ -109,6 +109,51 @@ WorkspaceExplorer:
       en: Refresh files and Git changes
       zh-CN: 刷新文件和 Git 更改
       zh-HK: 重新整理檔案和 Git 變更
+    show_hidden_files:
+      en: Show hidden files
+      zh-CN: 显示隐藏文件
+      zh-HK: 顯示隱藏檔案
+    hide_hidden_files:
+      en: Hide hidden files
+      zh-CN: 隐藏隐藏文件
+      zh-HK: 隱藏隱藏檔案
+    show_ignored_files:
+      en: Show Git ignored files
+      zh-CN: 显示 Git 忽略文件
+      zh-HK: 顯示 Git 忽略檔案
+    hide_ignored_files:
+      en: Hide Git ignored files
+      zh-CN: 隐藏 Git 忽略文件
+      zh-HK: 隱藏 Git 忽略檔案
+  frame:
+    options:
+      en: Panel options
+      zh-CN: 面板选项
+      zh-HK: 面板選項
+    move_to:
+      en: Move to
+      zh-CN: 移动到
+      zh-HK: 移動到
+    left:
+      en: Left
+      zh-CN: 左侧
+      zh-HK: 左側
+    right:
+      en: Right
+      zh-CN: 右侧
+      zh-HK: 右側
+    bottom:
+      en: Bottom
+      zh-CN: 底部
+      zh-HK: 底部
+    remove:
+      en: Remove from sidebar
+      zh-CN: 从侧边栏移除
+      zh-HK: 從側邊欄移除
+    close:
+      en: Close panel
+      zh-CN: 关闭面板
+      zh-HK: 關閉面板
   section:
     changes:
       en: "CHANGES (%{count})"

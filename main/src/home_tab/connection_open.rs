@@ -98,6 +98,7 @@ impl HomePage {
         }
 
         let connection = connection.clone();
+        self.selected_connection_id = connection.id;
         self.touch_connection_last_used(connection.id, cx);
         let workspace = connection
             .workspace_id

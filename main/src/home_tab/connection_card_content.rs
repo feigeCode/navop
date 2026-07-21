@@ -16,12 +16,13 @@ impl HomePage {
             .w_full()
             .child(
                 div()
-                    .h(px(48.0))
-                    .rounded(px(8.0))
+                    .h(px(40.0))
+                    .w(px(40.0))
+                    .rounded(px(6.0))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self.connection_icon(conn, px(40.0))),
+                    .child(self.connection_icon(conn, px(34.0))),
             )
             .child(
                 v_flex()

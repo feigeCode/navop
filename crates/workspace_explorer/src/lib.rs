@@ -14,6 +14,8 @@ mod model;
 mod theme;
 
 pub use editor::{WorkspaceEditor, WorkspaceEditorEvent};
-pub use explorer::{WorkspaceExplorer, WorkspaceExplorerConfig};
+pub use explorer::{
+    ExplorerFramePlacement, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceExplorerEvent,
+};
 pub use git::{GitChange, GitChangeKind, GitRepository};
 pub use theme::WorkspaceTheme;
