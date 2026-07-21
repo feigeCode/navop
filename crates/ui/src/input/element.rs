@@ -859,12 +859,15 @@ impl TextElement {
             return None;
         }
 
-        let invisible_color = cx
-            .theme()
+        let highlight_theme = state
             .highlight_theme
-            .style
-            .editor_invisible
-            .unwrap_or(cx.theme().muted_foreground);
+            .as_deref()
+            .unwrap_or_else(|| cx.theme().highlight_theme.as_ref());
+        let invisible_color = highlight_theme.style.editor_invisible.unwrap_or_else(|| {
+            state
+                .placeholder_color
+                .unwrap_or(cx.theme().muted_foreground)
+        });
 
         let space_font_size = text_size.half();
         let tab_font_size = text_size;
@@ -932,7 +935,10 @@ impl TextElement {
         }
 
         let completion_text = &completion_item.insert_text;
-        let completion_color = cx.theme().muted_foreground.opacity(0.5);
+        let completion_color = state
+            .placeholder_color
+            .unwrap_or(cx.theme().muted_foreground)
+            .opacity(0.5);
 
         let text_style = window.text_style();
         let font = text_style.font();
@@ -1258,6 +1264,10 @@ impl TextElement {
             _ => return None,
         };
         let highlighter = highlighter.as_mut()?;
+        let highlight_theme = state
+            .highlight_theme
+            .clone()
+            .unwrap_or_else(|| cx.theme().highlight_theme.clone());
 
         let mut styles = Vec::with_capacity(visible_buffer_lines.len());
 
@@ -1273,7 +1283,7 @@ impl TextElement {
             let range_styles = if skip {
                 vec![(byte_start..byte_end, HighlightStyle::default())]
             } else {
-                highlighter.styles(&(byte_start..byte_end), &cx.theme().highlight_theme)
+                highlighter.styles(&(byte_start..byte_end), &highlight_theme)
             };
 
             *styles = gpui::combine_highlights(styles.clone(), range_styles).collect();
@@ -1753,10 +1763,23 @@ impl Element for TextElement {
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
+            let highlight_theme = state
+                .highlight_theme
+                .as_deref()
+                .unwrap_or_else(|| cx.theme().highlight_theme.as_ref());
+            let other_line_color = highlight_theme.style.editor_line_number.unwrap_or_else(|| {
+                state
+                    .placeholder_color
+                    .unwrap_or(cx.theme().muted_foreground)
+            });
+            let current_line_color = highlight_theme
+                .style
+                .editor_active_line_number
+                .unwrap_or(style.color);
             let other_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: cx.theme().muted_foreground,
+                color: other_line_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -1764,7 +1787,7 @@ impl Element for TextElement {
             let current_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: cx.theme().foreground,
+                color: current_line_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -1894,7 +1917,15 @@ impl Element for TextElement {
         let origin = bounds.origin;
 
         let invisible_top_padding = prepaint.last_layout.visible_top;
-        let active_line_color = cx.theme().highlight_theme.style.editor_active_line;
+        let active_line_color = {
+            let state = self.state.read(cx);
+            state
+                .highlight_theme
+                .as_deref()
+                .unwrap_or_else(|| cx.theme().highlight_theme.as_ref())
+                .style
+                .editor_active_line
+        };
 
         // Paint active line
         let mut offset_y = px(0.);
@@ -2052,7 +2083,7 @@ impl Element for TextElement {
                         input_bounds.size.height + prepaint.ghost_lines_height,
                     ),
                 },
-                cx.theme().editor_background(),
+                editor_background,
             ));
 
             // Each item is the normal lines.

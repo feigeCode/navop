@@ -928,6 +928,18 @@ LocalTerminalClose:
     en: Closing it will terminate the process and any unsaved terminal state may be lost.
     zh-CN: 关闭后将终止该进程，未保存的终端状态可能会丢失。
     zh-HK: 關閉後將終止該行程，未儲存的終端狀態可能會遺失。
+  workspace_unsaved_title:
+    en: Unsaved workspace files
+    zh-CN: 工作区文件尚未保存
+    zh-HK: 工作區檔案尚未儲存
+  workspace_unsaved_message:
+    en: One or more opened files have unsaved changes.
+    zh-CN: 一个或多个已打开的文件有未保存的更改。
+    zh-HK: 一個或多個已打開的檔案有未儲存的更改。
+  workspace_unsaved_warning:
+    en: Closing this terminal will discard those changes.
+    zh-CN: 关闭此终端将放弃这些更改。
+    zh-HK: 關閉此終端將放棄這些變更。
 
 ServerMonitor:
   per_core:

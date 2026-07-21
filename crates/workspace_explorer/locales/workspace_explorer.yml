@@ -1,0 +1,138 @@
+_version: 2
+
+WorkspaceExplorer:
+  action:
+    save:
+      en: Save
+      zh-CN: 保存
+      zh-HK: 儲存
+    search:
+      en: Search
+      zh-CN: 搜索
+      zh-HK: 搜索
+    replace:
+      en: Replace
+      zh-CN: 替换
+      zh-HK: 取代
+    reload:
+      en: Reload
+      zh-CN: 重新加载
+      zh-HK: 重新載入
+    soft_wrap:
+      en: Wrap
+      zh-CN: 自动换行
+      zh-HK: 自動換行
+    discard:
+      en: Discard
+      zh-CN: 放弃更改
+      zh-HK: 放棄更改
+    cancel:
+      en: Cancel
+      zh-CN: 取消
+      zh-HK: 取消
+  editor:
+    diff_tab:
+      en: "%{name} (diff)"
+      zh-CN: "%{name}（差异）"
+      zh-HK: "%{name}（差異）"
+  status:
+    loading:
+      en: Loading...
+      zh-CN: 加载中...
+      zh-HK: 載入中...
+    loaded:
+      en: Loaded
+      zh-CN: 已加载
+      zh-HK: 已載入
+    diff_loaded:
+      en: Diff loaded
+      zh-CN: 差异已加载
+      zh-HK: 差異已載入
+    load_failed:
+      en: Unable to load
+      zh-CN: 加载失败
+      zh-HK: 載入失敗
+    saving:
+      en: Saving...
+      zh-CN: 保存中...
+      zh-HK: 儲存中...
+    saved:
+      en: Saved
+      zh-CN: 已保存
+      zh-HK: 已儲存
+    save_failed:
+      en: Save failed
+      zh-CN: 保存失败
+      zh-HK: 儲存失敗
+  policy:
+    code:
+      en: Code
+      zh-CN: 代码
+      zh-HK: 程式碼
+    plain_text:
+      en: Large file · plain text
+      zh-CN: 大文件 · 纯文本
+      zh-HK: 大型檔案 · 純文字
+    diff:
+      en: Git diff · read only
+      zh-CN: Git 差异 · 只读
+      zh-HK: Git 差異 · 唯讀
+  prompt:
+    unsaved_title:
+      en: Unsaved changes
+      zh-CN: 有未保存的更改
+      zh-HK: 有未儲存的更改
+    unsaved_message:
+      en: Save your changes before closing this file?
+      zh-CN: 是否在关闭文件前保存更改？
+      zh-HK: 是否在關閉檔案前儲存更改？
+  notification:
+    saved:
+      en: File saved
+      zh-CN: 文件已保存
+      zh-HK: 檔案已儲存
+  body:
+    loading:
+      en: Loading file...
+      zh-CN: 正在加载文件...
+      zh-HK: 正在載入檔案...
+    unable_to_open:
+      en: Unable to open document
+      zh-CN: 无法打开文档
+      zh-HK: 無法打開文件
+  tooltip:
+    collapse_folders:
+      en: Collapse folders
+      zh-CN: 折叠文件夹
+      zh-HK: 摺疊資料夾
+    refresh:
+      en: Refresh files and Git changes
+      zh-CN: 刷新文件和 Git 更改
+      zh-HK: 重新整理檔案和 Git 變更
+  section:
+    changes:
+      en: "CHANGES (%{count})"
+      zh-CN: "更改（%{count}）"
+      zh-HK: "變更（%{count}）"
+    files:
+      en: FILES
+      zh-CN: 文件
+      zh-HK: 檔案
+  state:
+    refreshing_changes:
+      en: Refreshing changes...
+      zh-CN: 正在刷新更改...
+      zh-HK: 正在重新整理變更...
+    working_tree_clean:
+      en: Working tree clean
+      zh-CN: 工作区没有更改
+      zh-HK: 工作區沒有變更
+    loading_workspace:
+      en: Loading workspace...
+      zh-CN: 正在加载工作区...
+      zh-HK: 正在載入工作區...
+  badge:
+    staged:
+      en: S
+      zh-CN: 暂
+      zh-HK: 暫

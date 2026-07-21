@@ -48,6 +48,16 @@ impl TerminalView {
             )
         });
 
+        let workspace_editor = is_local_terminal.then(|| {
+            let theme =
+                crate::sidebar::workspace_theme_from_terminal_colors(&default_theme.colors());
+            cx.new(|_| WorkspaceEditor::new(theme))
+        });
+        let local_workspace = local_working_dir
+            .clone()
+            .zip(workspace_editor.clone())
+            .map(|(root, editor)| LocalWorkspaceSidebar { root, editor });
+
         // 创建侧边栏（传递 StoredConnection 用于文件管理器）
         let sidebar = cx.new(|cx| {
             TerminalSidebar::new(
@@ -57,6 +67,7 @@ impl TerminalView {
                 terminal_ai_resource,
                 ssh_config,
                 ssh_session_manager,
+                local_workspace,
                 &default_theme,
                 default_font_size,
                 default_font_family.clone(),
@@ -86,6 +97,9 @@ impl TerminalView {
         let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
         let command_bar_subscription =
             cx.subscribe_in(&command_bar, window, Self::handle_command_bar_event);
+        let workspace_editor_subscription = workspace_editor
+            .as_ref()
+            .map(|editor| cx.subscribe_in(editor, window, Self::handle_workspace_editor_event));
 
         // 订阅 BlinkCursor 变化
         let blink_subscription = cx.observe(&blink_manager, |this, _, cx| {
@@ -112,6 +126,9 @@ impl TerminalView {
         subscriptions.push(sidebar_subscription);
         subscriptions.push(terminal_subscription);
         subscriptions.push(command_bar_subscription);
+        if let Some(subscription) = workspace_editor_subscription {
+            subscriptions.push(subscription);
+        }
         subscriptions.push(blink_subscription);
         subscriptions.push(focus_subscription);
         subscriptions.push(blur_subscription);
@@ -142,6 +159,7 @@ impl TerminalView {
             },
             blink_manager,
             sidebar,
+            workspace_editor,
             command_bar,
             sidebar_toolbar,
             sidebar_tool_panels,

@@ -51,8 +51,32 @@ use one_core::storage::{
 use rust_i18n::t;
 use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use terminal::terminal::{SshTerminalConfig, TerminalConnectionKind};
+use workspace_explorer::{
+    WorkspaceEditor, WorkspaceExplorer, WorkspaceExplorerConfig, WorkspaceTheme,
+};
+
+pub(crate) fn workspace_theme_from_terminal_colors(colors: &TerminalColors) -> WorkspaceTheme {
+    WorkspaceTheme {
+        background: colors.background,
+        foreground: colors.foreground,
+        muted: colors.muted,
+        muted_foreground: colors.muted_foreground,
+        border: colors.border,
+        accent: colors.accent,
+        accent_foreground: colors.accent_foreground,
+        danger: gpui::rgb(0xef4444).into(),
+        warning: gpui::rgb(0xf59e0b).into(),
+        success: gpui::rgb(0x22c55e).into(),
+    }
+}
+
+pub(crate) struct LocalWorkspaceSidebar {
+    pub(crate) root: PathBuf,
+    pub(crate) editor: Entity<WorkspaceEditor>,
+}
 
 fn terminal_ai_system_instruction(connection_kind: TerminalConnectionKind) -> String {
     let (environment, code_language) = match connection_kind {
@@ -193,6 +217,8 @@ fn load_terminal_ai_connections(cx: &App) -> Vec<StoredConnection> {
 /// 侧边栏面板类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarPanel {
+    /// 本地工作区文件浏览器
+    FileExplorer,
     /// 设置面板（搜索 + 字体 + 主题）
     Settings,
     /// 快捷命令面板
@@ -210,7 +236,8 @@ pub enum SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 7] = [
+    pub const ALL: [SidebarPanel; 8] = [
+        SidebarPanel::FileExplorer,
         SidebarPanel::Settings,
         SidebarPanel::QuickCommand,
         SidebarPanel::HistoryCommand,
@@ -226,6 +253,7 @@ impl SidebarPanel {
 
     pub fn local_id(&self) -> &'static str {
         match self {
+            SidebarPanel::FileExplorer => "terminal.file-explorer",
             SidebarPanel::Settings => "terminal.settings",
             SidebarPanel::QuickCommand => "terminal.quick-command",
             SidebarPanel::HistoryCommand => "terminal.history-command",
@@ -238,6 +266,7 @@ impl SidebarPanel {
 
     pub fn icon_name(&self) -> IconName {
         match self {
+            SidebarPanel::FileExplorer => IconName::TerminalFileManagerColor,
             SidebarPanel::Settings => IconName::Settings,
             SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor,
             SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor,
@@ -251,6 +280,7 @@ impl SidebarPanel {
     /// 获取面板图标
     pub fn icon(&self) -> Icon {
         match self {
+            SidebarPanel::FileExplorer => IconName::TerminalFileManagerColor.color(),
             SidebarPanel::Settings => IconName::SettingColor.color(),
             SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor.color(),
             SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor.color(),
@@ -264,6 +294,7 @@ impl SidebarPanel {
     /// 获取面板标题
     pub fn title(&self) -> &'static str {
         match self {
+            SidebarPanel::FileExplorer => "File Explorer",
             SidebarPanel::Settings => "Settings",
             SidebarPanel::QuickCommand => "Quick Commands",
             SidebarPanel::HistoryCommand => "History Commands",
@@ -280,12 +311,17 @@ impl SidebarPanel {
 }
 
 fn terminal_sidebar_available_panels(
+    has_file_explorer: bool,
     has_file_manager: bool,
     has_server_monitor: bool,
     history_supported: bool,
     broadcast_supported: bool,
 ) -> Vec<SidebarPanel> {
-    let mut panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
+    let mut panels = Vec::new();
+    if has_file_explorer {
+        panels.push(SidebarPanel::FileExplorer);
+    }
+    panels.extend([SidebarPanel::Settings, SidebarPanel::AiChat]);
     if broadcast_supported {
         panels.push(SidebarPanel::BroadcastInput);
     }
@@ -517,6 +553,8 @@ pub struct TerminalSidebar {
     broadcast_input_panel: Option<Entity<BroadcastInputPanel>>,
     /// 文件管理器面板（仅 SSH 终端时创建）
     file_manager_panel: Option<Entity<FileManagerPanel>>,
+    /// 本地工作区文件浏览器（仅本地终端时创建）
+    file_explorer_panel: Option<Entity<WorkspaceExplorer>>,
     /// 服务器监控面板（仅 SSH 终端时创建）
     server_monitor_panel: Option<Entity<ServerMonitorPanel>>,
     /// 路径与终端同步开关（默认开启）
@@ -530,13 +568,14 @@ pub struct TerminalSidebar {
 }
 
 impl TerminalSidebar {
-    pub fn new(
+    pub(crate) fn new(
         connection_id: Option<i64>,
         connection_kind: TerminalConnectionKind,
         stored_connection: Option<StoredConnection>,
         terminal_ai_resource: Option<agent_runtime::ResourceRef>,
         ssh_config: Option<SshTerminalConfig>,
         ssh_session_manager: Option<Arc<SshSessionManager>>,
+        local_workspace: Option<LocalWorkspaceSidebar>,
         initial_theme: &TerminalTheme,
         initial_font_size: Pixels,
         initial_font_family: SharedString,
@@ -618,6 +657,20 @@ impl TerminalSidebar {
                 .map(|(conn, manager)| {
                     cx.new(|cx| FileManagerPanel::new(conn, manager, colors.clone(), window, cx))
                 });
+        let file_explorer_panel = local_workspace.map(|workspace| {
+            let LocalWorkspaceSidebar { root, editor } = workspace;
+            let theme = workspace_theme_from_terminal_colors(&colors);
+            cx.new(|cx| {
+                WorkspaceExplorer::new(
+                    WorkspaceExplorerConfig {
+                        root,
+                        editor,
+                        theme,
+                    },
+                    cx,
+                )
+            })
+        });
         let server_monitor_panel = ssh_config
             .zip(ssh_session_manager)
             .map(|(_config, manager)| {
@@ -803,6 +856,7 @@ impl TerminalSidebar {
         }
 
         let available_panels = terminal_sidebar_available_panels(
+            file_explorer_panel.is_some(),
             file_manager_panel.is_some(),
             server_monitor_panel.is_some(),
             history_command_panel.is_some(),
@@ -816,6 +870,7 @@ impl TerminalSidebar {
             ai_chat_panel,
             broadcast_input_panel,
             file_manager_panel,
+            file_explorer_panel,
             server_monitor_panel,
             sync_path_enabled,
             focus_handle: cx.focus_handle(),
@@ -877,6 +932,10 @@ impl TerminalSidebar {
 
     pub fn panel_view(&self, panel: SidebarPanel) -> Option<AnyView> {
         match panel {
+            SidebarPanel::FileExplorer => self
+                .file_explorer_panel
+                .as_ref()
+                .map(|panel| panel.clone().into()),
             SidebarPanel::Settings => Some(self.settings_panel.clone().into()),
             SidebarPanel::QuickCommand => Some(self.quick_command_panel.clone().into()),
             SidebarPanel::HistoryCommand => self
@@ -1021,6 +1080,10 @@ impl TerminalSidebar {
             fm_panel.update(cx, |panel, cx| {
                 panel.set_colors(self.colors.clone(), cx);
             });
+        }
+        if let Some(ref explorer) = self.file_explorer_panel {
+            let theme = workspace_theme_from_terminal_colors(&self.colors);
+            explorer.update(cx, |explorer, cx| explorer.set_theme(theme, cx));
         }
         if let Some(ref monitor_panel) = self.server_monitor_panel {
             monitor_panel.update(cx, |panel, cx| {
@@ -1197,6 +1260,14 @@ impl TerminalSidebar {
         if let Some(ref monitor_panel) = self.server_monitor_panel {
             monitor_panel.update(cx, |panel, cx| {
                 panel.reconnect(cx);
+            });
+        }
+    }
+
+    pub fn sync_workspace_explorer_path(&mut self, path: String, cx: &mut Context<Self>) {
+        if let Some(ref explorer) = self.file_explorer_panel {
+            explorer.update(cx, move |explorer, cx| {
+                explorer.set_root(PathBuf::from(path), cx);
             });
         }
     }
@@ -1578,7 +1649,7 @@ mod tests {
 
     #[test]
     fn sidebar_default_panels_do_not_include_rich_input() {
-        assert_eq!(7, SidebarPanel::all().len());
+        assert_eq!(8, SidebarPanel::all().len());
         assert!(
             SidebarPanel::all()
                 .iter()
@@ -1588,8 +1659,9 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_available_for_local_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, true, false);
+        let panels = terminal_sidebar_available_panels(true, false, false, true, false);
 
+        assert!(panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
         assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
@@ -1598,8 +1670,9 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_available_for_ssh_terminals() {
-        let panels = terminal_sidebar_available_panels(true, true, true, true);
+        let panels = terminal_sidebar_available_panels(false, true, true, true, true);
 
+        assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
         assert!(panels.contains(&SidebarPanel::BroadcastInput));
         assert!(panels.contains(&SidebarPanel::FileManager));
@@ -1608,8 +1681,9 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_not_available_for_serial_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, false, false);
+        let panels = terminal_sidebar_available_panels(false, false, false, false, false);
 
+        assert!(!panels.contains(&SidebarPanel::FileExplorer));
         assert!(!panels.contains(&SidebarPanel::HistoryCommand));
         assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
@@ -1619,6 +1693,7 @@ mod tests {
     #[test]
     fn file_manager_uses_its_own_header_in_internal_tool_frame() {
         assert!(!SidebarPanel::FileManager.needs_internal_tool_frame_header());
+        assert!(SidebarPanel::FileExplorer.needs_internal_tool_frame_header());
         assert!(SidebarPanel::Settings.needs_internal_tool_frame_header());
         assert!(!SidebarPanel::AiChat.needs_internal_tool_frame_header());
         assert!(SidebarPanel::ServerMonitor.needs_internal_tool_frame_header());

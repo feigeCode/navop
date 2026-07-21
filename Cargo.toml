@@ -26,6 +26,7 @@ members = [
     "crates/public_mcp",
     "crates/terminal",
     "crates/terminal_view",
+    "crates/workspace_explorer",
     "crates/port_forwarding",
     "crates/connection_tunnel",
     "crates/connection_form",
@@ -107,6 +108,7 @@ ssh = { path = "crates/ssh" }
 sftp = { path = "crates/sftp" }
 terminal = { path = "crates/terminal" }
 terminal_view = { path = "crates/terminal_view" }
+workspace_explorer = { path = "crates/workspace_explorer" }
 port_forwarding = { path = "crates/port_forwarding" }
 connection_tunnel = { path = "crates/connection_tunnel" }
 connection-form = { path = "crates/connection_form" }
@@ -121,7 +123,7 @@ onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }
-cditor-app = { git = "https://github.com/feigeCode/Cditor.git", rev = "c0d85e1", default-features = false }
+cditor-app = { git = "https://github.com/feigeCode/Cditor.git", rev = "f6a86de1e4050e65374d2cf122d63af82d35ecaf", default-features = false }
 er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }

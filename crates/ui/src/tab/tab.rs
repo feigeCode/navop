@@ -19,6 +19,55 @@ pub enum TabVariant {
     Underline,
 }
 
+/// Local colors for tabs embedded in a differently themed panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocalTabStyle {
+    pub bar_background: Hsla,
+    pub background: Hsla,
+    pub foreground: Hsla,
+    pub hover_background: Hsla,
+    pub hover_foreground: Hsla,
+    pub selected_background: Hsla,
+    pub selected_foreground: Hsla,
+    pub disabled_foreground: Hsla,
+    pub border: Hsla,
+    pub accent: Hsla,
+}
+
+impl LocalTabStyle {
+    fn apply(self, mut style: TabStyle, selected: bool, hovered: bool, disabled: bool) -> TabStyle {
+        let transparent_border = Hsla {
+            a: 0.0,
+            ..self.border
+        };
+        style.fg = if disabled {
+            self.disabled_foreground
+        } else if selected {
+            self.selected_foreground
+        } else if hovered {
+            self.hover_foreground
+        } else {
+            self.foreground
+        };
+        style.bg = if selected {
+            self.selected_background
+        } else if hovered {
+            self.hover_background
+        } else {
+            self.background
+        };
+        style.border_color = if selected || hovered {
+            self.border
+        } else {
+            transparent_border
+        };
+        if style.inner_bg.a > 0.0 {
+            style.inner_bg = style.bg;
+        }
+        style
+    }
+}
+
 impl TabVariant {
     fn height(&self, size: Size) -> Pixels {
         match size {
@@ -404,6 +453,7 @@ pub struct Tab {
     pub(super) disabled: bool,
     pub(super) selected: bool,
     pub(super) indicator_active: bool,
+    pub(super) local_style: Option<LocalTabStyle>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -449,6 +499,7 @@ impl Default for Tab {
             disabled: false,
             selected: false,
             indicator_active: false,
+            local_style: None,
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
@@ -524,6 +575,12 @@ impl Tab {
         self
     }
 
+    /// Override colors for a tab embedded in a locally themed panel.
+    pub fn local_style(mut self, style: LocalTabStyle) -> Self {
+        self.local_style = Some(style);
+        self
+    }
+
     /// Set the click handler for the tab.
     pub fn on_click(
         mut self,
@@ -595,6 +652,10 @@ impl RenderOnce for Tab {
         if self.disabled {
             tab_style = self.variant.disabled(self.selected, cx);
             hover_style = self.variant.disabled(self.selected, cx);
+        }
+        if let Some(local_style) = self.local_style {
+            tab_style = local_style.apply(tab_style, self.selected, false, self.disabled);
+            hover_style = local_style.apply(hover_style, self.selected, true, self.disabled);
         }
         let tab_bar_prefix = self.tab_bar_prefix.unwrap_or_default();
         if !tab_bar_prefix {
@@ -690,5 +751,47 @@ impl RenderOnce for Tab {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn color(value: u32) -> Hsla {
+        gpui::rgb(value).into()
+    }
+
+    fn local_style() -> LocalTabStyle {
+        LocalTabStyle {
+            bar_background: color(0x111111),
+            background: color(0x222222),
+            foreground: color(0x999999),
+            hover_background: color(0x333333),
+            hover_foreground: color(0xeeeeee),
+            selected_background: color(0x000000),
+            selected_foreground: color(0xffffff),
+            disabled_foreground: color(0x666666),
+            border: color(0x444444),
+            accent: color(0x5555ff),
+        }
+    }
+
+    #[test]
+    fn local_tab_style_covers_normal_hover_selected_and_disabled_states() {
+        let local = local_style();
+        let normal = local.apply(TabStyle::default(), false, false, false);
+        let hovered = local.apply(TabStyle::default(), false, true, false);
+        let selected = local.apply(TabStyle::default(), true, false, false);
+        let disabled = local.apply(TabStyle::default(), false, false, true);
+
+        assert_eq!(normal.bg, local.background);
+        assert_eq!(normal.fg, local.foreground);
+        assert_eq!(hovered.bg, local.hover_background);
+        assert_eq!(hovered.fg, local.hover_foreground);
+        assert_eq!(selected.bg, local.selected_background);
+        assert_eq!(selected.fg, local.selected_foreground);
+        assert_eq!(selected.border_color, local.border);
+        assert_eq!(disabled.fg, local.disabled_foreground);
     }
 }

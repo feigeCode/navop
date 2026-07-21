@@ -9,9 +9,9 @@ use gpui::{
 use rust_i18n::t;
 use smallvec::SmallVec;
 
-use super::{Tab, TabVariant};
+use super::{LocalTabStyle, Tab, TabVariant};
 use crate::animation::{Lerp, ease_in_out_cubic};
-use crate::button::{Button, ButtonVariants as _};
+use crate::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex,
@@ -50,6 +50,7 @@ pub struct TabBar {
     variant: TabVariant,
     size: Size,
     menu: bool,
+    local_style: Option<LocalTabStyle>,
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -71,6 +72,7 @@ impl TabBar {
             selected_index: None,
             on_click: None,
             menu: false,
+            local_style: None,
         }
     }
 
@@ -107,6 +109,12 @@ impl TabBar {
     /// Set whether to show the menu button when tabs overflow, default is false.
     pub fn menu(mut self, menu: bool) -> Self {
         self.menu = menu;
+        self
+    }
+
+    /// Override colors for tabs embedded in a locally themed panel.
+    pub fn local_style(mut self, style: LocalTabStyle) -> Self {
+        self.local_style = Some(style);
         self
     }
 
@@ -207,6 +215,12 @@ impl TabBar {
         let size = self.size;
         let inner_height = variant.inner_height(size);
         let inner_radius = variant.inner_radius(size, cx);
+        let selected_background = self
+            .local_style
+            .map_or(cx.theme().background, |style| style.selected_background);
+        let accent = self
+            .local_style
+            .map_or(cx.theme().primary, |style| style.accent);
 
         let indicator = div()
             .absolute()
@@ -217,14 +231,14 @@ impl TabBar {
                     div()
                         .w_full()
                         .h(inner_height)
-                        .bg(cx.theme().background)
+                        .bg(selected_background)
                         .rounded(inner_radius)
                         .shadow_xs(),
                 ),
                 TabVariant::Pill => el
                     .flex()
                     .items_center()
-                    .child(div().size_full().bg(cx.theme().primary).rounded(px(99.))),
+                    .child(div().size_full().bg(accent).rounded(px(99.))),
                 TabVariant::Underline => el.child(
                     div()
                         .absolute()
@@ -232,7 +246,7 @@ impl TabBar {
                         .right_0()
                         .bottom_0()
                         .h(px(2.))
-                        .bg(cx.theme().primary),
+                        .bg(accent),
                 ),
                 _ => el,
             })
@@ -372,6 +386,10 @@ impl RenderOnce for TabBar {
                 (cx.theme().transparent, Edges::all(px(0.)), gap)
             }
         };
+        let local_style = self.local_style;
+        let bg = local_style.map_or(bg, |style| style.bar_background);
+        let foreground = local_style.map_or(cx.theme().tab_foreground, |style| style.foreground);
+        let border = local_style.map_or(cx.theme().border, |style| style.border);
 
         let has_indicator = matches!(
             self.variant,
@@ -407,7 +425,7 @@ impl RenderOnce for TabBar {
             .flex()
             .items_center()
             .bg(bg)
-            .text_color(cx.theme().tab_foreground)
+            .text_color(foreground)
             .when(
                 self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
                 |this| {
@@ -419,7 +437,7 @@ impl RenderOnce for TabBar {
                             .bottom_0()
                             .size_full()
                             .border_b_1()
-                            .border_color(cx.theme().border),
+                            .border_color(border),
                     )
                 },
             )
@@ -455,6 +473,7 @@ impl RenderOnce for TabBar {
                                 .tab_bar_prefix(tab_bar_prefix)
                                 .with_variant(self.variant)
                                 .with_size(self.size);
+                            tab.local_style = tab.local_style.or(local_style);
                             tab.indicator_active = has_indicator;
                             let tab = tab
                                 .when_some(self.selected_index, |this, selected_ix| {
@@ -482,11 +501,20 @@ impl RenderOnce for TabBar {
                 ),
             )
             .when(self.menu, |this| {
+                let button = Button::new("more").xsmall().icon(IconName::ChevronDown);
+                let button = if let Some(style) = local_style {
+                    button.custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(style.bar_background)
+                            .foreground(style.foreground)
+                            .hover(style.hover_background)
+                            .active(style.selected_background),
+                    )
+                } else {
+                    button.ghost()
+                };
                 this.child(
-                    Button::new("more")
-                        .xsmall()
-                        .ghost()
-                        .icon(IconName::ChevronDown)
+                    button
                         .dropdown_menu(move |mut this, _, _| {
                             this = this.scrollable(true);
                             for (ix, (label, icon, disabled)) in item_metas.iter().enumerate() {

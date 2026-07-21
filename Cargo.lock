@@ -1592,7 +1592,7 @@ dependencies = [
 [[package]]
 name = "cditor-ai"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "async-channel",
  "serde",
@@ -1602,7 +1602,7 @@ dependencies = [
 [[package]]
 name = "cditor-app"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "async-trait",
  "cditor-ai",
@@ -1626,7 +1626,7 @@ dependencies = [
 [[package]]
 name = "cditor-core"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "serde",
  "serde_json",
@@ -1636,7 +1636,7 @@ dependencies = [
 [[package]]
 name = "cditor-editor"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "cditor-core",
  "unicode-segmentation",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "cditor-runtime"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "cditor-ai",
  "cditor-core",
@@ -1655,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "cditor-storage"
 version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "async-trait",
  "cditor-core",
@@ -3092,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "ding-board"
 version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=c0d85e1#c0d85e142fb01c9886e9fa477bb21ba59b2efd57"
+source = "git+https://github.com/feigeCode/Cditor.git?rev=f6a86de1e4050e65374d2cf122d63af82d35ecaf#f6a86de1e4050e65374d2cf122d63af82d35ecaf"
 dependencies = [
  "gpui",
  "log",
@@ -12230,6 +12230,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "workspace_explorer",
 ]
 
 [[package]]
@@ -15483,6 +15484,19 @@ name = "workspace-hack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "beffa227304dbaea3ad6a06ac674f9bc83a3dec3b7f63eeb442de37e7cb6bb01"
+
+[[package]]
+name = "workspace_explorer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "process-util",
+ "remote_file_editor",
+ "rust-i18n",
+ "tracing",
+]
 
 [[package]]
 name = "writeable"

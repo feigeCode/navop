@@ -71,6 +71,13 @@ impl TerminalView {
     }
 
     pub(crate) fn requires_close_confirmation(&self, cx: &App) -> bool {
+        if self
+            .workspace_editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).has_dirty_tabs(cx))
+        {
+            return true;
+        }
         let terminal = self.terminal.read(cx);
         should_confirm_local_terminal_close(
             terminal.connection_kind(),

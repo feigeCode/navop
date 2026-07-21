@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use crate::button::{Button, ButtonVariants as _};
+use crate::highlighter::HighlightTheme;
 use crate::input::clear_button;
 use crate::menu::PopupMenu;
 use crate::spinner::Spinner;
@@ -39,6 +40,30 @@ pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     }
 }
 
+fn resolved_input_colors(
+    local_style: Option<LocalInputStyle>,
+    disabled: bool,
+    code_editor: bool,
+    fallback: (Hsla, Hsla),
+    editor_background: Hsla,
+) -> (Hsla, Hsla) {
+    let (background, foreground) = if disabled && !code_editor {
+        fallback
+    } else {
+        local_style.map_or(fallback, |style| (style.background, style.foreground))
+    };
+    let background = if code_editor {
+        local_style.map_or(editor_background, |style| style.background)
+    } else {
+        background
+    };
+    (background, foreground)
+}
+
+fn should_dim_input(disabled: bool, code_editor: bool) -> bool {
+    disabled && !code_editor
+}
+
 fn should_handle_vertical_navigation(is_multi_line: bool, context_menu_open: bool) -> bool {
     is_multi_line || context_menu_open
 }
@@ -60,6 +85,7 @@ pub struct Input {
     focus_bordered: bool,
     caret_color: Option<Hsla>,
     local_style: Option<LocalInputStyle>,
+    highlight_theme: Option<Arc<HighlightTheme>>,
     tab_index: isize,
     selected: bool,
     bare: bool,
@@ -107,6 +133,7 @@ impl Input {
             focus_bordered: true,
             caret_color: None,
             local_style: None,
+            highlight_theme: None,
             tab_index: 0,
             selected: false,
             bare: false,
@@ -163,6 +190,12 @@ impl Input {
     /// Override input colors for a locally themed embedded panel.
     pub fn local_style(mut self, style: LocalInputStyle) -> Self {
         self.local_style = Some(style);
+        self
+    }
+
+    /// Override syntax and editor decoration colors for an embedded code editor.
+    pub fn highlight_theme(mut self, theme: Arc<HighlightTheme>) -> Self {
+        self.highlight_theme = Some(theme);
         self
     }
 
@@ -289,6 +322,7 @@ impl RenderOnce for Input {
             state.caret_color = self.caret_color;
             state.placeholder_color = self.local_style.map(|style| style.muted_foreground);
             state.background_color = self.local_style.map(|style| style.background);
+            state.highlight_theme = self.highlight_theme.clone();
 
             // Only for single line mode
             if state.mode.is_single_line() {
@@ -308,24 +342,17 @@ impl RenderOnce for Input {
             _ => px(6.),
         };
 
-        let (bg, fg) = self.local_style.map_or_else(
-            || input_style(state.disabled, cx),
-            |style| {
-                if state.disabled {
-                    input_style(true, cx)
-                } else {
-                    (style.background, style.foreground)
-                }
-            },
+        let code_editor = state.mode.is_code_editor();
+        let (bg, fg) = resolved_input_colors(
+            self.local_style,
+            state.disabled,
+            code_editor,
+            input_style(state.disabled, cx),
+            cx.theme().editor_background(),
         );
-        let bg = if state.mode.is_code_editor() {
-            cx.theme().editor_background()
-        } else {
-            bg
-        };
         let border_color = self
             .local_style
-            .filter(|_| !state.disabled)
+            .filter(|_| !state.disabled || code_editor)
             .map_or(cx.theme().input, |style| style.border);
 
         let prefix = self.prefix;
@@ -435,7 +462,9 @@ impl RenderOnce for Input {
             .when(self.appearance, |this| {
                 this.bg(bg)
                     .text_color(fg)
-                    .when(self.disabled, |this| this.opacity(0.5))
+                    .when(should_dim_input(self.disabled, code_editor), |this| {
+                        this.opacity(0.5)
+                    })
                     .rounded(cx.theme().radius)
                     .when(self.bordered, |this| {
                         this.border_color(border_color)
@@ -483,5 +512,62 @@ impl RenderOnce for Input {
                         .children(suffix),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn color(value: u32) -> Hsla {
+        gpui::rgb(value).into()
+    }
+
+    fn local_style() -> LocalInputStyle {
+        LocalInputStyle {
+            background: color(0x111111),
+            foreground: color(0xeeeeee),
+            muted_foreground: color(0x888888),
+            border: color(0x333333),
+        }
+    }
+
+    #[test]
+    fn local_code_editor_uses_local_background() {
+        let style = local_style();
+        let colors = resolved_input_colors(
+            Some(style),
+            false,
+            true,
+            (color(0xaaaaaa), color(0xbbbbbb)),
+            color(0xffffff),
+        );
+
+        assert_eq!(colors, (style.background, style.foreground));
+    }
+
+    #[test]
+    fn local_code_editor_colors_survive_read_only_state() {
+        let style = local_style();
+        let colors = resolved_input_colors(
+            Some(style),
+            true,
+            true,
+            (color(0xaaaaaa), color(0xbbbbbb)),
+            color(0xffffff),
+        );
+
+        assert_eq!(colors, (style.background, style.foreground));
+        assert!(!should_dim_input(true, true));
+    }
+
+    #[test]
+    fn disabled_regular_input_keeps_disabled_treatment() {
+        let fallback = (color(0xaaaaaa), color(0xbbbbbb));
+        let colors =
+            resolved_input_colors(Some(local_style()), true, false, fallback, color(0xffffff));
+
+        assert_eq!(colors, fallback);
+        assert!(should_dim_input(true, false));
     }
 }

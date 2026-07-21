@@ -24,6 +24,23 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        let has_unsaved_workspace_files = self
+            .workspace_editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).has_dirty_tabs(cx));
+        let (title, message, warning) = if has_unsaved_workspace_files {
+            (
+                t!("LocalTerminalClose.workspace_unsaved_title").to_string(),
+                t!("LocalTerminalClose.workspace_unsaved_message").to_string(),
+                t!("LocalTerminalClose.workspace_unsaved_warning").to_string(),
+            )
+        } else {
+            (
+                t!("LocalTerminalClose.title").to_string(),
+                t!("LocalTerminalClose.message").to_string(),
+                t!("LocalTerminalClose.warning").to_string(),
+            )
+        };
         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
         let tx = Arc::new(StdMutex::new(Some(tx)));
         let tx_ok = tx.clone();
@@ -33,13 +50,13 @@ impl TerminalView {
             let tx_ok = tx_ok.clone();
             let tx_cancel = tx_cancel.clone();
             dialog
-                .title(t!("LocalTerminalClose.title").to_string())
+                .title(title.clone())
                 .w(px(420.))
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(t!("LocalTerminalClose.message").to_string())
-                        .child(t!("LocalTerminalClose.warning").to_string()),
+                        .child(message.clone())
+                        .child(warning.clone()),
                 )
                 .confirm()
                 .button_props(

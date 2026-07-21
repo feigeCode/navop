@@ -166,6 +166,29 @@ impl TerminalView {
         state: CenterRegionState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let workspace_editor = self
+            .workspace_editor
+            .as_ref()
+            .filter(|editor| editor.read(cx).has_open_tabs())
+            .cloned();
+        let primary_content = if let Some(editor) = workspace_editor {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(editor)
+                .into_any_element()
+        } else {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(self.render_terminal_viewport(state.font_family, cx))
+                .child(self.command_bar.clone())
+                .into_any_element()
+        };
         v_flex()
             .debug_selector(|| "terminal-tool-dock-center".to_string())
             .flex_1()
@@ -173,8 +196,7 @@ impl TerminalView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .child(self.render_terminal_viewport(state.font_family, cx))
-            .child(self.command_bar.clone())
+            .child(primary_content)
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))
             })

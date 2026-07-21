@@ -1,6 +1,22 @@
 use super::*;
 
 impl TerminalView {
+    pub(super) fn handle_workspace_editor_event(
+        &mut self,
+        _editor: &Entity<WorkspaceEditor>,
+        event: &WorkspaceEditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(event, WorkspaceEditorEvent::VisibilityChanged(false)) {
+            self.focus_terminal(window, cx);
+        }
+        if matches!(event, WorkspaceEditorEvent::VisibilityChanged(_)) {
+            cx.emit(TabContentEvent::StateChanged);
+            cx.notify();
+        }
+    }
+
     pub(super) fn handle_terminal_settings_event(
         &mut self,
         _store: &Entity<crate::settings::TerminalSettingsStore>,

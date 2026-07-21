@@ -17,6 +17,7 @@ use serde::Deserialize;
 use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 use sum_tree::Bias;
 use unicode_segmentation::*;
 
@@ -30,9 +31,9 @@ use super::{
     number_input,
 };
 use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
-use crate::highlighter::DiagnosticSet;
 #[cfg(not(target_family = "wasm"))]
 use crate::highlighter::LanguageRegistry;
+use crate::highlighter::{DiagnosticSet, HighlightTheme};
 use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::movement::MoveDirection;
 use crate::input::{
@@ -431,6 +432,7 @@ pub struct InputState {
     pub(super) caret_color: Option<Hsla>,
     pub(super) placeholder_color: Option<Hsla>,
     pub(super) background_color: Option<Hsla>,
+    pub(super) highlight_theme: Option<Arc<HighlightTheme>>,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) soft_wrap: bool,
@@ -549,6 +551,7 @@ impl InputState {
             caret_color: None,
             placeholder_color: None,
             background_color: None,
+            highlight_theme: None,
             masked: false,
             clean_on_escape: false,
             soft_wrap: true,

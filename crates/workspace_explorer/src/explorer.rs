@@ -1,0 +1,271 @@
+mod header;
+mod load;
+mod render;
+
+use crate::WorkspaceEditor;
+use crate::editor::{GitDiffRequest, WorkspaceEditorEvent};
+use crate::file_system::read_directory;
+use crate::git::{GitChange, GitRepository, load_changes};
+use crate::model::ExplorerEntry;
+use crate::theme::WorkspaceTheme;
+use gpui::{
+    AppContext as _, AsyncApp, Context, Entity, ScrollHandle, Subscription, WeakEntity, Window,
+};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use self::load::{WorkspaceSnapshot, load_workspace};
+
+pub struct WorkspaceExplorer {
+    root: PathBuf,
+    listings: HashMap<PathBuf, Vec<ExplorerEntry>>,
+    expanded: HashSet<PathBuf>,
+    loading_directories: HashSet<PathBuf>,
+    selected_path: Option<PathBuf>,
+    repository: Option<GitRepository>,
+    changes: Vec<GitChange>,
+    changes_expanded: bool,
+    files_expanded: bool,
+    loading: bool,
+    git_loading: bool,
+    git_refresh_pending: bool,
+    error: Option<String>,
+    git_error: Option<String>,
+    refresh_generation: u64,
+    editor: Entity<WorkspaceEditor>,
+    theme: WorkspaceTheme,
+    scroll_handle: ScrollHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+pub struct WorkspaceExplorerConfig {
+    pub root: PathBuf,
+    pub editor: Entity<WorkspaceEditor>,
+    pub theme: WorkspaceTheme,
+}
+
+impl WorkspaceExplorer {
+    pub fn new(config: WorkspaceExplorerConfig, cx: &mut Context<Self>) -> Self {
+        let WorkspaceExplorerConfig {
+            root,
+            editor,
+            theme,
+        } = config;
+        let editor_subscription =
+            cx.subscribe(&editor, |this, _, event: &WorkspaceEditorEvent, cx| {
+                if matches!(event, WorkspaceEditorEvent::FileSaved(_)) {
+                    this.refresh_git(cx);
+                }
+            });
+        let mut this = Self {
+            root,
+            listings: HashMap::new(),
+            expanded: HashSet::new(),
+            loading_directories: HashSet::new(),
+            selected_path: None,
+            repository: None,
+            changes: Vec::new(),
+            changes_expanded: true,
+            files_expanded: true,
+            loading: false,
+            git_loading: false,
+            git_refresh_pending: false,
+            error: None,
+            git_error: None,
+            refresh_generation: 0,
+            editor,
+            theme,
+            scroll_handle: ScrollHandle::new(),
+            _subscriptions: vec![editor_subscription],
+        };
+        this.refresh(cx);
+        this
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if !should_update_root(&self.root, &root, self.repository.is_some()) {
+            return;
+        }
+        self.root = root;
+        self.reset_workspace_state();
+        self.refresh(cx);
+    }
+
+    fn reset_workspace_state(&mut self) {
+        self.listings.clear();
+        self.expanded.clear();
+        self.loading_directories.clear();
+        self.selected_path = None;
+        self.repository = None;
+        self.changes.clear();
+        self.git_loading = false;
+        self.git_refresh_pending = false;
+    }
+
+    pub fn set_theme(&mut self, theme: WorkspaceTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        self.editor
+            .update(cx, |editor, cx| editor.set_theme(theme, cx));
+        cx.notify();
+    }
+
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        let generation = self.refresh_generation;
+        self.loading = true;
+        self.git_loading = false;
+        self.git_refresh_pending = false;
+        self.error = None;
+        self.git_error = None;
+        let root = self.root.clone();
+        let task = cx.background_spawn(async move { load_workspace(root) });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.refresh_generation != generation {
+                    return;
+                }
+                this.loading = false;
+                match result {
+                    Ok(snapshot) => this.apply_snapshot(snapshot),
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn apply_snapshot(&mut self, snapshot: WorkspaceSnapshot) {
+        self.root = snapshot.root.clone();
+        self.listings.clear();
+        self.listings.insert(snapshot.root, snapshot.entries);
+        self.expanded.clear();
+        self.loading_directories.clear();
+        self.selected_path = None;
+        self.repository = snapshot.repository;
+        self.changes = snapshot.changes;
+        self.git_loading = false;
+        self.git_refresh_pending = false;
+    }
+
+    fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        if self.git_loading {
+            self.git_refresh_pending = true;
+            return;
+        }
+        self.git_loading = true;
+        self.git_refresh_pending = false;
+        self.git_error = None;
+        let generation = self.refresh_generation;
+        let repository_root = repository.root.clone();
+        let task = cx.background_spawn(async move { load_changes(&repository) });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                let current = GitResultIdentity {
+                    generation: this.refresh_generation,
+                    repository: this.repository.as_ref().map(|repo| repo.root.as_path()),
+                };
+                let result_identity = GitResultIdentity {
+                    generation,
+                    repository: Some(&repository_root),
+                };
+                if !accepts_git_result(current, result_identity) {
+                    return;
+                }
+                this.git_loading = false;
+                match result {
+                    Ok(changes) => this.changes = changes,
+                    Err(error) => this.git_error = Some(error.to_string()),
+                }
+                let refresh_again = this.git_refresh_pending;
+                this.git_refresh_pending = false;
+                cx.notify();
+                if refresh_again {
+                    this.refresh_git(cx);
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn toggle_directory(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.expanded.remove(&path) {
+            cx.notify();
+            return;
+        }
+        self.expanded.insert(path.clone());
+        if self.listings.contains_key(&path) || self.loading_directories.contains(&path) {
+            cx.notify();
+            return;
+        }
+        self.loading_directories.insert(path.clone());
+        let generation = self.refresh_generation;
+        let task_path = path.clone();
+        let task = cx.background_spawn(async move { read_directory(&task_path) });
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.refresh_generation != generation {
+                    return;
+                }
+                this.loading_directories.remove(&path);
+                match result {
+                    Ok(entries) => {
+                        this.listings.insert(path.clone(), entries);
+                    }
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected_path = Some(path.clone());
+        self.editor
+            .update(cx, |editor, cx| editor.open_file(path, window, cx));
+        cx.notify();
+    }
+
+    fn open_change(&self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(repository) = self.repository.clone() else {
+            return;
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.open_git_change(GitDiffRequest { repository, change }, window, cx);
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GitResultIdentity<'a> {
+    generation: u64,
+    repository: Option<&'a Path>,
+}
+
+fn accepts_git_result(current: GitResultIdentity<'_>, result: GitResultIdentity<'_>) -> bool {
+    current.generation == result.generation && current.repository == result.repository
+}
+
+fn should_update_root(current: &Path, requested: &Path, in_repository: bool) -> bool {
+    current != requested && !(in_repository && requested.starts_with(current))
+}
+
+#[cfg(test)]
+mod tests;

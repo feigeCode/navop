@@ -53,8 +53,8 @@ use crate::sidebar::tool_dock::{
     TerminalToolDockLayout, render_internal_tool_panel_frame, right_tool_region_width,
 };
 use crate::sidebar::{
-    SidebarPanel, TerminalSidebar, TerminalSidebarEvent, TerminalSidebarToolPanel,
-    TerminalSidebarToolbar,
+    LocalWorkspaceSidebar, SidebarPanel, TerminalSidebar, TerminalSidebarEvent,
+    TerminalSidebarToolPanel, TerminalSidebarToolbar,
 };
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{
@@ -103,6 +103,7 @@ use terminal::terminal::{
     resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
+use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
 
 actions!(
     terminal_view,
@@ -183,6 +184,8 @@ pub struct TerminalView {
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
     sidebar: Entity<TerminalSidebar>,
+    /// 本地工作区文件编辑器（仅本地终端）
+    workspace_editor: Option<Entity<WorkspaceEditor>>,
     /// 终端底部命令输入栏
     command_bar: Entity<TerminalCommandBar>,
     sidebar_toolbar: Entity<TerminalSidebarToolbar>,
