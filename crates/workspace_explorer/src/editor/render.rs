@@ -1,7 +1,7 @@
 use super::{DiffEditors, DocumentPolicy, WorkspaceEditor, format_size};
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Window, div, px,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     Disableable as _, IconName, Selectable as _, Sizable as _, Size,
@@ -67,9 +67,10 @@ impl WorkspaceEditor {
         let soft_wrap = tab.is_some_and(|tab| tab.soft_wrap);
         let diff_available = tab.is_some_and(|tab| tab.diff.is_some());
         let side_by_side = diff_available && tab.is_some_and(|tab| tab.diff_side_by_side);
-        let has_diff_changes = tab
+        let diff_change_count = tab
             .and_then(|tab| tab.diff.as_ref())
-            .is_some_and(|diff| !crate::diff::change_starts(diff).is_empty());
+            .map_or(0, |diff| crate::diff::change_starts(diff).len());
+        let has_diff_changes = diff_change_count > 0;
         h_flex()
             .items_center()
             .gap_2()
@@ -115,6 +116,20 @@ impl WorkspaceEditor {
                         this.next_diff_change(cx);
                     })),
             )
+            .when(side_by_side, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(self.theme.muted_foreground)
+                        .child(
+                            t!(
+                                "WorkspaceExplorer.diff.change_count",
+                                count = diff_change_count
+                            )
+                            .to_string(),
+                        ),
+                )
+            })
             .child(
                 Button::new("workspace-wrap")
                     .label(t!("WorkspaceExplorer.action.soft_wrap"))

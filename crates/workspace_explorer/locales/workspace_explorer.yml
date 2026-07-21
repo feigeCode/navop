@@ -48,6 +48,10 @@ WorkspaceExplorer:
       zh-CN: "%{name}（差异）"
       zh-HK: "%{name}（差異）"
   diff:
+    change_count:
+      en: "%{count} changes"
+      zh-CN: "%{count} 处变更"
+      zh-HK: "%{count} 處變更"
     before:
       en: HEAD
       zh-CN: HEAD 版本
