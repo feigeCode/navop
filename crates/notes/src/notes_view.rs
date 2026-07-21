@@ -213,6 +213,9 @@ impl NotesView {
             };
             builder = builder.syntax_highlight_provider_arc(self.syntax_highlight_provider.clone());
             builder = builder.theme_provider_arc(self.theme_provider.clone());
+            builder = builder.source_editor_provider_arc(Arc::new(
+                crate::source_editor_provider::NotesSourceEditorProvider,
+            ));
             if let Some(provider) = self.document_renderer_provider.clone() {
                 builder = builder.document_renderer_provider_arc(provider);
             }
