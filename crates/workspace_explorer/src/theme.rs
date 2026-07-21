@@ -35,6 +35,14 @@ impl WorkspaceTheme {
             .active(self.accent)
     }
 
+    pub(crate) fn icon_button_style(&self, cx: &App) -> ButtonCustomVariant {
+        ButtonCustomVariant::new(cx)
+            .color(self.background.opacity(0.0))
+            .foreground(self.foreground)
+            .hover(self.muted)
+            .active(self.muted)
+    }
+
     pub(crate) fn tab_style(&self) -> LocalTabStyle {
         LocalTabStyle {
             bar_background: self.muted,

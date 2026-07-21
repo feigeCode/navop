@@ -286,7 +286,7 @@ fn parse_branches(output: &str) -> Result<Vec<GitBranch>> {
         } else {
             continue;
         };
-        if kind == GitBranchKind::Remote && name.ends_with("/HEAD") {
+        if kind == GitBranchKind::Remote && ref_name.ends_with("/HEAD") {
             continue;
         }
         branches.push(GitBranch {

@@ -12,15 +12,15 @@ use gpui::{
 use gpui_component::{
     Disableable as _, Icon, IconName, Sizable as _, Size, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
-    dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState, LocalInputStyle},
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     notification::Notification,
+    popover::{Popover, PopoverState},
     v_flex,
 };
 use rust_i18n::t;
 
+#[derive(Clone)]
 enum BranchOperation {
     Switch(GitBranch),
     Create(String),
@@ -28,6 +28,25 @@ enum BranchOperation {
     Merge(String),
     Delete(GitBranch),
     Fetch,
+}
+
+#[derive(Clone)]
+enum BranchEditorMode {
+    Create,
+    Rename(String),
+}
+
+#[derive(Clone)]
+struct BranchEditor {
+    mode: BranchEditorMode,
+    input: Entity<InputState>,
+}
+
+#[derive(Clone)]
+struct BranchConfirmation {
+    operation: BranchOperation,
+    message: String,
+    success_message: String,
 }
 
 impl BranchOperation {
@@ -53,6 +72,8 @@ pub(super) struct BranchManager {
     loading: bool,
     operating: bool,
     error: Option<String>,
+    editor: Option<BranchEditor>,
+    confirmation: Option<BranchConfirmation>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -84,6 +105,8 @@ impl BranchManager {
             loading: false,
             operating: false,
             error: None,
+            editor: None,
+            confirmation: None,
             _subscriptions: vec![subscription],
         };
         this.reload(cx);
@@ -193,37 +216,13 @@ impl BranchManager {
             InputState::new(window, cx)
                 .placeholder(t!("WorkspaceExplorer.branch.name_placeholder").to_string())
         });
-        let manager = cx.entity();
-        let dialog_input = input.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let manager = manager.clone();
-            let input = dialog_input.clone();
-            dialog
-                .title(t!("WorkspaceExplorer.branch.create").to_string())
-                .w(px(380.0))
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(t!("WorkspaceExplorer.branch.create").to_string())
-                        .cancel_text(t!("WorkspaceExplorer.action.cancel").to_string()),
-                )
-                .on_ok(move |_, window, cx| {
-                    let name = input.read(cx).value().trim().to_string();
-                    if name.is_empty() {
-                        return false;
-                    }
-                    manager.update(cx, |this, cx| {
-                        this.execute(
-                            BranchOperation::Create(name),
-                            t!("WorkspaceExplorer.branch.created").to_string(),
-                            window,
-                            cx,
-                        );
-                    });
-                    true
-                })
-                .child(Input::new(&dialog_input).w_full())
+        self.editor = Some(BranchEditor {
+            mode: BranchEditorMode::Create,
+            input: input.clone(),
         });
+        self.confirmation = None;
+        input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
     }
 
     fn prompt_rename(&mut self, branch: GitBranch, window: &mut Window, cx: &mut Context<Self>) {
@@ -233,113 +232,81 @@ impl BranchManager {
                 .default_value(current_name.clone())
                 .placeholder(t!("WorkspaceExplorer.branch.name_placeholder").to_string())
         });
-        let manager = cx.entity();
-        let dialog_input = input.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let manager = manager.clone();
-            let input = dialog_input.clone();
-            let old_name = branch.name.clone();
-            dialog
-                .title(t!("WorkspaceExplorer.branch.rename").to_string())
-                .w(px(380.0))
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(t!("WorkspaceExplorer.branch.rename").to_string())
-                        .cancel_text(t!("WorkspaceExplorer.action.cancel").to_string()),
-                )
-                .on_ok(move |_, window, cx| {
-                    let new_name = input.read(cx).value().trim().to_string();
-                    if new_name.is_empty() || new_name == old_name {
-                        return false;
-                    }
-                    manager.update(cx, |this, cx| {
-                        this.execute(
-                            BranchOperation::Rename {
-                                old_name: old_name.clone(),
-                                new_name,
-                            },
-                            t!("WorkspaceExplorer.branch.renamed").to_string(),
-                            window,
-                            cx,
-                        );
-                    });
-                    true
-                })
-                .child(Input::new(&dialog_input).w_full())
+        self.editor = Some(BranchEditor {
+            mode: BranchEditorMode::Rename(branch.name),
+            input: input.clone(),
         });
+        self.confirmation = None;
+        input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
     }
 
-    fn confirm_merge(&mut self, branch: GitBranch, window: &mut Window, cx: &mut Context<Self>) {
-        let manager = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let manager = manager.clone();
-            let branch_name = branch.name.clone();
-            dialog
-                .title(t!("WorkspaceExplorer.branch.merge").to_string())
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(t!("WorkspaceExplorer.branch.merge").to_string())
-                        .cancel_text(t!("WorkspaceExplorer.action.cancel").to_string()),
-                )
-                .on_ok(move |_, window, cx| {
-                    manager.update(cx, |this, cx| {
-                        this.execute(
-                            BranchOperation::Merge(branch_name.clone()),
-                            t!("WorkspaceExplorer.branch.merged").to_string(),
-                            window,
-                            cx,
-                        );
-                    });
-                    true
-                })
-                .child(
-                    div().child(
-                        t!(
-                            "WorkspaceExplorer.branch.merge_confirm",
-                            name = branch.name.clone()
-                        )
-                        .to_string(),
-                    ),
-                )
-        });
+    fn submit_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        let name = editor.input.read(cx).value().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let (operation, message) = match editor.mode {
+            BranchEditorMode::Create => (
+                BranchOperation::Create(name),
+                t!("WorkspaceExplorer.branch.created").to_string(),
+            ),
+            BranchEditorMode::Rename(old_name) if old_name != name => (
+                BranchOperation::Rename {
+                    old_name,
+                    new_name: name,
+                },
+                t!("WorkspaceExplorer.branch.renamed").to_string(),
+            ),
+            BranchEditorMode::Rename(_) => return,
+        };
+        self.editor = None;
+        self.execute(operation, message, window, cx);
     }
 
-    fn confirm_delete(&mut self, branch: GitBranch, window: &mut Window, cx: &mut Context<Self>) {
-        let manager = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let manager = manager.clone();
-            let branch_for_action = branch.clone();
-            dialog
-                .title(t!("WorkspaceExplorer.branch.delete").to_string())
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(t!("WorkspaceExplorer.branch.delete").to_string())
-                        .cancel_text(t!("WorkspaceExplorer.action.cancel").to_string()),
-                )
-                .on_ok(move |_, window, cx| {
-                    manager.update(cx, |this, cx| {
-                        this.execute(
-                            BranchOperation::Delete(branch_for_action.clone()),
-                            t!("WorkspaceExplorer.branch.deleted").to_string(),
-                            window,
-                            cx,
-                        );
-                    });
-                    true
-                })
-                .child(
-                    div().child(
-                        t!(
-                            "WorkspaceExplorer.branch.delete_confirm",
-                            name = branch.name.clone()
-                        )
-                        .to_string(),
-                    ),
-                )
+    fn cancel_inline_action(&mut self, cx: &mut Context<Self>) {
+        self.editor = None;
+        self.confirmation = None;
+        cx.notify();
+    }
+
+    fn confirm_merge(&mut self, branch: GitBranch, cx: &mut Context<Self>) {
+        self.editor = None;
+        self.confirmation = Some(BranchConfirmation {
+            operation: BranchOperation::Merge(branch.name.clone()),
+            message: t!("WorkspaceExplorer.branch.merge_confirm", name = branch.name).to_string(),
+            success_message: t!("WorkspaceExplorer.branch.merged").to_string(),
         });
+        cx.notify();
+    }
+
+    fn confirm_delete(&mut self, branch: GitBranch, cx: &mut Context<Self>) {
+        self.editor = None;
+        self.confirmation = Some(BranchConfirmation {
+            operation: BranchOperation::Delete(branch.clone()),
+            message: t!(
+                "WorkspaceExplorer.branch.delete_confirm",
+                name = branch.name
+            )
+            .to_string(),
+            success_message: t!("WorkspaceExplorer.branch.deleted").to_string(),
+        });
+        cx.notify();
+    }
+
+    fn submit_confirmation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(confirmation) = self.confirmation.take() else {
+            return;
+        };
+        self.execute(
+            confirmation.operation,
+            confirmation.success_message,
+            window,
+            cx,
+        );
     }
 
     fn render_branch(&self, branch: GitBranch, cx: &mut Context<Self>) -> AnyElement {
@@ -354,9 +321,7 @@ impl BranchManager {
             .h(px(32.0))
             .px_2()
             .rounded(px(4.0))
-            .when(branch.current, |this| {
-                this.bg(self.theme.accent.opacity(0.32))
-            })
+            .when(branch.current, |this| this.bg(self.theme.muted))
             .when(!branch.current && !self.operating, |this| {
                 this.cursor_pointer()
                     .hover(|style| style.bg(self.theme.muted))
@@ -405,18 +370,28 @@ impl BranchManager {
 
     fn render_branch_actions(&self, branch: GitBranch, cx: &mut Context<Self>) -> impl IntoElement {
         let manager = cx.entity();
-        Button::new(SharedString::from(format!(
-            "workspace-branch-actions-{:?}-{}",
+        let theme = self.theme;
+        let popover_id = SharedString::from(format!(
+            "workspace-branch-actions-popover-{:?}-{}",
             branch.kind, branch.name
-        )))
-        .icon(IconName::Ellipsis)
-        .ghost()
-        .compact()
-        .custom(self.theme.button_style(cx))
-        .disabled(self.operating)
-        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
-            build_branch_actions_menu(menu, manager.clone(), branch.clone(), window, cx)
-        })
+        ));
+        Popover::new(popover_id)
+            .anchor(Anchor::TopRight)
+            .appearance(false)
+            .trigger(
+                Button::new(SharedString::from(format!(
+                    "workspace-branch-actions-{:?}-{}",
+                    branch.kind, branch.name
+                )))
+                .icon(IconName::Ellipsis)
+                .ghost()
+                .compact()
+                .custom(self.theme.icon_button_style(cx))
+                .disabled(self.operating),
+            )
+            .content(move |_, _, cx| {
+                render_branch_actions_popover(manager.clone(), branch.clone(), theme, cx)
+            })
     }
 
     fn render_branch_section(
@@ -455,6 +430,8 @@ impl BranchManager {
 
 impl Render for BranchManager {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor = self.editor.clone();
+        let confirmation = self.confirmation.clone();
         let local = self.filtered_branches(GitBranchKind::Local);
         let remote = self.filtered_branches(GitBranchKind::Remote);
         let local_count = self
@@ -508,7 +485,7 @@ impl Render for BranchManager {
                             .icon(IconName::Plus)
                             .ghost()
                             .compact()
-                            .custom(self.theme.button_style(cx))
+                            .custom(self.theme.icon_button_style(cx))
                             .tooltip(t!("WorkspaceExplorer.branch.create"))
                             .disabled(self.operating)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -520,7 +497,7 @@ impl Render for BranchManager {
                             .icon(IconName::Refresh)
                             .ghost()
                             .compact()
-                            .custom(self.theme.button_style(cx))
+                            .custom(self.theme.icon_button_style(cx))
                             .tooltip(t!("WorkspaceExplorer.branch.fetch"))
                             .disabled(self.operating)
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -533,6 +510,90 @@ impl Render for BranchManager {
                             })),
                     ),
             )
+            .when_some(editor, |this, editor| {
+                let title = match editor.mode {
+                    BranchEditorMode::Create => t!("WorkspaceExplorer.branch.create"),
+                    BranchEditorMode::Rename(_) => t!("WorkspaceExplorer.branch.rename"),
+                };
+                this.child(
+                    v_flex()
+                        .gap_2()
+                        .p_2()
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(self.theme.border)
+                        .bg(self.theme.muted)
+                        .child(div().text_sm().font_semibold().child(title))
+                        .child(
+                            Input::new(&editor.input)
+                                .w_full()
+                                .local_style(LocalInputStyle {
+                                    background: self.theme.background,
+                                    foreground: self.theme.foreground,
+                                    muted_foreground: self.theme.muted_foreground,
+                                    border: self.theme.border,
+                                }),
+                        )
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_1()
+                                .child(
+                                    Button::new("workspace-branch-inline-cancel")
+                                        .label(t!("WorkspaceExplorer.action.cancel"))
+                                        .small()
+                                        .custom(self.theme.icon_button_style(cx))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_inline_action(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("workspace-branch-inline-submit")
+                                        .label(t!("WorkspaceExplorer.action.save"))
+                                        .small()
+                                        .custom(self.theme.button_style(cx))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.submit_editor(window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
+            .when_some(confirmation, |this, confirmation| {
+                this.child(
+                    v_flex()
+                        .gap_2()
+                        .p_2()
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(self.theme.warning)
+                        .bg(self.theme.muted)
+                        .child(div().text_sm().child(confirmation.message))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_1()
+                                .child(
+                                    Button::new("workspace-branch-confirm-cancel")
+                                        .label(t!("WorkspaceExplorer.action.cancel"))
+                                        .small()
+                                        .custom(self.theme.icon_button_style(cx))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_inline_action(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("workspace-branch-confirm-submit")
+                                        .label(t!("WorkspaceExplorer.action.save"))
+                                        .small()
+                                        .custom(self.theme.button_style(cx))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.submit_confirmation(window, cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
             .when_some(self.error.clone(), |this, error| {
                 this.child(
                     div()
@@ -638,51 +699,100 @@ impl Render for BranchManager {
     }
 }
 
-fn build_branch_actions_menu(
-    menu: PopupMenu,
+fn render_branch_actions_popover(
     manager: Entity<BranchManager>,
     branch: GitBranch,
-    _window: &mut Window,
-    _cx: &mut Context<PopupMenu>,
-) -> PopupMenu {
+    theme: WorkspaceTheme,
+    cx: &mut Context<PopoverState>,
+) -> AnyElement {
+    let popover_entity = cx.entity();
     let rename_manager = manager.clone();
     let merge_manager = manager.clone();
     let delete_manager = manager;
-    menu.min_w(px(180.0))
-        .when(branch.kind == GitBranchKind::Local, |menu| {
+    let rename_popover = popover_entity.clone();
+    let merge_popover = popover_entity.clone();
+    let delete_popover = popover_entity;
+    v_flex()
+        .w(px(220.0))
+        .p_1()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .text_color(theme.foreground)
+        .when(branch.kind == GitBranchKind::Local, |this| {
             let branch = branch.clone();
-            menu.item(
-                PopupMenuItem::new(t!("WorkspaceExplorer.branch.rename"))
-                    .icon(IconName::Replace)
+            this.child(
+                h_flex()
+                    .id("workspace-branch-action-rename")
+                    .items_center()
+                    .gap_2()
+                    .h(px(34.0))
+                    .px_2()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.muted))
                     .on_click(move |_, window, cx| {
-                        rename_manager.update(cx, |this, cx| {
-                            this.prompt_rename(branch.clone(), window, cx);
+                        rename_popover.update(cx, |popover, cx| {
+                            popover.dismiss(window, cx);
                         });
-                    }),
+                        rename_manager.update(cx, |manager, cx| {
+                            manager.prompt_rename(branch.clone(), window, cx);
+                        });
+                    })
+                    .child(Icon::new(IconName::Replace).with_size(Size::XSmall))
+                    .child(t!("WorkspaceExplorer.branch.rename")),
             )
         })
-        .item(
-            PopupMenuItem::new(t!("WorkspaceExplorer.branch.merge"))
-                .icon(IconName::Redo2)
-                .disabled(branch.current)
-                .on_click({
-                    let branch = branch.clone();
-                    move |_, window, cx| {
-                        merge_manager.update(cx, |this, cx| {
-                            this.confirm_merge(branch.clone(), window, cx);
+        .when(!branch.current, |this| {
+            let branch = branch.clone();
+            this.child(
+                h_flex()
+                    .id("workspace-branch-action-merge")
+                    .items_center()
+                    .gap_2()
+                    .h(px(34.0))
+                    .px_2()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.muted))
+                    .on_click(move |_, window, cx| {
+                        merge_popover.update(cx, |popover, cx| {
+                            popover.dismiss(window, cx);
                         });
-                    }
-                }),
-        )
-        .separator()
-        .item(
-            PopupMenuItem::new(t!("WorkspaceExplorer.branch.delete"))
-                .icon(IconName::Delete)
-                .disabled(branch.current)
-                .on_click(move |_, window, cx| {
-                    delete_manager.update(cx, |this, cx| {
-                        this.confirm_delete(branch.clone(), window, cx);
-                    });
-                }),
-        )
+                        merge_manager.update(cx, |manager, cx| {
+                            manager.confirm_merge(branch.clone(), cx);
+                        });
+                    })
+                    .child(Icon::new(IconName::Redo2).with_size(Size::XSmall))
+                    .child(t!("WorkspaceExplorer.branch.merge")),
+            )
+        })
+        .when(!branch.current, |this| {
+            let branch = branch.clone();
+            this.child(div().h(px(1.0)).mx_1().my_1().bg(theme.border))
+                .child(
+                    h_flex()
+                        .id("workspace-branch-action-delete")
+                        .items_center()
+                        .gap_2()
+                        .h(px(34.0))
+                        .px_2()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .text_color(theme.danger)
+                        .hover(|style| style.bg(theme.muted))
+                        .on_click(move |_, window, cx| {
+                            delete_popover.update(cx, |popover, cx| {
+                                popover.dismiss(window, cx);
+                            });
+                            delete_manager.update(cx, |manager, cx| {
+                                manager.confirm_delete(branch.clone(), cx);
+                            });
+                        })
+                        .child(Icon::new(IconName::Delete).with_size(Size::XSmall))
+                        .child(t!("WorkspaceExplorer.branch.delete")),
+                )
+        })
+        .into_any_element()
 }

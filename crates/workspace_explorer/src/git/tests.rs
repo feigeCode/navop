@@ -162,6 +162,7 @@ fn branch_parser_separates_local_and_remote_branches() {
     assert_eq!(Some("origin/dev".to_string()), branches[0].upstream);
     assert_eq!(GitBranchKind::Remote, branches[2].kind);
     assert_eq!("origin/dev", branches[2].name);
+    assert!(branches.iter().all(|branch| branch.name != "origin"));
 }
 
 #[test]

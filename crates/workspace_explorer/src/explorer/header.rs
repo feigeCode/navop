@@ -75,7 +75,7 @@ impl WorkspaceExplorer {
                                 .icon(IconName::ChevronsUpDown)
                                 .ghost()
                                 .compact()
-                                .custom(self.theme.button_style(cx))
+                                .custom(self.theme.icon_button_style(cx))
                                 .tooltip(t!("WorkspaceExplorer.branch.manage")),
                         )
                         .content(move |_, _, _| manager.clone()),
