@@ -1579,7 +1579,12 @@ impl SqlEditor {
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = self.editor_font(cx);
-        Input::new(&self.editor).font(font).size_full()
+        let font_size = AppSettings::global(cx).sql_editor_font_size as f32;
+        Input::new(&self.editor)
+            .font(font)
+            .text_size(gpui::px(font_size))
+            .line_height(gpui::px(font_size * 1.5))
+            .size_full()
     }
 }
 
@@ -1667,5 +1672,7 @@ mod tests {
         assert!(!editor_font.contains("cache.installed_font_names == installed_font_names"));
         assert!(!editor_font.contains("installed_font_names,"));
         assert!(!render.contains("cx.text_system().all_font_names()"));
+        assert!(render.contains("AppSettings::global(cx).sql_editor_font_size"));
+        assert!(render.contains(".text_size(gpui::px(font_size))"));
     }
 }

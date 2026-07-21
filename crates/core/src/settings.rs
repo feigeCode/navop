@@ -636,6 +636,8 @@ pub struct AppSettings {
     pub font_size: f64,
     #[serde(default = "default_monospace_font_family")]
     pub sql_editor_font_family: String,
+    #[serde(default = "default_sql_editor_font_size")]
+    pub sql_editor_font_size: f64,
     #[serde(default = "default_monospace_font_family")]
     pub table_preview_font_family: String,
     #[serde(default = "default_monospace_font_family")]
@@ -733,6 +735,10 @@ fn default_locale() -> String {
 }
 
 fn default_font_size() -> f64 {
+    14.0
+}
+
+fn default_sql_editor_font_size() -> f64 {
     14.0
 }
 
@@ -956,6 +962,7 @@ impl Default for AppSettings {
             font_family: default_font_family(),
             font_size: default_font_size(),
             sql_editor_font_family: default_monospace_font_family(),
+            sql_editor_font_size: default_sql_editor_font_size(),
             table_preview_font_family: default_monospace_font_family(),
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),
@@ -1531,6 +1538,10 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert!(!settings.sql_editor_font_family.is_empty());
+        assert_eq!(
+            AppSettings::default().sql_editor_font_size,
+            settings.sql_editor_font_size
+        );
         assert_eq!(
             settings.sql_editor_font_family,
             settings.table_preview_font_family

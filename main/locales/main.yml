@@ -1285,6 +1285,14 @@ Settings:
         en: Select the monospace font used by the SQL editor
         zh-CN: 选择 SQL 编辑器使用的等宽字体
         zh-HK: 選擇 SQL 編輯器使用的等寬字型
+      sql_editor_font_size:
+        en: SQL Editor Font Size
+        zh-CN: SQL 编辑器字体大小
+        zh-HK: SQL 編輯器字型大小
+      sql_editor_font_size_desc:
+        en: Adjust the SQL editor font size independently (8-72)
+        zh-CN: 单独调整 SQL 编辑器字体大小（8-72）
+        zh-HK: 單獨調整 SQL 編輯器字型大小（8-72）
       table_preview_font_family:
         en: Table Preview Font
         zh-CN: 表预览字体
@@ -1301,6 +1309,14 @@ Settings:
         en: Select the monospace font used by terminals
         zh-CN: 选择终端使用的等宽字体
         zh-HK: 選擇終端使用的等寬字型
+      terminal_font_size:
+        en: Terminal Font Size
+        zh-CN: 终端字体大小
+        zh-HK: 終端字型大小
+      terminal_font_size_desc:
+        en: Adjust the terminal font size; synchronized with terminal settings (8-32)
+        zh-CN: 调整终端字体大小，并与终端内设置同步（8-32）
+        zh-HK: 調整終端字型大小，並與終端內設定同步（8-32）
       custom_fonts:
         en: Custom Fonts
         zh-CN: 自定义字体
@@ -1407,9 +1423,9 @@ Settings:
         zh-CN: 终端字体大小
         zh-HK: 終端字型大小
       font_size_desc:
-        en: Adjust terminal font size (8-72)
-        zh-CN: 调整终端字体大小（8-72）
-        zh-HK: 調整終端字型大小（8-72）
+        en: Adjust terminal font size (8-32)
+        zh-CN: 调整终端字体大小（8-32）
+        zh-HK: 調整終端字型大小（8-32）
       auto_copy:
         en: Auto copy on select
         zh-CN: 选中自动复制

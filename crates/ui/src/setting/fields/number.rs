@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Entity, IntoElement, SharedString, StyleRefinement, Styled,
-    Subscription, Window, prelude::FluentBuilder as _,
+    AnyElement, App, AppContext as _, Entity, Focusable as _, IntoElement, SharedString,
+    StyleRefinement, Styled, Subscription, Window, prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -60,6 +60,10 @@ fn update_number_from_step(
     .clamp(options.min, options.max);
     set_value(new_value);
     Some(new_value)
+}
+
+fn should_sync_external_value(focused: bool, initial_value: f64, value: f64) -> bool {
+    !focused && initial_value != value
 }
 
 struct State {
@@ -159,8 +163,21 @@ impl SettingFieldRender for NumberField {
                 },
             )
             .read(cx);
+        let input = state.input.clone();
+        let initial_value = state.initial_value;
 
-        NumberInput::new(&state.input)
+        if should_sync_external_value(
+            input.focus_handle(cx).is_focused(window),
+            initial_value,
+            value,
+        ) {
+            let value = SharedString::from(value.to_string());
+            input.update(cx, |input, cx| {
+                input.set_value(value, window, cx);
+            });
+        }
+
+        NumberInput::new(&input)
             .with_size(options.size)
             .map(|this| {
                 if options.layout.is_horizontal() {
@@ -176,7 +193,7 @@ impl SettingFieldRender for NumberField {
 
 #[cfg(test)]
 mod tests {
-    use super::{NumberFieldOptions, update_number_from_step};
+    use super::{NumberFieldOptions, should_sync_external_value, update_number_from_step};
     use crate::input::StepAction;
 
     #[test]
@@ -194,6 +211,13 @@ mod tests {
 
         assert_eq!(Some(15.0), next);
         assert_eq!(Some(15.0), persisted);
+    }
+
+    #[test]
+    fn external_value_syncs_only_when_number_input_is_not_focused() {
+        assert!(should_sync_external_value(false, 15.0, 18.0));
+        assert!(!should_sync_external_value(true, 15.0, 18.0));
+        assert!(!should_sync_external_value(false, 15.0, 15.0));
     }
 
     #[test]

@@ -75,7 +75,7 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
-use terminal_view::TerminalTheme;
+use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -696,6 +696,29 @@ impl SettingsPanel {
                         )
                         .item(
                             SettingItem::new(
+                                t!("Settings.General.Font.sql_editor_font_size"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 8.0,
+                                        max: 72.0,
+                                        ..Default::default()
+                                    },
+                                    |cx: &App| AppSettings::global(cx).sql_editor_font_size,
+                                    |val: f64, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.sql_editor_font_size = val;
+                                        });
+                                        cx.refresh_windows();
+                                    },
+                                )
+                                .default_value(default_settings.sql_editor_font_size),
+                            )
+                            .description(
+                                t!("Settings.General.Font.sql_editor_font_size_desc").to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
                                 t!("Settings.General.Font.table_preview_font_family"),
                                 SettingField::dropdown(
                                     font_options.clone(),
@@ -743,6 +766,28 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Font.terminal_font_family_desc").to_string(),
+                            ),
+                        )
+                        .item(
+                            SettingItem::new(
+                                t!("Settings.General.Font.terminal_font_size"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: MIN_FONT_SIZE as f64,
+                                        max: MAX_FONT_SIZE as f64,
+                                        ..Default::default()
+                                    },
+                                    |cx: &App| AppSettings::global(cx).terminal_font_size,
+                                    |val: f64, cx: &mut App| {
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.terminal_font_size = val;
+                                        });
+                                    },
+                                )
+                                .default_value(default_settings.terminal_font_size),
+                            )
+                            .description(
+                                t!("Settings.General.Font.terminal_font_size_desc").to_string(),
                             ),
                         )
                         .item(
