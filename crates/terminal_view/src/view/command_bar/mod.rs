@@ -3,8 +3,8 @@ use crate::theme::TerminalColors;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
 };
-use gpui_component::RopeExt as _;
 use gpui_component::input::InputState;
+use gpui_component::{RopeExt as _, VirtualListScrollHandle};
 use one_core::storage::QuickCommand;
 use terminal::terminal::Terminal;
 
@@ -42,7 +42,7 @@ pub(super) struct TerminalCommandBar {
     input_state: Entity<InputState>,
     quick_search_state: Entity<InputState>,
     quick_group_scroll_handle: ScrollHandle,
-    quick_scroll_handle: ScrollHandle,
+    quick_scroll_handle: VirtualListScrollHandle,
     quick_commands: Vec<QuickCommand>,
     suggestions: Vec<CommandSuggestion>,
     selected_suggestion: Option<usize>,

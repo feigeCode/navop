@@ -27,7 +27,7 @@ impl TerminalCommandBar {
             input_state,
             quick_search_state,
             quick_group_scroll_handle: ScrollHandle::new(),
-            quick_scroll_handle: ScrollHandle::new(),
+            quick_scroll_handle: VirtualListScrollHandle::new(),
             quick_commands: Vec::new(),
             suggestions: Vec::new(),
             selected_suggestion: None,

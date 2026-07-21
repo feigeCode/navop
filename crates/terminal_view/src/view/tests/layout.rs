@@ -206,12 +206,15 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(quick_source.contains("on_mouse_down_out"));
     assert!(quick_source.contains("window.defer(cx"));
     assert!(quick_interaction_source.contains("window.defer(cx"));
-    assert!(quick_interaction_source.contains("quick_scroll_handle = ScrollHandle::new()"));
+    assert!(
+        quick_interaction_source.contains("quick_scroll_handle = VirtualListScrollHandle::new()")
+    );
     assert!(quick_source.contains("bottom(px(bottom_offset))"));
     assert!(
         include_str!("../command_bar/quick_render_list.rs")
             .contains("vertical_scrollbar(&self.quick_scroll_handle)")
     );
+    assert!(include_str!("../command_bar/quick_render_list.rs").contains("v_virtual_list("));
     assert!(
         include_str!("../command_bar/quick_render_sidebar.rs")
             .contains("vertical_scrollbar(&self.quick_group_scroll_handle)")

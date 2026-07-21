@@ -9,12 +9,49 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex,
     input::{Input, LocalInputStyle},
     scroll::ScrollableElement,
-    v_flex,
+    v_flex, v_virtual_list,
 };
 use rust_i18n::t;
+use std::rc::Rc;
 
 const QUICK_POPOVER_HEADER_HEIGHT: f32 = 48.0;
+const QUICK_GROUP_ROW_HEIGHT: f32 = 32.0;
+const QUICK_COMMAND_BASE_ROW_HEIGHT: f32 = 40.0;
+const QUICK_COMMAND_METADATA_ROW_HEIGHT: f32 = 20.0;
 const QUICK_COMMAND_GROUP_ID_STRIDE: usize = 10_000;
+
+#[derive(Clone)]
+enum QuickCommandListItem {
+    Group {
+        group_index: usize,
+        title: String,
+        color: gpui::Hsla,
+    },
+    Command {
+        group_index: usize,
+        command_index: usize,
+        command: QuickCommand,
+    },
+}
+
+impl QuickCommandListItem {
+    fn height(&self) -> f32 {
+        match self {
+            Self::Group { .. } => QUICK_GROUP_ROW_HEIGHT,
+            Self::Command { command, .. } => {
+                let value = command.command.trim();
+                let has_label = command
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| name.trim() != value);
+                let metadata_rows =
+                    usize::from(has_label) + usize::from(command.description.is_some());
+                QUICK_COMMAND_BASE_ROW_HEIGHT
+                    + metadata_rows as f32 * QUICK_COMMAND_METADATA_ROW_HEIGHT
+            }
+        }
+    }
+}
 
 impl TerminalCommandBar {
     pub(super) fn render_quick_body(
@@ -22,6 +59,15 @@ impl TerminalCommandBar {
         groups: Vec<QuickCommandGroup>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let items = Rc::new(self.quick_command_list_items(groups));
+        let item_sizes = Rc::new(
+            items
+                .iter()
+                .map(|item| gpui::size(px(0.0), px(item.height())))
+                .collect(),
+        );
+        let items_empty = items.is_empty();
+
         v_flex()
             .flex_1()
             .h_full()
@@ -33,30 +79,28 @@ impl TerminalCommandBar {
                     .flex_1()
                     .min_h_0()
                     .relative()
-                    .child(
-                        v_flex()
-                            .id("terminal-quick-command-scroll-view")
+                    .when(items_empty, |body| body.child(self.render_quick_empty()))
+                    .when(!items_empty, |body| {
+                        body.child(
+                            v_virtual_list(
+                                cx.entity().clone(),
+                                "terminal-quick-command-list",
+                                item_sizes,
+                                move |this, visible_range, _window, cx| {
+                                    visible_range
+                                        .filter_map(|index| {
+                                            items
+                                                .get(index)
+                                                .cloned()
+                                                .map(|item| this.render_quick_list_item(item, cx))
+                                        })
+                                        .collect()
+                                },
+                            )
                             .size_full()
-                            .track_scroll(&self.quick_scroll_handle)
-                            .overflow_y_scroll()
-                            .child(
-                                v_flex()
-                                    .w_full()
-                                    .when(groups.is_empty(), |list| {
-                                        list.child(self.render_quick_empty())
-                                    })
-                                    .children(index_quick_groups(groups).map(
-                                        |(group_index, command_offset, group)| {
-                                            self.render_quick_group(
-                                                group_index,
-                                                command_offset,
-                                                group,
-                                                cx,
-                                            )
-                                        },
-                                    )),
-                            ),
-                    )
+                            .track_scroll(&self.quick_scroll_handle),
+                        )
+                    })
                     .vertical_scrollbar(&self.quick_scroll_handle),
             )
             .into_any_element()
@@ -109,52 +153,81 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
-    fn render_quick_group(
+    fn quick_command_list_items(
         &self,
-        group_index: usize,
-        command_offset: usize,
-        group: QuickCommandGroup,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let title = group
-            .name
-            .unwrap_or_else(|| t!("TerminalCommandBar.ungrouped").to_string());
-        let color = group_color(group.color.as_deref(), self.colors.accent);
+        groups: Vec<QuickCommandGroup>,
+    ) -> Vec<QuickCommandListItem> {
         let show_group_header = self.quick_group_filter == QuickGroupFilter::All;
-        v_flex()
-            .id(("terminal-quick-command-group", group_index))
-            .w_full()
-            .when(show_group_header, |this| {
-                this.child(
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .px_3()
-                        .pt_3()
-                        .pb_1()
-                        .child(div().size_2().rounded_full().bg(color))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(title),
-                        ),
-                )
-            })
-            .children(
+        let item_count = groups
+            .iter()
+            .map(|group| group.commands.len())
+            .sum::<usize>()
+            + usize::from(show_group_header) * groups.len();
+        let mut items = Vec::with_capacity(item_count);
+        let mut command_offset = 0;
+
+        for (group_index, group) in groups.into_iter().enumerate() {
+            if show_group_header {
+                items.push(QuickCommandListItem::Group {
+                    group_index,
+                    title: group
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| t!("TerminalCommandBar.ungrouped").to_string()),
+                    color: group_color(group.color.as_deref(), self.colors.accent),
+                });
+            }
+            let command_count = group.commands.len();
+            items.extend(
                 group
                     .commands
                     .into_iter()
                     .enumerate()
-                    .map(|(command_index, command)| {
-                        self.render_quick_command(
-                            (group_index, command_offset + command_index),
-                            command,
-                            cx,
-                        )
+                    .map(|(command_index, command)| QuickCommandListItem::Command {
+                        group_index,
+                        command_index: command_offset + command_index,
+                        command,
                     }),
-            )
-            .into_any_element()
+            );
+            command_offset += command_count;
+        }
+
+        items
+    }
+
+    fn render_quick_list_item(
+        &self,
+        item: QuickCommandListItem,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match item {
+            QuickCommandListItem::Group {
+                group_index,
+                title,
+                color,
+            } => h_flex()
+                .id(("terminal-quick-command-group", group_index))
+                .w_full()
+                .h(px(QUICK_GROUP_ROW_HEIGHT))
+                .gap_2()
+                .items_center()
+                .px_3()
+                .pt_3()
+                .pb_1()
+                .child(div().size_2().rounded_full().bg(color))
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(title),
+                )
+                .into_any_element(),
+            QuickCommandListItem::Command {
+                group_index,
+                command_index,
+                command,
+            } => self.render_quick_command((group_index, command_index), command, cx),
+        }
     }
 
     fn render_quick_command(
@@ -170,32 +243,41 @@ impl TerminalCommandBar {
             .name
             .clone()
             .filter(|name| name.trim() != value.trim());
-        h_flex()
-            .id((
-                "terminal-quick-command-item",
-                group_index * QUICK_COMMAND_GROUP_ID_STRIDE + command_index,
-            ))
-            .mx_2()
-            .mb_1()
-            .min_w_0()
-            .gap_2()
-            .items_center()
-            .rounded(cx.theme().radius)
+        let row_height = QUICK_COMMAND_BASE_ROW_HEIGHT
+            + (usize::from(label.is_some()) + usize::from(command.description.is_some())) as f32
+                * QUICK_COMMAND_METADATA_ROW_HEIGHT;
+        div()
+            .w_full()
+            .h(px(row_height))
             .px_2()
-            .py_2()
-            .cursor_pointer()
-            .when(selected, |row| row.bg(self.colors.muted))
-            .hover(|row| row.bg(self.colors.muted))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.choose_command(value.clone(), window, cx);
-            }))
-            .child(self.render_quick_command_text(label, command))
+            .pb_1()
             .child(
-                div()
-                    .flex_shrink_0()
-                    .text_xs()
-                    .text_color(self.colors.muted_foreground)
-                    .child(t!("TerminalCommandBar.fill").to_string()),
+                h_flex()
+                    .id((
+                        "terminal-quick-command-item",
+                        group_index * QUICK_COMMAND_GROUP_ID_STRIDE + command_index,
+                    ))
+                    .size_full()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .rounded(cx.theme().radius)
+                    .px_2()
+                    .py_2()
+                    .cursor_pointer()
+                    .when(selected, |row| row.bg(self.colors.muted))
+                    .hover(|row| row.bg(self.colors.muted))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.choose_command(value.clone(), window, cx);
+                    }))
+                    .child(self.render_quick_command_text(label, command))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(self.colors.muted_foreground)
+                            .child(t!("TerminalCommandBar.fill").to_string()),
+                    ),
             )
             .into_any_element()
     }
@@ -238,17 +320,4 @@ impl TerminalCommandBar {
             })
             .into_any_element()
     }
-}
-
-fn index_quick_groups(
-    groups: Vec<QuickCommandGroup>,
-) -> impl Iterator<Item = (usize, usize, QuickCommandGroup)> {
-    groups
-        .into_iter()
-        .enumerate()
-        .scan(0, |offset, (group_index, group)| {
-            let command_offset = *offset;
-            *offset += group.commands.len();
-            Some((group_index, command_offset, group))
-        })
 }

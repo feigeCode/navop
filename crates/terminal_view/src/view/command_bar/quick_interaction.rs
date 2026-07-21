@@ -29,7 +29,7 @@ impl TerminalCommandBar {
                 InputEvent::Change => {
                     this.quick_query = input.read(cx).value().to_string();
                     this.selected_quick_command = None;
-                    this.quick_scroll_handle = ScrollHandle::new();
+                    this.quick_scroll_handle = VirtualListScrollHandle::new();
                     cx.notify();
                 }
                 InputEvent::PressEnter { secondary } if !secondary => {
@@ -53,7 +53,7 @@ impl TerminalCommandBar {
         self.selected_quick_command = None;
         self.quick_group_filter = QuickGroupFilter::All;
         self.quick_group_scroll_handle = ScrollHandle::new();
-        self.quick_scroll_handle = ScrollHandle::new();
+        self.quick_scroll_handle = VirtualListScrollHandle::new();
         self.quick_search_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
         });
@@ -81,7 +81,7 @@ impl TerminalCommandBar {
     pub(super) fn select_quick_group(&mut self, filter: QuickGroupFilter, cx: &mut Context<Self>) {
         self.quick_group_filter = filter;
         self.selected_quick_command = None;
-        self.quick_scroll_handle = ScrollHandle::new();
+        self.quick_scroll_handle = VirtualListScrollHandle::new();
         cx.notify();
     }
 
