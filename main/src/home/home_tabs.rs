@@ -112,9 +112,9 @@ mod tests {
 
     #[test]
     fn notes_sidebar_entry_precedes_extensions() {
-        let source = include_str!("../home_tab/sidebar.rs");
-        let notes = source.find("Button::new(\"open_notes\")").unwrap();
-        let extensions = source.find("Button::new(\"open_extensions\")").unwrap();
+        let source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let notes = source.find("\"persistent-open-notes\"").unwrap();
+        let extensions = source.find("\"persistent-open-extensions\"").unwrap();
         assert!(notes < extensions);
     }
 

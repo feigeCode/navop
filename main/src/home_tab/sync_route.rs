@@ -40,6 +40,6 @@ pub(super) fn should_show_team_key_menu_item(
     route == HomeSyncRoute::OnetCloud && cached_team_count > 0
 }
 
-pub(super) fn should_show_team_management_entry(team_management_enabled: bool) -> bool {
+pub(crate) fn should_show_team_management_entry(team_management_enabled: bool) -> bool {
     team_management_enabled
 }

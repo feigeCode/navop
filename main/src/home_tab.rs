@@ -37,7 +37,7 @@ use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
-use one_core::settings::{AppSettings, SyncProvider};
+use one_core::settings::{AppSettings, HomeConnectionLayout, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
@@ -61,13 +61,14 @@ use crate::external_driver_display::external_driver_icon_for_config_with_registr
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
-use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
+use crate::home::home_workspace_filter::{
+    WorkspaceDialogConfig, WorkspaceFilterDelegate, show_workspace_dialog,
+};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::local_terminal_profiles::{effective_kind, launch_options};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
-use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
@@ -81,8 +82,6 @@ actions!(
     ]
 );
 
-const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
-const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
 // HomePage Entity - 管理 home 页面的所有状态
 
@@ -104,9 +103,27 @@ impl ConnectionLayout {
     }
 }
 
+impl From<HomeConnectionLayout> for ConnectionLayout {
+    fn from(layout: HomeConnectionLayout) -> Self {
+        match layout {
+            HomeConnectionLayout::Card => Self::Card,
+            HomeConnectionLayout::List => Self::List,
+        }
+    }
+}
+
+impl From<ConnectionLayout> for HomeConnectionLayout {
+    fn from(layout: ConnectionLayout) -> Self {
+        match layout {
+            ConnectionLayout::Card => Self::Card,
+            ConnectionLayout::List => Self::List,
+        }
+    }
+}
+
 pub struct HomePage {
     focus_handle: FocusHandle,
-    selected_filter: ConnectionType,
+    pub(crate) selected_filter: ConnectionType,
     connection_layout: ConnectionLayout,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
@@ -133,7 +150,7 @@ pub struct HomePage {
     /// 认证服务
     auth_service: Arc<AuthService>,
     /// 当前登录用户
-    current_user: Option<UserInfo>,
+    pub(crate) current_user: Option<UserInfo>,
     /// 是否正在登录
     logging_in: bool,
     /// 认证错误消息（登录/注册失败时设置）
@@ -142,7 +159,6 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
-    sidebar_collapsed: bool,
     team_options: Vec<TeamOption>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
@@ -172,7 +188,6 @@ mod keybindings;
 mod lifecycle;
 mod local_terminal;
 mod render;
-mod sidebar;
 mod sync_route;
 mod toolbar;
 mod workspace;
@@ -185,9 +200,10 @@ use connection_info::{
     port_forwarding_connection_info,
 };
 pub use keybindings::{init, refresh_keybindings};
+pub(crate) use sync_route::should_show_team_management_entry;
 use sync_route::{
     HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,
-    should_show_team_key_menu_item, should_show_team_management_entry, sync_route,
+    should_show_team_key_menu_item, sync_route,
 };
 
 #[cfg(test)]

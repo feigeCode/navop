@@ -19,14 +19,26 @@ use gpui_component::{
 use one_core::storage::{StoredConnection, Workspace};
 use rust_i18n::t;
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WorkspaceDialogConfig {
+    pub workspace_id: Option<i64>,
+    pub parent_id: Option<i64>,
+    pub initial_name: String,
+    pub initial_sort_order: Option<i32>,
+}
+
 pub(crate) fn show_workspace_dialog(
     parent: Entity<HomePage>,
-    workspace_id: Option<i64>,
-    initial_name: String,
-    initial_sort_order: Option<i32>,
+    config: WorkspaceDialogConfig,
     window: &mut Window,
     cx: &mut App,
 ) {
+    let WorkspaceDialogConfig {
+        workspace_id,
+        parent_id,
+        initial_name,
+        initial_sort_order,
+    } = config;
     let name_input = cx.new(|cx| {
         let mut state = InputState::new(window, cx)
             .placeholder(t!("Workspace.name_placeholder"))
@@ -96,7 +108,7 @@ pub(crate) fn show_workspace_dialog(
                 };
 
                 let _ = parent_for_ok.update(cx, |home, cx| {
-                    home.handle_save_workspace(workspace_id, name, sort_order, cx);
+                    home.handle_save_workspace(workspace_id, parent_id, name, sort_order, cx);
                 });
                 true
             })
@@ -357,9 +369,12 @@ impl ListDelegate for WorkspaceFilterDelegate {
                                 .on_click(move |_, window, cx| {
                                     show_workspace_dialog(
                                         parent_for_edit.clone(),
-                                        Some(item_id_for_edit),
-                                        item_name_for_edit.clone(),
-                                        item_sort_order_for_edit,
+                                        WorkspaceDialogConfig {
+                                            workspace_id: Some(item_id_for_edit),
+                                            parent_id: None,
+                                            initial_name: item_name_for_edit.clone(),
+                                            initial_sort_order: item_sort_order_for_edit,
+                                        },
                                         window,
                                         cx,
                                     );

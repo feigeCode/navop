@@ -9,6 +9,7 @@ use crate::local_terminal_profiles::{
     effective_kind as effective_local_terminal_profile_kind,
     setting_options as local_terminal_profile_options,
 };
+use crate::onetcli_app::{GlobalHomePage, GlobalOnetCliApp};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -64,10 +65,10 @@ const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
-    LocalTerminalProfileKind, LocalTerminalProfileSettings, PersonalSyncBackendKind,
-    PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
+    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
+    HomeConnectionLayout, LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK,
+    LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -505,6 +506,80 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Startup.default_page_desc").to_string(),
+                            ),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("Settings.General.ConnectionDisplay.group_title"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("Settings.General.ConnectionDisplay.home_layout"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            HomeConnectionLayout::Card.as_str().into(),
+                                            t!("Home.card_view").into(),
+                                        ),
+                                        (
+                                            HomeConnectionLayout::List.as_str().into(),
+                                            t!("Home.list_view").into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .home_connection_layout
+                                                .as_str(),
+                                        )
+                                    },
+                                    |value: SharedString, cx: &mut App| {
+                                        let layout = HomeConnectionLayout::from_value(&value);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.home_connection_layout = layout;
+                                        });
+                                        let home = cx
+                                            .try_global::<GlobalHomePage>()
+                                            .map(|global| global.home_page.clone());
+                                        if let Some(home) = home {
+                                            home.update(cx, |home, cx| {
+                                                home.set_connection_layout(layout, cx)
+                                            });
+                                        }
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.home_connection_layout.as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.ConnectionDisplay.home_layout_desc")
+                                    .to_string(),
+                            ),
+                            SettingItem::new(
+                                t!("Settings.General.ConnectionDisplay.connection_tree"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).connection_sidebar_expanded
+                                    },
+                                    |expanded: bool, cx: &mut App| {
+                                        let app = cx
+                                            .try_global::<GlobalOnetCliApp>()
+                                            .map(|global| global.app.clone());
+                                        if let Some(app) = app {
+                                            app.update(cx, |app, cx| {
+                                                app.set_connection_sidebar_expanded(expanded, cx)
+                                            });
+                                        } else {
+                                            AppSettings::update_and_save(cx, |settings| {
+                                                settings.connection_sidebar_expanded = expanded;
+                                            });
+                                        }
+                                    },
+                                )
+                                .default_value(default_settings.connection_sidebar_expanded),
+                            )
+                            .description(
+                                t!("Settings.General.ConnectionDisplay.connection_tree_desc")
+                                    .to_string(),
                             ),
                         ]),
                     notes_setting_group(),

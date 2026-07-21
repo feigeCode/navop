@@ -66,6 +66,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260720000001",
         include_str!("../../migrations/20260720000001_default_quick_commands.sql"),
     ),
+    (
+        "20260721000001",
+        include_str!("../../migrations/20260721000001_workspace_hierarchy.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

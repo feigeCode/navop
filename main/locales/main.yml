@@ -1171,6 +1171,29 @@ Settings:
         zh-CN: AI 工作台
         zh-HK: AI 工作台
 
+    # 连接显示设置
+    ConnectionDisplay:
+      group_title:
+        en: Connections
+        zh-CN: 连接显示
+        zh-HK: 連線顯示
+      home_layout:
+        en: Home Connection Layout
+        zh-CN: 主页连接布局
+        zh-HK: 主頁連線佈局
+      home_layout_desc:
+        en: Choose the card or list layout for the existing connection list on Home
+        zh-CN: 选择主页现有连接列表使用卡片或列表布局
+        zh-HK: 選擇主頁現有連線列表使用卡片或列表佈局
+      connection_tree:
+        en: Show Persistent Connection Tree
+        zh-CN: 显示常驻连接树
+        zh-HK: 顯示常駐連線樹
+      connection_tree_desc:
+        en: Keep the connection tree beside the navigation rail; it can also be toggled from the left edge of the tab bar
+        zh-CN: 在导航栏旁常驻显示连接树，也可通过 Tab 栏最左侧按钮收起或展开
+        zh-HK: 在導覽列旁常駐顯示連線樹，也可透過 Tab 列最左側按鈕收起或展開
+
     # 笔记设置
     Notes:
       group_title:

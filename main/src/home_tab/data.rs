@@ -165,7 +165,7 @@ impl HomePage {
         cx.notify();
     }
 
-    pub(super) fn refresh_local_home_data(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_local_home_data(&mut self, cx: &mut Context<Self>) {
         self.load_workspaces(cx);
         self.load_connections(cx);
     }

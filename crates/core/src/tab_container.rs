@@ -175,6 +175,8 @@ pub enum TabContainerEvent {
     TabActivated { index: usize, id: String },
     /// A tab was closed
     TabClosed { id: String },
+    /// The application navigation sidebar visibility was toggled.
+    NavigationSidebarToggled { expanded: bool },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -761,6 +763,7 @@ pub struct TabContainer {
     tab_close_button_color: Option<gpui::Hsla>,
     left_padding: Option<gpui::Pixels>,
     top_padding: Option<gpui::Pixels>,
+    navigation_sidebar_expanded: Option<bool>,
     tab_bar_scroll_handle: ScrollHandle,
     closing_tabs: HashSet<SharedString>,
     activity_tabs: HashSet<String>,
@@ -805,6 +808,7 @@ impl TabContainer {
             tab_close_button_color: None,
             left_padding: None,
             top_padding: None,
+            navigation_sidebar_expanded: None,
             tab_bar_scroll_handle: ScrollHandle::new(),
             closing_tabs: HashSet::new(),
             activity_tabs: HashSet::new(),
@@ -868,6 +872,18 @@ impl TabContainer {
     pub fn with_top_padding(mut self, padding: gpui::Pixels) -> Self {
         self.top_padding = Some(padding);
         self
+    }
+
+    pub fn with_navigation_sidebar_toggle(mut self, expanded: bool) -> Self {
+        self.navigation_sidebar_expanded = Some(expanded);
+        self
+    }
+
+    pub fn set_navigation_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
+        if self.navigation_sidebar_expanded != Some(expanded) {
+            self.navigation_sidebar_expanded = Some(expanded);
+            cx.notify();
+        }
     }
 
     pub fn with_window_controls(mut self, show: bool) -> Self {
@@ -2859,6 +2875,7 @@ impl TabContainer {
         let active_index = self.active_index;
         let left_padding = self.left_padding.unwrap_or(px(8.0));
         let pinned_tab_count = self.pinned_tabs.len();
+        let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
 
         // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
         let is_linux = cfg!(target_os = "linux");
@@ -2918,6 +2935,42 @@ impl TabContainer {
                         .h_full()
                         .w(left_padding)
                         .when_some(self.top_padding, |div, padding| div.pt(padding)),
+                )
+            })
+            .when_some(navigation_sidebar_expanded, |this, expanded| {
+                this.child(
+                    div()
+                        .id("navigation-sidebar-toggle-boundary")
+                        .flex_shrink_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .px_1()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new("navigation-sidebar-toggle")
+                                .icon(if expanded {
+                                    IconName::PanelLeftClose
+                                } else {
+                                    IconName::PanelLeftOpen
+                                })
+                                .ghost()
+                                .small()
+                                .tooltip(if expanded {
+                                    t!("Sidebar.hide_navigation").to_string()
+                                } else {
+                                    t!("Sidebar.show_navigation").to_string()
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let expanded =
+                                        !this.navigation_sidebar_expanded.unwrap_or_default();
+                                    this.navigation_sidebar_expanded = Some(expanded);
+                                    cx.emit(TabContainerEvent::NavigationSidebarToggled {
+                                        expanded,
+                                    });
+                                    cx.notify();
+                                })),
+                        ),
                 )
             })
             .children(
@@ -3728,6 +3781,26 @@ mod tests {
         assert_eq!(2, tab_display_number(ActiveTabSlot::Pinned(1), 2));
         assert_eq!(3, tab_display_number(ActiveTabSlot::Regular(0), 2));
         assert_eq!(5, tab_display_number(ActiveTabSlot::Regular(2), 2));
+    }
+
+    #[gpui::test]
+    fn navigation_sidebar_toggle_state_can_be_configured_and_updated(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let container =
+                    cx.new(|cx| TabContainer::new(window, cx).with_navigation_sidebar_toggle(true));
+                assert_eq!(Some(true), container.read(cx).navigation_sidebar_expanded);
+
+                container.update(cx, |container, cx| {
+                    container.set_navigation_sidebar_expanded(false, cx);
+                });
+
+                assert_eq!(Some(false), container.read(cx).navigation_sidebar_expanded);
+                container
+            })
+            .expect("window opens");
+        });
     }
 
     #[gpui::test]

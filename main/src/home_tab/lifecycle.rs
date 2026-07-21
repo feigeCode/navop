@@ -33,7 +33,7 @@ impl HomePage {
         let mut page = Self {
             focus_handle: cx.focus_handle(),
             selected_filter: ConnectionType::All,
-            connection_layout: ConnectionLayout::Card,
+            connection_layout: AppSettings::current(cx).home_connection_layout.into(),
             workspaces: Vec::new(),
             connections: Vec::new(),
             tab_container,
@@ -57,7 +57,6 @@ impl HomePage {
             auth_error: None,
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
-            sidebar_collapsed: false,
             team_options: Vec::new(),
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),

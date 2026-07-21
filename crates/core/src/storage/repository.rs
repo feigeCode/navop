@@ -90,6 +90,7 @@ struct WorkspaceRow {
     name: String,
     color: Option<String>,
     icon: Option<String>,
+    parent_id: Option<i64>,
     created_at: i64,
     updated_at: i64,
     cloud_id: Option<String>,
@@ -104,6 +105,7 @@ impl FromSqliteRow for WorkspaceRow {
             name: row.get("name")?,
             color: row.get("color")?,
             icon: row.get("icon")?,
+            parent_id: row.get("parent_id")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
             cloud_id: row.get("cloud_id")?,
@@ -120,6 +122,7 @@ impl From<WorkspaceRow> for Workspace {
             name: row.name,
             color: row.color,
             icon: row.icon,
+            parent_id: row.parent_id,
             created_at: Some(row.created_at),
             updated_at: Some(row.updated_at),
             cloud_id: row.cloud_id,
@@ -573,6 +576,7 @@ impl Repository for WorkspaceRepository {
         let name = item.name.clone();
         let color = item.color.clone();
         let icon = item.icon.clone();
+        let parent_id = item.parent_id;
         let cloud_id = item.cloud_id.clone();
         let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order.unwrap_or(self.next_sort_order()?);
@@ -580,8 +584,8 @@ impl Repository for WorkspaceRepository {
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO workspaces (name, color, icon, cloud_id, last_synced_at, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![name, color, icon, cloud_id, last_synced_at, sort_order, ts, ts],
+                "INSERT INTO workspaces (name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, ts, ts],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
@@ -601,6 +605,7 @@ impl Repository for WorkspaceRepository {
         let name = item.name.clone();
         let color = item.color.clone();
         let icon = item.icon.clone();
+        let parent_id = item.parent_id;
         let cloud_id = item.cloud_id.clone();
         let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order;
@@ -608,8 +613,8 @@ impl Repository for WorkspaceRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, last_synced_at = ?5, sort_order = COALESCE(?6, sort_order), updated_at = ?7 WHERE id = ?8",
-                params![name, color, icon, cloud_id, last_synced_at, sort_order, ts, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, parent_id = ?4, cloud_id = ?5, last_synced_at = ?6, sort_order = COALESCE(?7, sort_order), updated_at = ?8 WHERE id = ?9",
+                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, ts, id],
             )?;
             Ok(())
         })
@@ -617,18 +622,24 @@ impl Repository for WorkspaceRepository {
 
     fn delete(&self, id: i64) -> Result<()> {
         self.conn.with_connection(|conn| {
-            conn.execute(
+            let transaction = conn.unchecked_transaction()?;
+            transaction.execute(
                 "UPDATE connections SET workspace_id = NULL WHERE workspace_id = ?1",
                 params![id],
             )?;
-            conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+            transaction.execute(
+                "UPDATE workspaces SET parent_id = NULL WHERE parent_id = ?1",
+                params![id],
+            )?;
+            transaction.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+            transaction.commit()?;
             Ok(())
         })
     }
 
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces WHERE id = ?1")?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
                 Ok(Some(WorkspaceRow::from_row(row)?.into()))
@@ -640,7 +651,7 @@ impl Repository for WorkspaceRepository {
 
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
             let rows = stmt.query_map([], |row| WorkspaceRow::from_row(row))?;
             let mut results = Vec::new();
             for row in rows {
@@ -852,6 +863,46 @@ mod tests {
             vec![Some(third_id), Some(first_id), Some(second_id)],
             listed_ids
         );
+    }
+
+    #[test]
+    fn workspace_repository_preserves_parent_hierarchy() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut parent = workspace("parent");
+        let parent_id = repo.insert(&mut parent).unwrap();
+        let mut child = workspace("child");
+        child.parent_id = Some(parent_id);
+        let child_id = repo.insert(&mut child).unwrap();
+
+        assert_eq!(
+            Some(parent_id),
+            repo.get(child_id).unwrap().unwrap().parent_id
+        );
+
+        repo.delete(parent_id).unwrap();
+
+        assert_eq!(None, repo.get(child_id).unwrap().unwrap().parent_id);
+    }
+
+    #[test]
+    fn workspace_cloud_update_does_not_flatten_local_hierarchy() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut parent = workspace("parent");
+        let parent_id = repo.insert(&mut parent).unwrap();
+        let mut child = workspace("child");
+        child.parent_id = Some(parent_id);
+        let child_id = repo.insert(&mut child).unwrap();
+
+        let mut cloud_child = repo.get(child_id).unwrap().unwrap();
+        cloud_child.parent_id = None;
+        cloud_child.name = "cloud child".to_string();
+        repo.update_from_cloud(&cloud_child).unwrap();
+
+        let stored = repo.get(child_id).unwrap().unwrap();
+        assert_eq!("cloud child", stored.name);
+        assert_eq!(Some(parent_id), stored.parent_id);
     }
 
     #[test]
