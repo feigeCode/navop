@@ -1213,9 +1213,9 @@ TerminalCommandBar:
     zh-CN: 命令输入
     zh-HK: 命令輸入
   placeholder:
-    en: Enter a command. Use Up/Down to choose, Tab to complete, Enter to run
-    zh-CN: 输入命令，↑/↓ 选择，Tab 补全，Enter 执行
-    zh-HK: 輸入命令，↑/↓ 選擇，Tab 補全，Enter 執行
+    en: Enter commands, one per line. Shift+Enter for newline, Enter to run lines one by one
+    zh-CN: 输入命令，每行一条，Enter 逐条执行，Shift+Enter 换行
+    zh-HK: 輸入命令，每行一條，Enter 逐條執行，Shift+Enter 換行
   search_quick_commands:
     en: Search quick commands
     zh-CN: 搜索快捷指令
@@ -1249,9 +1249,9 @@ TerminalCommandBar:
     zh-CN: 历史
     zh-HK: 歷史
   keyboard_hint:
-    en: Up/Down select · Tab complete · Enter run
-    zh-CN: ↑/↓ 选择 · Tab 补全 · Enter 执行
-    zh-HK: ↑/↓ 選擇 · Tab 補全 · Enter 執行
+    en: Up/Down select · Tab complete · Enter run · Shift+Enter newline
+    zh-CN: ↑/↓ 选择 · Tab 补全 · Enter 逐条执行 · Shift+Enter 换行
+    zh-HK: ↑/↓ 選擇 · Tab 補全 · Enter 逐條執行 · Shift+Enter 換行
   expand:
     en: Expand command input
     zh-CN: 展开命令输入

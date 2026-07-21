@@ -196,6 +196,20 @@ fn command_submission_trims_outer_whitespace_and_appends_enter() {
     assert_eq!(None, command_submission_bytes(" \n\t "));
 }
 
+#[test]
+fn command_batch_lines_split_trim_and_drop_empty_lines() {
+    assert_eq!(
+        vec![
+            "ls -la".to_string(),
+            "echo hi".to_string(),
+            "pwd".to_string()
+        ],
+        command_batch_lines("  ls -la  \n\n echo hi \r\npwd\n  ")
+    );
+    assert_eq!(vec!["ls".to_string()], command_batch_lines("ls"));
+    assert!(command_batch_lines(" \n\t \n").is_empty());
+}
+
 fn command(
     value: &str,
     name: Option<&str>,

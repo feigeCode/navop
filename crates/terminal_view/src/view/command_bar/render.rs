@@ -12,7 +12,7 @@ use gpui_component::{
 use rust_i18n::t;
 
 const COMMAND_BAR_COLLAPSED_HEIGHT: f32 = 30.0;
-const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 46.0;
+const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0;
 
 impl TerminalCommandBar {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {

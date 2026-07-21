@@ -25,7 +25,7 @@ impl TerminalCommandBar {
         }
         v_flex()
             .absolute()
-            .bottom(px(54.0))
+            .bottom(px(88.0))
             .left_3()
             .w(px(COMMAND_POPOVER_WIDTH))
             .max_w(gpui::relative(0.96))

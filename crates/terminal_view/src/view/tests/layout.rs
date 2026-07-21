@@ -178,8 +178,8 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(!refresh.contains("reset_overlays"));
     assert!(render_source.contains("toggle_collapsed"));
     assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
-    assert!(interaction_source.contains("auto_grow(2, 8)"));
-    assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 46.0"));
+    assert!(interaction_source.contains("auto_grow(4, 12)"));
+    assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0"));
     assert!(render_source.contains("with_size(Size::Medium)"));
     assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
@@ -193,7 +193,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     for key in ["\"arrowup\"", "\"arrowdown\"", "\"home\"", "\"end\""] {
         assert!(quick_interaction_source.contains(key));
     }
-    assert!(suggestion_source.contains("bottom(px(54.0))"));
+    assert!(suggestion_source.contains("bottom(px(88.0))"));
     assert!(suggestion_source.contains("bg(self.colors.background)"));
     assert!(suggestion_source.contains("let mut content"));
     assert!(suggestion_source.contains("overflow_y_scrollbar"));

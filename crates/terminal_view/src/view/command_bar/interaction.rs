@@ -48,7 +48,7 @@ impl TerminalCommandBar {
         cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
-                .auto_grow(2, 8)
+                .auto_grow(4, 12)
                 .placeholder(rust_i18n::t!("TerminalCommandBar.placeholder").to_string())
         })
     }

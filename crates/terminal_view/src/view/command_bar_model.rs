@@ -175,6 +175,17 @@ pub(super) fn command_submission_bytes(command: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Split a possibly multi-line command into individual statements so batch
+/// input can be executed line by line.
+pub(super) fn command_batch_lines(command: &str) -> Vec<String> {
+    command
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn quick_command_matches(command: &QuickCommand, query: &str) -> bool {
     [
         Some(command.command.as_str()),
