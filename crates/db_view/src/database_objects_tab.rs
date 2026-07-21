@@ -163,6 +163,9 @@ pub enum DatabaseObjectsEvent {
     /// 删除查询
     DeleteQuery { node: DbNode },
 
+    /// 在文件管理器中显示查询文件
+    RevealQueryInFileManager { node: DbNode },
+
     /// 删除模式/Schema
     DeleteSchema { node: DbNode },
 

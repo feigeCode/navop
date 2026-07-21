@@ -434,6 +434,8 @@ pub enum DbTreeViewEvent {
     RenameQuery { node_id: String },
     /// 删除查询
     DeleteQuery { node_id: String },
+    /// 在文件管理器中显示查询文件
+    RevealQueryInFileManager { node_id: String },
     /// 节点被选中（用于更新 objects panel）
     NodeSelected { node_id: String },
     /// 导入数据

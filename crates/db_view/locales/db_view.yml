@@ -1161,6 +1161,10 @@ Query:
     en: Rename Query
     zh-CN: 重命名查询
     zh-HK: 重新命名查詢
+  reveal_in_file_manager:
+    en: Reveal in File Manager
+    zh-CN: 在文件管理器中显示
+    zh-HK: 在檔案管理員中顯示
   run:
     en: Run
     zh-CN: 运行

@@ -237,6 +237,7 @@ pub enum DatabaseActionId {
     OpenNamedQuery,
     RenameQuery,
     DeleteQuery,
+    RevealQueryInFileManager,
     RunSqlFile,
     ImportData,
     ExportData,

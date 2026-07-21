@@ -393,6 +393,11 @@ impl DatabaseEventHandler {
                             Self::handle_delete_query(node, tree_view.clone(), None, window, cx);
                         }
                     }
+                    DbTreeViewEvent::RevealQueryInFileManager { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_reveal_query_in_file_manager(&node, window, cx);
+                        }
+                    }
                     DbTreeViewEvent::RunSqlFile { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_run_sql_file(node, global_state, window, cx);
@@ -576,6 +581,9 @@ impl DatabaseEventHandler {
                             window,
                             cx,
                         );
+                    }
+                    DatabaseObjectsEvent::RevealQueryInFileManager { node } => {
+                        Self::handle_reveal_query_in_file_manager(node, window, cx);
                     }
                     DatabaseObjectsEvent::DeleteSchema { node } => {
                         Self::handle_delete_schema(
@@ -3553,6 +3561,19 @@ impl DatabaseEventHandler {
                     false
                 })
         });
+    }
+
+    /// 在文件管理器中显示查询文件
+    fn handle_reveal_query_in_file_manager(node: &DbNode, _window: &mut Window, cx: &mut App) {
+        let Some(path_str) = node.metadata.get("file_path") else {
+            return;
+        };
+        let path = std::path::PathBuf::from(path_str);
+        if path.exists() {
+            cx.reveal_path(&path);
+        } else if let Some(parent) = path.parent().filter(|parent| parent.exists()) {
+            cx.reveal_path(parent);
+        }
     }
 
     /// 处理删除查询事件

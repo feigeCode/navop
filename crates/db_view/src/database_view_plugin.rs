@@ -554,6 +554,7 @@ fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usiz
             DatabaseActionId::OpenNamedQuery => 10,
             DatabaseActionId::RenameQuery => 20,
             DatabaseActionId::DeleteQuery => 30,
+            DatabaseActionId::RevealQueryInFileManager => 40,
             _ => 900,
         },
         _ => 900,
@@ -632,7 +633,9 @@ fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) 
             DbNodeType::QueriesFolder => Some("create"),
             DbNodeType::NamedQuery => match action.id {
                 DatabaseActionId::OpenNamedQuery => Some("open"),
-                DatabaseActionId::RenameQuery | DatabaseActionId::DeleteQuery => Some("query"),
+                DatabaseActionId::RenameQuery
+                | DatabaseActionId::DeleteQuery
+                | DatabaseActionId::RevealQueryInFileManager => Some("query"),
                 _ => None,
             },
             _ => None,
@@ -1133,6 +1136,9 @@ fn map_tree_event(action_id: DatabaseActionId, node_id: &str) -> Option<DbTreeVi
         DatabaseActionId::OpenNamedQuery => DbTreeViewEvent::OpenNamedQuery { node_id },
         DatabaseActionId::RenameQuery => DbTreeViewEvent::RenameQuery { node_id },
         DatabaseActionId::DeleteQuery => DbTreeViewEvent::DeleteQuery { node_id },
+        DatabaseActionId::RevealQueryInFileManager => {
+            DbTreeViewEvent::RevealQueryInFileManager { node_id }
+        }
         DatabaseActionId::RunSqlFile => DbTreeViewEvent::RunSqlFile { node_id },
         DatabaseActionId::ImportData => DbTreeViewEvent::ImportData { node_id },
         DatabaseActionId::ExportData => DbTreeViewEvent::ExportData { node_id },
@@ -1185,6 +1191,9 @@ fn map_objects_event(
         }
         DatabaseActionId::RenameQuery => Some(|node| DatabaseObjectsEvent::RenameQuery { node }),
         DatabaseActionId::DeleteQuery => Some(|node| DatabaseObjectsEvent::DeleteQuery { node }),
+        DatabaseActionId::RevealQueryInFileManager => {
+            Some(|node| DatabaseObjectsEvent::RevealQueryInFileManager { node })
+        }
         DatabaseActionId::CloseDatabase
         | DatabaseActionId::RenameTable
         | DatabaseActionId::CopyTable
@@ -1210,6 +1219,7 @@ fn toolbar_icon(action: &DatabaseActionDescriptor) -> IconName {
         DatabaseActionId::EditDatabase
         | DatabaseActionId::RenameQuery
         | DatabaseActionId::OpenNamedQuery => IconName::Edit,
+        DatabaseActionId::RevealQueryInFileManager => IconName::FolderOpen,
         DatabaseActionId::OpenTableData | DatabaseActionId::OpenViewData => IconName::Eye,
         DatabaseActionId::CreateDatabase
         | DatabaseActionId::CreateSchema
@@ -1253,6 +1263,7 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
         DatabaseActionId::OpenNamedQuery => "open-query",
         DatabaseActionId::RenameQuery => "rename-query",
         DatabaseActionId::DeleteQuery => "delete-query",
+        DatabaseActionId::RevealQueryInFileManager => "reveal-query-in-file-manager",
         DatabaseActionId::RunSqlFile => "run-sql-file",
         DatabaseActionId::ImportData => "import-data",
         DatabaseActionId::ExportData => "export-data",

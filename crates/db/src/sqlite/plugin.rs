@@ -595,6 +595,13 @@ fn sqlite_action_manifest() -> DatabaseActionManifest {
                 DatabaseActionPlacement::Both,
             )
             .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::RevealQueryInFileManager,
+                "Query.reveal_in_file_manager",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
         ],
     }
 }
