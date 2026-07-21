@@ -612,13 +612,14 @@ fn build_sidebar_context_menu(
 
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let editor_theme = self.resolved_editor_theme(cx);
         let theme_changed = self.theme_provider.refresh(cditor_theme(
-            cx.theme().background,
-            cx.theme().foreground,
-            cx.theme().muted_foreground,
-            cx.theme().border,
-            cx.theme().primary,
-            cx.theme().danger,
+            editor_theme.background,
+            editor_theme.foreground,
+            editor_theme.muted_foreground,
+            editor_theme.border,
+            editor_theme.primary,
+            editor_theme.danger,
         ));
         if theme_changed {
             let mut editors = self
@@ -636,9 +637,9 @@ impl Render for NotesView {
             }
         }
         self.syntax_highlight_provider.refresh_theme(
-            cx.theme().highlight_theme.clone(),
-            cx.theme().background,
-            cx.theme().foreground,
+            editor_theme.highlight_theme,
+            editor_theme.background,
+            editor_theme.foreground,
         );
         let content = match &self.load_state {
             NotesLoadState::NeedsLocation => self.render_location_setup(cx),
@@ -649,6 +650,8 @@ impl Render for NotesView {
             .size_full()
             .min_h_0()
             .overflow_hidden()
+            .bg(editor_theme.background)
+            .text_color(editor_theme.foreground)
             .child(content)
     }
 }

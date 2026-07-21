@@ -60,8 +60,11 @@ impl WorkspaceEditor {
             .child(tabs)
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = self.active_tab();
+        if tab.is_some_and(|tab| matches!(tab.policy, DocumentPolicy::Markdown)) {
+            return div().into_any_element();
+        }
         let read_only = tab.is_none_or(|tab| tab.read_only);
         let unavailable = tab.is_none_or(|tab| tab.loading || tab.saving || tab.editor.is_none());
         let soft_wrap = tab.is_some_and(|tab| tab.soft_wrap);
@@ -148,6 +151,7 @@ impl WorkspaceEditor {
                     .text_color(self.theme.muted_foreground)
                     .child(tab.map(|tab| policy_label(tab.policy)).unwrap_or_default()),
             )
+            .into_any_element()
     }
 
     fn toolbar_button(
@@ -198,6 +202,14 @@ impl WorkspaceEditor {
         }
         if let Some(error) = tab.load_error.as_ref() {
             return self.render_load_error(error);
+        }
+        if let Some(markdown) = tab.markdown.as_ref() {
+            return div()
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .child(markdown.clone())
+                .into_any_element();
         }
         if matches!(tab.policy, DocumentPolicy::Diff) && tab.saved_text.trim().is_empty() {
             return v_flex()
@@ -393,6 +405,7 @@ fn policy_label(policy: DocumentPolicy) -> String {
     match policy {
         DocumentPolicy::Code => t!("WorkspaceExplorer.policy.code").to_string(),
         DocumentPolicy::PlainText => t!("WorkspaceExplorer.policy.plain_text").to_string(),
+        DocumentPolicy::Markdown => t!("WorkspaceExplorer.policy.markdown").to_string(),
         DocumentPolicy::Diff => t!("WorkspaceExplorer.policy.diff").to_string(),
     }
 }

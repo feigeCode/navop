@@ -9,6 +9,10 @@ Notes:
     en: Source
     zh-CN: 源码
     zh-HK: 原始碼
+  markdown_readonly_preview:
+    en: Read-only preview · edit in Source
+    zh-CN: 只读预览 · 请在源码模式编辑
+    zh-HK: 唯讀預覽 · 請在原始碼模式編輯
   markdown_confirm_adjustment:
     en: Confirm changes and edit
     zh-CN: 确认调整并编辑

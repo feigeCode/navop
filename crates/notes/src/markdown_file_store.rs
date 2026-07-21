@@ -37,6 +37,10 @@ struct MarkdownStoreState {
 }
 
 impl MarkdownFileStore {
+    pub(crate) fn path(&self) -> Result<PathBuf> {
+        Ok(self.state()?.path.clone())
+    }
+
     pub(crate) fn media_base_path(&self) -> Result<PathBuf> {
         let state = self.state()?;
         Ok(state

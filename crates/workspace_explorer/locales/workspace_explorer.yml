@@ -77,6 +77,10 @@ WorkspaceExplorer:
       en: Diff loaded
       zh-CN: 差异已加载
       zh-HK: 差異已載入
+    markdown_loaded:
+      en: Markdown editor
+      zh-CN: Markdown 编辑器
+      zh-HK: Markdown 編輯器
     load_failed:
       en: Unable to load
       zh-CN: 加载失败
@@ -102,6 +106,10 @@ WorkspaceExplorer:
       en: Large file · plain text
       zh-CN: 大文件 · 纯文本
       zh-HK: 大型檔案 · 純文字
+    markdown:
+      en: Markdown · Notes
+      zh-CN: Markdown · Notes
+      zh-HK: Markdown · Notes
     diff:
       en: Git diff · read only
       zh-CN: Git 差异 · 只读

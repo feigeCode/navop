@@ -1,6 +1,6 @@
-use crate::NotesView;
 use crate::markdown_file_store::MarkdownSaveOutcome;
 use crate::markdown_persistence::CONFLICT_MESSAGE;
+use crate::{NotesView, NotesViewEvent};
 use cditor_app::EditorEvent;
 use gpui::{AppContext, AsyncApp, Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
@@ -39,9 +39,11 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
+        let mut saved_path = None;
         let notification = match result {
             Ok(Some(MarkdownSaveOutcome::Saved(_))) => {
                 session.state.source_saved(generation);
+                saved_path = session.store.path().ok();
                 None
             }
             Ok(Some(MarkdownSaveOutcome::Conflict(_))) => {
@@ -63,6 +65,9 @@ impl NotesView {
         if let Some(notification) = notification {
             window.push_notification(notification.autohide(false), cx);
         }
+        if let Some(path) = saved_path {
+            cx.emit(NotesViewEvent::FileSaved(path));
+        }
         cx.notify();
     }
 
@@ -77,6 +82,21 @@ impl NotesView {
         cx.spawn(async move |_, cx: &mut AsyncApp| {
             while let Ok(event) = events.recv().await {
                 match event {
+                    EditorEvent::Saved { document_id, .. } => {
+                        let weak = weak.clone();
+                        let _ = cx.update_window(window_handle, move |_, _, cx| {
+                            let _ = weak.update(cx, |view, cx| {
+                                if let Some(path) = view
+                                    .markdown_sessions
+                                    .get(&document_id)
+                                    .and_then(|session| session.store.path().ok())
+                                {
+                                    cx.emit(NotesViewEvent::FileSaved(path));
+                                }
+                                cx.notify();
+                            });
+                        });
+                    }
                     EditorEvent::SaveFailed {
                         document_id,
                         message,

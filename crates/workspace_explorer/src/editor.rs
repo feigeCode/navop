@@ -1,4 +1,5 @@
 mod load;
+mod markdown;
 mod render;
 mod save;
 mod tabs;
@@ -9,6 +10,7 @@ use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
 use gpui::{App, Context, Entity, EventEmitter, ScrollHandle, Subscription};
 use gpui_component::input::{InputLineDecoration, InputState};
+use notes::NotesView;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -78,14 +80,19 @@ pub(super) struct LoadedDocument {
 pub(super) enum DocumentPolicy {
     Code,
     PlainText,
+    Markdown,
     Diff,
 }
 
 impl LoadedDocument {
-    pub(super) fn from_file(file: LoadedFile) -> Self {
-        let policy = match file.policy.mode {
-            EditorMode::Code => DocumentPolicy::Code,
-            EditorMode::PlainText => DocumentPolicy::PlainText,
+    pub(super) fn from_file(path: &Path, file: LoadedFile) -> Self {
+        let policy = if is_markdown_path(path) {
+            DocumentPolicy::Markdown
+        } else {
+            match file.policy.mode {
+                EditorMode::Code => DocumentPolicy::Code,
+                EditorMode::PlainText => DocumentPolicy::PlainText,
+            }
         };
         Self {
             text: file.text,
@@ -119,6 +126,7 @@ pub(super) struct EditorTab {
     key: DocumentKey,
     display_name: String,
     editor: Option<Entity<InputState>>,
+    markdown: Option<Entity<NotesView>>,
     subscriptions: Vec<Subscription>,
     diff: Option<Rc<SideBySideDiff>>,
     diff_editors: Option<DiffEditors>,
@@ -144,6 +152,7 @@ impl EditorTab {
             key: document.key,
             display_name: document.display_name,
             editor: None,
+            markdown: None,
             subscriptions: Vec::new(),
             diff: None,
             diff_editors: None,
@@ -164,12 +173,21 @@ impl EditorTab {
     }
 
     pub(super) fn is_dirty(&self, cx: &App) -> bool {
+        if let Some(markdown) = self.markdown.as_ref() {
+            return markdown.read(cx).has_unsaved_changes(cx);
+        }
         !self.read_only
             && self
                 .editor
                 .as_ref()
                 .is_some_and(|editor| editor.read(cx).text() != self.saved_text.as_str())
     }
+}
+
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 pub struct WorkspaceEditor {
@@ -196,6 +214,10 @@ impl WorkspaceEditor {
     pub fn set_theme(&mut self, theme: WorkspaceTheme, cx: &mut Context<Self>) {
         self.theme = theme;
         for tab in &self.tabs {
+            if let Some(markdown) = tab.markdown.as_ref() {
+                let theme = markdown::markdown_editor_theme(theme);
+                markdown.update(cx, |view, cx| view.set_editor_theme(theme, cx));
+            }
             let (Some(diff), Some(editors)) = (&tab.diff, &tab.diff_editors) else {
                 continue;
             };

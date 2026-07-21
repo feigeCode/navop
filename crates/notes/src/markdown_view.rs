@@ -31,7 +31,9 @@ impl NotesView {
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let ai_model_id = AppSettings::global(cx).ai_chat.notes_model_id.clone();
+            let ai_model_id = cx
+                .try_global::<AppSettings>()
+                .and_then(|settings| settings.ai_chat.notes_model_id.clone());
             let projection = build_markdown_projection(
                 MarkdownProjectionConfig {
                     document_id: &document_id,
@@ -44,6 +46,7 @@ impl NotesView {
                     source_editor_provider: Arc::new(
                         crate::source_editor_provider::NotesSourceEditorProvider,
                     ),
+                    source_authoritative: self.standalone_markdown,
                     document_renderer_provider: self
                         .document_renderer_provider
                         .clone()
@@ -64,6 +67,7 @@ impl NotesView {
                     compatibility: projection.compatibility,
                     diagnostics: projection.diagnostics,
                     normalization_accepted: false,
+                    source_authoritative: self.standalone_markdown,
                     save_generation: Default::default(),
                     state: MarkdownSessionState {
                         mode,
@@ -99,6 +103,9 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
+        if session.source_authoritative {
+            return;
+        }
         let generation = session.state.source_changed();
         session.save_generation.store(generation, Ordering::Release);
         let _ = session.state.begin_source_save(generation);
@@ -252,6 +259,9 @@ fn switch_to_wysiwyg(
     )?;
     session.compatibility = imported.compatibility;
     session.diagnostics = imported.diagnostics;
+    if session.source_authoritative {
+        session.preview.set_readonly(true, cx)?;
+    }
     session.state.switch_to_wysiwyg();
     Ok(None)
 }
@@ -261,15 +271,28 @@ fn switch_to_source(
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> anyhow::Result<Option<String>> {
+    if session.source_authoritative {
+        session.state.switch_to_source();
+        focus_source_editor(session, window, cx);
+        return Ok(None);
+    }
     let markdown = export_markdown_bundle(&session.preview, &session.store, cx)?;
     session.source_editor.update(cx, |input, cx| {
         input.set_value(markdown.clone(), window, cx)
     });
     session.state.switch_to_source();
+    focus_source_editor(session, window, cx);
+    Ok(Some(markdown))
+}
+
+fn focus_source_editor(
+    session: &MarkdownSession,
+    window: &mut Window,
+    cx: &mut Context<NotesView>,
+) {
     let input = session.source_editor.clone();
     window.defer(cx, move |window, cx| {
         input.update(cx, |input, cx| input.focus(window, cx))
     });
-    Ok(Some(markdown))
 }
 use std::sync::Arc;

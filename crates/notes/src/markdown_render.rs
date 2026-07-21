@@ -3,7 +3,7 @@ use crate::{MarkdownViewMode, NotesView};
 use cditor_app::{EditorSaveState, MarkdownCompatibility};
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable,
+    Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
@@ -43,6 +43,7 @@ impl NotesView {
         document_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let theme = self.resolved_editor_theme(cx);
         let keep_id = document_id.to_owned();
         let external_id = document_id.to_owned();
         h_flex()
@@ -51,12 +52,12 @@ impl NotesView {
             .gap_2()
             .items_center()
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().warning.opacity(0.12))
+            .border_color(theme.border)
+            .bg(theme.warning.opacity(0.12))
             .child(
                 Icon::new(IconName::TriangleAlert)
                     .small()
-                    .text_color(cx.theme().warning),
+                    .text_color(theme.warning),
             )
             .child(
                 div()
@@ -88,6 +89,7 @@ impl NotesView {
         mode: MarkdownViewMode,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
         let needs_acceptance = session.is_some_and(|session| {
             mode == MarkdownViewMode::Wysiwyg
@@ -104,12 +106,13 @@ impl NotesView {
             .px_2()
             .gap_2()
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(theme.border)
+            .bg(theme.background)
             .child(self.render_source_toggle(document_id, mode, cx))
             .child(div().flex_1().when_some(status, |status_view, status| {
                 status_view
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child(status)
             }))
             .when(needs_acceptance, |toolbar| {
@@ -161,6 +164,9 @@ fn markdown_status(
         return source_status(session);
     }
     let session = session?;
+    if session.source_authoritative {
+        return Some(t!("Notes.markdown_readonly_preview").to_string());
+    }
     match save_state {
         Some(EditorSaveState::Dirty) => {
             return Some(t!("Notes.markdown_waiting_autosave").to_string());

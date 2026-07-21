@@ -28,6 +28,7 @@ pub(crate) struct MarkdownSession {
     pub compatibility: MarkdownCompatibility,
     pub diagnostics: Vec<MarkdownDiagnostic>,
     pub normalization_accepted: bool,
+    pub source_authoritative: bool,
     pub save_generation: Arc<AtomicU64>,
     pub state: MarkdownSessionState,
     pub _subscription: Subscription,

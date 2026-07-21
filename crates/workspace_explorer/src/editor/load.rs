@@ -4,6 +4,7 @@ use super::{
     display_name,
 };
 use crate::diff::{aligned_side_by_side, parse_side_by_side};
+use crate::editor::markdown::create_markdown_editor;
 use crate::file_system::load_file;
 use crate::git::load_diff;
 use crate::model::active_index_after_open;
@@ -143,7 +144,9 @@ impl WorkspaceEditor {
         let task = match &tab.load_request {
             LoadRequest::File(path) => {
                 let path = path.clone();
-                cx.background_spawn(async move { load_file(&path).map(LoadedDocument::from_file) })
+                cx.background_spawn(async move {
+                    load_file(&path).map(|file| LoadedDocument::from_file(&path, file))
+                })
             }
             LoadRequest::Diff { repository, change } => {
                 let repository = repository.clone();
@@ -188,24 +191,39 @@ impl WorkspaceEditor {
         let document = completion.document;
         let initial_text = document.text.clone();
         let diff_language = document.diff_language.clone();
-        let editor = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor(document.language)
-                .line_number(true)
-                .searchable(true)
-                .soft_wrap(tab.soft_wrap);
-            state.set_value(initial_text, window, cx);
-            state
+        let markdown_path = match (&tab.key, document.policy) {
+            (DocumentKey::File(path), DocumentPolicy::Markdown) => Some(path.clone()),
+            _ => None,
+        };
+        let editor = markdown_path.is_none().then(|| {
+            cx.new(|cx| {
+                let mut state = InputState::new(window, cx)
+                    .code_editor(document.language)
+                    .line_number(true)
+                    .searchable(true)
+                    .soft_wrap(tab.soft_wrap);
+                state.set_value(initial_text, window, cx);
+                state
+            })
         });
         tab.subscriptions.clear();
-        tab.subscriptions.push(
-            cx.subscribe(&editor, |_this, _input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            }),
-        );
-        tab.editor = Some(editor.clone());
+        if let Some(editor) = editor.as_ref() {
+            tab.subscriptions.push(cx.subscribe(
+                editor,
+                |_this, _input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                },
+            ));
+        }
+        let markdown =
+            markdown_path.map(|path| create_markdown_editor(path, self.theme, window, cx));
+        tab.markdown = markdown.as_ref().map(|(view, _)| view.clone());
+        if let Some((_, subscriptions)) = markdown {
+            tab.subscriptions.extend(subscriptions);
+        }
+        tab.editor = editor.clone();
         tab.saved_text = document.text;
         tab.file_size = document.file_size;
         tab.policy = document.policy;
@@ -269,7 +287,11 @@ impl WorkspaceEditor {
         tab.load_error = None;
         tab.status_message = loaded_status(tab.policy).to_string();
         if index == self.active_tab && !tab.read_only {
-            editor.update(cx, |state, cx| state.focus(window, cx));
+            if let Some(editor) = editor {
+                editor.update(cx, |state, cx| state.focus(window, cx));
+            } else if let Some(markdown) = tab.markdown.as_ref() {
+                markdown.update(cx, |view, cx| view.focus_active_editor(window, cx));
+            }
         }
         cx.notify();
     }
@@ -307,6 +329,7 @@ struct LoadFailure {
 fn loaded_status(policy: DocumentPolicy) -> std::borrow::Cow<'static, str> {
     match policy {
         DocumentPolicy::Diff => t!("WorkspaceExplorer.status.diff_loaded"),
+        DocumentPolicy::Markdown => t!("WorkspaceExplorer.status.markdown_loaded"),
         DocumentPolicy::Code | DocumentPolicy::PlainText => {
             t!("WorkspaceExplorer.status.loaded")
         }

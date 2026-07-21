@@ -40,6 +40,16 @@ impl TabContent for NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        self.prepare_close(window, cx)
+    }
+}
+
+impl NotesView {
+    pub fn has_unsaved_changes(&self, cx: &App) -> bool {
+        !dirty_editors(self, cx).is_empty() || self.markdown_has_blocking_state()
+    }
+
+    pub fn prepare_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         let dirty = dirty_editors(self, cx);
         if markdown_close_blocked(self) {
             return confirm_blocked_close(cx.entity().clone(), window, cx);

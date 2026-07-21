@@ -30,22 +30,59 @@ fn diff_documents_are_read_only_and_use_diff_language() {
     assert!(matches!(document.policy, DocumentPolicy::Diff));
 }
 
+#[test]
+fn notes_markdown_theme_uses_workspace_colors() {
+    let workspace = test_theme();
+    let markdown = super::markdown::markdown_editor_theme(workspace);
+
+    assert_eq!(workspace.background, markdown.background);
+    assert_eq!(workspace.foreground, markdown.foreground);
+    assert_eq!(workspace.accent, markdown.primary);
+    assert_eq!(workspace.accent_foreground, markdown.primary_foreground);
+    assert!(markdown.highlight_theme.appearance.is_dark());
+}
+
+#[gpui::test]
+fn markdown_file_uses_notes_markdown_editor(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        notes::init(cx);
+    });
+    let path = test_file_path_with_extension("md");
+    let source = concat!(
+        "# Workspace Markdown\n\n",
+        "> <https://example.com/path_(item)>\n\n",
+        "Use `snake_case(value)` and [README](README_CN.md).\n\n",
+        "1. First\n2. Second\n",
+    );
+    std::fs::write(&path, source).unwrap();
+    let (window, editor) = open_test_editor(cx);
+    let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.open_file(path.clone(), window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    editor.read_with(&cx, |editor, _| {
+        let tab = editor.active_tab().expect("opened tab should be active");
+        assert!(matches!(tab.policy, DocumentPolicy::Markdown));
+        assert!(tab.markdown.is_some());
+        assert!(tab.editor.is_none());
+    });
+    assert_eq!(source, std::fs::read_to_string(&path).unwrap());
+
+    let _ = std::fs::remove_file(path);
+}
+
 #[gpui::test]
 fn local_file_opens_in_window_and_last_tab_can_close(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let path = test_file_path();
     std::fs::write(&path, "fn main() {}\n").unwrap();
-    let (window, editor) = cx.update(|cx| {
-        let mut editor = None;
-        let window = cx
-            .open_window(WindowOptions::default(), |window, cx| {
-                let entity = cx.new(|_| WorkspaceEditor::new(test_theme()));
-                editor = Some(entity.clone());
-                cx.new(|cx| Root::new(entity, window, cx))
-            })
-            .expect("workspace editor window should open");
-        (window, editor.expect("workspace editor should be created"))
-    });
+    let (window, editor) = open_test_editor(cx);
     let mut cx = VisualTestContext::from_window(window.into(), cx);
 
     cx.update(|window, cx| {
@@ -82,14 +119,37 @@ fn local_file_opens_in_window_and_last_tab_can_close(cx: &mut TestAppContext) {
 }
 
 fn test_file_path() -> PathBuf {
+    test_file_path_with_extension("rs")
+}
+
+fn test_file_path_with_extension(extension: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "workspace-editor-{}-{nonce}.rs",
-        std::process::id()
+        "workspace-editor-{}-{nonce}.{extension}",
+        std::process::id(),
     ))
+}
+
+fn open_test_editor(
+    cx: &mut TestAppContext,
+) -> (gpui::AnyWindowHandle, gpui::Entity<WorkspaceEditor>) {
+    cx.update(|cx| {
+        let mut editor = None;
+        let window = cx
+            .open_window(WindowOptions::default(), |window, cx| {
+                let entity = cx.new(|_| WorkspaceEditor::new(test_theme()));
+                editor = Some(entity.clone());
+                cx.new(|cx| Root::new(entity, window, cx))
+            })
+            .expect("workspace editor window should open");
+        (
+            window.into(),
+            editor.expect("workspace editor should be created"),
+        )
+    })
 }
 
 fn test_theme() -> WorkspaceTheme {

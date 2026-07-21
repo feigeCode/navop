@@ -31,6 +31,7 @@ pub(crate) struct MarkdownProjectionConfig<'a> {
     pub document_renderer_provider: Option<Arc<dyn DocumentRendererProvider>>,
     pub theme_provider: Arc<dyn ThemeProvider>,
     pub source_editor_provider: Arc<dyn SourceEditorProvider>,
+    pub source_authoritative: bool,
 }
 
 pub(crate) fn build_markdown_projection<C: AppContext>(
@@ -42,7 +43,8 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
         config.source,
         &config.store,
     )?;
-    let readonly = !matches!(imported.compatibility, MarkdownCompatibility::Editable);
+    let readonly = config.source_authoritative
+        || !matches!(imported.compatibility, MarkdownCompatibility::Editable);
     let media_base_path = config.store.media_base_path()?;
     let (event_sender, events) = unbounded();
     let mut builder = Editor::builder()
@@ -51,11 +53,13 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
         .persistence(MarkdownDocumentPersistence::new(config.store))
         .media_base_path(media_base_path)
         .markdown_native_blocks_only(true)
-        .autosave(MARKDOWN_AUTOSAVE_INTERVAL)
         .readonly(readonly)
         .on_event(move |event| {
             let _ = event_sender.try_send(event);
         });
+    if !config.source_authoritative {
+        builder = builder.autosave(MARKDOWN_AUTOSAVE_INTERVAL);
+    }
     builder = match config.ai_provider {
         Some(provider) => builder.ai_provider_arc(provider),
         None => builder.without_ai(),

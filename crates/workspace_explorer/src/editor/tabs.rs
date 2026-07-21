@@ -21,6 +21,10 @@ impl WorkspaceEditor {
         if index >= self.tabs.len() || self.close_prompt_open {
             return;
         }
+        if self.tabs[index].markdown.is_some() {
+            self.request_close_markdown_tab(index, window, cx);
+            return;
+        }
         if self.tabs[index].is_dirty(cx) {
             self.show_unsaved_prompt(index, window, cx);
         } else {
@@ -99,6 +103,10 @@ impl WorkspaceEditor {
         let Some(tab) = self.active_tab().filter(|tab| !tab.read_only) else {
             return;
         };
+        if let Some(markdown) = tab.markdown.as_ref() {
+            markdown.update(cx, |view, cx| view.focus_active_editor(window, cx));
+            return;
+        }
         if let Some(editor) = tab.editor.as_ref() {
             editor.update(cx, |state, cx| state.focus(window, cx));
         }

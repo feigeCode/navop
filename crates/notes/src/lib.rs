@@ -43,10 +43,11 @@ pub use model::{
     DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, MarkdownViewMode, NodeKind,
     NotebookMetadata, NotebookUiState,
 };
-pub use notes_view::NotesView;
+pub use notes_view::{NotesView, NotesViewEvent};
 pub use path_policy::validate_node_name;
 pub use shortcuts::NotesShortcutDescriptor;
 pub use storage::NotesStorage;
+pub use theme_provider::MarkdownEditorTheme;
 pub use tree_state::{TreeRow, TreeState};
 
 /// Installs the Cditor keymap required by embedded Notes editors.

@@ -1,7 +1,7 @@
 use crate::document_rendering::NavopDocumentRendererProvider;
 use crate::notes_notifications::notify_operation_error;
 use crate::syntax_highlighting::NavopSyntaxHighlightProvider;
-use crate::theme_provider::{NavopThemeProvider, cditor_theme};
+use crate::theme_provider::{MarkdownEditorTheme, NavopThemeProvider, cditor_theme};
 use crate::{
     DocumentDescriptor, DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow,
     TreeState,
@@ -11,7 +11,6 @@ use cditor_app::{AiProvider, Editor, EditorHandle};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Window,
 };
-use gpui_component::ActiveTheme;
 use gpui_component::input::InputState;
 use one_core::settings::AppSettings;
 use one_core::tab_container::TabContentEvent;
@@ -32,6 +31,11 @@ pub(crate) struct CachedEditor {
     pub relative_path: PathBuf,
     pub handle: EditorHandle,
     pub persistence: FileDocumentPersistence,
+}
+
+#[derive(Clone, Debug)]
+pub enum NotesViewEvent {
+    FileSaved(PathBuf),
 }
 
 pub struct NotesView {
@@ -55,6 +59,7 @@ pub struct NotesView {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
+    pub(crate) editor_theme: Option<MarkdownEditorTheme>,
 }
 
 impl NotesView {
@@ -63,6 +68,7 @@ impl NotesView {
             "Notes".into(),
             NotesLoadState::NeedsLocation,
             false,
+            None,
             window,
             cx,
         );
@@ -86,24 +92,71 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let title = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
-        let mut view = Self::base(title.into(), NotesLoadState::Ready, true, window, cx);
+        let title = markdown_title(&path);
+        let mut view = Self::base(title.into(), NotesLoadState::Ready, true, None, window, cx);
+        view.open_standalone_markdown(path, window, cx);
+        view
+    }
+
+    pub fn new_for_markdown_file_with_theme(
+        path: PathBuf,
+        theme: MarkdownEditorTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = markdown_title(&path);
+        let mut view = Self::base(
+            title.into(),
+            NotesLoadState::Ready,
+            true,
+            Some(theme),
+            window,
+            cx,
+        );
+        view.open_standalone_markdown(path, window, cx);
+        view
+    }
+
+    fn open_standalone_markdown(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match standalone_markdown_descriptor(&path)
-            .and_then(|descriptor| view.open_markdown_document(descriptor, window, cx))
+            .and_then(|descriptor| self.open_markdown_document(descriptor, window, cx))
         {
             Ok(()) => {}
             Err(error) => notify_operation_error(window, cx, error),
         }
-        view
+    }
+
+    pub fn focus_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(document_id) = self.active_document_id.as_ref()
+            && let Some(session) = self.markdown_sessions.get(document_id)
+        {
+            match session.state.mode {
+                crate::MarkdownViewMode::Source => {
+                    session
+                        .source_editor
+                        .update(cx, |input, cx| input.focus(window, cx));
+                }
+                crate::MarkdownViewMode::Wysiwyg => {
+                    let _ = session.preview.focus(cx);
+                }
+            }
+            return;
+        }
+        if let Some(editor) = self.active_editor.as_ref() {
+            let _ = editor.focus(cx);
+        }
     }
 
     fn base(
         notebook_name: SharedString,
         load_state: NotesLoadState,
         standalone_markdown: bool,
+        editor_theme: Option<MarkdownEditorTheme>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -121,10 +174,13 @@ impl NotesView {
                 None
             }
         };
+        let resolved_theme = editor_theme
+            .clone()
+            .unwrap_or_else(|| MarkdownEditorTheme::from_app(cx));
         let syntax_highlight_provider = Arc::new(NavopSyntaxHighlightProvider::new(
-            cx.theme().highlight_theme.clone(),
-            cx.theme().background,
-            cx.theme().foreground,
+            resolved_theme.highlight_theme.clone(),
+            resolved_theme.background,
+            resolved_theme.foreground,
         ));
         let document_renderer_provider = cx
             .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
@@ -132,12 +188,12 @@ impl NotesView {
             .map(NavopDocumentRendererProvider::new)
             .map(Arc::new);
         let theme_provider = Arc::new(NavopThemeProvider::new(cditor_theme(
-            cx.theme().background,
-            cx.theme().foreground,
-            cx.theme().muted_foreground,
-            cx.theme().border,
-            cx.theme().primary,
-            cx.theme().danger,
+            resolved_theme.background,
+            resolved_theme.foreground,
+            resolved_theme.muted_foreground,
+            resolved_theme.border,
+            resolved_theme.primary,
+            resolved_theme.danger,
         )));
         Self {
             storage: None,
@@ -160,7 +216,19 @@ impl NotesView {
             focus_handle: cx.focus_handle(),
             standalone_markdown,
             sidebar_collapsed: false,
+            editor_theme,
         }
+    }
+
+    pub fn set_editor_theme(&mut self, theme: MarkdownEditorTheme, cx: &mut Context<Self>) {
+        self.editor_theme = Some(theme);
+        cx.notify();
+    }
+
+    pub(crate) fn resolved_editor_theme(&self, cx: &App) -> MarkdownEditorTheme {
+        self.editor_theme
+            .clone()
+            .unwrap_or_else(|| MarkdownEditorTheme::from_app(cx))
     }
 
     pub(crate) fn refresh_tree(
@@ -269,13 +337,22 @@ impl NotesView {
     }
 
     pub(crate) fn restore_ai_model(&self, handle: &EditorHandle, cx: &mut App) {
-        let Some(model_id) = AppSettings::global(cx).ai_chat.notes_model_id.clone() else {
+        let Some(model_id) = cx
+            .try_global::<AppSettings>()
+            .and_then(|settings| settings.ai_chat.notes_model_id.clone())
+        else {
             return;
         };
         if let Err(error) = handle.select_ai_model(&model_id, cx) {
             tracing::debug!(%error, model_id, "saved Notes AI model is unavailable");
         }
     }
+}
+
+fn markdown_title(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn standalone_markdown_descriptor(path: &Path) -> anyhow::Result<DocumentDescriptor> {
@@ -303,6 +380,7 @@ fn standalone_markdown_descriptor(path: &Path) -> anyhow::Result<DocumentDescrip
 }
 
 impl EventEmitter<TabContentEvent> for NotesView {}
+impl EventEmitter<NotesViewEvent> for NotesView {}
 
 impl Focusable for NotesView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -313,6 +391,8 @@ impl Focusable for NotesView {
 #[cfg(test)]
 mod external_markdown_tests {
     use super::*;
+    use gpui::{TestAppContext, VisualTestContext, WindowOptions};
+    use gpui_component::Root;
 
     #[test]
     fn standalone_markdown_descriptor_preserves_the_external_file() -> anyhow::Result<()> {
@@ -356,5 +436,50 @@ mod external_markdown_tests {
         ));
         assert_eq!("after", std::fs::read_to_string(path)?);
         Ok(())
+    }
+
+    #[gpui::test]
+    fn standalone_preview_and_mode_switch_preserve_source(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("round-trip.md");
+        let source = concat!(
+            "> <https://example.com/path_(item)>\n\n",
+            "[README](README_CN.md) and `snake_case(value)`\n",
+        );
+        std::fs::write(&path, source).unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let document_id = view.read_with(&cx, |view, cx| {
+            let id = view.active_document_id.clone().unwrap();
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert!(session.source_authoritative);
+            assert!(session.preview.is_readonly(cx));
+            id
+        });
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.toggle_markdown_mode(document_id.clone(), window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        assert_eq!(source, std::fs::read_to_string(path).unwrap());
     }
 }

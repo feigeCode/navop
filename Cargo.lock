@@ -15493,6 +15493,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "ignore",
+ "notes",
  "process-util",
  "remote_file_editor",
  "rust-i18n",
