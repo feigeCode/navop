@@ -4,8 +4,8 @@ use crate::home_tab::{
 use crate::persistent_connection_sidebar::PersistentConnectionSidebar;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
-    Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, Keystroke,
+    ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
@@ -41,6 +41,7 @@ actions!(
         OpenTabSwitcher,
         SwitchNextTab,
         SwitchPreviousTab,
+        ToggleConnectionSidebar,
         QuitApp,
     ]
 );
@@ -711,6 +712,15 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
             .into_iter()
             .map(|key| KeyBinding::new(&key, ClosePanel, None)),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::WINDOW_TOGGLE_CONNECTION_SIDEBAR,
+            &[default_shortcut("cmd-b", "ctrl-b")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ToggleConnectionSidebar, None)),
+    );
     keybindings.extend(vec![
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-1", ActivateTab1, None),
@@ -828,6 +838,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         &["ctrl-w"],
         None,
         ClosePanel,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::WINDOW_TOGGLE_CONNECTION_SIDEBAR,
+        &[default_shortcut("cmd-b", "ctrl-b")],
+        None,
+        ToggleConnectionSidebar,
     ));
     keybindings.push(KeyBinding::new(
         default_shortcut("cmd-v", "ctrl-v"),
@@ -1626,6 +1643,13 @@ impl Render for OnetCliApp {
         div()
             .size_full()
             .relative()
+            .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
+                if !this.home_page_style.uses_persistent_sidebar() {
+                    return;
+                }
+                let expanded = !this.connection_sidebar.read(cx).is_expanded();
+                this.set_connection_sidebar_expanded(expanded, cx);
+            }))
             .bg(cx.theme().background)
             .child(
                 gpui_component::h_flex()

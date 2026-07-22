@@ -15,6 +15,7 @@ impl RemoteDesktopView {
         self.input_tx = Some(runtime.input_tx);
         self.output_rx = Some(runtime.output_rx);
         self.last_resize_size = Some(size);
+        self.connected = false;
         self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
     }
 
@@ -37,6 +38,7 @@ impl RemoteDesktopView {
         match output {
             RemoteDesktopOutput::Connected { width, height, .. } => {
                 self.remote_size = Some((width, height));
+                self.connected = true;
                 self.status = SharedString::from(t!("RemoteDesktop.status_connected").to_string());
             }
             RemoteDesktopOutput::Frame {
@@ -181,11 +183,13 @@ impl RemoteDesktopView {
 
     fn handle_disconnect_status(&mut self, message: String) {
         self.modifiers = Modifiers::default();
+        self.connected = false;
         self.status = SharedString::from(message);
     }
 
     pub(super) fn request_reconnect(&mut self) {
         self.modifiers = Modifiers::default();
+        self.connected = false;
         self.status = SharedString::from(t!("RemoteDesktop.status_reconnecting").to_string());
         self.send_input(RemoteDesktopInput::Reconnect);
     }

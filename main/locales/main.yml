@@ -2371,6 +2371,10 @@ Settings:
       en: Close Panel
       zh-CN: 关闭面板
       zh-HK: 關閉面板
+    toggle_connection_sidebar:
+      en: Toggle Connection Sidebar
+      zh-CN: 切换连接树
+      zh-HK: 切換連線樹
     switch_tab_n:
       en: "Switch to Tab N"
       zh-CN: "切换到第 N 个标签页"

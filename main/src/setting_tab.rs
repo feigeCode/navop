@@ -2978,6 +2978,13 @@ const WINDOW_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::WINDOW_CLOSE_PANEL),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["cmd-b"],
+        keys_other: &["ctrl-b"],
+        label_key: "Settings.Shortcuts.toggle_connection_sidebar",
+        action_id: Some(action_id::WINDOW_TOGGLE_CONNECTION_SIDEBAR),
+        system_hotkey: false,
+    },
 ];
 
 const TAB_SHORTCUTS: &[ShortcutEntry] = &[

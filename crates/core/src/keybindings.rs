@@ -9,6 +9,7 @@ pub type KeyBindingOverrides = HashMap<String, Vec<String>>;
 pub mod action_id {
     pub const WINDOW_TOGGLE_ZOOM: &str = "window.toggle_zoom";
     pub const WINDOW_CLOSE_PANEL: &str = "window.close_panel";
+    pub const WINDOW_TOGGLE_CONNECTION_SIDEBAR: &str = "window.toggle_connection_sidebar";
     pub const WINDOW_TOGGLE_FULLSCREEN: &str = "window.toggle_fullscreen";
     pub const WINDOW_TOGGLE_ALWAYS_ON_TOP: &str = "window.toggle_always_on_top";
     pub const APP_DUPLICATE_TAB: &str = "app.duplicate_tab";

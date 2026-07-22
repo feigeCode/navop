@@ -83,6 +83,7 @@ pub struct RemoteDesktopView {
     last_clipboard_sync_at: Option<Instant>,
     display_scale_factor: u32,
     status: SharedString,
+    connected: bool,
     tab_index: Option<usize>,
     _output_poll_task: Task<()>,
 }
@@ -141,6 +142,7 @@ impl RemoteDesktopView {
             last_clipboard_sync_at: None,
             display_scale_factor: 100,
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
+            connected: false,
             tab_index: config.tab_index,
             _output_poll_task: output_poll_task,
         }

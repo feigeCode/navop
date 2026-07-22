@@ -55,7 +55,7 @@ impl Render for RemoteDesktopView {
         let rendered_frame = self.rendered_frames.current().cloned();
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
-        let show_status_overlay = self.status.as_ref() != "Connected";
+        let show_status_overlay = !self.connected;
 
         let content = div()
             .size_full()
