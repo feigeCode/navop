@@ -20,6 +20,7 @@ on:
           - windows-x64
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -551,3 +552,11 @@ jobs:
             --clobber \
             "${new_files[@]}" \
             publish/sha256sums.txt
+
+          # Dispatch R2 explicitly after the Release assets are present.
+          # Relying only on workflow_run is not reliable when this workflow
+          # itself is dispatched by release-trigger.yml.
+          gh workflow run upload-r2.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref dev \
+            -f tag="$RELEASE_TAG"
