@@ -9,6 +9,8 @@ pub mod shell_integration;
 pub mod ssh_backend;
 pub mod terminal;
 pub mod types;
+#[cfg(any(test, target_os = "windows"))]
+mod windows_shell_integration;
 
 pub use exec_supervisor::TerminalExecError;
 pub use local_shell::{local_config_from_settings, local_config_from_settings_with_profile};

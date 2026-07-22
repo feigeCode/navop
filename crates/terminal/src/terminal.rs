@@ -50,6 +50,7 @@ use crate::history::{
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 #[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{
@@ -628,9 +629,17 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 }
 
 #[cfg(target_os = "windows")]
-fn prepare_shell_integration(_shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
-    // Windows 暂不支持 Shell Integration
-    (vec![], vec![])
+fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
+    let program = shell.map(str::to_string).unwrap_or_else(|| {
+        resolve_default_windows_shell_from_env(
+            env::var_os("PATH").as_deref(),
+            env::var_os("SystemRoot")
+                .or_else(|| env::var_os("SYSTEMROOT"))
+                .as_deref(),
+            env::var_os("COMSPEC").as_deref(),
+        )
+    });
+    crate::windows_shell_integration::prepare(&program)
 }
 
 fn history_file_candidates(preferred_shell: Option<&str>) -> Vec<(PathBuf, ShellHistoryFormat)> {

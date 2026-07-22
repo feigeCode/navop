@@ -90,6 +90,7 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
             .split_once('/')
             .map(|(_, p)| format!("/{p}"))
             .unwrap_or_default();
+        let path = normalize_osc_file_path(path, cfg!(target_os = "windows"));
         return Some(OscEvent::WorkingDirChanged(path));
     }
 
@@ -103,6 +104,20 @@ pub fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
     }
 
     None
+}
+
+fn normalize_osc_file_path(path: String, windows: bool) -> String {
+    if !windows {
+        return path;
+    }
+
+    let mut path = path.replace('\\', "/");
+    let drive_path = path.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic)
+        && path.as_bytes().get(2) == Some(&b':');
+    if drive_path || path.starts_with("///") {
+        path.remove(0);
+    }
+    path
 }
 
 #[cfg(test)]
@@ -143,6 +158,22 @@ mod tests {
             Some(OscEvent::WorkingDirChanged(
                 "/home/user/project".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn normalizes_windows_drive_path_from_osc_file_uri() {
+        assert_eq!(
+            normalize_osc_file_path(r"/C:\Users\alice\project".to_string(), true),
+            "C:/Users/alice/project"
+        );
+    }
+
+    #[test]
+    fn keeps_unix_path_when_normalizing_osc_file_uri() {
+        assert_eq!(
+            normalize_osc_file_path("/home/alice/project".to_string(), false),
+            "/home/alice/project"
         );
     }
 
