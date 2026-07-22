@@ -5,7 +5,7 @@ use gpui::{
     Window, px,
 };
 use gpui_component::input::Position;
-use markdown_source::{SourceNodeId, SourceSelection, TableCellAddress};
+use markdown_source::{SourceInlineKind, SourceNodeId, SourceSelection, TableCellAddress};
 
 impl MarkdownEditor {
     pub(super) fn input_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -13,6 +13,9 @@ impl MarkdownEditor {
             return;
         }
         let value = self.input.read(cx).value().to_string();
+        if value == self.projection.text {
+            return;
+        }
         let source_cursor = self
             .projection
             .display_to_source(self.input.read(cx).selected_range().end);
@@ -65,7 +68,8 @@ impl MarkdownEditor {
         }
         let display_cursor = self.input.read(cx).selected_range().end;
         let selection = self.source_selection(cx);
-        if self.active_inline_at_display(display_cursor) != self.projection.active_inline {
+        let active_inline = self.active_inline_at_display(display_cursor);
+        if active_inline != self.projection.active_inline {
             self.sync_selection(selection, window, cx);
         }
     }
@@ -81,6 +85,15 @@ impl MarkdownEditor {
                     self.projection.display_end_to_source(display_offset),
                 )
                 .and_then(|offset| document.inline_node_at(offset))
+            })
+            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
+            .filter(|node| {
+                self.projection.source_range.start <= node.source_range.start
+                    && node.source_range.end <= self.projection.source_range.end
+            })
+            .filter(|node| {
+                self.projection.source_to_display(node.source_range.start)
+                    < self.projection.source_to_display(node.source_range.end)
             })
             .map(|node| node.id)
     }
@@ -102,6 +115,7 @@ impl MarkdownEditor {
                 previous_char_offset(&document.source, source_cursor)
                     .and_then(|offset| document.inline_node_at(offset))
             })
+            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
             .map(|node| node.id);
         self.active_block = active_block.map(|block| block.id);
         self.active_table_cell = None;
@@ -125,7 +139,10 @@ impl MarkdownEditor {
             self.sync_projection(source_cursor, window, cx);
             return;
         };
-        let active = document.inline_node_at(source_cursor).map(|node| node.id);
+        let active = document
+            .inline_node_at(source_cursor)
+            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
+            .map(|node| node.id);
         self.active_block = Some(address.block_id);
         self.active_table_cell = Some(address);
         self.projection =
@@ -147,9 +164,13 @@ impl MarkdownEditor {
         let position = position_for_offset(&self.projection.text, display_cursor);
         self.syncing_input = true;
         self.input.update(cx, |input, cx| {
-            input.set_value(self.projection.text.clone(), window, cx);
+            if input.value() != self.projection.text {
+                input.set_value(self.projection.text.clone(), window, cx);
+            }
             input.set_text_highlights(projection_highlights(&self.projection, &self.theme), cx);
-            input.set_cursor_position(position, window, cx);
+            if input.selected_range() != (display_cursor..display_cursor) {
+                input.set_cursor_position(position, window, cx);
+            }
         });
         self.syncing_input = false;
         cx.notify();

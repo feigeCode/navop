@@ -6,7 +6,8 @@ use gpui::{
 use gpui_component::v_flex;
 
 impl Render for MarkdownEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+        let content = self.render_editor_content(cx);
         Self::bind_editor_actions(gpui::div().key_context(EDITOR_CONTEXT), cx)
             .size_full()
             .min_h_0()
@@ -17,7 +18,7 @@ impl Render for MarkdownEditor {
                     .size_full()
                     .min_h_0()
                     .min_w_0()
-                    .child(self.render_blocks(cx))
+                    .child(content)
                     .when(self.active_image_properties().is_some(), |editor| {
                         editor.child(self.render_image_properties(cx))
                     }),

@@ -1,4 +1,7 @@
-use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext, WindowOptions, point, px};
+use gpui::{
+    AppContext, Bounds, Modifiers, TestAppContext, VisualTestContext, WindowBounds, WindowOptions,
+    point, px, size,
+};
 use gpui_component::{Root, highlighter::HighlightTheme, input::Position};
 use markdown_editor::{MarkdownEditor, MarkdownEditorTheme};
 use markdown_source::{BlockMoveDirection, SourceBlockKind, TableCellAddress};
@@ -454,6 +457,60 @@ fn clicking_a_rendered_block_switches_only_that_block_to_editing(cx: &mut TestAp
         ))
         .is_some()
     );
+    assert_eq!(
+        "Rendered heading",
+        editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
+    );
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-block-up-{}", heading_id.0).into_boxed_str(),
+        ))
+        .is_none()
+    );
+}
+
+#[gpui::test]
+fn long_documents_virtualize_blocks_and_reveal_the_activated_tail(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = (0..200)
+        .map(|index| format!("Paragraph {index}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let source = Box::leak(source.into_boxed_str());
+    let document = markdown_source::SourceMarkdownDocument::parse(&*source).unwrap();
+    let first_id = document.blocks[0].id;
+    let last_id = document.blocks.last().unwrap().id;
+    let (window, editor) = open_editor_with_size(source, size(px(600.), px(260.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-preview-block-{}", first_id.0).into_boxed_str(),
+        ))
+        .is_some()
+    );
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-preview-block-{}", last_id.0).into_boxed_str(),
+        ))
+        .is_none()
+    );
+    assert!(cx.debug_bounds("markdown-editor-scrollbar").is_some());
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(last_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-active-block-{}", last_id.0).into_boxed_str(),
+        ))
+        .is_some()
+    );
 }
 
 #[gpui::test]
@@ -502,11 +559,15 @@ fn active_block_structure_actions_are_source_transactions(cx: &mut TestAppContex
     });
     editor.update_in(&mut cx, |editor, window, cx| {
         assert!(editor.activate_block(second_id, window, cx));
+    });
+    editor.update_in(&mut cx, |editor, window, cx| {
         assert!(
             editor
                 .move_active_block(BlockMoveDirection::Up, window, cx)
                 .unwrap()
         );
+    });
+    editor.update_in(&mut cx, |editor, window, cx| {
         assert!(editor.toggle_active_blockquote(window, cx).unwrap());
     });
     assert_eq!(
@@ -653,6 +714,32 @@ fn open_editor(
                 editor = Some(entity.clone());
                 cx.new(|cx| Root::new(entity, window, cx))
             })
+            .unwrap();
+        (window.into(), editor.unwrap())
+    })
+}
+
+fn open_editor_with_size(
+    source: &'static str,
+    window_size: gpui::Size<gpui::Pixels>,
+    cx: &mut TestAppContext,
+) -> (gpui::AnyWindowHandle, gpui::Entity<MarkdownEditor>) {
+    cx.update(|cx| {
+        let mut editor = None;
+        let window_bounds = Bounds::centered(None, window_size, cx);
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let entity =
+                        cx.new(|cx| MarkdownEditor::new(source, test_theme(), window, cx).unwrap());
+                    editor = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                },
+            )
             .unwrap();
         (window.into(), editor.unwrap())
     })

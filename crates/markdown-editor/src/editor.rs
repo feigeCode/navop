@@ -1,6 +1,8 @@
 use crate::{MarkdownEditorTheme, MarkdownProjection};
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window};
-use gpui_component::input::InputState;
+use gpui::{
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
+};
+use gpui_component::{VirtualListScrollHandle, input::InputState};
 use markdown_source::{
     PatchError, SourceEdit, SourceEditOrigin, SourceHistory, SourceMarkdownDocument,
     SourceSelection, SourceTransaction,
@@ -11,9 +13,11 @@ mod operations;
 mod render;
 mod setup;
 mod sync;
+mod text_diff;
 mod types;
 use setup::{apply_projection_styles, create_input, create_property_input, subscribe_to_input};
 use sync::projection_highlights;
+use text_diff::{common_prefix, common_suffix};
 pub use types::{MarkdownEditorError, MarkdownEditorEvent};
 
 pub struct MarkdownEditor {
@@ -29,6 +33,8 @@ pub struct MarkdownEditor {
     syncing_input: bool,
     source_mode_selection: SourceSelection,
     pending_newline: Option<usize>,
+    block_scroll: VirtualListScrollHandle,
+    document_scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -59,6 +65,8 @@ impl MarkdownEditor {
             syncing_input: false,
             source_mode_selection: SourceSelection::default(),
             pending_newline: None,
+            block_scroll: VirtualListScrollHandle::new(),
+            document_scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         })
     }
@@ -277,21 +285,4 @@ impl Focusable for MarkdownEditor {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.input.read(cx).focus_handle(cx)
     }
-}
-
-fn common_prefix(left: &str, right: &str) -> usize {
-    left.char_indices()
-        .zip(right.chars())
-        .take_while(|((_, left), right)| left == right)
-        .last()
-        .map_or(0, |((offset, ch), _)| offset + ch.len_utf8())
-}
-
-fn common_suffix(left: &str, right: &str) -> usize {
-    left.char_indices()
-        .rev()
-        .zip(right.chars().rev())
-        .take_while(|((_, left), right)| left == right)
-        .map(|((_, ch), _)| ch.len_utf8())
-        .sum()
 }

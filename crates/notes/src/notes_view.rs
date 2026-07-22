@@ -363,9 +363,9 @@ mod external_markdown_tests {
             );
             assert_eq!(
                 concat!(
-                    "> <https://example.com/path_(item)>\n\n",
+                    "<https://example.com/path_(item)>\n\n",
                     "README and snake_case(value)\n\n",
-                    "2. second\n\nitalic\n",
+                    "second\n\nitalic\n",
                 ),
                 session.preview.read(cx).projected_text()
             );

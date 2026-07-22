@@ -8,37 +8,18 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
-    scroll::ScrollableElement,
     text::{MarkdownPalette, TextView, TextViewStyle},
     v_flex,
 };
 use markdown_source::{SourceBlock, SourceBlockKind};
 
+pub(super) const VIRTUALIZATION_THRESHOLD: usize = 80;
+
 mod action_handlers;
+mod blocks;
 mod table;
-mod toolbar;
 
 impl MarkdownEditor {
-    fn render_blocks(&self, cx: &mut Context<Self>) -> impl gpui::IntoElement {
-        let active_block = self.active_block;
-        let blocks = self.history.document().blocks.clone();
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .min_w_0()
-            .overflow_y_scrollbar()
-            .px_4()
-            .py_3()
-            .when(blocks.is_empty(), |editor| {
-                editor.child(self.render_empty_document())
-            })
-            .children(blocks.into_iter().map(|block| match &block.kind {
-                SourceBlockKind::Table(table) => self.render_table(&block, table, cx),
-                _ if active_block == Some(block.id) => self.render_active_block(&block, cx),
-                _ => self.render_preview_block(&block, cx),
-            }))
-    }
-
     fn render_empty_document(&self) -> gpui::AnyElement {
         gpui::div()
             .id("markdown-empty-document")
@@ -57,8 +38,8 @@ impl MarkdownEditor {
             .into_any_element()
     }
 
-    fn render_active_block(&self, block: &SourceBlock, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let rows = block.original_source.lines().count().max(1) as f32;
+    fn render_active_block(&self, block: &SourceBlock) -> gpui::AnyElement {
+        let rows = self.projection.text.lines().count().max(1) as f32;
         let heading_level = match block.kind {
             SourceBlockKind::Heading { level, .. } => Some(level),
             _ => None,
@@ -85,7 +66,6 @@ impl MarkdownEditor {
                             .indent_guide_color(self.theme.border),
                     ),
             )
-            .child(self.render_block_toolbar(block, cx))
             .into_any_element()
     }
 

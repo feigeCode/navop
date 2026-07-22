@@ -26,6 +26,43 @@ fn active_inline_node_reveals_only_its_original_source() {
 }
 
 #[test]
+fn block_markers_stay_hidden_while_inline_markers_follow_the_cursor() {
+    let source = "## Before _italic_ after";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let block = &document.blocks[0];
+    let inactive = MarkdownProjection::build_range(&document, None, block.source_range.clone());
+    let inline = document
+        .inline_node_at(source.find("italic").unwrap())
+        .unwrap();
+    let active =
+        MarkdownProjection::build_range(&document, Some(inline.id), block.source_range.clone());
+
+    assert_eq!("Before italic after", inactive.text);
+    assert_eq!("Before _italic_ after", active.text);
+}
+
+#[test]
+fn structural_block_syntax_is_projected_as_content() {
+    let source = concat!(
+        "> quoted **text**\n\n",
+        "- first\n- second\n\n",
+        "```rust\nlet value = 1;\n```",
+    );
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let projections = document
+        .blocks
+        .iter()
+        .map(|block| {
+            MarkdownProjection::build_range(&document, None, block.source_range.clone()).text
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!("quoted text", projections[0]);
+    assert_eq!("first\nsecond\n", projections[1]);
+    assert_eq!("let value = 1;", projections[2]);
+}
+
+#[test]
 fn block_projection_keeps_global_source_offsets() {
     let source = "# Title\n\nUse _old_ here";
     let document = SourceMarkdownDocument::parse(source).unwrap();

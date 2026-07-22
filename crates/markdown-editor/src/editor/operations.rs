@@ -1,5 +1,5 @@
 use super::{MarkdownEditor, MarkdownEditorError};
-use gpui::{Context, Window};
+use gpui::{Context, ScrollStrategy, Window};
 use markdown_source::{BlockMoveDirection, SourceSelection, SourceTransaction, TableCellAddress};
 use markdown_source::{InlineFormat, ListFormat};
 
@@ -28,7 +28,14 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(block) = self.history.document().block_by_id(block_id) else {
+        let Some((block_index, block)) = self
+            .history
+            .document()
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| block.id == block_id)
+        else {
             return false;
         };
         let cursor = block
@@ -38,6 +45,10 @@ impl MarkdownEditor {
         self.active_block = Some(block_id);
         self.active_table_cell = None;
         self.sync_projection(cursor, window, cx);
+        if self.history.document().blocks.len() >= super::render::VIRTUALIZATION_THRESHOLD {
+            self.block_scroll
+                .scroll_to_item(block_index, ScrollStrategy::Center);
+        }
         self.input.update(cx, |input, cx| input.focus(window, cx));
         true
     }
