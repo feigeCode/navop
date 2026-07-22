@@ -33,6 +33,7 @@ pub enum NodeKind {
 #[serde(rename_all = "snake_case")]
 pub enum DocumentFormat {
     #[default]
+    #[serde(alias = "rich_text")]
     Markdown,
 }
 
@@ -79,5 +80,19 @@ mod tests {
         assert!(state.markdown_view_modes.is_empty());
         assert_eq!(DocumentFormat::Markdown, state.last_created_format);
         assert_eq!(MarkdownViewMode::Wysiwyg, MarkdownViewMode::default());
+    }
+
+    #[test]
+    fn legacy_rich_text_format_migrates_to_markdown() {
+        let state: NotebookUiState = serde_json::from_str(
+            r#"{"selected_document":null,"expanded_directories":[],"last_created_format":"rich_text"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(DocumentFormat::Markdown, state.last_created_format);
+        assert_eq!(
+            r#""markdown""#,
+            serde_json::to_string(&state.last_created_format).unwrap()
+        );
     }
 }
