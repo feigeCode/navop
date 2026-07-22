@@ -155,6 +155,48 @@ Home:
     en: Import from other apps
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
+  StartCenter:
+    subtitle:
+      en: Your workspace for connections, terminals, data, and AI
+      zh-CN: 连接、终端、数据与 AI 的统一工作台
+      zh-HK: 連線、終端、資料與 AI 的統一工作台
+    quick_open:
+      en: Quick Open
+      zh-CN: 快速打开
+      zh-HK: 快速開啟
+    tools:
+      en: Tools
+      zh-CN: 常用工具
+      zh-HK: 常用工具
+    import_description:
+      en: Import saved connections from supported applications
+      zh-CN: 从受支持的应用导入已有连接
+      zh-HK: 從支援的應用程式匯入現有連線
+    notes_description:
+      en: Keep commands, snippets, and operational notes together
+      zh-CN: 集中记录命令、片段和运维笔记
+      zh-HK: 集中記錄命令、片段和維運筆記
+    ai_description:
+      en: Work with connections and resources through AI
+      zh-CN: 使用 AI 操作连接与应用资源
+      zh-HK: 使用 AI 操作連線與應用程式資源
+    extensions_description:
+      en: Add drivers, importers, and integration capabilities
+      zh-CN: 扩展驱动、导入器和集成能力
+      zh-HK: 擴充驅動程式、匯入器和整合能力
+    Shortcut:
+      HOME_QUICK_OPEN:
+        en: Quick Open
+        zh-CN: 快速打开
+        zh-HK: 快速開啟
+      HOME_NEW_CONNECTION:
+        en: New Connection
+        zh-CN: 新建连接
+        zh-HK: 新建連線
+      HOME_OPEN_LOCAL_TERMINAL:
+        en: Local Terminal
+        zh-CN: 本地终端
+        zh-HK: 本機終端
 
   ConnectionImport:
     scan:
@@ -1018,6 +1060,18 @@ Connection:
     en: Open in Background Tab
     zh-CN: 在后台标签页打开
     zh-HK: 在背景分頁開啟
+  copy_connection_info:
+    en: Copy Connection Info
+    zh-CN: 复制连接信息
+    zh-HK: 複製連線資訊
+  copy_connection_name:
+    en: Copy Connection Name
+    zh-CN: 复制连接名称
+    zh-HK: 複製連線名稱
+  copy_username:
+    en: Copy Username
+    zh-CN: 复制用户名
+    zh-HK: 複製使用者名稱
   copy_target:
     en: Copy Target
     zh-CN: 复制连接目标
@@ -1041,7 +1095,11 @@ Connection:
   copy_serial_port:
     en: Copy Serial Port
     zh-CN: 复制串口名称
-    zh-HK: 複製串口名稱
+    zh-HK: 複製串列埠名稱
+  copy_forwarding_rule:
+    en: Copy Forwarding Rule
+    zh-CN: 复制转发规则
+    zh-HK: 複製轉送規則
   copy_forwarding_address:
     en: Copy Listening Address
     zh-CN: 复制监听地址
@@ -1050,6 +1108,251 @@ Connection:
     en: Copy Remote Desktop Address
     zh-CN: 复制远程桌面地址
     zh-HK: 複製遠端桌面位址
+  copy_connection_command:
+    en: Copy CLI Command
+    zh-CN: 复制命令行命令
+    zh-HK: 複製命令列命令
+  move_to_group:
+    en: Move to Group
+    zh-CN: 移动到分组
+    zh-HK: 移動到分組
+  Share:
+    title:
+      en: "[Connection Info]"
+      zh-CN: "【连接信息】"
+      zh-HK: "【連線資訊】"
+    separator:
+      en: ": "
+      zh-CN: "："
+      zh-HK: "："
+    name:
+      en: Name
+      zh-CN: 名称
+      zh-HK: 名稱
+    type:
+      en: Type
+      zh-CN: 类型
+      zh-HK: 類型
+    database_type:
+      en: Database Type
+      zh-CN: 数据库类型
+      zh-HK: 資料庫類型
+    host:
+      en: Host
+      zh-CN: 主机
+      zh-HK: 主機
+    port:
+      en: Port
+      zh-CN: 端口
+      zh-HK: 連接埠
+    username:
+      en: Username
+      zh-CN: 用户名
+      zh-HK: 使用者名稱
+    database:
+      en: Database
+      zh-CN: 数据库
+      zh-HK: 資料庫
+    service_name:
+      en: Service Name
+      zh-CN: 服务名
+      zh-HK: 服務名稱
+    sid:
+      en: SID
+      zh-CN: SID
+      zh-HK: SID
+    auth_method:
+      en: Authentication
+      zh-CN: 认证方式
+      zh-HK: 驗證方式
+    default_directory:
+      en: Default Directory
+      zh-CN: 默认目录
+      zh-HK: 預設目錄
+    mode:
+      en: Mode
+      zh-CN: 模式
+      zh-HK: 模式
+    database_index:
+      en: Database Index
+      zh-CN: 数据库索引
+      zh-HK: 資料庫索引
+    tls:
+      en: TLS
+      zh-CN: TLS
+      zh-HK: TLS
+    auth_database:
+      en: Authentication Database
+      zh-CN: 认证库
+      zh-HK: 驗證資料庫
+    replica_set:
+      en: Replica Set
+      zh-CN: 副本集
+      zh-HK: 複本集
+    serial_port:
+      en: Serial Port
+      zh-CN: 串口
+      zh-HK: 串列埠
+    baud_rate:
+      en: Baud Rate
+      zh-CN: 波特率
+      zh-HK: 鮑率
+    data_bits:
+      en: Data Bits
+      zh-CN: 数据位
+      zh-HK: 資料位元
+    stop_bits:
+      en: Stop Bits
+      zh-CN: 停止位
+      zh-HK: 停止位元
+    parity:
+      en: Parity
+      zh-CN: 校验位
+      zh-HK: 同位檢查
+    flow_control:
+      en: Flow Control
+      zh-CN: 流控
+      zh-HK: 流量控制
+    listen_address:
+      en: Listening Address
+      zh-CN: 监听地址
+      zh-HK: 監聽位址
+    target_address:
+      en: Target Address
+      zh-CN: 目标地址
+      zh-HK: 目標位址
+    protocol:
+      en: Protocol
+      zh-CN: 协议
+      zh-HK: 通訊協定
+    domain:
+      en: Domain
+      zh-CN: 域
+      zh-HK: 網域
+    read_only:
+      en: Read Only
+      zh-CN: 只读
+      zh-HK: 唯讀
+    remark:
+      en: Remark
+      zh-CN: 备注
+      zh-HK: 備註
+    credentials:
+      en: Credentials
+      zh-CN: 凭据
+      zh-HK: 認證資訊
+    credentials_hint:
+      en: Obtain separately through a secure channel
+      zh-CN: 请通过安全渠道另行获取
+      zh-HK: 請透過安全管道另行取得
+    auth_password:
+      en: Password
+      zh-CN: 密码
+      zh-HK: 密碼
+    auth_private_key:
+      en: Private Key
+      zh-CN: 私钥
+      zh-HK: 私鑰
+    auth_agent:
+      en: SSH Agent
+      zh-CN: SSH Agent
+      zh-HK: SSH Agent
+    auth_auto_public_key:
+      en: Automatic Public Key
+      zh-CN: 自动公钥
+      zh-HK: 自動公鑰
+    mode_standalone:
+      en: Standalone
+      zh-CN: 单机
+      zh-HK: 單機
+    mode_sentinel:
+      en: Sentinel
+      zh-CN: 哨兵
+      zh-HK: 哨兵
+    mode_cluster:
+      en: Cluster
+      zh-CN: 集群
+      zh-HK: 叢集
+    yes:
+      en: "Yes"
+      zh-CN: 是
+      zh-HK: 是
+    no:
+      en: "No"
+      zh-CN: 否
+      zh-HK: 否
+    type_all:
+      en: All
+      zh-CN: 全部
+      zh-HK: 全部
+    type_database:
+      en: Database
+      zh-CN: 数据库
+      zh-HK: 資料庫
+    type_ssh_sftp:
+      en: SSH/SFTP
+      zh-CN: SSH/SFTP
+      zh-HK: SSH/SFTP
+    type_redis:
+      en: Redis
+      zh-CN: Redis
+      zh-HK: Redis
+    type_mongodb:
+      en: MongoDB
+      zh-CN: MongoDB
+      zh-HK: MongoDB
+    type_serial:
+      en: Serial
+      zh-CN: 串口
+      zh-HK: 串列埠
+    type_port_forwarding:
+      en: Port Forwarding
+      zh-CN: 端口转发
+      zh-HK: 連接埠轉送
+    type_rdp:
+      en: RDP
+      zh-CN: RDP
+      zh-HK: RDP
+    type_vnc:
+      en: VNC
+      zh-CN: VNC
+      zh-HK: VNC
+    database_type_external:
+      en: External Driver
+      zh-CN: 外部驱动
+      zh-HK: 外部驅動
+    forwarding_local:
+      en: Local
+      zh-CN: 本地转发
+      zh-HK: 本機轉送
+    forwarding_dynamic:
+      en: Dynamic SOCKS
+      zh-CN: 动态 SOCKS
+      zh-HK: 動態 SOCKS
+    parity_none:
+      en: None
+      zh-CN: 无
+      zh-HK: 無
+    parity_odd:
+      en: Odd
+      zh-CN: 奇校验
+      zh-HK: 奇同位
+    parity_even:
+      en: Even
+      zh-CN: 偶校验
+      zh-HK: 偶同位
+    flow_none:
+      en: None
+      zh-CN: 无
+      zh-HK: 無
+    flow_software:
+      en: XON/XOFF
+      zh-CN: XON/XOFF
+      zh-HK: XON/XOFF
+    flow_hardware:
+      en: RTS/CTS
+      zh-CN: RTS/CTS
+      zh-HK: RTS/CTS
   delete_confirm:
     en: "Are you sure you want to delete connection \"%{conn_name}\"?"
     zh-CN: "确定要删除连接 \"%{conn_name}\" 吗？"
@@ -1483,6 +1786,22 @@ Settings:
         en: System Default
         zh-CN: 系统默认
         zh-HK: 系統預設
+      zsh:
+        en: Zsh
+        zh-CN: Zsh
+        zh-HK: Zsh
+      bash:
+        en: Bash
+        zh-CN: Bash
+        zh-HK: Bash
+      fish:
+        en: Fish
+        zh-CN: Fish
+        zh-HK: Fish
+      nushell:
+        en: Nushell
+        zh-CN: Nushell
+        zh-HK: Nushell
       powershell:
         en: PowerShell
         zh-CN: PowerShell
@@ -1519,6 +1838,46 @@ Settings:
         en: Arguments are parsed safely and passed directly to the program without a command shell
         zh-CN: 参数会被安全解析并直接传给程序，不经过命令 shell
         zh-HK: 參數會被安全解析並直接傳給程式，不經過命令 shell
+      custom_profiles:
+        en: Custom terminals
+        zh-CN: 自定义终端
+        zh-HK: 自訂終端
+      custom_command:
+        en: Terminal command
+        zh-CN: 终端命令
+        zh-HK: 終端命令
+      profiles_desc:
+        en: Add multiple named terminal commands. On macOS, .app bundle paths are resolved to their executable automatically.
+        zh-CN: 添加多个带名称的终端命令。macOS 的 .app 路径会自动解析到应用内的可执行文件。
+        zh-HK: 新增多個帶名稱的終端命令。macOS 的 .app 路徑會自動解析到應用程式內的可執行檔。
+      profiles_placeholder:
+        en: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+        zh-CN: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+        zh-HK: "Ghostty | /Applications/Ghostty.app\nFish | fish --login"
+      default_custom:
+        en: Default custom terminal
+        zh-CN: 默认自定义终端
+        zh-HK: 預設自訂終端
+      add_example:
+        en: Add example
+        zh-CN: 添加示例
+        zh-HK: 新增範例
+      name_placeholder:
+        en: Name
+        zh-CN: 名称
+        zh-HK: 名稱
+      command_placeholder:
+        en: Command or executable path
+        zh-CN: 命令或可执行文件路径
+        zh-HK: 命令或可執行檔路徑
+      set_default:
+        en: Set as default custom terminal
+        zh-CN: 设为默认自定义终端
+        zh-HK: 設為預設自訂終端
+      add_terminal:
+        en: Add custom terminal
+        zh-CN: 添加自定义终端
+        zh-HK: 新增自訂終端
 
     # 终端设置
     Terminal:

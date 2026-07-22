@@ -1,13 +1,13 @@
 use super::*;
 
 #[derive(Clone)]
-pub(super) struct ConnectionTeamBadge {
-    pub(super) name: String,
-    pub(super) tooltip: String,
-    pub(super) active: bool,
+pub(crate) struct ConnectionTeamBadge {
+    pub(crate) name: String,
+    pub(crate) tooltip: String,
+    pub(crate) active: bool,
 }
 
-pub(super) fn connection_team_badge(
+pub(crate) fn connection_team_badge(
     team_id: Option<&str>,
     teams: &[TeamOption],
 ) -> Option<ConnectionTeamBadge> {

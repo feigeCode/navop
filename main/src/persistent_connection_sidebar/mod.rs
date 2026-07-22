@@ -11,7 +11,11 @@ use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
 
+mod connection_command;
 mod connection_context_menu;
+mod connection_copy;
+mod connection_copy_menu;
+mod connection_share;
 mod context_menu;
 mod drag;
 mod rail;

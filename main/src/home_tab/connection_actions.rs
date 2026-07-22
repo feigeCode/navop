@@ -1,7 +1,7 @@
 use super::*;
 
 impl HomePage {
-    pub(super) fn edit_connection(
+    pub(crate) fn edit_connection(
         &mut self,
         connection: StoredConnection,
         window: &mut Window,
@@ -85,7 +85,7 @@ impl HomePage {
     }
 
     /// 复制连接，创建一个副本
-    pub(super) fn duplicate_connection(
+    pub(crate) fn duplicate_connection(
         &mut self,
         conn: StoredConnection,
         _window: &mut Window,
@@ -145,7 +145,7 @@ impl HomePage {
         .detach();
     }
 
-    pub(super) fn confirm_delete_connection(
+    pub(crate) fn confirm_delete_connection(
         &mut self,
         conn_id: i64,
         conn_name: String,

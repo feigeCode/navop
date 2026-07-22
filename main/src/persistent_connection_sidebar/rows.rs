@@ -3,13 +3,15 @@ use gpui::{
     AnyElement, AppContext, ElementId, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, div, px,
 };
-use gpui_component::{Icon, IconName, InteractiveElementExt, Sizable, Size, h_flex};
+use gpui_component::{
+    Icon, IconName, InteractiveElementExt, Sizable, Size, h_flex, menu::ContextMenuExt,
+};
 use rust_i18n::t;
 
 use super::drag::DragConnection;
 use super::row_parts::{
-    child_group_button, delete_group_button, edit_group_button, tree_chevron, tree_count,
-    tree_label,
+    child_group_button, connection_team_indicator, delete_group_button, edit_group_button,
+    tree_chevron, tree_count, tree_label,
 };
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
@@ -61,6 +63,7 @@ impl PersistentConnectionSidebar {
         let group: SharedString = format!("persistent-workspace-{id}").into();
         let home_for_rename = self.home_page.clone();
         let rename_config = self.workspace_dialog_config(id, cx);
+        let view_for_menu = view.clone();
         h_flex()
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
@@ -98,6 +101,9 @@ impl PersistentConnectionSidebar {
                     cx.stop_propagation();
                     show_workspace_dialog(home_for_rename.clone(), config.clone(), window, cx);
                 })
+            })
+            .context_menu(move |menu, window, cx| {
+                Self::build_workspace_context_menu(menu, &view_for_menu, id, expanded, window, cx)
             })
             .child(tree_chevron(has_children, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))
@@ -172,6 +178,9 @@ impl PersistentConnectionSidebar {
             .cloned();
         let selected = home.read(cx).selected_connection_id == Some(id);
         let can_drag = home.read(cx).can_move_connection(id);
+        let team_indicator = connection.as_ref().and_then(|connection| {
+            connection_team_indicator(connection, &home.read(cx).team_options, cx)
+        });
         let icon = connection
             .as_ref()
             .map(|connection| home.read(cx).connection_icon(connection, px(16.0)))
@@ -180,6 +189,7 @@ impl PersistentConnectionSidebar {
             connection_id: id,
             name: name.clone(),
         };
+        let view_for_menu = cx.entity();
         h_flex()
             .id(SharedString::from(format!("persistent-connection-{id}")))
             .w_full()
@@ -213,8 +223,12 @@ impl PersistentConnectionSidebar {
                     });
                 }
             })
+            .context_menu(move |menu, window, cx| {
+                Self::build_connection_context_menu(menu, &view_for_menu, id, window, cx)
+            })
             .child(icon)
             .child(tree_label(name))
+            .when_some(team_indicator, |row, indicator| row.child(indicator))
             .into_any_element()
     }
 
@@ -226,6 +240,7 @@ impl PersistentConnectionSidebar {
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let view = cx.entity();
+        let view_for_menu = view.clone();
         h_flex()
             .id("persistent-unassigned")
             .w_full()
@@ -253,6 +268,9 @@ impl PersistentConnectionSidebar {
                     this.unassigned_collapsed = !this.unassigned_collapsed;
                     cx.notify();
                 })
+            })
+            .context_menu(move |menu, window, cx| {
+                Self::build_unassigned_context_menu(menu, &view_for_menu, expanded, window, cx)
             })
             .child(tree_chevron(count > 0, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))

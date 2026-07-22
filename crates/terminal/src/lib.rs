@@ -13,7 +13,10 @@ pub mod types;
 mod windows_shell_integration;
 
 pub use exec_supervisor::TerminalExecError;
-pub use local_shell::{local_config_from_settings, local_config_from_settings_with_profile};
+pub use local_shell::{
+    local_config_from_custom_profile, local_config_from_settings,
+    local_config_from_settings_with_profile,
+};
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;

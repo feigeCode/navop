@@ -15,7 +15,8 @@ fn local_terminal_launcher_is_visible_in_home_toolbar() {
     assert!(toolbar.contains("render_local_terminal_button(window, cx)"));
     assert!(launcher.contains("DropdownButton::new(\"local-terminal-dropdown\")"));
     assert!(launcher.contains("IconName::SquareTerminalColor.color()"));
-    assert!(launcher.contains(".checked(kind == default_kind)"));
+    assert!(launcher.contains("launch_target_is_default"));
+    assert!(launcher.contains("LocalTerminalLaunchTarget::Custom"));
 }
 
 #[test]
@@ -43,11 +44,15 @@ fn connection_team_badge_uses_cached_team_name() {
 fn list_and_card_layouts_render_cached_team_badges() {
     let list_item = include_str!("../connection_list.rs");
     let card = include_str!("../connection_card.rs");
+    let sidebar_rows = include_str!("../../persistent_connection_sidebar/rows.rs");
+    let row_parts = include_str!("../../persistent_connection_sidebar/row_parts.rs");
 
     assert!(list_item.contains("connection_team_badge"));
     assert!(list_item.contains("conn-list-team-"));
     assert!(card.contains("connection_team_badge"));
     assert!(card.contains("conn-team-"));
+    assert!(sidebar_rows.contains("connection_team_indicator"));
+    assert!(row_parts.contains("persistent-team-"));
 }
 
 #[test]
@@ -104,14 +109,26 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     let toolbar = include_str!("../toolbar.rs");
     let content = include_str!("../content.rs");
     let card = include_str!("../connection_card.rs");
+    let render = include_str!("../render.rs");
+    let modern_home = include_str!("../modern_home.rs");
 
     assert!(toolbar.contains("Input::new(&self.search_input)"));
     assert!(content.contains("max_w(px(1160.0))"));
     assert!(content.contains("MODERN_HOME_CARD_MIN_WIDTH"));
     assert!(content.contains("MODERN_HOME_CARD_MAX_WIDTH"));
     assert!(content.contains(".flex_grow(1.0)"));
-    assert!(card.contains("h(px(76.0))"));
+    assert!(card.contains("px(76.0)"));
     assert!(!card.contains(".shadow_sm()\n            .group"));
+    assert!(render.contains("self.render_modern_home(window, cx)"));
+    assert!(modern_home.contains("modern-home-start-center"));
+    assert!(!modern_home.contains("render_connection_card"));
+    assert!(!modern_home.contains("view.update(cx, |home"));
+    assert!(modern_home.contains("modern-home-sync"));
+    assert!(modern_home.contains("modern-home-keys"));
+    assert!(modern_home.contains("self.render_local_terminal_button(window, cx)"));
+    assert!(!modern_home.contains("modern-home-local-terminal"));
+    assert!(!modern_home.contains("IconName::Terminal).with_size(px(42.0))"));
+    assert!(!modern_home.contains(".read(cx)"));
 }
 
 #[test]

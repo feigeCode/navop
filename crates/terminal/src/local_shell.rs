@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
-use one_core::settings::{AppSettings, LocalTerminalProfileKind, LocalTerminalProfileSettings};
+use one_core::settings::{
+    AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,
+};
 
 use crate::LocalConfig;
 
@@ -18,6 +20,19 @@ pub fn local_config_from_settings_with_profile(
     let mut profile = settings.local_terminal_profile.clone();
     profile.kind = profile_kind;
     local_config_from_profile_settings(&profile, working_dir)
+}
+
+pub fn local_config_from_custom_profile(
+    profile: &LocalTerminalCustomProfile,
+    working_dir: Option<String>,
+) -> Result<LocalConfig> {
+    let (shell, args) = resolve_custom_command(&profile.command)?;
+    Ok(LocalConfig {
+        shell: Some(shell),
+        args,
+        working_dir,
+        ..LocalConfig::default()
+    })
 }
 
 fn local_config_from_profile_settings(
@@ -46,21 +61,71 @@ fn resolve_profile(
 fn resolve_custom_profile(
     profile: &LocalTerminalProfileSettings,
 ) -> Result<(Option<String>, Vec<String>)> {
-    let program = profile.custom_program.trim();
-    if program.is_empty() {
-        bail!("custom terminal program is required");
+    let profile = profile
+        .selected_custom_profile()
+        .context("custom terminal profile is required")?;
+    let (program, args) = resolve_custom_command(&profile.command)?;
+    Ok((Some(program), args))
+}
+
+fn resolve_custom_command(command: &str) -> Result<(String, Vec<String>)> {
+    let parts = shell_words::split(command.trim()).context("invalid custom terminal command")?;
+    let (program, args) = parts
+        .split_first()
+        .context("custom terminal command is required")?;
+    Ok((resolve_application_bundle(program)?, args.to_vec()))
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_application_bundle(program: &str) -> Result<String> {
+    if !program.ends_with(".app") {
+        return Ok(program.to_string());
     }
-    let args = shell_words::split(profile.custom_arguments.trim())
-        .context("invalid custom terminal arguments")?;
-    Ok((Some(program.to_string()), args))
+    let bundle = std::path::Path::new(program);
+    let plist_path = bundle.join("Contents").join("Info.plist");
+    let plist = plist::Value::from_file(&plist_path)
+        .with_context(|| format!("failed to read {}", plist_path.display()))?;
+    let executable = plist
+        .as_dictionary()
+        .and_then(|value| value.get("CFBundleExecutable"))
+        .and_then(plist::Value::as_string)
+        .context("application bundle has no CFBundleExecutable")?;
+    let executable = bundle.join("Contents").join("MacOS").join(executable);
+    if !executable.is_file() {
+        bail!(
+            "application bundle executable does not exist: {}",
+            executable.display()
+        );
+    }
+    Ok(executable.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_application_bundle(program: &str) -> Result<String> {
+    Ok(program.to_string())
 }
 
 #[cfg(target_os = "windows")]
 fn resolve_builtin_profile(
     kind: LocalTerminalProfileKind,
 ) -> Result<(Option<String>, Vec<String>)> {
-    let (command, args) = resolve_windows_profile(kind)?;
-    Ok((Some(command), args))
+    match kind {
+        LocalTerminalProfileKind::PowerShell
+        | LocalTerminalProfileKind::Cmd
+        | LocalTerminalProfileKind::Wsl
+        | LocalTerminalProfileKind::GitBash => {
+            let (command, args) = resolve_windows_profile(kind)?;
+            Ok((Some(command), args))
+        }
+        LocalTerminalProfileKind::Zsh
+        | LocalTerminalProfileKind::Bash
+        | LocalTerminalProfileKind::Fish
+        | LocalTerminalProfileKind::Nushell => {
+            tracing::warn!("当前平台不支持所选 Unix 本地终端 profile，回退系统默认 shell");
+            Ok((None, Vec::new()))
+        }
+        _ => Ok((None, Vec::new())),
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -68,6 +133,14 @@ fn resolve_builtin_profile(
     kind: LocalTerminalProfileKind,
 ) -> Result<(Option<String>, Vec<String>)> {
     match kind {
+        LocalTerminalProfileKind::Zsh => Ok((Some(resolve_unix_shell("zsh")?), vec!["-l".into()])),
+        LocalTerminalProfileKind::Bash => {
+            Ok((Some(resolve_unix_shell("bash")?), vec!["--login".into()]))
+        }
+        LocalTerminalProfileKind::Fish => {
+            Ok((Some(resolve_unix_shell("fish")?), vec!["--login".into()]))
+        }
+        LocalTerminalProfileKind::Nushell => Ok((Some(resolve_unix_shell("nu")?), Vec::new())),
         LocalTerminalProfileKind::PowerShell
         | LocalTerminalProfileKind::Cmd
         | LocalTerminalProfileKind::Wsl
@@ -79,9 +152,25 @@ fn resolve_builtin_profile(
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn resolve_unix_shell(program: &str) -> Result<String> {
+    std::env::var_os("PATH")
+        .as_deref()
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join(program))
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+        .with_context(|| format!("{program} was not found in PATH"))
+}
+
 #[cfg(any(test, target_os = "windows"))]
 fn resolve_windows_profile(kind: LocalTerminalProfileKind) -> Result<(String, Vec<String>)> {
     match kind {
+        LocalTerminalProfileKind::Zsh
+        | LocalTerminalProfileKind::Bash
+        | LocalTerminalProfileKind::Fish
+        | LocalTerminalProfileKind::Nushell => bail!("profile is not a Windows terminal profile"),
         LocalTerminalProfileKind::PowerShell => Ok((resolve_powershell(), Vec::new())),
         LocalTerminalProfileKind::Cmd => Ok((resolve_cmd(), Vec::new())),
         LocalTerminalProfileKind::Wsl => Ok((resolve_wsl(), Vec::new())),
@@ -150,104 +239,5 @@ fn find_in_path(program: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use one_core::settings::{AppSettings, LocalTerminalProfileKind, LocalTerminalProfileSettings};
-
-    use super::{
-        local_config_from_settings, local_config_from_settings_with_profile,
-        resolve_windows_profile,
-    };
-
-    #[test]
-    fn system_profile_keeps_automatic_shell_resolution() {
-        let settings = AppSettings::default();
-
-        let config = local_config_from_settings(&settings, Some("/tmp".to_string())).unwrap();
-
-        assert!(config.shell.is_none());
-        assert!(config.args.is_empty());
-        assert_eq!(Some("/tmp".to_string()), config.working_dir);
-    }
-
-    #[test]
-    fn custom_profile_parses_program_and_quoted_arguments_without_shell_execution() {
-        let settings = AppSettings {
-            local_terminal_profile: LocalTerminalProfileSettings {
-                kind: LocalTerminalProfileKind::Custom,
-                custom_program: " /opt/homebrew/bin/fish ".to_string(),
-                custom_arguments: "--login -C 'echo ready'".to_string(),
-            },
-            ..AppSettings::default()
-        };
-
-        let config = local_config_from_settings(&settings, None).unwrap();
-
-        assert_eq!(Some("/opt/homebrew/bin/fish".to_string()), config.shell);
-        assert_eq!(vec!["--login", "-C", "echo ready"], config.args);
-    }
-
-    #[test]
-    fn custom_profile_rejects_missing_program_and_invalid_arguments() {
-        let mut settings = AppSettings::default();
-        settings.local_terminal_profile.kind = LocalTerminalProfileKind::Custom;
-        assert!(local_config_from_settings(&settings, None).is_err());
-
-        settings.local_terminal_profile.custom_program = "fish".to_string();
-        settings.local_terminal_profile.custom_arguments = "'unterminated".to_string();
-        assert!(local_config_from_settings(&settings, None).is_err());
-    }
-
-    #[test]
-    fn temporary_profile_override_keeps_custom_command_settings() {
-        let settings = AppSettings {
-            local_terminal_profile: LocalTerminalProfileSettings {
-                kind: LocalTerminalProfileKind::System,
-                custom_program: "fish".to_string(),
-                custom_arguments: "--login".to_string(),
-            },
-            ..AppSettings::default()
-        };
-
-        let config = local_config_from_settings_with_profile(
-            &settings,
-            LocalTerminalProfileKind::Custom,
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(Some("fish".to_string()), config.shell);
-        assert_eq!(vec!["--login"], config.args);
-    }
-
-    #[test]
-    fn windows_profiles_resolve_wsl_and_git_bash_commands() {
-        let (wsl, wsl_args) = resolve_windows_profile(LocalTerminalProfileKind::Wsl).unwrap();
-        assert!(wsl.to_ascii_lowercase().ends_with("wsl.exe"));
-        assert!(wsl_args.is_empty());
-
-        let (git_bash, git_bash_args) =
-            resolve_windows_profile(LocalTerminalProfileKind::GitBash).unwrap();
-        assert!(git_bash.to_ascii_lowercase().ends_with("bash.exe"));
-        assert_eq!(vec!["--login", "-i"], git_bash_args);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn windows_profiles_fall_back_to_system_shell_on_other_platforms() {
-        for kind in [
-            LocalTerminalProfileKind::PowerShell,
-            LocalTerminalProfileKind::Cmd,
-            LocalTerminalProfileKind::Wsl,
-            LocalTerminalProfileKind::GitBash,
-        ] {
-            let profile = LocalTerminalProfileSettings {
-                kind,
-                ..LocalTerminalProfileSettings::default()
-            };
-
-            let (shell, args) = super::resolve_profile(&profile).unwrap();
-            assert!(shell.is_none(), "{kind:?} should use the system shell");
-            assert!(args.is_empty(), "{kind:?} should not pass shell arguments");
-        }
-    }
-}
+#[path = "local_shell_tests.rs"]
+mod tests;

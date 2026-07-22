@@ -1115,8 +1115,13 @@ fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> Sett
         .title(t!("Settings.General.LocalTerminal.group_title"))
         .items(vec![
             local_terminal_profile_item(defaults.kind),
-            local_terminal_custom_program_item(&defaults.custom_program),
-            local_terminal_custom_arguments_item(&defaults.custom_arguments),
+            SettingItem::render(move |_options, window, cx| {
+                crate::settings::local_terminal_settings::render(window, cx)
+            })
+            .search_texts([
+                t!("Settings.General.LocalTerminal.custom_profiles").to_string(),
+                t!("Settings.General.LocalTerminal.custom_command").to_string(),
+            ]),
         ])
 }
 
@@ -1144,52 +1149,6 @@ fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem
         .default_value(SharedString::from(default.as_str())),
     )
     .description(t!("Settings.General.LocalTerminal.profile_desc").to_string())
-}
-
-fn local_terminal_custom_program_item(default: &str) -> SettingItem {
-    SettingItem::new(
-        t!("Settings.General.LocalTerminal.custom_program"),
-        SettingField::input(
-            |cx: &App| {
-                SharedString::from(
-                    AppSettings::global(cx)
-                        .local_terminal_profile
-                        .custom_program
-                        .clone(),
-                )
-            },
-            |value: SharedString, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.local_terminal_profile.custom_program = value.trim().to_string();
-                });
-            },
-        )
-        .default_value(SharedString::from(default.to_string())),
-    )
-    .description(t!("Settings.General.LocalTerminal.custom_program_desc").to_string())
-}
-
-fn local_terminal_custom_arguments_item(default: &str) -> SettingItem {
-    SettingItem::new(
-        t!("Settings.General.LocalTerminal.custom_arguments"),
-        SettingField::input(
-            |cx: &App| {
-                SharedString::from(
-                    AppSettings::global(cx)
-                        .local_terminal_profile
-                        .custom_arguments
-                        .clone(),
-                )
-            },
-            |value: SharedString, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.local_terminal_profile.custom_arguments = value.to_string();
-                });
-            },
-        )
-        .default_value(SharedString::from(default.to_string())),
-    )
-    .description(t!("Settings.General.LocalTerminal.custom_arguments_desc").to_string())
 }
 
 fn sync_setting_group(
@@ -3913,6 +3872,22 @@ mod tests {
         assert!(options.contains(&LocalTerminalProfileKind::Wsl));
         assert!(options.contains(&LocalTerminalProfileKind::GitBash));
         assert!(options.contains(&LocalTerminalProfileKind::Custom));
+    }
+
+    #[test]
+    fn unix_local_terminal_options_include_common_shells() {
+        let options = local_terminal_profile_options(false)
+            .into_iter()
+            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
+            .collect::<Vec<_>>();
+
+        assert!(options.contains(&LocalTerminalProfileKind::System));
+        assert!(options.contains(&LocalTerminalProfileKind::Zsh));
+        assert!(options.contains(&LocalTerminalProfileKind::Bash));
+        assert!(options.contains(&LocalTerminalProfileKind::Fish));
+        assert!(options.contains(&LocalTerminalProfileKind::Nushell));
+        assert!(options.contains(&LocalTerminalProfileKind::Custom));
+        assert!(!options.contains(&LocalTerminalProfileKind::Wsl));
     }
 
     #[test]

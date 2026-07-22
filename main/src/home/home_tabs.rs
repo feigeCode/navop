@@ -8,7 +8,7 @@ use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
 use notes::NotesView;
 use one_core::license::Feature;
-use one_core::settings::LocalTerminalProfileKind;
+use one_core::settings::{LocalTerminalCustomProfile, LocalTerminalProfileKind};
 use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
@@ -16,7 +16,10 @@ use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use rust_i18n::t;
 use sftp_view::{SftpView, SftpViewEvent};
-use terminal::{local_config_from_settings, local_config_from_settings_with_profile};
+use terminal::{
+    local_config_from_custom_profile, local_config_from_settings,
+    local_config_from_settings_with_profile,
+};
 use terminal_view::{
     TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
 };
@@ -757,6 +760,22 @@ impl HomePage {
         self.add_terminal_tab_from_profile(Some(profile_kind), window, cx);
     }
 
+    pub(crate) fn add_terminal_tab_with_custom_profile(
+        &mut self,
+        profile: LocalTerminalCustomProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let config = match local_config_from_custom_profile(&profile, None) {
+            Ok(config) => config,
+            Err(error) => {
+                push_local_terminal_config_error(window, &error, cx);
+                return;
+            }
+        };
+        self.add_local_terminal_tab(config, window, cx);
+    }
+
     fn add_terminal_tab_from_profile(
         &mut self,
         profile_kind: Option<LocalTerminalProfileKind>,
@@ -775,6 +794,15 @@ impl HomePage {
                 return;
             }
         };
+        self.add_local_terminal_tab(config, window, cx);
+    }
+
+    fn add_local_terminal_tab(
+        &mut self,
+        config: terminal::LocalConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // 使用时间戳生成唯一 tab_id，支持打开多个本地终端
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -1,13 +1,18 @@
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
+use gpui::{
+    AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, div, px,
+};
 use gpui_component::{
-    Icon, IconName, Sizable, Size,
+    ActiveTheme, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
+    tooltip::Tooltip,
 };
 use rust_i18n::t;
 
 use super::SidebarPalette;
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
+use crate::home_tab::connection_team_badge;
 
 pub(super) fn child_group_button(id: i64, home: gpui::Entity<crate::home_tab::HomePage>) -> Button {
     tree_action_button("child", id, IconName::Plus).on_click(move |_, window, cx| {
@@ -98,6 +103,44 @@ pub(super) fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
         .text_color(palette.muted_foreground)
         .child(count.to_string())
         .into_any_element()
+}
+
+pub(super) fn connection_team_indicator(
+    connection: &one_core::storage::StoredConnection,
+    teams: &[one_core::cloud_sync::TeamOption],
+    cx: &gpui::App,
+) -> Option<AnyElement> {
+    let badge = connection_team_badge(connection.team_id.as_deref(), teams)?;
+    let tooltip: SharedString = badge.tooltip.into();
+    Some(
+        div()
+            .id(format!(
+                "persistent-team-{}",
+                connection.id.unwrap_or_default()
+            ))
+            .flex_shrink_0()
+            .max_w(px(92.0))
+            .px_1p5()
+            .py_0p5()
+            .rounded(px(4.0))
+            .bg(if badge.active {
+                cx.theme().primary
+            } else {
+                cx.theme().muted
+            })
+            .text_color(if badge.active {
+                cx.theme().primary_foreground
+            } else {
+                cx.theme().muted_foreground
+            })
+            .text_xs()
+            .overflow_hidden()
+            .text_ellipsis()
+            .whitespace_nowrap()
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .child(badge.name)
+            .into_any_element(),
+    )
 }
 
 fn tree_action_button(action: &'static str, id: i64, icon: IconName) -> Button {

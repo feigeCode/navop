@@ -2,6 +2,7 @@ pub mod appearance;
 mod appearance_import;
 mod appearance_state;
 pub mod llm_providers_view;
+pub mod local_terminal_settings;
 mod mcp_agent_config_copy;
 pub mod mcp_client_config;
 mod mcp_helper_install;

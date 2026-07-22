@@ -579,6 +579,10 @@ impl Default for PersonalSyncSettings {
 pub enum LocalTerminalProfileKind {
     #[default]
     System,
+    Zsh,
+    Bash,
+    Fish,
+    Nushell,
     PowerShell,
     Cmd,
     Wsl,
@@ -590,6 +594,10 @@ impl LocalTerminalProfileKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::System => "system",
+            Self::Zsh => "zsh",
+            Self::Bash => "bash",
+            Self::Fish => "fish",
+            Self::Nushell => "nushell",
             Self::PowerShell => "powershell",
             Self::Cmd => "cmd",
             Self::Wsl => "wsl",
@@ -601,6 +609,10 @@ impl LocalTerminalProfileKind {
     pub fn parse(value: &str) -> Self {
         match value {
             "powershell" => Self::PowerShell,
+            "zsh" => Self::Zsh,
+            "bash" => Self::Bash,
+            "fish" => Self::Fish,
+            "nushell" => Self::Nushell,
             "cmd" => Self::Cmd,
             "wsl" => Self::Wsl,
             "git_bash" => Self::GitBash,
@@ -611,6 +623,13 @@ impl LocalTerminalProfileKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LocalTerminalCustomProfile {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LocalTerminalProfileSettings {
     #[serde(default)]
     pub kind: LocalTerminalProfileKind,
@@ -618,6 +637,50 @@ pub struct LocalTerminalProfileSettings {
     pub custom_program: String,
     #[serde(default)]
     pub custom_arguments: String,
+    #[serde(default)]
+    pub custom_profiles: Vec<LocalTerminalCustomProfile>,
+    #[serde(default)]
+    pub default_custom_profile_id: Option<String>,
+}
+
+impl LocalTerminalProfileSettings {
+    pub fn effective_custom_profiles(&self) -> Vec<LocalTerminalCustomProfile> {
+        let profiles: Vec<_> = self
+            .custom_profiles
+            .iter()
+            .filter(|profile| !profile.name.trim().is_empty() && !profile.command.trim().is_empty())
+            .cloned()
+            .collect();
+        if !profiles.is_empty() {
+            return profiles;
+        }
+        let program = self.custom_program.trim();
+        if program.is_empty() {
+            return Vec::new();
+        }
+        let command = format_legacy_custom_command(program, self.custom_arguments.trim());
+        vec![LocalTerminalCustomProfile {
+            id: "legacy-custom".to_string(),
+            name: program.to_string(),
+            command,
+        }]
+    }
+
+    pub fn selected_custom_profile(&self) -> Option<LocalTerminalCustomProfile> {
+        let profiles = self.effective_custom_profiles();
+        self.default_custom_profile_id
+            .as_deref()
+            .and_then(|id| profiles.iter().find(|profile| profile.id == id).cloned())
+            .or_else(|| profiles.into_iter().next())
+    }
+}
+
+fn format_legacy_custom_command(program: &str, arguments: &str) -> String {
+    if arguments.is_empty() {
+        program.to_string()
+    } else {
+        format!("{program} {arguments}")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1877,6 +1940,7 @@ mod tests {
             kind: LocalTerminalProfileKind::Custom,
             custom_program: "/opt/homebrew/bin/fish".to_string(),
             custom_arguments: "--login -C 'echo ready'".to_string(),
+            ..Default::default()
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -1893,6 +1957,15 @@ mod tests {
         assert_eq!(
             "--login -C 'echo ready'",
             restored.local_terminal_profile.custom_arguments
+        );
+        let profile = restored
+            .local_terminal_profile
+            .selected_custom_profile()
+            .unwrap();
+        assert_eq!("/opt/homebrew/bin/fish", profile.name);
+        assert_eq!(
+            "/opt/homebrew/bin/fish --login -C 'echo ready'",
+            profile.command
         );
     }
 }

@@ -1,7 +1,7 @@
 use super::*;
 
-pub(super) const OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS: &str = "cmd-alt-t";
-pub(super) const OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER: &str = "alt-t";
+pub(crate) const OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS: &str = "cmd-alt-t";
+pub(crate) const OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER: &str = "alt-t";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(init_keybindings(cx));

@@ -65,7 +65,9 @@ use crate::home::home_workspace_filter::{
     WorkspaceDialogConfig, WorkspaceFilterDelegate, show_workspace_dialog,
 };
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
-use crate::local_terminal_profiles::{effective_kind, launch_options};
+use crate::local_terminal_profiles::{
+    LocalTerminalLaunchTarget, effective_kind, launch_options, launch_target_is_default,
+};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
@@ -167,7 +169,7 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     sidebar_collapsed: bool,
-    team_options: Vec<TeamOption>,
+    pub(crate) team_options: Vec<TeamOption>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
 }
@@ -196,6 +198,8 @@ mod forwarding;
 mod keybindings;
 mod lifecycle;
 mod local_terminal;
+mod modern_home;
+mod modern_home_shortcuts;
 mod render;
 mod sidebar;
 mod sync_route;
@@ -203,11 +207,15 @@ mod toolbar;
 mod workspace;
 mod workspace_filter;
 
-use connection_badge::{ConnectionTeamBadge, connection_team_badge};
+use connection_badge::ConnectionTeamBadge;
+pub(crate) use connection_badge::connection_team_badge;
 use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
 use connection_info::{
     card_connection_info, connection_display_name, generate_duplicate_name,
     port_forwarding_connection_info,
+};
+pub(super) use keybindings::{
+    OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS, OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER,
 };
 pub use keybindings::{init, refresh_keybindings};
 pub(crate) use sync_route::should_show_team_management_entry;

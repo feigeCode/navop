@@ -18,11 +18,15 @@ ssh = { workspace = true }
 alacritty_terminal.workspace = true
 serde = { workspace = true }
 shell-words = { workspace = true }
+plist = { workspace = true }
 tracing = { workspace = true }
 serialport = { workspace = true }
 base64 = { workspace = true }
 dirs = { workspace = true }
 polling = "3.11.0"
+
+[dev-dependencies]
+tempfile = "3"
 
 
 [target.'cfg(unix)'.dependencies]

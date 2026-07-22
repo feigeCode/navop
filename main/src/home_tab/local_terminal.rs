@@ -10,10 +10,7 @@ impl HomePage {
             AppSettings::global(cx).local_terminal_profile.kind,
             cfg!(target_os = "windows"),
         );
-        let custom_program = AppSettings::global(cx)
-            .local_terminal_profile
-            .custom_program
-            .clone();
+        let profile_settings = AppSettings::global(cx).local_terminal_profile.clone();
         let view = cx.entity();
         let menu_view = view.clone();
         DropdownButton::new("local-terminal-dropdown")
@@ -27,19 +24,26 @@ impl HomePage {
                     })),
             )
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                launch_options(cfg!(target_os = "windows"), &custom_program)
+                launch_options(cfg!(target_os = "windows"), &profile_settings)
                     .into_iter()
-                    .fold(menu, |menu, (kind, label)| {
+                    .fold(menu, |menu, (target, label)| {
                         let view = menu_view.clone();
-                        menu.item(
-                            PopupMenuItem::new(label)
-                                .checked(kind == default_kind)
-                                .on_click(move |_, window, cx| {
-                                    view.update(cx, |home, cx| {
-                                        home.add_terminal_tab_with_profile(kind, window, cx);
-                                    });
-                                }),
-                        )
+                        let checked = launch_target_is_default(
+                            &target,
+                            &profile_settings,
+                            cfg!(target_os = "windows"),
+                        );
+                        menu.item(PopupMenuItem::new(label).checked(checked).on_click(
+                            move |_, window, cx| {
+                                view.update(cx, |home, cx| match target.clone() {
+                                    LocalTerminalLaunchTarget::Builtin(kind) => {
+                                        home.add_terminal_tab_with_profile(kind, window, cx)
+                                    }
+                                    LocalTerminalLaunchTarget::Custom(profile) => home
+                                        .add_terminal_tab_with_custom_profile(profile, window, cx),
+                                });
+                            },
+                        ))
                     })
             })
             .into_any_element()
