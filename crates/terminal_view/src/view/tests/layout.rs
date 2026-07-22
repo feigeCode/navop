@@ -180,8 +180,39 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
     assert!(interaction_source.contains("auto_grow(4, 12)"));
     assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0"));
+    assert!(render_source.contains("fn popover_bottom_offset(&self) -> f32"));
+    assert!(render_source.contains("self.input_height + COMMAND_BAR_POPOVER_GAP"));
+    assert!(render_source.contains("struct CommandBarResize {"));
+    assert!(render_source.contains("entity_id: EntityId"));
+    assert!(render_source.contains("initial_height: f32"));
+    assert!(render_source.contains("initial_y: Rc<Cell<Option<Pixels>>>"));
+    assert!(render_source.contains("DragMoveEvent<CommandBarResize>"));
+    assert!(!render_source.contains("ResizePanel"));
+    assert!(render_source.contains("group(\"terminal-command-resize-handle\")"));
+    assert!(render_source.contains("group_hover(\"terminal-command-resize-handle\""));
+    assert!(render_source.contains("cx.theme().drag_border"));
+    assert!(render_source.contains("Input::new(&self.input_state)"));
+    assert!(!render_source.contains(".h_full()"));
+    assert!(render_source.contains(".h(px(self.input_height))"));
+    assert!(render_source.contains("drag.initial_height + delta"));
+    assert!(render_source.contains("initial_y.set(Some(event.position.y))"));
+    assert!(render_source.contains("initial_y - event.event.position.y"));
+    assert!(!render_source.contains("event.bounds.center().y"));
+    assert!(render_source.contains("if drag.entity_id != cx.entity_id()"));
     assert!(render_source.contains("with_size(Size::Medium)"));
-    assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
+    let expanded_row = render_source
+        .split("fn render_input_row")
+        .nth(1)
+        .and_then(|source| source.split("impl Render for TerminalCommandBar").next())
+        .expect("expanded command input row should exist");
+    assert!(!expanded_row.contains("terminal-command-collapse-toggle"));
+    assert!(!expanded_row.contains("target_label"));
+    assert!(!expanded_row.contains("IconName::ChevronRight"));
+    assert!(expanded_row.contains("pr(px(COMMAND_BAR_ACTIONS_WIDTH))"));
+    assert!(expanded_row.contains(".absolute()"));
+    assert!(expanded_row.contains(".top_2()"));
+    assert!(expanded_row.contains(".right_0()"));
+    assert!(expanded_row.contains("child(self.render_quick_command_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
     assert!(quick_interaction_source.contains("self.collapsed = false"));
     assert!(quick_interaction_source.contains("set_command_input_value(state, command"));
@@ -193,13 +224,13 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     for key in ["\"arrowup\"", "\"arrowdown\"", "\"home\"", "\"end\""] {
         assert!(quick_interaction_source.contains(key));
     }
-    assert!(suggestion_source.contains("bottom(px(88.0))"));
+    assert!(suggestion_source.contains("bottom(px(self.popover_bottom_offset()))"));
     assert!(suggestion_source.contains("bg(self.colors.background)"));
     assert!(suggestion_source.contains("let mut content"));
     assert!(suggestion_source.contains("overflow_y_scrollbar"));
     assert!(suggestion_source.contains("relative(0.96)"));
     assert!(quick_source.contains("group_quick_commands"));
-    assert!(quick_source.contains("bottom(px(bottom_offset))"));
+    assert!(quick_source.contains("bottom(px(self.popover_bottom_offset()))"));
     assert!(quick_source.contains("relative(0.96)"));
     assert!(!quick_source.contains("on_scroll_wheel"));
     assert!(!quick_source.contains("on_mouse_down(MouseButton::Left"));
@@ -209,7 +240,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(
         quick_interaction_source.contains("quick_scroll_handle = VirtualListScrollHandle::new()")
     );
-    assert!(quick_source.contains("bottom(px(bottom_offset))"));
+    assert!(quick_source.contains("bottom(px(self.popover_bottom_offset()))"));
     assert!(
         include_str!("../command_bar/quick_render_list.rs")
             .contains("vertical_scrollbar(&self.quick_scroll_handle)")

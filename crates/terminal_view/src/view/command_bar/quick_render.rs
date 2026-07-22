@@ -18,10 +18,9 @@ pub(super) struct QuickGroupSummary {
 impl TerminalCommandBar {
     pub(super) fn render_quick_commands(&self, cx: &mut Context<Self>) -> AnyElement {
         let groups = self.filtered_quick_groups();
-        let bottom_offset = if self.collapsed { 38.0 } else { 88.0 };
         v_flex()
             .absolute()
-            .bottom(px(bottom_offset))
+            .bottom(px(self.popover_bottom_offset()))
             .right_3()
             .w(px(QUICK_POPOVER_WIDTH))
             .max_w(gpui::relative(0.96))
