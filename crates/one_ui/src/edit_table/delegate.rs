@@ -36,6 +36,30 @@ pub enum CellEditor {
 }
 
 impl CellEditor {
+    pub fn input_state(&self) -> Option<Entity<InputState>> {
+        match self {
+            CellEditor::Input(input)
+            | CellEditor::DatePickerInput { input, .. }
+            | CellEditor::DateTimePickerInput { input, .. }
+            | CellEditor::TimePickerInput { input, .. } => Some(input.clone()),
+            CellEditor::DatePicker(_)
+            | CellEditor::DateTimePicker(_)
+            | CellEditor::TimePicker(_) => None,
+        }
+    }
+
+    pub fn render_floating(&self, window: &mut Window, cx: &mut App) -> AnyElement {
+        match self {
+            CellEditor::Input(input) => Input::new(input)
+                .size_full()
+                .text_base()
+                .appearance(false)
+                .bare()
+                .into_any_element(),
+            _ => self.render(window, cx),
+        }
+    }
+
     pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         match self {
             CellEditor::Input(input) => h_flex()

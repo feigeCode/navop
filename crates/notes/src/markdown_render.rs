@@ -6,7 +6,7 @@ use gpui_component::{
     Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
+    input::{Input, LocalInputStyle},
     v_flex,
 };
 use rust_i18n::t;
@@ -21,9 +21,21 @@ impl NotesView {
         };
         let mode = session.state.mode;
         let content = match mode {
-            MarkdownViewMode::Source => Input::new(&session.source_editor)
-                .size_full()
-                .into_any_element(),
+            MarkdownViewMode::Source => {
+                let theme = self.resolved_editor_theme(cx);
+                Input::new(&session.source_editor)
+                    .size_full()
+                    .local_style(LocalInputStyle {
+                        background: theme.background,
+                        foreground: theme.foreground,
+                        muted_foreground: theme.muted_foreground,
+                        border: theme.border,
+                    })
+                    .highlight_theme(theme.highlight_theme)
+                    .caret_color(theme.primary)
+                    .indent_guide_color(theme.border.opacity(0.7))
+                    .into_any_element()
+            }
             MarkdownViewMode::Wysiwyg => session.preview.entity().clone().into_any_element(),
         };
         v_flex()

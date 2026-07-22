@@ -103,9 +103,6 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
-        if session.source_authoritative {
-            return;
-        }
         let generation = session.state.source_changed();
         session.save_generation.store(generation, Ordering::Release);
         let _ = session.state.begin_source_save(generation);
