@@ -8,6 +8,8 @@ use gpui_component::{RopeExt as _, VirtualListScrollHandle};
 use one_core::storage::QuickCommand;
 use terminal::terminal::Terminal;
 
+pub(super) const COMMAND_BAR_INPUT_DEFAULT_HEIGHT: f32 = 80.0;
+
 mod interaction;
 mod quick_interaction;
 mod quick_render;
@@ -51,6 +53,7 @@ pub(super) struct TerminalCommandBar {
     selected_quick_command: Option<usize>,
     quick_commands_open: bool,
     collapsed: bool,
+    input_height: f32,
     autocomplete_enabled: bool,
     colors: TerminalColors,
     _subscriptions: Vec<Subscription>,

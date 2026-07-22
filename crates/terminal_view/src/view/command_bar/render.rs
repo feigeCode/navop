@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
-    div, prelude::FluentBuilder as _, px,
+    AnyElement, AppContext, Context, DragMoveEvent, InteractiveElement, IntoElement, ParentElement,
+    Render, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size,
@@ -9,12 +9,53 @@ use gpui_component::{
     h_flex,
     input::{Input, LocalInputStyle},
 };
+use one_ui::resize_handle::ResizePanel;
 use rust_i18n::t;
 
 const COMMAND_BAR_COLLAPSED_HEIGHT: f32 = 30.0;
 const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0;
+const COMMAND_BAR_INPUT_MAX_HEIGHT: f32 = 400.0;
+const COMMAND_BAR_RESIZE_HANDLE_HEIGHT: f32 = 6.0;
 
 impl TerminalCommandBar {
+    fn render_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("terminal-command-resize-handle")
+            .w_full()
+            .h(px(COMMAND_BAR_RESIZE_HANDLE_HEIGHT))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_row_resize()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_drag_move(cx.listener(Self::resize_input))
+            .on_drag(ResizePanel, |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .child(
+                div()
+                    .w(px(32.0))
+                    .h(px(2.0))
+                    .rounded_full()
+                    .bg(self.colors.border),
+            )
+            .into_any_element()
+    }
+
+    fn resize_input(
+        &mut self,
+        event: &DragMoveEvent<ResizePanel>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = event.drag(cx);
+        let delta: f32 = (event.bounds.center().y - event.event.position.y).into();
+        self.input_height = (self.input_height + delta)
+            .clamp(COMMAND_BAR_INPUT_MIN_HEIGHT, COMMAND_BAR_INPUT_MAX_HEIGHT);
+        cx.notify();
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
@@ -96,6 +137,7 @@ impl TerminalCommandBar {
     fn render_input_row(&self, focused: bool, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
+            .h(px(self.input_height))
             .min_h(px(COMMAND_BAR_INPUT_MIN_HEIGHT))
             .gap_2()
             .items_center()
@@ -178,7 +220,8 @@ impl Render for TerminalCommandBar {
             })
             .when(self.collapsed, |bar| bar.child(self.render_toolbar(cx)))
             .when(!self.collapsed, |bar| {
-                bar.child(self.render_input_row(focused, cx))
+                bar.child(self.render_resize_handle(cx))
+                    .child(self.render_input_row(focused, cx))
             })
     }
 }
