@@ -201,6 +201,39 @@ fn local_branch_operations_create_switch_rename_and_merge() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn pushing_branch_sets_up_and_updates_remote_branch() {
+    let root = initialized_repository();
+    let remote = unique_test_path();
+    std::fs::create_dir_all(&remote).unwrap();
+    run_test_git(&remote, &["init", "-q", "--bare"]);
+    run_test_git(
+        &root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let branch = load_branches(&repository)
+        .unwrap()
+        .into_iter()
+        .find(|branch| branch.current)
+        .unwrap();
+
+    push_branch(&repository, &branch).unwrap();
+
+    let remote_ref = Command::new("git")
+        .current_dir(&remote)
+        .args([
+            "show-ref",
+            "--verify",
+            &format!("refs/heads/{}", branch.name),
+        ])
+        .output()
+        .unwrap();
+    assert!(remote_ref.status.success());
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(remote);
+}
+
 fn initialized_repository() -> PathBuf {
     let root = empty_repository();
     std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();

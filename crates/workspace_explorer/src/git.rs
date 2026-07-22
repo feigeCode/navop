@@ -178,6 +178,31 @@ pub(crate) fn fetch_branches(repository: &GitRepository) -> Result<()> {
     )
 }
 
+pub(crate) fn push_branch(repository: &GitRepository, branch: &GitBranch) -> Result<()> {
+    if branch.kind != GitBranchKind::Local {
+        return Err(anyhow!("Only local branches can be pushed"));
+    }
+    let args = if let Some(upstream) = branch.upstream.as_deref() {
+        let (remote, remote_branch) = upstream
+            .split_once('/')
+            .ok_or_else(|| anyhow!("Invalid upstream branch: {upstream}"))?;
+        vec![
+            "push".to_string(),
+            remote.to_string(),
+            format!("{}:{remote_branch}", branch.name),
+        ]
+    } else {
+        let remote = default_remote(repository)?;
+        vec![
+            "push".to_string(),
+            "-u".to_string(),
+            remote,
+            branch.name.clone(),
+        ]
+    };
+    run_git_operation(repository, "git push", args)
+}
+
 pub(crate) fn load_diff(repository: &GitRepository, change: &GitChange) -> Result<String> {
     if change.kind == GitChangeKind::Untracked {
         return untracked_file_diff(repository, change);
@@ -317,6 +342,25 @@ fn validate_branch_name(repository: &GitRepository, name: &str) -> Result<()> {
     } else {
         Err(git_command_error("Invalid branch name", &output))
     }
+}
+
+fn default_remote(repository: &GitRepository) -> Result<String> {
+    let output = run_git(&repository.root, ["remote"])?;
+    if !output.status.success() {
+        return Err(git_command_error("git remote", &output));
+    }
+    let remotes = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|remote| !remote.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    remotes
+        .iter()
+        .find(|remote| remote.as_str() == "origin")
+        .cloned()
+        .or_else(|| remotes.first().cloned())
+        .ok_or_else(|| anyhow!("No Git remote is configured"))
 }
 
 fn run_git_operation(repository: &GitRepository, label: &str, args: Vec<String>) -> Result<()> {

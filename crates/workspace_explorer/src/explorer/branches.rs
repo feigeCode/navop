@@ -1,7 +1,7 @@
 use super::WorkspaceExplorer;
 use crate::git::{
     GitBranch, GitBranchKind, GitRepository, create_branch, delete_branch, fetch_branches,
-    load_branches, merge_branch, rename_branch, switch_branch,
+    load_branches, merge_branch, push_branch, rename_branch, switch_branch,
 };
 use crate::theme::WorkspaceTheme;
 use gpui::{
@@ -28,6 +28,7 @@ enum BranchOperation {
     Merge(String),
     Delete(GitBranch),
     Fetch,
+    Push(GitBranch),
 }
 
 #[derive(Clone)]
@@ -58,6 +59,7 @@ impl BranchOperation {
             Self::Merge(name) => merge_branch(repository, &name),
             Self::Delete(branch) => delete_branch(repository, &branch),
             Self::Fetch => fetch_branches(repository),
+            Self::Push(branch) => push_branch(repository, &branch),
         }
     }
 }
@@ -444,6 +446,7 @@ impl Render for BranchManager {
             .iter()
             .filter(|branch| branch.kind == GitBranchKind::Remote)
             .count();
+        let current_branch = self.branches.iter().find(|branch| branch.current).cloned();
         let show_create = self.query.is_empty()
             || t!("WorkspaceExplorer.branch.create")
                 .to_lowercase()
@@ -452,6 +455,11 @@ impl Render for BranchManager {
             || t!("WorkspaceExplorer.branch.fetch")
                 .to_lowercase()
                 .contains(&self.query);
+        let show_push = current_branch.is_some()
+            && (self.query.is_empty()
+                || t!("WorkspaceExplorer.branch.push")
+                    .to_lowercase()
+                    .contains(&self.query));
         let input_style = LocalInputStyle {
             background: self.theme.muted,
             foreground: self.theme.foreground,
@@ -637,6 +645,36 @@ impl Render for BranchManager {
                                 .child(t!("WorkspaceExplorer.branch.fetch")),
                         )
                     })
+                    .when_some(
+                        show_push.then_some(current_branch).flatten(),
+                        |this, branch| {
+                            this.child(
+                                h_flex()
+                                    .id("workspace-branch-action-push")
+                                    .items_center()
+                                    .gap_2()
+                                    .h(px(34.0))
+                                    .px_2()
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(self.theme.muted))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.execute(
+                                            BranchOperation::Push(branch.clone()),
+                                            t!("WorkspaceExplorer.branch.pushed").to_string(),
+                                            window,
+                                            cx,
+                                        );
+                                    }))
+                                    .child(
+                                        Icon::new(IconName::ArrowUp)
+                                            .with_size(Size::Small)
+                                            .text_color(self.theme.muted_foreground),
+                                    )
+                                    .child(t!("WorkspaceExplorer.branch.push")),
+                            )
+                        },
+                    )
                     .when(show_create, |this| {
                         this.child(
                             h_flex()
@@ -659,7 +697,7 @@ impl Render for BranchManager {
                                 .child(t!("WorkspaceExplorer.branch.create")),
                         )
                     })
-                    .when(show_create || show_fetch, |this| {
+                    .when(show_create || show_fetch || show_push, |this| {
                         this.child(div().h(px(1.0)).my_2().mx_1().bg(self.theme.border))
                     })
                     .when(self.loading, |this| {
@@ -707,9 +745,11 @@ fn render_branch_actions_popover(
 ) -> AnyElement {
     let popover_entity = cx.entity();
     let rename_manager = manager.clone();
+    let push_manager = manager.clone();
     let merge_manager = manager.clone();
     let delete_manager = manager;
     let rename_popover = popover_entity.clone();
+    let push_popover = popover_entity.clone();
     let merge_popover = popover_entity.clone();
     let delete_popover = popover_entity;
     v_flex()
@@ -742,6 +782,35 @@ fn render_branch_actions_popover(
                     })
                     .child(Icon::new(IconName::Replace).with_size(Size::XSmall))
                     .child(t!("WorkspaceExplorer.branch.rename")),
+            )
+        })
+        .when(branch.kind == GitBranchKind::Local, |this| {
+            let branch = branch.clone();
+            this.child(
+                h_flex()
+                    .id("workspace-branch-action-push")
+                    .items_center()
+                    .gap_2()
+                    .h(px(34.0))
+                    .px_2()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.muted))
+                    .on_click(move |_, window, cx| {
+                        push_popover.update(cx, |popover, cx| {
+                            popover.dismiss(window, cx);
+                        });
+                        push_manager.update(cx, |manager, cx| {
+                            manager.execute(
+                                BranchOperation::Push(branch.clone()),
+                                t!("WorkspaceExplorer.branch.pushed").to_string(),
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+                    .child(Icon::new(IconName::ArrowUp).with_size(Size::XSmall))
+                    .child(t!("WorkspaceExplorer.branch.push")),
             )
         })
         .when(!branch.current, |this| {

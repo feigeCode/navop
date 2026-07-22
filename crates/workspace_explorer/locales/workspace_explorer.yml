@@ -105,6 +105,10 @@ WorkspaceExplorer:
       en: Fetch remote branches
       zh-CN: 拉取远程分支
       zh-HK: 取得遠端分支
+    push:
+      en: Push branch
+      zh-CN: 推送分支
+      zh-HK: 推送分支
     merge_confirm:
       en: "Merge branch %{name} into the current branch?"
       zh-CN: "将分支 %{name} 合并到当前分支？"
@@ -145,6 +149,10 @@ WorkspaceExplorer:
       en: Remote branches updated
       zh-CN: 远程分支已更新
       zh-HK: 遠端分支已更新
+    pushed:
+      en: Branch pushed
+      zh-CN: 分支已推送到远程
+      zh-HK: 分支已推送到遠端
   status:
     loading:
       en: Loading...
