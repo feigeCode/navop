@@ -178,10 +178,8 @@ impl SettingPage {
                                                             .to_string(),
                                                     )
                                                     .description(
-                                                        t!(
-                                                            "Settings.reset_confirm_description"
-                                                        )
-                                                        .to_string(),
+                                                        t!("Settings.reset_confirm_description")
+                                                            .to_string(),
                                                     )
                                                     .button_props(
                                                         DialogButtonProps::default()

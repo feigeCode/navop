@@ -1,5 +1,5 @@
-use one_core::settings::StartupDefaultPage;
 use super::*;
+use one_core::settings::StartupDefaultPage;
 
 impl HomePage {
     pub(super) fn render_sidebar(
