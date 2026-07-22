@@ -183,6 +183,7 @@ mod connection_details;
 mod connection_filter;
 mod connection_form_title;
 mod connection_forms;
+mod connection_grouping;
 mod connection_icon;
 mod connection_info;
 mod connection_list;

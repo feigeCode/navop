@@ -185,9 +185,6 @@ fn append_unassigned_rows(
         .iter()
         .filter(|connection| connection.workspace_id.is_none())
         .collect();
-    if unassigned.is_empty() {
-        return;
-    }
     rows.push(ConnectionTreeRow::Unassigned {
         connection_count: unassigned.len(),
         expanded: !collapsed,
@@ -242,7 +239,8 @@ mod tests {
                 ("workspace", 0),
                 ("workspace", 1),
                 ("connection", 2),
-                ("connection", 1)
+                ("connection", 1),
+                ("unassigned", 0),
             ],
             row_shape(&rows)
         );
@@ -257,7 +255,25 @@ mod tests {
             false,
         );
 
-        assert_eq!(vec![("workspace", 0)], row_shape(&rows));
+        assert_eq!(vec![("workspace", 0), ("unassigned", 0)], row_shape(&rows));
+    }
+
+    #[test]
+    fn unassigned_drop_target_remains_visible_when_empty() {
+        let rows = build_connection_tree_rows(
+            &[workspace(1, None, "Root")],
+            &[connection(10, Some(1), "Connection")],
+            &HashSet::new(),
+            false,
+        );
+
+        assert!(matches!(
+            rows.last(),
+            Some(ConnectionTreeRow::Unassigned {
+                connection_count: 0,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -273,9 +289,14 @@ mod tests {
             false,
         );
 
-        assert_eq!(3, rows.len());
+        assert_eq!(4, rows.len());
         assert_eq!(
-            vec![("workspace", 0), ("workspace", 0), ("workspace", 1)],
+            vec![
+                ("workspace", 0),
+                ("workspace", 0),
+                ("workspace", 1),
+                ("unassigned", 0),
+            ],
             row_shape(&rows)
         );
     }

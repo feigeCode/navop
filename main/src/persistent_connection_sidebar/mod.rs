@@ -9,7 +9,9 @@ use terminal_view::theme::TerminalColors;
 
 use crate::home_tab::HomePage;
 
+mod drag;
 mod rail;
+mod row_parts;
 mod rows;
 mod tree;
 mod tree_model;

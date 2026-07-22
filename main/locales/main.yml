@@ -951,6 +951,10 @@ Workspace:
     en: Edit Workspace
     zh-CN: 编辑工作区
     zh-HK: 編輯工作區
+  rename:
+    en: Rename Group
+    zh-CN: 修改分组名称
+    zh-HK: 修改分組名稱
   delete:
     en: Delete Workspace
     zh-CN: 删除工作区

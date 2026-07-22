@@ -184,6 +184,18 @@ impl ConnectionRepository {
         item.updated_at = Some(ts);
         Ok(())
     }
+
+    pub fn update_workspace(&self, id: i64, workspace_id: Option<i64>) -> Result<i64> {
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            let updated = conn.execute(
+                "UPDATE connections SET workspace_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![workspace_id, ts, id],
+            )?;
+            anyhow::ensure!(updated == 1, "Connection {id} not found");
+            Ok(ts)
+        })
+    }
 }
 
 impl Repository for ConnectionRepository {
@@ -997,6 +1009,40 @@ mod tests {
             Some(new_id),
             repo.list().unwrap().first().and_then(|c| c.id)
         );
+    }
+
+    #[test]
+    fn connection_workspace_update_preserves_connection_params() {
+        let (conn, repo) = test_repository();
+        let workspace_repo = WorkspaceRepository::new(conn.clone());
+        let mut workspace = workspace("production");
+        let workspace_id = workspace_repo.insert(&mut workspace).expect("workspace");
+        let mut connection = ssh_connection("primary");
+        let connection_id = repo.insert(&mut connection).expect("connection");
+        let params_before = raw_connection_params(&conn, connection_id);
+
+        repo.update_workspace(connection_id, Some(workspace_id))
+            .expect("assign workspace");
+
+        let assigned = repo.get(connection_id).expect("read").expect("connection");
+        assert_eq!(Some(workspace_id), assigned.workspace_id);
+        assert_eq!(params_before, raw_connection_params(&conn, connection_id));
+
+        repo.update_workspace(connection_id, None)
+            .expect("clear workspace");
+        let unassigned = repo.get(connection_id).expect("read").expect("connection");
+        assert_eq!(None, unassigned.workspace_id);
+    }
+
+    fn raw_connection_params(conn: &SqliteConnection, connection_id: i64) -> String {
+        conn.with_connection(|conn| {
+            Ok(conn.query_row(
+                "SELECT params FROM connections WHERE id = ?1",
+                params![connection_id],
+                |row| row.get(0),
+            )?)
+        })
+        .expect("raw connection params")
     }
 
     #[test]

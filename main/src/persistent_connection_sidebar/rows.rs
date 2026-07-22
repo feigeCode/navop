@@ -1,15 +1,16 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, ElementId, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px,
+    AnyElement, AppContext, ElementId, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, div, px,
 };
-use gpui_component::{
-    Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-};
+use gpui_component::{Icon, IconName, InteractiveElementExt, Sizable, Size, h_flex};
 use rust_i18n::t;
 
+use super::drag::DragConnection;
+use super::row_parts::{
+    child_group_button, delete_group_button, edit_group_button, tree_chevron, tree_count,
+    tree_label,
+};
 use super::tree_model::ConnectionTreeRow;
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
@@ -58,6 +59,8 @@ impl PersistentConnectionSidebar {
         };
         let view = cx.entity();
         let group: SharedString = format!("persistent-workspace-{id}").into();
+        let home_for_rename = self.home_page.clone();
+        let rename_config = self.workspace_dialog_config(id, cx);
         h_flex()
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
@@ -72,6 +75,16 @@ impl PersistentConnectionSidebar {
             .cursor_pointer()
             .text_color(palette.foreground)
             .hover(move |this| this.bg(palette.muted))
+            .drag_over::<DragConnection>(move |this, _, _, _| {
+                this.bg(palette.muted).border_color(palette.accent)
+            })
+            .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
+                this.collapsed_workspaces.remove(&id);
+                this.home_page.update(cx, |home, cx| {
+                    home.move_connection_to_workspace(drag.connection_id, Some(id), cx);
+                });
+                cx.notify();
+            }))
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
                     if !this.collapsed_workspaces.remove(&id) {
@@ -80,12 +93,36 @@ impl PersistentConnectionSidebar {
                     cx.notify();
                 });
             })
+            .when_some(rename_config, |this, config| {
+                this.on_double_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    show_workspace_dialog(home_for_rename.clone(), config.clone(), window, cx);
+                })
+            })
             .child(tree_chevron(has_children, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))
             .child(tree_label(name))
             .child(tree_count(direct_connection_count, palette))
             .child(self.render_workspace_actions(id, group, cx))
             .into_any_element()
+    }
+
+    fn workspace_dialog_config(
+        &self,
+        id: i64,
+        cx: &gpui::Context<Self>,
+    ) -> Option<WorkspaceDialogConfig> {
+        self.home_page
+            .read(cx)
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == Some(id))
+            .map(|workspace| WorkspaceDialogConfig {
+                workspace_id: Some(id),
+                parent_id: workspace.parent_id,
+                initial_name: workspace.name.clone(),
+                initial_sort_order: workspace.sort_order,
+            })
     }
 
     fn render_workspace_actions(
@@ -134,10 +171,15 @@ impl PersistentConnectionSidebar {
             .find(|item| item.id == Some(id))
             .cloned();
         let selected = home.read(cx).selected_connection_id == Some(id);
+        let can_drag = home.read(cx).can_move_connection(id);
         let icon = connection
             .as_ref()
             .map(|connection| home.read(cx).connection_icon(connection, px(16.0)))
             .unwrap_or_else(|| Icon::new(IconName::Apps).with_size(Size::Small));
+        let drag = DragConnection {
+            connection_id: id,
+            name: name.clone(),
+        };
         h_flex()
             .id(SharedString::from(format!("persistent-connection-{id}")))
             .w_full()
@@ -158,6 +200,12 @@ impl PersistentConnectionSidebar {
             .text_color(palette.foreground)
             .when(selected, |this| this.bg(palette.muted))
             .hover(move |this| this.bg(palette.muted))
+            .when(can_drag, |this| {
+                this.on_drag(drag, |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                })
+            })
             .on_click(move |_, window, cx| {
                 if let Some(connection) = connection.as_ref() {
                     home.update(cx, |home, cx| {
@@ -190,109 +238,26 @@ impl PersistentConnectionSidebar {
             .cursor_pointer()
             .text_color(palette.foreground)
             .hover(move |this| this.bg(palette.muted))
+            .drag_over::<DragConnection>(move |this, _, _, _| {
+                this.bg(palette.muted).border_color(palette.accent)
+            })
+            .on_drop(cx.listener(|this, drag: &DragConnection, _, cx| {
+                this.unassigned_collapsed = false;
+                this.home_page.update(cx, |home, cx| {
+                    home.move_connection_to_workspace(drag.connection_id, None, cx);
+                });
+                cx.notify();
+            }))
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
                     this.unassigned_collapsed = !this.unassigned_collapsed;
                     cx.notify();
                 })
             })
-            .child(tree_chevron(true, expanded))
+            .child(tree_chevron(count > 0, expanded))
             .child(Icon::new(IconName::FolderOpen).with_size(Size::Small))
             .child(tree_label(t!("Home.unassigned_workspace").to_string()))
             .child(tree_count(count, palette))
             .into_any_element()
     }
-}
-
-fn child_group_button(id: i64, home: gpui::Entity<crate::home_tab::HomePage>) -> Button {
-    tree_action_button("child", id, IconName::Plus).on_click(move |_, window, cx| {
-        let initial_sort_order = home.read(cx).workspaces.len() as i32;
-        show_workspace_dialog(
-            home.clone(),
-            WorkspaceDialogConfig {
-                parent_id: Some(id),
-                initial_sort_order: Some(initial_sort_order),
-                ..Default::default()
-            },
-            window,
-            cx,
-        );
-    })
-}
-
-fn edit_group_button(
-    id: i64,
-    workspace: one_core::storage::Workspace,
-    home: gpui::Entity<crate::home_tab::HomePage>,
-) -> Button {
-    tree_action_button("edit", id, IconName::Edit).on_click(move |_, window, cx| {
-        show_workspace_dialog(
-            home.clone(),
-            WorkspaceDialogConfig {
-                workspace_id: Some(id),
-                parent_id: workspace.parent_id,
-                initial_name: workspace.name.clone(),
-                initial_sort_order: workspace.sort_order,
-            },
-            window,
-            cx,
-        );
-    })
-}
-
-fn delete_group_button(id: i64, home: gpui::Entity<crate::home_tab::HomePage>) -> Button {
-    tree_action_button("delete", id, IconName::Remove)
-        .danger()
-        .on_click(move |_, window, cx| {
-            home.update(cx, |home, cx| home.delete_workspace(id, window, cx));
-        })
-}
-
-fn tree_chevron(has_children: bool, expanded: bool) -> AnyElement {
-    div()
-        .w(px(16.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(has_children, |this| {
-            this.child(
-                Icon::new(if expanded {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .with_size(Size::XSmall),
-            )
-        })
-        .into_any_element()
-}
-
-fn tree_label(label: String) -> AnyElement {
-    div()
-        .flex_1()
-        .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_ellipsis()
-        .text_sm()
-        .child(label)
-        .into_any_element()
-}
-
-fn tree_count(count: usize, palette: SidebarPalette) -> AnyElement {
-    div()
-        .px_1p5()
-        .rounded_full()
-        .bg(palette.muted)
-        .text_xs()
-        .text_color(palette.muted_foreground)
-        .child(count.to_string())
-        .into_any_element()
-}
-
-fn tree_action_button(action: &'static str, id: i64, icon: IconName) -> Button {
-    Button::new(format!("persistent-{action}-{id}"))
-        .icon(icon)
-        .ghost()
-        .xsmall()
 }

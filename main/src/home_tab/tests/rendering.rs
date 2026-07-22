@@ -122,6 +122,30 @@ fn sidebar_search_aligns_with_home_toolbar_height() {
 }
 
 #[test]
+fn persistent_sidebar_supports_connection_group_drag_and_drop() {
+    let rows = include_str!("../../persistent_connection_sidebar/rows.rs");
+    let grouping = include_str!("../connection_grouping.rs");
+
+    assert!(rows.contains(".on_drag("));
+    assert!(rows.contains(".drag_over::<DragConnection>"));
+    assert!(rows.contains("move_connection_to_workspace"));
+    assert!(rows.contains("Some(id)"));
+    assert!(rows.contains("None"));
+    assert!(grouping.contains("repo.update_workspace("));
+    assert!(grouping.contains("ConnectionDataEvent::ConnectionUpdated"));
+}
+
+#[test]
+fn persistent_sidebar_groups_expose_a_rename_interaction() {
+    let rows = include_str!("../../persistent_connection_sidebar/rows.rs");
+    let row_parts = include_str!("../../persistent_connection_sidebar/row_parts.rs");
+
+    assert!(row_parts.contains("Workspace.rename"));
+    assert!(rows.contains(".on_double_click("));
+    assert!(rows.contains("show_workspace_dialog"));
+}
+
+#[test]
 fn legacy_and_modern_home_layouts_are_both_kept() {
     let render = include_str!("../render.rs");
     let content = include_str!("../content.rs");
