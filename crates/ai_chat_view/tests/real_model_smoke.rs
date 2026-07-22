@@ -12,7 +12,7 @@ use one_core::storage::StorageManager;
 use one_core::storage::traits::Repository;
 
 #[tokio::test]
-#[ignore = "uses local DeepSeek credentials from ~/.config/one-hub/one-hub.db and calls a real model"]
+#[ignore = "uses local DeepSeek credentials from ~/.config/navop/one-hub.db and calls a real model"]
 async fn real_model_deepseek_agent_updates_plan_and_calls_tool() {
     let config = load_local_provider_config().expect("local enabled provider config");
     let runtime = ai_chat_view::build_runtime_from_provider_config(
@@ -112,7 +112,7 @@ async fn real_model_deepseek_agent_updates_plan_and_calls_tool() {
 }
 
 #[tokio::test]
-#[ignore = "uses local DeepSeek credentials from ~/.config/one-hub/one-hub.db and calls a real model"]
+#[ignore = "uses local DeepSeek credentials from ~/.config/navop/one-hub.db and calls a real model"]
 async fn real_model_deepseek_plan_prompt_reaches_update_plan() {
     let config = load_local_provider_config().expect("local enabled provider config");
     let runtime = ai_chat_view::build_runtime_from_provider_config(

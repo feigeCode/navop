@@ -90,23 +90,7 @@ pub fn get_db_path() -> Result<PathBuf> {
 }
 
 pub fn get_config_dir() -> Result<PathBuf> {
-    let config_dir = if cfg!(target_os = "macos") {
-        dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-            .join(".config")
-            .join("one-hub")
-    } else if cfg!(target_os = "windows") {
-        dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
-            .join("one-hub")
-    } else {
-        dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-            .join(".config")
-            .join("one-hub")
-    };
-
-    Ok(config_dir)
+    crate::app_dirs::config_dir()
 }
 
 pub fn get_download_dir() -> Option<PathBuf> {

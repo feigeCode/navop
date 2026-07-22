@@ -81,7 +81,7 @@ static RAW_MASTER_KEY: RwLock<Option<String>> = RwLock::new(None);
 
 /// 获取数据目录路径
 fn get_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|p| p.join("one-hub"))
+    crate::app_dirs::data_dir()
 }
 
 /// 获取密钥验证文件路径

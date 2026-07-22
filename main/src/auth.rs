@@ -329,7 +329,7 @@ impl AuthService {
 
 /// 获取认证数据存储路径
 fn get_auth_file_path() -> Option<std::path::PathBuf> {
-    dirs::data_dir().map(|p| p.join("one-hub").join("auth.json"))
+    one_core::app_dirs::data_dir().map(|p| p.join("auth.json"))
 }
 
 /// 保存认证数据到本地

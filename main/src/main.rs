@@ -137,6 +137,10 @@ fn main() {
         return;
     }
 
+    if let Err(error) = one_core::app_dirs::migrate_legacy_directories() {
+        eprintln!("Failed to migrate legacy application directories: {error:#}");
+    }
+
     let (file_open_tx, file_open_rx) = smol::channel::unbounded();
     for argument in std::env::args_os().skip(1) {
         let _ = file_open_tx.try_send(file_open::FileOpenInput::Path(argument.into()));
@@ -241,6 +245,19 @@ mod embedded_cli_removal_tests {
         let source = include_str!("main.rs");
 
         assert!(source.contains("file_association::schedule_registration(cx)"));
+    }
+
+    #[test]
+    fn startup_migrates_legacy_application_directories_before_loading_assets() {
+        let source = include_str!("main.rs");
+        let migration = source
+            .find("migrate_legacy_directories()")
+            .expect("startup directory migration");
+        let assets = source
+            .find("AppAssets::new()")
+            .expect("application asset initialization");
+
+        assert!(migration < assets);
     }
 
     #[test]

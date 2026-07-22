@@ -153,7 +153,7 @@ pub fn get_key_storage() -> Arc<dyn KeyStorage> {
 
 /// 获取数据目录路径
 fn get_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|p| p.join("one-hub"))
+    crate::app_dirs::data_dir()
 }
 
 /// 获取本地密钥存储文件路径

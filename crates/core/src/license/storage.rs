@@ -56,12 +56,12 @@ pub struct LocalLicenseStorage;
 impl LocalLicenseStorage {
     /// 获取 License 缓存文件路径
     fn get_license_path() -> Option<PathBuf> {
-        dirs::data_dir().map(|p| p.join("one-hub").join("license.json"))
+        crate::app_dirs::data_dir().map(|p| p.join("license.json"))
     }
 
     /// 获取离线 License 文件路径
     fn get_offline_license_path() -> Option<PathBuf> {
-        dirs::data_dir().map(|p| p.join("one-hub").join("offline_license.json"))
+        crate::app_dirs::data_dir().map(|p| p.join("offline_license.json"))
     }
 }
 
