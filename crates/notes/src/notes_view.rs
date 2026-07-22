@@ -448,7 +448,8 @@ mod external_markdown_tests {
         let path = temp.path().join("round-trip.md");
         let source = concat!(
             "> <https://example.com/path_(item)>\n\n",
-            "[README](README_CN.md) and `snake_case(value)`\n",
+            "[README](README_CN.md) and `snake_case(value)`\n\n",
+            "2. second\n\n_italic_\n",
         );
         std::fs::write(&path, source).unwrap();
         let (window, view) = cx.update(|cx| {
@@ -470,6 +471,10 @@ mod external_markdown_tests {
             let id = view.active_document_id.clone().unwrap();
             let session = view.markdown_sessions.get(&id).unwrap();
             assert!(session.source_authoritative);
+            assert!(matches!(
+                session.compatibility,
+                cditor_app::MarkdownCompatibility::SourceOnly(_)
+            ));
             assert!(session.preview.is_readonly(cx));
             id
         });
@@ -481,5 +486,40 @@ mod external_markdown_tests {
         cx.run_until_parked();
 
         assert_eq!(source, std::fs::read_to_string(path).unwrap());
+    }
+
+    #[gpui::test]
+    fn standalone_lossless_markdown_preview_is_editable(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("editable.md");
+        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let cx = VisualTestContext::from_window(window.into(), cx);
+
+        view.read_with(&cx, |view, cx| {
+            let id = view.active_document_id.as_ref().unwrap();
+            let session = view.markdown_sessions.get(id).unwrap();
+            assert!(session.source_authoritative);
+            assert_eq!(
+                cditor_app::MarkdownCompatibility::Editable,
+                session.compatibility
+            );
+            assert!(!session.preview.is_readonly(cx));
+        });
     }
 }

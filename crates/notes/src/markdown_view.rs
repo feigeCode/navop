@@ -46,7 +46,6 @@ impl NotesView {
                     source_editor_provider: Arc::new(
                         crate::source_editor_provider::NotesSourceEditorProvider,
                     ),
-                    source_authoritative: self.standalone_markdown,
                     document_renderer_provider: self
                         .document_renderer_provider
                         .clone()
@@ -67,6 +66,9 @@ impl NotesView {
                     compatibility: projection.compatibility,
                     diagnostics: projection.diagnostics,
                     normalization_accepted: false,
+                    // Standalone files retain their exact original source when changing
+                    // modes. Preview editability is decided independently by Cditor's
+                    // byte-stable Markdown compatibility result.
                     source_authoritative: self.standalone_markdown,
                     save_generation: Default::default(),
                     state: MarkdownSessionState {
@@ -256,9 +258,6 @@ fn switch_to_wysiwyg(
     )?;
     session.compatibility = imported.compatibility;
     session.diagnostics = imported.diagnostics;
-    if session.source_authoritative {
-        session.preview.set_readonly(true, cx)?;
-    }
     session.state.switch_to_wysiwyg();
     Ok(None)
 }

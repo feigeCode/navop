@@ -176,9 +176,6 @@ fn markdown_status(
         return source_status(session);
     }
     let session = session?;
-    if session.source_authoritative {
-        return Some(t!("Notes.markdown_readonly_preview").to_string());
-    }
     match save_state {
         Some(EditorSaveState::Dirty) => {
             return Some(t!("Notes.markdown_waiting_autosave").to_string());
