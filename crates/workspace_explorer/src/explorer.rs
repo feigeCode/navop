@@ -12,9 +12,11 @@ use crate::git::{GitChange, GitRepository, load_changes};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
 use gpui::{
-    AppContext as _, AsyncApp, Context, Entity, ScrollHandle, Subscription, WeakEntity, Window,
+    AppContext as _, AsyncApp, Context, Entity, PathPromptOptions, ScrollHandle, Subscription,
+    WeakEntity, Window,
 };
 use ignore::gitignore::Gitignore;
+use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,6 +50,7 @@ pub struct WorkspaceExplorer {
     scroll_handle: ScrollHandle,
     show_hidden: bool,
     show_ignored: bool,
+    follow_terminal_cwd: bool,
     ignore_matcher: Option<Arc<Gitignore>>,
     show_frame_controls: bool,
     frame_placement: ExplorerFramePlacement,
@@ -102,6 +105,7 @@ impl WorkspaceExplorer {
             scroll_handle: ScrollHandle::new(),
             show_hidden: false,
             show_ignored: false,
+            follow_terminal_cwd: true,
             ignore_matcher: None,
             show_frame_controls,
             frame_placement: ExplorerFramePlacement::Right,
@@ -119,10 +123,66 @@ impl WorkspaceExplorer {
         &self.root
     }
 
-    pub fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if !should_update_root(&self.root, &root, self.repository.is_some()) {
+    pub fn follows_terminal_cwd(&self) -> bool {
+        self.follow_terminal_cwd
+    }
+
+    pub fn set_root_from_terminal(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if !should_sync_terminal_root(
+            self.follow_terminal_cwd,
+            &self.root,
+            &root,
+            self.repository.is_some(),
+        ) {
             return;
         }
+        self.apply_root_change(root, cx);
+    }
+
+    pub fn set_root_manually(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.follow_terminal_cwd = false;
+        if self.root != root {
+            self.apply_root_change(root, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    pub fn set_follow_terminal_cwd(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.follow_terminal_cwd == enabled {
+            return;
+        }
+        self.follow_terminal_cwd = enabled;
+        if enabled {
+            cx.emit(WorkspaceExplorerEvent::SyncTerminalCwd);
+        }
+        cx.notify();
+    }
+
+    pub fn choose_root(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.entity().clone();
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: false,
+            directories: true,
+            prompt: Some(t!("WorkspaceExplorer.frame.choose_root").to_string().into()),
+        });
+        window
+            .spawn(cx, async move |cx| {
+                let Ok(Ok(Some(paths))) = prompt.await else {
+                    return;
+                };
+                let Some(path) = paths.first().cloned() else {
+                    return;
+                };
+                let _ = view.update_in(cx, |this, _window, cx| {
+                    this.set_root_manually(path, cx);
+                });
+            })
+            .detach();
+    }
+
+    fn apply_root_change(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         self.root = root;
         self.reset_workspace_state();
         self.refresh(cx);
@@ -350,6 +410,15 @@ fn accepts_git_result(current: GitResultIdentity<'_>, result: GitResultIdentity<
 
 fn should_update_root(current: &Path, requested: &Path, in_repository: bool) -> bool {
     current != requested && !(in_repository && requested.starts_with(current))
+}
+
+fn should_sync_terminal_root(
+    follow_terminal_cwd: bool,
+    current: &Path,
+    requested: &Path,
+    in_repository: bool,
+) -> bool {
+    follow_terminal_cwd && should_update_root(current, requested, in_repository)
 }
 
 #[cfg(test)]

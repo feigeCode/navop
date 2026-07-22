@@ -878,6 +878,9 @@ impl TerminalSidebar {
                             cx,
                         );
                     }
+                    WorkspaceExplorerEvent::SyncTerminalCwd => {
+                        cx.emit(TerminalSidebarEvent::SyncWorkingDir);
+                    }
                 },
             );
             subs.push(explorer_sub);
@@ -1314,7 +1317,7 @@ impl TerminalSidebar {
     pub fn sync_workspace_explorer_path(&mut self, path: String, cx: &mut Context<Self>) {
         if let Some(ref explorer) = self.file_explorer_panel {
             explorer.update(cx, move |explorer, cx| {
-                explorer.set_root(PathBuf::from(path), cx);
+                explorer.set_root_from_terminal(PathBuf::from(path), cx);
             });
         }
     }

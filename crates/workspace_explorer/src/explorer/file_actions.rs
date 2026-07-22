@@ -594,11 +594,13 @@ pub(super) fn build_file_context_menu(
     let open_explorer = explorer.clone();
     let create_file_explorer = explorer.clone();
     let create_directory_explorer = explorer.clone();
+    let set_root_explorer = explorer.clone();
     let rename_explorer = explorer.clone();
     let delete_explorer = explorer.clone();
     let open_path = path.clone();
     let create_file_parent = parent.clone();
     let create_directory_parent = parent;
+    let set_root_path = path.clone();
     let rename_path = path.clone();
     let delete_path = path;
     let theme = explorer.read(cx).theme.menu_style();
@@ -635,6 +637,19 @@ pub(super) fn build_file_context_menu(
                     });
                 }),
         )
+        .when(is_dir, |menu| {
+            menu.separator().item(
+                PopupMenuItem::new(
+                    t!("WorkspaceExplorer.file_action.set_workspace_root").to_string(),
+                )
+                .icon(IconName::Pin)
+                .on_click(move |_, _, cx| {
+                    set_root_explorer.update(cx, |this, cx| {
+                        this.set_root_manually(set_root_path.clone(), cx);
+                    });
+                }),
+            )
+        })
         .separator()
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.file_action.rename").to_string())

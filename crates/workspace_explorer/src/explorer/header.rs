@@ -221,11 +221,34 @@ fn build_frame_options_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let remove_view = view.clone();
+    let choose_root_view = view.clone();
+    let follow_view = view.clone();
     let hidden_view = view.clone();
     let ignored_view = view.clone();
+    let follows_terminal_cwd = view.read(cx).follows_terminal_cwd();
     let theme = view.read(cx).theme.menu_style();
     menu.local_style(theme)
         .min_w(px(220.0))
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.frame.choose_root").to_string())
+                .icon(IconName::FolderOpen)
+                .on_click(move |_, window, cx| {
+                    choose_root_view.update(cx, |this, cx| {
+                        this.choose_root(window, cx);
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.frame.follow_terminal_cwd").to_string())
+                .icon(IconName::Refresh)
+                .checked(follows_terminal_cwd)
+                .on_click(move |_, _, cx| {
+                    follow_view.update(cx, |this, cx| {
+                        this.set_follow_terminal_cwd(!follows_terminal_cwd, cx);
+                    });
+                }),
+        )
+        .separator()
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.tooltip.show_hidden_files").to_string())
                 .icon(IconName::Eye)

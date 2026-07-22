@@ -14,6 +14,7 @@ pub enum ExplorerFramePlacement {
 pub enum WorkspaceExplorerEvent {
     Close,
     MoveTo(ExplorerFramePlacement),
+    SyncTerminalCwd,
 }
 
 impl EventEmitter<WorkspaceExplorerEvent> for WorkspaceExplorer {}

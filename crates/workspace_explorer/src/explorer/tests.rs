@@ -52,6 +52,17 @@ fn repository_root_stays_stable_when_terminal_moves_into_a_subdirectory() {
     assert!(should_update_root(&root, &child, false));
 }
 
+#[test]
+fn terminal_root_sync_stops_after_manual_root_selection() {
+    let current = PathBuf::from("/workspace/manual");
+    let requested = PathBuf::from("/workspace/terminal");
+
+    assert!(!should_sync_terminal_root(
+        false, &current, &requested, false
+    ));
+    assert!(should_sync_terminal_root(true, &current, &requested, false));
+}
+
 fn identity<'a>(generation: u64, repository: Option<&'a PathBuf>) -> GitResultIdentity<'a> {
     GitResultIdentity {
         generation,

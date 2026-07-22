@@ -59,6 +59,10 @@ WorkspaceExplorer:
       en: New Directory
       zh-CN: 新建目录
       zh-HK: 新增目錄
+    set_workspace_root:
+      en: Set as Workspace Root
+      zh-CN: 设为工作区根目录
+      zh-HK: 設為工作區根目錄
     rename:
       en: Rename
       zh-CN: 重命名
@@ -346,6 +350,14 @@ WorkspaceExplorer:
       en: Panel options
       zh-CN: 面板选项
       zh-HK: 面板選項
+    choose_root:
+      en: Choose Workspace Folder
+      zh-CN: 选择工作区目录
+      zh-HK: 選擇工作區資料夾
+    follow_terminal_cwd:
+      en: Follow Terminal Working Directory
+      zh-CN: 跟随终端工作目录
+      zh-HK: 跟隨終端工作目錄
     move_to:
       en: Move to
       zh-CN: 移动到
