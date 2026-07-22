@@ -1,5 +1,7 @@
+#[cfg(target_os = "macos")]
+use gpui::div;
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, Entity, IntoElement, ParentElement, Styled, div, px};
+use gpui::{AnyElement, Entity, IntoElement, ParentElement, Styled, px};
 use gpui_component::{
     Icon, Selectable, Sizable, Size,
     button::{Button, ButtonVariants as _},
@@ -10,7 +12,9 @@ use one_core::settings::{AppSettings, GlobalCurrentUser, StartupDefaultPage};
 use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
-use super::{SidebarPalette, TOP_BAR_BACKGROUND, TOP_BAR_BORDER};
+use super::SidebarPalette;
+#[cfg(target_os = "macos")]
+use super::{TOP_BAR_BACKGROUND, TOP_BAR_BORDER};
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
