@@ -3063,8 +3063,7 @@ impl TabContainer {
             .child(
                 h_flex()
                     .id("tabs")
-                    .flex_1()
-                    .h_full()
+                    .size_full()
                     .items_center()
                     // 仅在启用窗口控件时设置拖动区域（用于 Windows 原生拖动）
                     .when(show_window_controls, |this| {
@@ -3423,7 +3422,16 @@ impl TabContainer {
                                     .append(menu, window, cx)
                                 })
                             })
-                    })),
+                    }))
+                    .map(|tabs| {
+                        div()
+                            .id("tab-scroll-boundary")
+                            .flex_1()
+                            .h_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(tabs)
+                    }),
             )
             .child(
                 Button::new("tab-dropdown-btn")

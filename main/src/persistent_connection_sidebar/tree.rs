@@ -19,8 +19,6 @@ use super::{
 };
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
-const CONNECTION_TREE_WIDTH: gpui::Pixels = px(260.0);
-
 impl PersistentConnectionSidebar {
     pub(super) fn render_connection_tree(
         &mut self,
@@ -30,7 +28,10 @@ impl PersistentConnectionSidebar {
     ) -> AnyElement {
         let rows = self.tree_rows(cx);
         v_flex()
-            .w(CONNECTION_TREE_WIDTH)
+            .relative()
+            .w(self.tree_width)
+            .min_w(self.tree_width)
+            .max_w(self.tree_width)
             .h_full()
             .min_h_0()
             .flex_shrink_0()
@@ -54,6 +55,7 @@ impl PersistentConnectionSidebar {
                         ),
                     ),
             )
+            .child(self.render_tree_resize_handle(cx))
             .into_any_element()
     }
 

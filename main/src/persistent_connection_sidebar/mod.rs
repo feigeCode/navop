@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use gpui::{AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Render, Styled, Window};
+use gpui::{
+    AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Pixels, Render, Styled, Window,
+};
 use gpui_component::{
     h_flex,
     input::{InputEvent, InputState},
@@ -11,6 +13,9 @@ use crate::home_tab::HomePage;
 
 mod drag;
 mod rail;
+mod resize;
+#[cfg(test)]
+mod resize_contract_tests;
 mod row_parts;
 mod rows;
 mod tree;
@@ -69,6 +74,7 @@ pub(crate) struct PersistentConnectionSidebar {
     pub(super) collapsed_workspaces: HashSet<i64>,
     pub(super) unassigned_collapsed: bool,
     pub(super) search_input: Entity<InputState>,
+    tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
 }
 
@@ -97,6 +103,7 @@ impl PersistentConnectionSidebar {
             collapsed_workspaces: HashSet::new(),
             unassigned_collapsed: false,
             search_input,
+            tree_width: resize::CONNECTION_TREE_DEFAULT_WIDTH,
             terminal_colors: None,
         }
     }

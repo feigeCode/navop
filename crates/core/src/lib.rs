@@ -38,6 +38,8 @@ mod tab_container_drag_contract_tests;
 #[cfg(test)]
 mod tab_container_external_drag_contract_tests;
 #[cfg(test)]
+mod tab_container_layout_contract_tests;
+#[cfg(test)]
 mod tab_content_contract_tests;
 
 pub use crate::agent::{
