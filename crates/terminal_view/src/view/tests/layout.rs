@@ -195,7 +195,8 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(!render_source.contains(".h_full()"));
     assert!(render_source.contains(".h(px(self.input_height))"));
     assert!(render_source.contains("drag.initial_height + delta"));
-    assert!(render_source.contains("initial_y.set(Some(event.position.y))"));
+    assert!(render_source.contains("drag.initial_y.set(Some(window.mouse_position().y))"));
+    assert!(!render_source.contains(".on_mouse_down(gpui::MouseButton::Left"));
     assert!(render_source.contains("initial_y - event.event.position.y"));
     assert!(!render_source.contains("event.bounds.center().y"));
     assert!(render_source.contains("if drag.entity_id != cx.entity_id()"));

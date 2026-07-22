@@ -54,13 +54,6 @@ impl TerminalCommandBar {
             .items_center()
             .justify_center()
             .cursor_row_resize()
-            .on_mouse_down(gpui::MouseButton::Left, {
-                let initial_y = initial_y.clone();
-                move |event, _, cx| {
-                    initial_y.set(Some(event.position.y));
-                    cx.stop_propagation();
-                }
-            })
             .on_drag_move(cx.listener(Self::resize_input))
             .on_drag(
                 CommandBarResize {
@@ -68,7 +61,8 @@ impl TerminalCommandBar {
                     initial_height: self.input_height,
                     initial_y,
                 },
-                |drag, _, _, cx| {
+                |drag, _, window, cx| {
+                    drag.initial_y.set(Some(window.mouse_position().y));
                     cx.stop_propagation();
                     cx.new(|_| drag.clone())
                 },
