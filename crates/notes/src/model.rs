@@ -33,7 +33,6 @@ pub enum NodeKind {
 #[serde(rename_all = "snake_case")]
 pub enum DocumentFormat {
     #[default]
-    RichText,
     Markdown,
 }
 
@@ -78,7 +77,7 @@ mod tests {
             serde_json::from_str(r#"{"selected_document":null,"expanded_directories":[]}"#)
                 .unwrap();
         assert!(state.markdown_view_modes.is_empty());
-        assert_eq!(DocumentFormat::RichText, state.last_created_format);
+        assert_eq!(DocumentFormat::Markdown, state.last_created_format);
         assert_eq!(MarkdownViewMode::Wysiwyg, MarkdownViewMode::default());
     }
 }

@@ -8,7 +8,7 @@ Navop 将数据库、Redis、MongoDB、SSH、SFTP、终端、远程桌面、Note
 
 - 新增终端命令栏、持久化快捷命令与命令建议。
 - 新增 Workspace Explorer、标签页文件编辑、Git diff、分支切换、推送与回滚。
-- File Explorer 使用 Notes/Cditor 渲染 Markdown；无损内容可编辑，有损语法保留源码并在 Source 模式编辑。
+- File Explorer 与 Notes 使用 Navop 原生源码保真 Markdown 编辑器；Markdown 始终是权威数据，未知语法保持原样并可在 Source 模式精确编辑。
 - 新增首页常驻连接树导航，并完善 Redis 二进制值和跨平台发布稳定性。
 
 ## 从这里开始

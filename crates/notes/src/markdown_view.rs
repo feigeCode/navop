@@ -1,21 +1,54 @@
-use crate::markdown_adapter::{
-    MarkdownProjectionConfig, apply_markdown_source, build_markdown_projection,
-    export_markdown_bundle,
-};
 use crate::markdown_file_store::MarkdownFileStore;
+use crate::markdown_mode::{switch_to_source, switch_to_wysiwyg};
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
 use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
-use one_core::settings::AppSettings;
+use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
+use markdown_source::SourceMarkdownDocument;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 const MARKDOWN_SAVE_DELAY: Duration = Duration::from_millis(700);
 
 impl NotesView {
+    pub(crate) fn apply_source_mode_history(
+        &mut self,
+        undo: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document_id) = self.active_document_id.as_ref() else {
+            return;
+        };
+        let Some(session) = self.markdown_sessions.get(document_id) else {
+            return;
+        };
+        let selection = session.preview.update(cx, |editor, cx| {
+            if undo {
+                editor.undo_source_mode(window, cx)
+            } else {
+                editor.redo_source_mode(window, cx)
+            }
+        });
+        let Ok(Some(selection)) = selection else {
+            return;
+        };
+        let source = session.preview.read(cx).source().to_owned();
+        session.source_editor.update(cx, |input, cx| {
+            input.set_value(source, window, cx);
+            input.set_selected_range(
+                selection.anchor.min(selection.head)..selection.anchor.max(selection.head),
+                selection.anchor > selection.head,
+                window,
+                cx,
+            );
+        });
+    }
+
     pub(crate) fn open_markdown_document(
         &mut self,
         descriptor: DocumentDescriptor,
@@ -31,51 +64,44 @@ impl NotesView {
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let ai_model_id = cx
-                .try_global::<AppSettings>()
-                .and_then(|settings| settings.ai_chat.notes_model_id.clone());
-            let projection = build_markdown_projection(
-                MarkdownProjectionConfig {
-                    document_id: &document_id,
-                    source: &snapshot.source,
-                    store: store.clone(),
-                    ai_provider: self.ai_provider.clone(),
-                    ai_model_id: ai_model_id.as_deref(),
-                    syntax_highlight_provider: self.syntax_highlight_provider.clone(),
-                    theme_provider: self.theme_provider.clone(),
-                    source_editor_provider: Arc::new(
-                        crate::source_editor_provider::NotesSourceEditorProvider,
-                    ),
-                    document_renderer_provider: self
-                        .document_renderer_provider
-                        .clone()
-                        .map(|provider| provider as Arc<dyn cditor_app::DocumentRendererProvider>),
-                },
+            let source_document = Arc::new(std::sync::Mutex::new(SourceMarkdownDocument::parse(
+                snapshot.source.clone(),
+            )?));
+            let theme = markdown_editor_theme(self.resolved_editor_theme(cx));
+            let preview = cx.new(|cx| {
+                MarkdownEditor::new(snapshot.source.clone(), theme, window, cx)
+                    .expect("prevalidated Markdown must initialize the editor")
+            });
+            let preview_subscription = subscribe_markdown_changes(
+                &preview,
+                &source_editor,
+                document_id.clone(),
+                window,
+                cx,
+            );
+            let source_subscription =
+                subscribe_source_changes(&source_editor, &preview, window, cx);
+            let file_watcher = crate::markdown_watcher::watch_markdown_file(
+                descriptor.absolute_path.clone(),
+                document_id.clone(),
+                window,
                 cx,
             )?;
-            self.observe_editor_events(projection.events, window, cx);
-            let subscription =
-                subscribe_source_changes(&source_editor, document_id.clone(), window, cx);
             self.markdown_sessions.insert(
                 document_id.clone(),
                 MarkdownSession {
                     relative_path: descriptor.relative_path,
                     store,
                     source_editor,
-                    preview: projection.handle,
-                    compatibility: projection.compatibility,
-                    diagnostics: projection.diagnostics,
-                    normalization_accepted: false,
-                    // Standalone files retain their exact original source when changing
-                    // modes. Preview editability is decided independently by Cditor's
-                    // byte-stable Markdown compatibility result.
-                    source_authoritative: self.standalone_markdown,
+                    preview,
+                    source_document,
                     save_generation: Default::default(),
                     state: MarkdownSessionState {
                         mode,
                         ..MarkdownSessionState::default()
                     },
-                    _subscription: subscription,
+                    _subscriptions: vec![preview_subscription, source_subscription],
+                    _file_watcher: Some(file_watcher),
                 },
             );
             if let Some(storage) = self.storage.as_ref() {
@@ -83,7 +109,6 @@ impl NotesView {
             }
         }
         self.active_document_id = Some(document_id.clone());
-        self.active_editor = None;
         if let Some(session) = self.markdown_sessions.get(&document_id)
             && session.state.mode == MarkdownViewMode::Source
         {
@@ -106,6 +131,13 @@ impl NotesView {
             return;
         };
         let generation = session.state.source_changed();
+        if let Err(error) = replace_session_source(session, &source) {
+            session
+                .state
+                .source_save_failed(generation, error.to_string());
+            notify_operation_error(window, cx, error);
+            return;
+        }
         session.save_generation.store(generation, Ordering::Release);
         let _ = session.state.begin_source_save(generation);
         let store = session.store.clone();
@@ -166,7 +198,7 @@ impl NotesView {
             return None;
         }
         let result = match session.state.mode {
-            MarkdownViewMode::Source => switch_to_wysiwyg(session, cx),
+            MarkdownViewMode::Source => switch_to_wysiwyg(session, window, cx),
             MarkdownViewMode::Wysiwyg => switch_to_source(session, window, cx),
         };
         match result {
@@ -179,28 +211,6 @@ impl NotesView {
                 None
             }
         }
-    }
-
-    pub(crate) fn accept_markdown_normalization(
-        &mut self,
-        document_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
-            return;
-        };
-        if !matches!(
-            session.compatibility,
-            cditor_app::MarkdownCompatibility::EditableWithNormalization(_)
-        ) {
-            return;
-        }
-        session.normalization_accepted = true;
-        if let Err(error) = session.preview.set_readonly(false, cx) {
-            notify_operation_error(window, cx, error);
-        }
-        cx.notify();
     }
 
     pub(crate) fn remap_markdown_sessions(
@@ -245,58 +255,51 @@ impl NotesView {
     }
 }
 
-fn switch_to_wysiwyg(
-    session: &mut MarkdownSession,
-    cx: &mut Context<NotesView>,
-) -> anyhow::Result<Option<String>> {
-    let source = session.source_editor.read(cx).value().to_string();
-    let imported = apply_markdown_source(
-        &session.preview,
-        &source,
-        session.normalization_accepted,
-        cx,
-    )?;
-    session.compatibility = imported.compatibility;
-    session.diagnostics = imported.diagnostics;
-    session.state.switch_to_wysiwyg();
-    Ok(None)
+fn replace_session_source(session: &MarkdownSession, source: &str) -> anyhow::Result<()> {
+    let mut document = session
+        .source_document
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
+    *document = document.replace_source(source)?;
+    Ok(())
 }
 
-fn switch_to_source(
-    session: &mut MarkdownSession,
+fn subscribe_markdown_changes(
+    preview: &gpui::Entity<MarkdownEditor>,
+    source_editor: &gpui::Entity<gpui_component::input::InputState>,
+    document_id: String,
     window: &mut Window,
     cx: &mut Context<NotesView>,
-) -> anyhow::Result<Option<String>> {
-    if source_must_remain_authoritative(session) {
-        session.state.switch_to_source();
-        focus_source_editor(session, window, cx);
-        return Ok(None);
+) -> gpui::Subscription {
+    let source_editor = source_editor.clone();
+    cx.subscribe_in(
+        preview,
+        window,
+        move |view, _, event: &MarkdownEditorEvent, window, cx| {
+            let MarkdownEditorEvent::Changed { source, .. } = event;
+            let source_mode = view
+                .markdown_sessions
+                .get(&document_id)
+                .is_some_and(|session| session.state.mode == MarkdownViewMode::Source);
+            if !source_mode {
+                source_editor.update(cx, |input, cx| {
+                    input.set_value(source.clone(), window, cx);
+                });
+            }
+            view.markdown_source_changed(&document_id, source.clone(), window, cx);
+        },
+    )
+}
+
+fn markdown_editor_theme(
+    theme: crate::theme_provider::MarkdownEditorTheme,
+) -> markdown_editor::MarkdownEditorTheme {
+    markdown_editor::MarkdownEditorTheme {
+        background: theme.background,
+        foreground: theme.foreground,
+        muted_foreground: theme.muted_foreground,
+        border: theme.border,
+        primary: theme.primary,
+        highlight_theme: theme.highlight_theme,
     }
-    let markdown = export_markdown_bundle(&session.preview, &session.store, cx)?;
-    session.source_editor.update(cx, |input, cx| {
-        input.set_value(markdown.clone(), window, cx)
-    });
-    session.state.switch_to_source();
-    focus_source_editor(session, window, cx);
-    Ok(Some(markdown))
 }
-
-fn source_must_remain_authoritative(session: &MarkdownSession) -> bool {
-    session.source_authoritative
-        || matches!(
-            session.compatibility,
-            cditor_app::MarkdownCompatibility::SourceOnly(_)
-        )
-}
-
-fn focus_source_editor(
-    session: &MarkdownSession,
-    window: &mut Window,
-    cx: &mut Context<NotesView>,
-) {
-    let input = session.source_editor.clone();
-    window.defer(cx, move |window, cx| {
-        input.update(cx, |input, cx| input.focus(window, cx))
-    });
-}
-use std::sync::Arc;

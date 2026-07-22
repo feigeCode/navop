@@ -99,10 +99,10 @@ mod tests {
             kind: NodeKind::Directory,
             format: None,
             children: vec![FileNode {
-                relative_path: "work/note.cditor.json".into(),
+                relative_path: "work/note.md".into(),
                 display_name: "note".into(),
                 kind: NodeKind::Document,
-                format: Some(DocumentFormat::RichText),
+                format: Some(DocumentFormat::Markdown),
                 children: Vec::new(),
             }],
         }];

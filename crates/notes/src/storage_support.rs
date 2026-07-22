@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 pub(crate) fn scan_directory(root: &Path, directory: &Path) -> Result<Vec<FileNode>> {
     let mut nodes = Vec::new();
@@ -135,27 +134,6 @@ pub(crate) fn write_text_atomic(path: &Path, text: &str) -> Result<()> {
     file.write_all(text.as_bytes())?;
     file.flush()?;
     fs::rename(temporary, path)?;
-    Ok(())
-}
-
-pub(crate) fn write_text_atomic_new(path: &Path, text: &str) -> Result<()> {
-    let name = path
-        .file_name()
-        .context("file has no name")?
-        .to_string_lossy();
-    let temporary = path.with_file_name(format!(".{name}.{}.tmp", Uuid::new_v4()));
-    let result = write_new_file(&temporary, text).and_then(|_| {
-        fs::hard_link(&temporary, path)
-            .with_context(|| format!("create new file {}", path.display()))
-    });
-    let _ = fs::remove_file(temporary);
-    result
-}
-
-fn write_new_file(path: &Path, text: &str) -> Result<()> {
-    let mut file = File::options().write(true).create_new(true).open(path)?;
-    file.write_all(text.as_bytes())?;
-    file.flush()?;
     Ok(())
 }
 

@@ -1274,7 +1274,11 @@ impl TextElement {
                 diagnostics,
                 ..
             } => (highlighter.borrow_mut(), diagnostics),
-            _ => return None,
+            _ if state.text_highlights.is_empty() => return None,
+            _ => {
+                let styles = custom_text_highlights(&state, &visible_byte_range);
+                return Some(styles);
+            }
         };
         let highlighter = highlighter.as_mut()?;
         let highlight_theme = state
@@ -1344,8 +1348,35 @@ impl TextElement {
 
         // Combine marker styles
         styles = gpui::combine_highlights(diagnostic_styles, styles).collect();
+        styles =
+            gpui::combine_highlights(styles, custom_text_highlights(&state, &visible_byte_range))
+                .collect();
 
         Some(styles)
+    }
+}
+
+fn custom_text_highlights(
+    state: &InputState,
+    visible_range: &Range<usize>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let styles = state
+        .text_highlights
+        .iter()
+        .filter_map(|(range, style)| {
+            let start = range.start.max(visible_range.start);
+            let end = range.end.min(visible_range.end);
+            (start < end).then_some((start..end, *style))
+        })
+        .collect::<Vec<_>>();
+    if styles.is_empty() {
+        vec![(visible_range.clone(), HighlightStyle::default())]
+    } else {
+        gpui::combine_highlights(
+            vec![(visible_range.clone(), HighlightStyle::default())],
+            styles,
+        )
+        .collect()
     }
 }
 

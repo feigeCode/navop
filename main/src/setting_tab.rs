@@ -2909,7 +2909,6 @@ fn shortcut_search_texts() -> Vec<String> {
             texts.extend(entry.keys_other.iter().map(|spec| spec.to_string()));
         }
     }
-
     texts.extend(notes_shortcut_search_texts());
 
     texts

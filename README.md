@@ -62,7 +62,7 @@
 
 - **Terminal command bar and quick commands** — use command suggestions, persistent shortcuts, pinned commands, and fast access from the terminal or sidebar.
 - **Workspace Explorer and Git tools** — browse and manage workspace files, open tabbed editors, review diffs, switch and push branches, and roll back changes without leaving the terminal workspace.
-- **Source-safe Markdown editing** — File Explorer uses the native Notes/Cditor renderer and workspace theme. Lossless documents remain editable; syntax that cannot round-trip safely stays rendered as a read-only preview and can be edited exactly in Source mode.
+- **Source-safe Markdown editing** — File Explorer and Notes use Navop's native source-preserving Markdown editor. Markdown stays authoritative, rich previews remain editable, and unsupported syntax is preserved for exact source editing.
 - **Persistent connection navigation** — filter and open database, SSH, and other resources from the home navigation rail, with quick access to Notes, extensions, settings, and team management.
 - **Cross-platform reliability** — Redis binary values are preserved correctly, image-only Markdown table cells can be cleared, and release packaging now covers macOS, Windows, x86_64 Linux, and ARM64 Linux.
 
@@ -389,7 +389,7 @@ Use the GitHub [Releases](https://github.com/feigeCode/navop/releases/latest) pa
 <details>
 <summary><strong>Is Navop free?</strong></summary>
 
-All features are available without sponsorship. Navop-authored source is licensed under Apache License 2.0 and the Navop Supplementary License, while the Notes workspace includes the GPL-licensed Cditor dependency. Distributions must comply with all applicable third-party license terms.
+All features are available without sponsorship. Navop-authored source is licensed under Apache License 2.0 and the Navop Supplementary License. Distributions must comply with all applicable third-party license terms.
 </details>
 
 <details>
@@ -421,9 +421,7 @@ ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-f
 
 Navop source code is licensed under [Apache License 2.0](LICENSE-APACHE).
 
-The Notes workspace includes [Cditor](https://github.com/feigeCode/Cditor), a GPL-licensed dependency. The Cditor component and any distribution that contains it must comply with the applicable GNU GPL terms and the license notices provided by Cditor.
-
-Navop-authored portions are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds the following restrictions on top of Apache 2.0. These supplementary terms do not replace or limit the licenses that apply to third-party components such as Cditor:
+Navop-authored portions are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds the following restrictions on top of Apache 2.0. These supplementary terms do not replace or limit licenses that apply to third-party components:
 
 - No redistribution, resale, or repackaging as a standalone product
 - No creating competing products or services based on this software

@@ -1,0 +1,12 @@
+[package]
+name = "markdown-source"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+markdown.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

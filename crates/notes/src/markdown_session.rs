@@ -24,14 +24,12 @@ pub(crate) struct MarkdownSession {
     pub relative_path: PathBuf,
     pub store: MarkdownFileStore,
     pub source_editor: Entity<InputState>,
-    pub preview: EditorHandle,
-    pub compatibility: MarkdownCompatibility,
-    pub diagnostics: Vec<MarkdownDiagnostic>,
-    pub normalization_accepted: bool,
-    pub source_authoritative: bool,
+    pub preview: Entity<markdown_editor::MarkdownEditor>,
+    pub source_document: Arc<std::sync::Mutex<markdown_source::SourceMarkdownDocument>>,
     pub save_generation: Arc<AtomicU64>,
     pub state: MarkdownSessionState,
-    pub _subscription: Subscription,
+    pub _subscriptions: Vec<Subscription>,
+    pub _file_watcher: Option<notify::RecommendedWatcher>,
 }
 
 impl Default for MarkdownSessionState {
@@ -170,7 +168,6 @@ mod tests {
     }
 }
 use crate::markdown_file_store::MarkdownFileStore;
-use cditor_app::{EditorHandle, MarkdownCompatibility, MarkdownDiagnostic};
 use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 use std::path::PathBuf;

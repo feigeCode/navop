@@ -5,11 +5,11 @@
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClickEvent, ClipboardItem, Context, Edges, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _,
-    IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent,
-    ShapedLine, SharedString, Styled as _, Subscription, Task, UTF16Selection, Window, actions,
-    div, point, prelude::FluentBuilder as _, px,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollHandle,
+    ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Subscription, Task, UTF16Selection,
+    Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use gpui::{Half, TextAlign};
 use ropey::{Rope, RopeSlice};
@@ -119,6 +119,8 @@ pub struct InputLineDecoration {
     pub line_number: Option<usize>,
     pub background: Option<Hsla>,
 }
+
+pub type InputTextHighlight = (Range<usize>, HighlightStyle);
 
 pub type InputContextMenuActionFactory = Rc<dyn Fn() -> Box<dyn Action>>;
 pub type InputContextMenuClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -447,6 +449,7 @@ pub struct InputState {
     pub(super) highlight_theme: Option<Arc<HighlightTheme>>,
     pub(super) indent_guide_color: Option<Hsla>,
     pub(super) line_decorations: Option<Rc<[InputLineDecoration]>>,
+    pub(super) text_highlights: Rc<[InputTextHighlight]>,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) soft_wrap: bool,
@@ -569,6 +572,7 @@ impl InputState {
             highlight_theme: None,
             indent_guide_color: None,
             line_decorations: None,
+            text_highlights: Rc::from([]),
             masked: false,
             clean_on_escape: false,
             soft_wrap: true,
@@ -688,6 +692,15 @@ impl InputState {
         cx: &mut Context<Self>,
     ) {
         self.line_decorations = Some(decorations.into());
+        cx.notify();
+    }
+
+    pub fn set_text_highlights(
+        &mut self,
+        highlights: impl Into<Rc<[InputTextHighlight]>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.text_highlights = highlights.into();
         cx.notify();
     }
 
@@ -1186,6 +1199,26 @@ impl InputState {
         self.move_to(offset, None, cx);
         self.update_preferred_column();
         self.focus(window, cx);
+    }
+
+    pub fn set_selected_range(
+        &mut self,
+        range: Range<usize>,
+        reversed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self
+            .text
+            .clip_offset(range.start.min(self.text.len()), Bias::Left);
+        let end = self
+            .text
+            .clip_offset(range.end.min(self.text.len()), Bias::Right);
+        self.selected_range = (start.min(end)..start.max(end)).into();
+        self.selection_reversed = reversed && start != end;
+        self.update_preferred_column();
+        self.focus(window, cx);
+        cx.notify();
     }
 
     /// Focus the input field.

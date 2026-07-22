@@ -1,8 +1,56 @@
 use crate::notes_notifications::notify_operation_error;
-use crate::{MarkdownViewMode, NotesView, markdown_adapter, markdown_session::MarkdownSyncState};
+use crate::{MarkdownViewMode, NotesView, markdown_session::MarkdownSyncState};
 use gpui::{Context, Window};
 
 impl NotesView {
+    pub(crate) fn markdown_file_changed_on_disk(
+        &mut self,
+        document_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+            return;
+        };
+        let Ok(snapshot) = session.store.load() else {
+            session.state.conflict();
+            cx.notify();
+            return;
+        };
+        if snapshot.source == session.preview.read(cx).source() {
+            return;
+        }
+        if session.preview.read(cx).is_dirty()
+            || !matches!(session.state.sync_state, MarkdownSyncState::Clean)
+        {
+            session.state.conflict();
+            cx.notify();
+            return;
+        }
+        self.resolve_markdown_conflict_use_external(document_id, window, cx);
+    }
+
+    pub fn reload_active_markdown_from_disk(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document_id) = self.active_document_id.clone() else {
+            return;
+        };
+        let Some(session) = self.markdown_sessions.get_mut(&document_id) else {
+            return;
+        };
+        if session.preview.read(cx).is_dirty()
+            || !matches!(session.state.sync_state, MarkdownSyncState::Clean)
+        {
+            session.state.conflict();
+            cx.notify();
+            return;
+        }
+        self.resolve_markdown_conflict_use_external(&document_id, window, cx);
+    }
+
     /// Keep the local changes and overwrite the externally modified file.
     pub(crate) fn resolve_markdown_conflict_keep_local(
         &mut self,
@@ -18,19 +66,15 @@ impl NotesView {
                 let source = session.source_editor.read(cx).value().to_string();
                 session.store.force_save(&source).map(|_| ())
             }
-            MarkdownViewMode::Wysiwyg => {
-                markdown_adapter::export_markdown_bundle(&session.preview, &session.store, cx)
-                    .and_then(|markdown| session.store.force_save(&markdown).map(|_| ()))
-            }
+            MarkdownViewMode::Wysiwyg => session
+                .store
+                .force_save(session.preview.read(cx).source())
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
                 session.state.conflict_resolved();
-                if session.state.mode == MarkdownViewMode::Wysiwyg {
-                    // Clear the editor's failed save state; the fingerprint now
-                    // matches the file we just wrote, so this save succeeds.
-                    let _ = session.preview.save(cx);
-                }
+                session.preview.update(cx, |editor, _| editor.mark_saved());
                 cx.notify();
             }
             Err(error) => notify_operation_error(window, cx, error),
@@ -48,13 +92,21 @@ impl NotesView {
             return;
         };
         let result = session.store.load().and_then(|snapshot| {
+            {
+                let mut document = session
+                    .source_document
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
+                *document = document.replace_source(snapshot.source.clone())?;
+            }
             session.source_editor.update(cx, |input, cx| {
                 input.set_value(snapshot.source.clone(), window, cx);
             });
-            session
-                .preview
-                .reload(cx)
-                .map_err(|error| anyhow::anyhow!(error))
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .replace_source(snapshot.source, window, cx)
+                    .map_err(anyhow::Error::from)
+            })
         });
         match result {
             Ok(()) => {

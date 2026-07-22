@@ -6,27 +6,23 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-cditor-app.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 dunce = "1"
 futures.workspace = true
-extension-runtime = { workspace = true, features = ["wasm-components"] }
-extension_view.workspace = true
-extension-wasm.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-html", "tree-sitter-markdown"] }
-image.workspace = true
+markdown-editor.workspace = true
+markdown-source.workspace = true
+notify.workspace = true
 one-core.workspace = true
 rust-i18n.workspace = true
 ropey.workspace = true
-resvg.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 smol.workspace = true
 tracing.workspace = true
-tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

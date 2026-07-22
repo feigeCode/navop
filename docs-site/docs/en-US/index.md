@@ -8,7 +8,7 @@ Navop brings databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, N
 
 - Added the terminal command bar, persistent quick commands, and command suggestions.
 - Added Workspace Explorer, tabbed file editing, Git diffs, branch switching, pushing, and rollback.
-- File Explorer now renders Markdown with Notes/Cditor. Lossless content remains editable, while unsafe syntax preserves its source and is edited in Source mode.
+- File Explorer and Notes now use Navop's native source-preserving Markdown editor. Markdown remains authoritative and unsupported syntax is preserved for exact source editing.
 - Added persistent connection-tree navigation and improved Redis binary-value handling and cross-platform publishing.
 
 ## Start here

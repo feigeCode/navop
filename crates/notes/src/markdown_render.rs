@@ -1,7 +1,9 @@
 use crate::markdown_session::MarkdownSyncState;
 use crate::{MarkdownViewMode, NotesView};
-use cditor_app::{EditorSaveState, MarkdownCompatibility};
-use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
+use gpui::{
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
+    prelude::FluentBuilder,
+};
 use gpui_component::{
     Disableable, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
@@ -23,20 +25,35 @@ impl NotesView {
         let content = match mode {
             MarkdownViewMode::Source => {
                 let theme = self.resolved_editor_theme(cx);
-                Input::new(&session.source_editor)
+                div()
+                    .key_context(crate::markdown_source::SOURCE_CONTEXT)
+                    .on_action(cx.listener(
+                        |view, _: &crate::markdown_source::UndoSourceMode, window, cx| {
+                            view.apply_source_mode_history(true, window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |view, _: &crate::markdown_source::RedoSourceMode, window, cx| {
+                            view.apply_source_mode_history(false, window, cx);
+                        },
+                    ))
                     .size_full()
-                    .local_style(LocalInputStyle {
-                        background: theme.background,
-                        foreground: theme.foreground,
-                        muted_foreground: theme.muted_foreground,
-                        border: theme.border,
-                    })
-                    .highlight_theme(theme.highlight_theme)
-                    .caret_color(theme.primary)
-                    .indent_guide_color(theme.border.opacity(0.7))
+                    .child(
+                        Input::new(&session.source_editor)
+                            .size_full()
+                            .local_style(LocalInputStyle {
+                                background: theme.background,
+                                foreground: theme.foreground,
+                                muted_foreground: theme.muted_foreground,
+                                border: theme.border,
+                            })
+                            .highlight_theme(theme.highlight_theme)
+                            .caret_color(theme.primary)
+                            .indent_guide_color(theme.border.opacity(0.7)),
+                    )
                     .into_any_element()
             }
-            MarkdownViewMode::Wysiwyg => session.preview.entity().clone().into_any_element(),
+            MarkdownViewMode::Wysiwyg => session.preview.clone().into_any_element(),
         };
         v_flex()
             .size_full()
@@ -103,16 +120,7 @@ impl NotesView {
     ) -> impl IntoElement {
         let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
-        let needs_acceptance = session.is_some_and(|session| {
-            mode == MarkdownViewMode::Wysiwyg
-                && !session.normalization_accepted
-                && matches!(
-                    session.compatibility,
-                    MarkdownCompatibility::EditableWithNormalization(_)
-                )
-        });
-        let save_state = session.map(|session| session.preview.save_state(cx));
-        let status = markdown_status(session, mode, save_state.as_ref());
+        let status = markdown_status(session, mode);
         h_flex()
             .h_9()
             .px_2()
@@ -127,17 +135,6 @@ impl NotesView {
                     .text_color(theme.muted_foreground)
                     .child(status)
             }))
-            .when(needs_acceptance, |toolbar| {
-                let id = document_id.to_owned();
-                toolbar.child(
-                    Button::new("accept-markdown-normalization")
-                        .label(t!("Notes.markdown_confirm_adjustment").to_string())
-                        .small()
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.accept_markdown_normalization(&id, window, cx)
-                        })),
-                )
-            })
     }
 
     fn render_source_toggle(
@@ -170,42 +167,15 @@ impl NotesView {
 fn markdown_status(
     session: Option<&crate::markdown_session::MarkdownSession>,
     mode: MarkdownViewMode,
-    save_state: Option<&EditorSaveState>,
 ) -> Option<String> {
     if mode == MarkdownViewMode::Source {
         return source_status(session);
     }
     let session = session?;
-    match save_state {
-        Some(EditorSaveState::Dirty) => {
-            return Some(t!("Notes.markdown_waiting_autosave").to_string());
-        }
-        Some(EditorSaveState::Saving) => {
-            return Some(t!("Notes.markdown_saving").to_string());
-        }
-        Some(EditorSaveState::SaveFailed { .. }) => return None,
-        _ => {}
+    if !matches!(session.state.sync_state, MarkdownSyncState::Clean) {
+        return source_status(Some(session));
     }
-    match &session.compatibility {
-        MarkdownCompatibility::Editable => None,
-        MarkdownCompatibility::EditableWithNormalization(_) if session.normalization_accepted => {
-            None
-        }
-        MarkdownCompatibility::EditableWithNormalization(_) => Some(
-            t!(
-                "Notes.markdown_adjustment_required",
-                count = session.diagnostics.len()
-            )
-            .to_string(),
-        ),
-        MarkdownCompatibility::SourceOnly(_) => Some(
-            t!(
-                "Notes.markdown_source_only",
-                count = session.diagnostics.len()
-            )
-            .to_string(),
-        ),
-    }
+    None
 }
 
 fn source_status(session: Option<&crate::markdown_session::MarkdownSession>) -> Option<String> {
