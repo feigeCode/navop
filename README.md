@@ -58,13 +58,13 @@
   </p>
 </div>
 
-## What's New in v0.8.12
+## What's New in v0.9.0
 
-- **Richer Notes Markdown rendering** — standard Markdown syntax, safely restricted HTML blocks, and images inside Markdown tables render in the document view; relative media resolves from the current document directory, and whiteboard conversions produce portable previews.
-- **Faster syntax highlighting** — highlighters are reused per language, full-document updates use correct edit positions, and language WASM parsers stay lazily loaded.
-- **Smoother extension lifecycle** — install, reload, and uninstall refresh only the affected extension kind; background uninstall progress avoids blocking the extension manager.
-- **Redis drivers on demand** — Navop discovers drivers from the installed extension directory, prompts when the Redis driver is missing, and continues opening the connection immediately after installation.
-- **Release recovery** — release jobs now handle missing or asset-empty GitHub Releases and can republish existing build artifacts without rebuilding every platform.
+- **Terminal command bar and quick commands** — use command suggestions, persistent shortcuts, pinned commands, and fast access from the terminal or sidebar.
+- **Workspace Explorer and Git tools** — browse and manage workspace files, open tabbed editors, review diffs, switch and push branches, and roll back changes without leaving the terminal workspace.
+- **Source-safe Markdown editing** — File Explorer uses the native Notes/Cditor renderer and workspace theme. Lossless documents remain editable; syntax that cannot round-trip safely stays rendered as a read-only preview and can be edited exactly in Source mode.
+- **Persistent connection navigation** — filter and open database, SSH, and other resources from the home navigation rail, with quick access to Notes, extensions, settings, and team management.
+- **Cross-platform reliability** — Redis binary values are preserved correctly, image-only Markdown table cells can be cleared, and release packaging now covers macOS, Windows, x86_64 Linux, and ARM64 Linux.
 
 
 ## Why Navop?
@@ -276,6 +276,7 @@ Release artifacts are currently published by platform:
 |----------|--------------|----------|
 | macOS | Apple Silicon, Intel | `.dmg`, `.tar.gz` |
 | Linux | x86_64 | `.tar.gz`, `.deb`, `.rpm`, `.AppImage` |
+| Linux | ARM64 | `.tar.gz` |
 | Windows | x86_64 | `.msi`, `.zip` |
 
 Checksums are published as `sha256sums.txt` in each release.

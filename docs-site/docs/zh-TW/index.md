@@ -2,6 +2,15 @@
 
 Navop 將資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、Notes、AI 和團隊同步放在同一個原生工作區。
 
+## 目前版本：v0.9.0
+
+[下載 Navop v0.9.0](https://github.com/feigeCode/navop/releases/tag/v0.9.0)
+
+- 新增終端命令列、持久化快速命令與命令建議。
+- 新增 Workspace Explorer、分頁檔案編輯、Git diff、分支切換、推送與回復。
+- File Explorer 使用 Notes/Cditor 渲染 Markdown；無損內容可編輯，有損語法保留原始碼並在 Source 模式編輯。
+- 新增首頁常駐連線樹導覽，並改善 Redis 二進位值與跨平台發佈穩定性。
+
 ## 從這裡開始
 
 - [快速開始](./guide/quick-start)
