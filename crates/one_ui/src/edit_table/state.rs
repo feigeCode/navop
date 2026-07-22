@@ -5,19 +5,18 @@ use super::selection::{CellCoord, TableSelection};
 use super::*;
 use crate::edit_table::filter_panel::FilterPanel;
 use gpui::{
-    AnyElement, AppContext, Axis, Bounds, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent,
-    ElementId, Empty, Entity, EntityId, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, IsZero, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    Point, Render, ScrollStrategy, ScrollWheelEvent, SharedString, Size, Stateful,
-    StatefulInteractiveElement as _, Styled, Subscription, Task, UniformListScrollHandle, Window,
-    canvas, div, prelude::FluentBuilder, px, uniform_list,
+    AppContext, Axis, Bounds, ClickEvent, ClipboardItem, Context, Div, DragMoveEvent, ElementId,
+    Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, IsZero,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render,
+    ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled, Subscription, Task, UniformListScrollHandle, Window, canvas, div,
+    prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::list::{List, ListState};
 use gpui_component::scroll::ScrollbarHandle;
 use gpui_component::{
-    ActiveTheme, ElementExt, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle,
-    h_flex,
-    input::{IndentInline, InputEvent, OutdentInline},
+    ActiveTheme, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle, h_flex,
+    input::{IndentInline, OutdentInline},
     menu::{ContextMenuExt, PopupMenu},
     scroll::{ScrollableMask, Scrollbar},
     v_flex,
@@ -26,74 +25,6 @@ use rust_i18n::t;
 
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
-const FLOATING_EDITOR_MAX_WIDTH: Pixels = px(640.);
-const FLOATING_EDITOR_MAX_HEIGHT: Pixels = px(360.);
-const FLOATING_EDITOR_HORIZONTAL_PADDING: Pixels = px(20.);
-const FLOATING_EDITOR_VERTICAL_PADDING: Pixels = px(12.);
-const FLOATING_EDITOR_CHARACTER_WIDTH: Pixels = px(8.);
-const FLOATING_EDITOR_HANDLE_SIZE: Pixels = px(22.);
-
-fn floating_editor_size(value: &str, cell_size: Size<Pixels>, line_height: Pixels) -> Size<Pixels> {
-    let longest_line = value
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
-    let desired_width =
-        FLOATING_EDITOR_HORIZONTAL_PADDING + FLOATING_EDITOR_CHARACTER_WIDTH * longest_line as f32;
-    let width = desired_width
-        .max(cell_size.width)
-        .min(FLOATING_EDITOR_MAX_WIDTH);
-    let chars_per_line = ((width - FLOATING_EDITOR_HORIZONTAL_PADDING)
-        / FLOATING_EDITOR_CHARACTER_WIDTH)
-        .floor()
-        .max(1.) as usize;
-    let rows = value
-        .split('\n')
-        .map(|line| line.chars().count().max(1).div_ceil(chars_per_line))
-        .sum::<usize>()
-        .max(1);
-    let height = (FLOATING_EDITOR_VERTICAL_PADDING + line_height * rows as f32)
-        .max(cell_size.height)
-        .min(FLOATING_EDITOR_MAX_HEIGHT);
-    Size { width, height }
-}
-
-fn clamp_floating_editor_origin(
-    origin: Point<Pixels>,
-    editor_size: Size<Pixels>,
-    bounds: Bounds<Pixels>,
-) -> Point<Pixels> {
-    let max_x = (bounds.right() - editor_size.width).max(bounds.left());
-    let max_y = (bounds.bottom() - editor_size.height).max(bounds.top());
-    Point::new(
-        origin.x.max(bounds.left()).min(max_x),
-        origin.y.max(bounds.top()).min(max_y),
-    )
-}
-
-fn floating_editor_origin(
-    cell_bounds: Bounds<Pixels>,
-    table_bounds: Bounds<Pixels>,
-    editor_size: Size<Pixels>,
-    drag_offset: Point<Pixels>,
-) -> Point<Pixels> {
-    let local_origin = Point::new(
-        cell_bounds.origin.x - table_bounds.origin.x + drag_offset.x,
-        cell_bounds.origin.y - table_bounds.origin.y + drag_offset.y,
-    );
-    let local_bounds = Bounds::new(Point::default(), table_bounds.size);
-    clamp_floating_editor_origin(local_origin, editor_size, local_bounds)
-}
-
-#[derive(Clone)]
-struct FloatingEditorDrag(EntityId);
-
-impl Render for FloatingEditorDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        Empty
-    }
-}
 
 gpui::actions!(
     edit_table_internal,
@@ -219,8 +150,6 @@ pub struct EditTableState<D: EditTableDelegate> {
 
     editing_cell: Option<(usize, usize)>,
     editing_input: Option<CellEditor>,
-    floating_editor_offset: Point<Pixels>,
-    floating_editor_drag: Option<(Point<Pixels>, Point<Pixels>)>,
     _subscriptions: Vec<Subscription>,
 
     visible_range: TableVisibleRange,
@@ -264,8 +193,6 @@ where
             resizing_col: None,
             editing_cell: None,
             editing_input: None,
-            floating_editor_offset: Point::default(),
-            floating_editor_drag: None,
             bounds: Bounds::default(),
             fixed_head_cols_bounds: Bounds::default(),
             visible_range: TableVisibleRange::default(),
@@ -1220,22 +1147,7 @@ where
             .build_input(row_ix, delegate_col_ix, window, cx);
         if input.is_some() {
             self.editing_cell = Some((row_ix, col_ix));
-            self.floating_editor_offset = Point::default();
-            self.floating_editor_drag = None;
-            let (input, mut subscriptions) = input.unwrap();
-            if let Some(input_state) = input.input_state() {
-                subscriptions.push(cx.subscribe_in(
-                    &input_state,
-                    window,
-                    |table, _, event: &InputEvent, window, cx| {
-                        if matches!(event, InputEvent::Blur) {
-                            table.commit_cell_edit(window, cx);
-                        } else {
-                            cx.notify();
-                        }
-                    },
-                ));
-            }
+            let (input, subscriptions) = input.unwrap();
             self.editing_input = Some(input);
             self._subscriptions = subscriptions;
             cx.emit(EditTableEvent::CellEditing(row_ix, col_ix));
@@ -1265,7 +1177,6 @@ where
             }
             self.editing_cell = None;
             self.editing_input = None;
-            self.floating_editor_drag = None;
             self._subscriptions.clear();
             cx.notify();
         }
@@ -1275,7 +1186,6 @@ where
         if self.editing_cell.is_some() {
             self.editing_cell = None;
             self.editing_input = None;
-            self.floating_editor_drag = None;
             self._subscriptions.clear();
             cx.notify();
         }
@@ -2019,7 +1929,7 @@ where
         &self,
         col_ix: usize,
         row_ix: Option<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let Some(col_group) = self.col_groups.get(col_ix) else {
@@ -2190,6 +2100,13 @@ where
                 target_pr
             });
 
+        // 编辑模式：嵌入轻量编辑器（无自带样式，由容器控制布局）
+        if is_editing {
+            if let Some(editor) = &self.editing_input {
+                cell = cell.child(editor.render(window, cx));
+            }
+        }
+
         cell
     }
 
@@ -2270,10 +2187,18 @@ where
                     this.end_drag_selection(cx);
                 }),
             )
-            .on_prepaint(move |bounds, _, cx| {
-                view.update(cx, |state, _| {
-                    state.cell_bounds.insert((row_ix, col_ix), bounds);
-                });
+            // 使用 canvas 追踪单元格边界
+            .child({
+                canvas(
+                    move |bounds, _, cx| {
+                        view.update(cx, |state, _| {
+                            state.cell_bounds.insert((row_ix, col_ix), bounds);
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
             });
 
         if is_editing {
@@ -2982,107 +2907,6 @@ where
             .into_any_element()
     }
 
-    fn render_floating_editor(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let editing_cell = self.editing_cell?;
-        let editor = self.editing_input.as_ref()?;
-        let cell_bounds = self.cell_bounds.get(&editing_cell)?;
-        let desired_size = floating_editor_size(
-            &editor.get_value(cx),
-            cell_bounds.size,
-            window.line_height(),
-        );
-        let editor_size = Size {
-            width: desired_size.width.min(self.bounds.size.width),
-            height: desired_size.height.min(self.bounds.size.height),
-        };
-        let origin = floating_editor_origin(
-            *cell_bounds,
-            self.bounds,
-            editor_size,
-            self.floating_editor_offset,
-        );
-        let entity_id = cx.entity_id();
-
-        Some(
-            div()
-                .id("floating-cell-editor")
-                .absolute()
-                .left(origin.x)
-                .top(origin.y)
-                .w(editor_size.width)
-                .h(editor_size.height)
-                .min_w(px(1.))
-                .min_h(px(1.))
-                .overflow_hidden()
-                .occlude()
-                .bg(cx.theme().background)
-                .border_2()
-                .border_color(cx.theme().ring)
-                .rounded(cx.theme().radius)
-                .shadow_lg()
-                .child(
-                    div()
-                        .size_full()
-                        .p_1()
-                        .pr(FLOATING_EDITOR_HANDLE_SIZE + px(4.))
-                        .overflow_hidden()
-                        .child(editor.render_floating(window, cx)),
-                )
-                .child(
-                    h_flex()
-                        .id("floating-cell-editor-drag-handle")
-                        .absolute()
-                        .top(px(4.))
-                        .right(px(4.))
-                        .size(FLOATING_EDITOR_HANDLE_SIZE)
-                        .justify_center()
-                        .items_center()
-                        .cursor_move()
-                        .bg(cx.theme().secondary)
-                        .text_color(cx.theme().muted_foreground)
-                        .rounded(cx.theme().radius / 2.)
-                        .child(Icon::new(IconName::EllipsisVertical).size_3())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.floating_editor_drag =
-                                    Some((event.position, this.floating_editor_offset));
-                            }),
-                        )
-                        .on_drag(FloatingEditorDrag(entity_id), |drag, _, _, cx| {
-                            cx.stop_propagation();
-                            cx.new(|_| drag.clone())
-                        })
-                        .on_drag_move(cx.listener(
-                            |this, event: &DragMoveEvent<FloatingEditorDrag>, _, cx| {
-                                if event.drag(cx).0 != cx.entity_id() {
-                                    return;
-                                }
-                                let Some((start, initial_offset)) = this.floating_editor_drag
-                                else {
-                                    return;
-                                };
-                                this.floating_editor_offset = Point::new(
-                                    initial_offset.x + event.event.position.x - start.x,
-                                    initial_offset.y + event.event.position.y - start.y,
-                                );
-                                cx.notify();
-                            },
-                        ))
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, _| this.floating_editor_drag = None),
-                        ),
-                )
-                .into_any_element(),
-        )
-    }
-
     fn render_vertical_scrollbar(
         &mut self,
         _: &mut Window,
@@ -3132,61 +2956,6 @@ impl<D> EventEmitter<EditTableEvent> for EditTableState<D> where D: EditTableDel
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn floating_editor_size_grows_with_content_and_stops_at_limits() {
-        let cell_size = gpui::size(px(120.), px(32.));
-        let compact = floating_editor_size("short", cell_size, px(20.));
-        let expanded = floating_editor_size(
-            "a much longer line that should expand the editor width\nsecond\nthird",
-            cell_size,
-            px(20.),
-        );
-        let capped = floating_editor_size(&"x".repeat(2_000), cell_size, px(20.));
-
-        assert_eq!(px(120.), compact.width);
-        assert_eq!(px(32.), compact.height);
-        assert!(expanded.width > compact.width);
-        assert!(expanded.height > compact.height);
-        assert_eq!(FLOATING_EDITOR_MAX_WIDTH, capped.width);
-        assert!(capped.height <= FLOATING_EDITOR_MAX_HEIGHT);
-    }
-
-    #[test]
-    fn floating_editor_origin_is_clamped_inside_table() {
-        let table = Bounds::new(Point::new(px(10.), px(20.)), gpui::size(px(500.), px(300.)));
-        let editor = gpui::size(px(240.), px(160.));
-
-        assert_eq!(
-            Point::new(px(120.), px(100.)),
-            clamp_floating_editor_origin(Point::new(px(120.), px(100.)), editor, table)
-        );
-        assert_eq!(
-            Point::new(px(10.), px(20.)),
-            clamp_floating_editor_origin(Point::new(px(-100.), px(-100.)), editor, table)
-        );
-        assert_eq!(
-            Point::new(px(270.), px(160.)),
-            clamp_floating_editor_origin(Point::new(px(900.), px(900.)), editor, table)
-        );
-    }
-
-    #[test]
-    fn floating_editor_starts_at_current_cell_in_table_coordinates() {
-        let table = Bounds::new(
-            Point::new(px(40.), px(120.)),
-            gpui::size(px(900.), px(500.)),
-        );
-        let cell = Bounds::new(
-            Point::new(px(140.), px(296.)),
-            gpui::size(px(400.), px(68.)),
-        );
-
-        assert_eq!(
-            Point::new(px(100.), px(176.)),
-            floating_editor_origin(cell, table, gpui::size(px(400.), px(68.)), Point::default(),)
-        );
-    }
 
     #[test]
     fn deleted_row_cleanup_clears_cell_selection_and_drag_state() {
@@ -3402,11 +3171,8 @@ where
                 }
             });
 
-        let floating_editor = self.render_floating_editor(window, cx);
-
         div()
             .size_full()
-            .relative()
             .on_scroll_wheel(cx.listener(Self::handle_scroll_wheel))
             .children(loading_view)
             .when(!loading, |this| {
@@ -3422,10 +3188,13 @@ where
                         }))
                     })
             })
-            .on_prepaint({
-                let state = cx.entity();
-                move |bounds, _, cx| state.update(cx, |state, _| state.bounds = bounds)
-            })
+            .child(canvas(
+                {
+                    let state = cx.entity();
+                    move |bounds, _, cx| state.update(cx, |state, _| state.bounds = bounds)
+                },
+                |_, _, _, _| {},
+            ))
             .when(!window.is_inspector_picking(cx), |this| {
                 this.child(
                     div()
@@ -3441,6 +3210,5 @@ where
                         ),
                 )
             })
-            .children(floating_editor)
     }
 }
