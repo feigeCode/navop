@@ -472,6 +472,18 @@ impl PostgresDbConnection {
         false
     }
 
+    fn connection_error_context(code: Option<&str>) -> String {
+        match code {
+            Some(code) => format!("failed to connect: SQLSTATE {code}"),
+            None => "failed to connect".to_string(),
+        }
+    }
+
+    fn connection_error(error: tokio_postgres::Error) -> DbError {
+        let context = Self::connection_error_context(error.code().map(|code| code.code()));
+        DbError::connection_with_source(context, error)
+    }
+
     async fn connect_without_tls(pg_config: &Config) -> Result<Client, tokio_postgres::Error> {
         let (client, connection) = pg_config.connect(NoTls).await?;
         tokio::spawn(async move {
@@ -562,7 +574,7 @@ impl DbConnection for PostgresDbConnection {
                     .await
                     .map_err(|error| {
                         error!("[PostgreSQL] Connection failed: {}", error);
-                        DbError::connection_with_source("failed to connect", error)
+                        Self::connection_error(error)
                     })?;
                 info!(
                     "[PostgreSQL][Timing] connect_without_tls={}ms",
@@ -603,7 +615,7 @@ impl DbConnection for PostgresDbConnection {
                                     "[PostgreSQL] Non-TLS retry after TLS failure also failed: {}",
                                     retry_error
                                 );
-                                DbError::connection_with_source("failed to connect", retry_error)
+                                Self::connection_error(retry_error)
                             },
                         )?;
                         info!(
@@ -614,7 +626,7 @@ impl DbConnection for PostgresDbConnection {
                     }
                     Err(error) => {
                         error!("[PostgreSQL] Connection failed: {}", error);
-                        return Err(DbError::connection_with_source("failed to connect", error));
+                        return Err(Self::connection_error(error));
                     }
                 }
             }
@@ -631,7 +643,7 @@ impl DbConnection for PostgresDbConnection {
                     .await
                     .map_err(|error| {
                         error!("[PostgreSQL] Connection failed: {}", error);
-                        DbError::connection_with_source("failed to connect", error)
+                        Self::connection_error(error)
                     })?;
                 info!(
                     "[PostgreSQL][Timing] connect_with_tls={}ms ssl_mode={:?}",
@@ -1713,5 +1725,17 @@ mod tests {
         let error = std::io::Error::other("password authentication failed for user postgres");
 
         assert!(!PostgresDbConnection::should_retry_without_tls(&error));
+    }
+
+    #[test]
+    fn connection_error_context_includes_postgres_sqlstate() {
+        assert_eq!(
+            "failed to connect: SQLSTATE 28P01",
+            PostgresDbConnection::connection_error_context(Some("28P01"))
+        );
+        assert_eq!(
+            "failed to connect",
+            PostgresDbConnection::connection_error_context(None)
+        );
     }
 }

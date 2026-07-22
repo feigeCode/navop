@@ -1874,8 +1874,11 @@ impl DbConnectionForm {
     fn simplify_connection_error_message(err: &Error) -> String {
         let mut message = err
             .chain()
-            .last()
-            .map(|e| e.to_string())
+            .find_map(|error| {
+                let message = error.to_string();
+                message.contains("SQLSTATE").then_some(message)
+            })
+            .or_else(|| err.chain().last().map(|error| error.to_string()))
             .unwrap_or_else(|| err.to_string());
 
         // Strip common wrapper prefixes and keep the most useful root-level message.
@@ -2981,6 +2984,20 @@ mod tests {
             .iter()
             .find(|field| field.name == field_name)
             .expect("field should exist")
+    }
+
+    #[test]
+    fn simplify_connection_error_preserves_postgres_sqlstate() {
+        let source = std::io::Error::other("password authentication failed for user postgres");
+        let error = Error::new(db::DbError::connection_with_source(
+            "failed to connect: SQLSTATE 28P01",
+            source,
+        ));
+
+        assert_eq!(
+            "SQLSTATE 28P01: password authentication failed for user postgres",
+            DbConnectionForm::simplify_connection_error_message(&error)
+        );
     }
 
     fn stored_ssh_connection(id: i64, name: &str, host: &str) -> StoredConnection {
