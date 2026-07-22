@@ -6,11 +6,11 @@ use gpui::FontWeight;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
+    Colorize, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     color_picker::{ColorPicker, ColorPickerState},
     dialog::DialogButtonProps,
@@ -19,7 +19,6 @@ use gpui_component::{
         Input, InputEvent, InputState, LocalInputStyle, NumberInput, NumberInputEvent, StepAction,
     },
     notification::Notification,
-    scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectItem, SelectState},
     switch::Switch,
     try_parse_color, v_flex,
@@ -30,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::{
     TerminalHighlightRule,
     theme::{
-        MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors, TerminalTheme,
+        MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors, TerminalTheme, available_monospace_fonts,
         is_supported_terminal_primary_font,
     },
 };
@@ -77,7 +76,7 @@ fn terminal_font_options(
     custom_fonts: &[CustomFont],
     installed_font_names: &[String],
 ) -> Vec<TerminalFontOption> {
-    let mut fonts = TerminalTheme::available_monospace_fonts()
+    let mut fonts = available_monospace_fonts()
         .into_iter()
         .map(|font| TerminalFontOption::new(font, installed_font_names))
         .collect::<Vec<_>>();
@@ -115,8 +114,6 @@ pub enum SettingsPanelEvent {
     FontSizeChanged(f32),
     /// 字体变更
     FontFamilyChanged(String),
-    /// 主题变更
-    ThemeChanged(TerminalTheme),
     /// 光标闪烁变更
     CursorBlinkChanged(bool),
     /// 非 bracketed 模式下，多行粘贴确认开关
@@ -708,14 +705,6 @@ impl SettingsPanel {
         });
     }
 
-    /// 设置主题（用户点击主题时调用）
-    fn set_theme(&mut self, theme: TerminalTheme, cx: &mut Context<Self>) {
-        // 更新当前主题
-        self.current_theme = theme.clone();
-        cx.emit(SettingsPanelEvent::ThemeChanged(theme));
-        cx.notify();
-    }
-
     fn colors(&self) -> TerminalColors {
         self.current_theme.colors()
     }
@@ -782,68 +771,6 @@ impl SettingsPanel {
                         .child(t!("Settings.search_shortcuts_hint")),
                 ),
         )
-    }
-
-    /// 渲染主题项
-    fn render_theme_item(&self, theme: TerminalTheme, cx: &mut Context<Self>) -> AnyElement {
-        let current_theme_name = self.current_theme.name;
-        let is_current = current_theme_name == theme.name;
-        let theme_for_click = theme.clone();
-        let colors = self.colors();
-        let accent = colors.accent;
-        let accent_fg = colors.accent_foreground;
-        let muted = colors.muted;
-        let border = colors.border;
-        let theme_i18n_key = format!("Theme.{}", theme.name);
-        let theme_display_name = t!(&theme_i18n_key).to_string();
-
-        div()
-            .id(SharedString::from(format!("theme-{}", theme.name)))
-            .w_full()
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .cursor_pointer()
-            .when(is_current, |style| style.bg(accent).text_color(accent_fg))
-            .when(!is_current, |style| style.hover(|s| s.bg(muted)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _window, cx| {
-                    this.set_theme(theme_for_click.clone(), cx);
-                }),
-            )
-            // 颜色预览
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .h(px(16.0))
-                            .rounded_md()
-                            .bg(theme.background)
-                            .border_1()
-                            .border_color(border),
-                    )
-                    .child(
-                        div()
-                            .w(px(16.0))
-                            .h(px(16.0))
-                            .rounded_md()
-                            .bg(theme.foreground)
-                            .border_1()
-                            .border_color(border),
-                    ),
-            )
-            // 主题名称
-            .child(div().flex_1().text_sm().child(theme_display_name))
-            .when(is_current, |item| {
-                item.child(Icon::new(IconName::Check).with_size(Size::Small))
-            })
-            .into_any_element()
     }
 
     /// 渲染字体设置区域
@@ -1388,43 +1315,6 @@ impl SettingsPanel {
                     }),
             )
     }
-
-    /// 渲染主题选择区域
-    fn render_theme_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = self.colors();
-        let border = colors.border;
-        let muted = colors.muted;
-        let muted_fg = colors.muted_foreground;
-
-        // 预先收集所有主题项
-        let theme_items: Vec<AnyElement> =
-            std::iter::once(TerminalTheme::from_application_theme(cx.theme()))
-                .map(|theme| self.render_theme_item(theme, cx))
-                .collect();
-
-        v_flex()
-            .gap_3()
-            .p_3()
-            .border_t_1()
-            .border_color(border)
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(muted_fg)
-                    .child(t!("Settings.theme").to_uppercase()),
-            )
-            .child(
-                div()
-                    .id("theme-list-scroll")
-                    .max_h(px(300.0))
-                    .overflow_y_scrollbar()
-                    .rounded_md()
-                    .bg(muted)
-                    .p_1()
-                    .children(theme_items),
-            )
-    }
 }
 
 fn parse_optional_hex_color(value: Option<&str>) -> Option<Hsla> {
@@ -1640,8 +1530,7 @@ impl Render for SettingsPanel {
                             .when(has_file_manager, |el| {
                                 el.child(self.render_file_manager_section(cx))
                             })
-                            .child(self.render_custom_highlight_section(window, cx))
-                            .child(self.render_theme_section(cx)),
+                            .child(self.render_custom_highlight_section(window, cx)),
                     ),
             )
     }

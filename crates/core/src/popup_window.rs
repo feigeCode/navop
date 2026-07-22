@@ -103,7 +103,6 @@ where
                 height: px(options.min_height),
             }),
             kind: WindowKind::Normal,
-            #[cfg(target_os = "linux")]
             window_background: gpui::WindowBackgroundAppearance::Transparent,
             #[cfg(target_os = "linux")]
             window_decorations: Some(gpui::WindowDecorations::Client),
@@ -145,6 +144,7 @@ impl Render for PopupWindowContent {
             .justify_center()
             .size_full()
             .bg(cx.theme().background)
+            .opacity(crate::settings::AppSettings::global(cx).window_opacity)
             .child(
                 TitleBar::new().child(
                     div()

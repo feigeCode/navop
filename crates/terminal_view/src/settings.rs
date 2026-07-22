@@ -43,7 +43,6 @@ pub struct TerminalSettings {
     pub right_click_paste: bool,
     pub paste_image_upload: bool,
     pub sync_path_with_terminal: bool,
-    pub theme: String,
     pub cursor_blink: bool,
     pub confirm_multiline_paste: bool,
     pub confirm_high_risk_command: bool,
@@ -82,7 +81,6 @@ impl TerminalSettings {
             right_click_paste: app_settings.terminal_right_click_paste,
             paste_image_upload: app_settings.terminal_paste_image_upload,
             sync_path_with_terminal: app_settings.terminal_sync_path_with_terminal,
-            theme: app_settings.terminal_theme.clone(),
             cursor_blink: app_settings.terminal_cursor_blink,
             confirm_multiline_paste: app_settings.terminal_confirm_multiline_paste,
             confirm_high_risk_command: app_settings.terminal_confirm_high_risk_command,
@@ -203,7 +201,6 @@ pub fn update_settings<T>(
     let mut next = previous.clone();
     updater(&mut next);
     next.font_family = normalize_terminal_primary_font(&next.font_family);
-    next.theme = crate::theme::APPLICATION_THEME_NAME.to_string();
     if previous == next {
         return Some(next);
     }
@@ -286,7 +283,6 @@ fn update_app_settings<T>(
         settings.terminal_right_click_paste = next.right_click_paste;
         settings.terminal_paste_image_upload = next.paste_image_upload;
         settings.terminal_sync_path_with_terminal = next.sync_path_with_terminal;
-        settings.terminal_theme = next.theme.clone();
         settings.terminal_cursor_blink = next.cursor_blink;
         settings.terminal_confirm_multiline_paste = next.confirm_multiline_paste;
         settings.terminal_confirm_high_risk_command = next.confirm_high_risk_command;
@@ -302,7 +298,6 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.right_click_paste == right.right_click_paste
         && left.paste_image_upload == right.paste_image_upload
         && left.sync_path_with_terminal == right.sync_path_with_terminal
-        && left.theme == right.theme
         && left.cursor_blink == right.cursor_blink
         && left.confirm_multiline_paste == right.confirm_multiline_paste
         && left.confirm_high_risk_command == right.confirm_high_risk_command
@@ -347,7 +342,6 @@ mod tests {
         let path = temp_file_path("terminal-settings-legacy-json");
         let legacy = TerminalSettings {
             font_size: 17.0,
-            theme: "light".to_string(),
             sync_path_with_terminal: true,
             builtin_highlights_initialized: false,
             custom_highlights: Vec::new(),

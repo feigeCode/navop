@@ -1206,10 +1206,10 @@ impl OnetCliApp {
     }
 
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
-        let colors = {
+        let terminal_active = {
             let tabs = self.tab_container.read(cx);
             if tabs.is_pinned_tab_active() {
-                None
+                false
             } else {
                 tabs.active_tab()
                     .filter(|tab| tab.content().content_key(cx) == "Terminal")
@@ -1219,9 +1219,11 @@ impl OnetCliApp {
                             .downcast::<terminal_view::TerminalWorkspace>()
                             .ok()
                     })
-                    .map(|terminal| terminal.read(cx).current_theme(cx).colors())
+                    .is_some()
             }
         };
+        let colors = terminal_active
+            .then(|| terminal_view::TerminalColors::from_application_theme(cx.theme()));
         self.connection_sidebar
             .update(cx, |sidebar, cx| sidebar.set_terminal_colors(colors, cx));
     }

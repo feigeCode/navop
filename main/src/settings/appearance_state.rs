@@ -71,7 +71,7 @@ impl AppearanceSettingsState {
         if save {
             AppSettings::global(cx).save();
         }
-        cx.refresh_windows();
+        window.refresh();
     }
 }
 
@@ -87,7 +87,9 @@ fn subscribe_opacity(
         if matches!(event, SliderEvent::Release(_)) {
             AppSettings::global(cx).save();
         }
-        cx.refresh_windows();
+        if matches!(event, SliderEvent::Release(_)) {
+            cx.refresh_windows();
+        }
     })
 }
 

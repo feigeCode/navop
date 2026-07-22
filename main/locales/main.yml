@@ -955,6 +955,18 @@ Workspace:
     en: Rename Group
     zh-CN: 修改分组名称
     zh-HK: 修改分組名稱
+  new_child:
+    en: New Child Group
+    zh-CN: 新建子分组
+    zh-HK: 新建子分組
+  expand:
+    en: Expand Group
+    zh-CN: 展开分组
+    zh-HK: 展開分組
+  collapse:
+    en: Collapse Group
+    zh-CN: 折叠分组
+    zh-HK: 摺疊分組
   delete:
     en: Delete Workspace
     zh-CN: 删除工作区
@@ -1002,6 +1014,42 @@ Connection:
     en: Delete Connection
     zh-CN: 删除连接
     zh-HK: 刪除連線
+  open_in_background:
+    en: Open in Background Tab
+    zh-CN: 在后台标签页打开
+    zh-HK: 在背景分頁開啟
+  copy_target:
+    en: Copy Target
+    zh-CN: 复制连接目标
+    zh-HK: 複製連線目標
+  copy_database_target:
+    en: Copy Database Address
+    zh-CN: 复制数据库地址
+    zh-HK: 複製資料庫位址
+  copy_ssh_target:
+    en: Copy SSH Target
+    zh-CN: 复制 SSH 地址
+    zh-HK: 複製 SSH 位址
+  copy_redis_target:
+    en: Copy Redis Address
+    zh-CN: 复制 Redis 地址
+    zh-HK: 複製 Redis 位址
+  copy_mongodb_target:
+    en: Copy MongoDB Address
+    zh-CN: 复制 MongoDB 地址
+    zh-HK: 複製 MongoDB 位址
+  copy_serial_port:
+    en: Copy Serial Port
+    zh-CN: 复制串口名称
+    zh-HK: 複製串口名稱
+  copy_forwarding_address:
+    en: Copy Listening Address
+    zh-CN: 复制监听地址
+    zh-HK: 複製監聽位址
+  copy_remote_desktop_target:
+    en: Copy Remote Desktop Address
+    zh-CN: 复制远程桌面地址
+    zh-HK: 複製遠端桌面位址
   delete_confirm:
     en: "Are you sure you want to delete connection \"%{conn_name}\"?"
     zh-CN: "确定要删除连接 \"%{conn_name}\" 吗？"
@@ -1291,9 +1339,9 @@ Settings:
         zh-CN: 导入主题
         zh-HK: 匯入主題
       import_theme_desc:
-        en: Import a GPUI theme JSON file. Imported themes remain available after restart.
-        zh-CN: 导入 GPUI 主题 JSON 文件，重启应用后仍然可用。
-        zh-HK: 匯入 GPUI 主題 JSON 檔案，重新啟動應用後仍然可用。
+        en: Import GPUI, VS Code, Alacritty (TOML/YAML), or iTerm2 theme files. Imported themes remain available after restart.
+        zh-CN: 导入 GPUI、VS Code、Alacritty（TOML/YAML）或 iTerm2 主题文件，重启应用后仍然可用。
+        zh-HK: 匯入 GPUI、VS Code、Alacritty（TOML/YAML）或 iTerm2 主題檔案，重新啟動應用後仍然可用。
       select_theme_files:
         en: Select theme files
         zh-CN: 选择主题文件

@@ -77,9 +77,6 @@ impl TerminalView {
                     settings.font_family = family;
                 });
             }
-            TerminalSidebarEvent::ThemeChanged(_theme) => {
-                // 终端配色统一由宿主应用主题驱动，不再写入独立终端主题。
-            }
             TerminalSidebarEvent::ExecuteCommand(command) => {
                 // 仅粘贴命令，不自动回车执行，降低误操作风险
                 self.paste_text(command, window, cx);

@@ -14,10 +14,10 @@ use gpui::{
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontFallbacks, InteractiveElement,
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Styled, Task,
-    UTF16Selection, Window, actions, canvas, div, px, rgb, size,
+    UTF16Selection, Window, actions, canvas, div, px, size,
 };
 use gpui_component::{
-    BlinkCursor, Icon, IconName, Sizable, Size,
+    ActiveTheme, BlinkCursor, Icon, IconName, Sizable, Size,
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow},
 };
@@ -1923,11 +1923,12 @@ impl Render for RedisCliView {
         self.clamp_scroll_offset_for(total_lines, line_height);
         self.sync_scrollbar_metrics(total_lines, line_height);
         let show_scrollbar = self.max_scroll_for(total_lines, line_height) > 0.0;
+        self.theme = CliTheme::from_application_theme(cx.theme());
 
         div()
             .id("redis-cli-view")
             .size_full()
-            .bg(rgb(0x1E1E1E)) // 终端深色背景
+            .bg(cx.theme().background)
             .track_focus(&focus_handle)
             .key_context(REDIS_CLI_CONTEXT)
             .on_action(cx.listener(Self::clear_output_action))

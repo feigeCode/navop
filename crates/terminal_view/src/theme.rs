@@ -14,7 +14,7 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{Hsla, Pixels, SharedString, rgb};
+use gpui::{Hsla, Pixels, SharedString};
 use gpui_component::Theme;
 use one_core::settings::{
     default_grid_font_fallback_families, default_grid_monospace_font_family,
@@ -27,8 +27,6 @@ pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 /// 默认行高比例
 pub const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.4;
-/// 使用应用主题作为终端配色时的内部主题标识。
-pub const APPLICATION_THEME_NAME: &str = "application";
 const TERMINAL_CELL_WIDTH_RATIO: f32 = 0.6;
 const MIN_TERMINAL_CELL_WIDTH_RATIO: f32 = 0.3;
 const MAX_TERMINAL_CELL_WIDTH_RATIO: f32 = 1.2;
@@ -59,11 +57,15 @@ pub struct TerminalColors {
     pub accent_foreground: Hsla,
 }
 
+impl TerminalColors {
+    pub fn from_application_theme(theme: &Theme) -> Self {
+        TerminalTheme::from_application_theme(theme).colors()
+    }
+}
+
 /// 终端主题配置
 #[derive(Clone, Debug)]
 pub struct TerminalTheme {
-    /// 主题名称
-    pub name: &'static str,
     /// 前景色（文字颜色）
     pub foreground: Hsla,
     /// 背景色
@@ -76,8 +78,7 @@ pub struct TerminalTheme {
 
 impl PartialEq for TerminalTheme {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.foreground == other.foreground
+        self.foreground == other.foreground
             && self.background == other.background
             && self.cursor == other.cursor
             && self.selection == other.selection
@@ -148,179 +149,25 @@ impl TerminalTheme {
     /// 终端只需要背景、前景、光标和选区四种基础颜色，因此直接复用
     /// 应用主题的对应语义色，避免终端侧边栏和主界面出现两套配色。
     pub fn from_application_theme(theme: &Theme) -> Self {
-        Self::new(
-            APPLICATION_THEME_NAME,
-            theme.foreground,
-            theme.background,
-            theme.primary,
-            theme.selection,
-        )
-    }
-
-    /// 判断当前主题是否跟随应用主题。
-    pub fn is_application(&self) -> bool {
-        self.name == APPLICATION_THEME_NAME
-    }
-
-    /// 获取所有可用主题
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::midnight(),
-            Self::daylight(),
-            Self::ink(),
-            Self::paper(),
-            Self::ocean(),
-            Self::obsidian(),
-            Self::lotus(),
-            Self::neon_blue(),
-            Self::matrix(),
-            Self::crimson(),
-        ]
-    }
-
-    /// 创建主题
-    fn new(
-        name: &'static str,
-        foreground: Hsla,
-        background: Hsla,
-        cursor: Hsla,
-        selection: Hsla,
-    ) -> Self {
         Self {
-            name,
-            foreground,
-            background,
-            cursor,
-            selection,
+            foreground: theme.foreground,
+            background: theme.background,
+            cursor: theme.primary,
+            selection: theme.selection,
         }
     }
 
-    /// 暗夜主题（深灰背景，浅灰文字）
-    pub fn midnight() -> Self {
-        Self::new(
-            "midnight",
-            rgb(0xE4E4E4).into(),
-            rgb(0x1E1E1E).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x3D3D3D).into(),
-        )
-    }
-
-    /// 明亮主题（白色背景，深灰文字）
-    pub fn daylight() -> Self {
-        Self::new(
-            "daylight",
-            rgb(0x2E3436).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x000000).into(),
-            rgb(0xD3D7CF).into(),
-        )
-    }
-
-    /// 墨黑主题（近黑背景，米色文字）
-    pub fn ink() -> Self {
-        Self::new(
-            "ink",
-            rgb(0xCECDC3).into(),
-            rgb(0x100F0F).into(),
-            rgb(0xDA702C).into(),
-            rgb(0x282726).into(),
-        )
-    }
-
-    /// 纸白主题（米白背景，深色文字）
-    pub fn paper() -> Self {
-        Self::new(
-            "paper",
-            rgb(0x100F0F).into(),
-            rgb(0xFFFCF0).into(),
-            rgb(0xDA702C).into(),
-            rgb(0xE6E4D9).into(),
-        )
-    }
-
-    /// 海浪主题（深蓝灰背景，暖米色文字）
-    pub fn ocean() -> Self {
-        Self::new(
-            "ocean",
-            rgb(0xDCD7BA).into(),
-            rgb(0x1F1F28).into(),
-            rgb(0xC8C093).into(),
-            rgb(0x2D4F67).into(),
-        )
-    }
-
-    /// 黑曜主题（深棕黑背景，灰绿文字）
-    pub fn obsidian() -> Self {
-        Self::new(
-            "obsidian",
-            rgb(0xC5C9C5).into(),
-            rgb(0x181616).into(),
-            rgb(0xC8C093).into(),
-            rgb(0x2D4F67).into(),
-        )
-    }
-
-    /// 莲白主题（米黄背景，深灰紫文字）
-    pub fn lotus() -> Self {
-        Self::new(
-            "lotus",
-            rgb(0x545464).into(),
-            rgb(0xF2ECBC).into(),
-            rgb(0x43436C).into(),
-            rgb(0xB6D7A8).into(),
-        )
-    }
-
-    /// 霓蓝主题（深蓝黑背景，青蓝文字）
-    pub fn neon_blue() -> Self {
-        Self::new(
-            "neon_blue",
-            rgb(0x00D9FF).into(),
-            rgb(0x0A0E14).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x1A3A52).into(),
-        )
-    }
-
-    /// 矩阵主题（近黑背景，亮绿文字，Matrix 风格）
-    pub fn matrix() -> Self {
-        Self::new(
-            "matrix",
-            rgb(0x00FF41).into(),
-            rgb(0x0D0D0D).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x1A3A1A).into(),
-        )
-    }
-
-    /// 赤红主题（深红黑背景，亮红文字）
-    pub fn crimson() -> Self {
-        Self::new(
-            "crimson",
-            rgb(0xFF5555).into(),
-            rgb(0x1A0A0A).into(),
-            rgb(0xFFFFFF).into(),
-            rgb(0x4A1A1A).into(),
-        )
-    }
-
-    /// 根据名称查找主题
-    pub fn find_by_name(name: &str) -> Option<Self> {
-        Self::all().into_iter().find(|t| t.name == name)
-    }
-
-    /// 判断是否为深色主题
+    /// 判断当前宿主主题是否为深色。
     pub fn is_dark(&self) -> bool {
-        // 根据背景色亮度判断
         self.background.l < 0.5
     }
 
-    /// 获取用于 UI 组件的配色
-    ///
-    /// 该方法根据主题的基础颜色生成一套完整的 UI 配色，
-    /// 所有颜色组合都保证足够的对比度以确保可读性。
+    /// 获取用于终端侧边栏和终端工具面板的语义配色。
     pub fn colors(&self) -> TerminalColors {
+        self.semantic_colors()
+    }
+
+    fn semantic_colors(&self) -> TerminalColors {
         let is_dark = self.is_dark();
 
         // 计算 muted 背景色（卡片、列表项等）
@@ -411,163 +258,52 @@ impl TerminalTheme {
             accent_foreground,
         }
     }
+}
 
-    /// 获取可用的等宽字体列表（按操作系统优化排序）
-    pub fn available_monospace_fonts() -> Vec<&'static str> {
-        if cfg!(target_os = "macos") {
-            vec![
-                "Menlo", // macOS 默认
-                "Monaco",
-                "SF Mono",
-                "Courier New",
-                // 跨平台字体（需要安装）
-                "Fira Code",
-                "JetBrains Mono",
-                "Source Code Pro",
-                "Cascadia Code",
-                "Hack",
-                "IBM Plex Mono",
-            ]
-        } else if cfg!(target_os = "windows") {
-            vec![
-                "Consolas", // Windows 默认
-                "Cascadia Mono",
-                "Cascadia Code",
-                "Courier New",
-                "Lucida Console",
-                // 跨平台字体（需要安装）
-                "Fira Code",
-                "JetBrains Mono",
-                "Source Code Pro",
-                "Hack",
-                "IBM Plex Mono",
-            ]
-        } else {
-            // Linux 和其他系统
-            vec![
-                "DejaVu Sans Mono", // Linux 常见默认
-                "Ubuntu Mono",
-                "Liberation Mono",
-                "Courier New",
-                // 跨平台字体（需要安装）
-                "Fira Code",
-                "JetBrains Mono",
-                "Source Code Pro",
-                "Cascadia Code",
-                "Hack",
-                "IBM Plex Mono",
-            ]
-        }
+/// 获取可用的等宽字体列表（按操作系统优化排序）。
+pub fn available_monospace_fonts() -> Vec<&'static str> {
+    if cfg!(target_os = "macos") {
+        vec![
+            "Menlo",
+            "Monaco",
+            "SF Mono",
+            "Courier New",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Cascadia Code",
+            "Hack",
+            "IBM Plex Mono",
+        ]
+    } else if cfg!(target_os = "windows") {
+        vec![
+            "Consolas",
+            "Cascadia Mono",
+            "Cascadia Code",
+            "Courier New",
+            "Lucida Console",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Hack",
+            "IBM Plex Mono",
+        ]
+    } else {
+        vec![
+            "DejaVu Sans Mono",
+            "Ubuntu Mono",
+            "Liberation Mono",
+            "Courier New",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Cascadia Code",
+            "Hack",
+            "IBM Plex Mono",
+        ]
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        APPLICATION_THEME_NAME, TerminalTheme, default_font_fallbacks, default_monospace_font,
-        normalize_terminal_primary_font, terminal_cell_width_from_advance,
-        terminal_cell_width_from_advances,
-    };
-    use gpui::{Pixels, px};
-    use gpui_component::{Theme, ThemeColor};
-
-    #[test]
-    fn application_theme_reuses_application_semantic_colors() {
-        let app_theme = Theme::from(ThemeColor::dark().as_ref());
-        let terminal_theme = TerminalTheme::from_application_theme(&app_theme);
-
-        assert_eq!(APPLICATION_THEME_NAME, terminal_theme.name);
-        assert_eq!(app_theme.background, terminal_theme.background);
-        assert_eq!(app_theme.foreground, terminal_theme.foreground);
-        assert_eq!(app_theme.primary, terminal_theme.cursor);
-        assert_eq!(app_theme.selection, terminal_theme.selection);
-        assert!(terminal_theme.is_application());
-    }
-
-    #[test]
-    fn terminal_default_fallbacks_put_cjk_before_emoji_and_symbols() {
-        let fallbacks = default_font_fallbacks()
-            .into_iter()
-            .map(|font| font.to_string())
-            .collect::<Vec<_>>();
-
-        for cjk_font in ["PingFang SC", "Noto Sans CJK SC", "Noto Sans Mono CJK SC"] {
-            if let Some(cjk_index) = fallbacks.iter().position(|font| font == cjk_font) {
-                for symbol_font in ["Apple Color Emoji", "Apple Symbols", "Noto Color Emoji"] {
-                    if let Some(symbol_index) =
-                        fallbacks.iter().position(|font| font == symbol_font)
-                    {
-                        assert!(cjk_index < symbol_index);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn terminal_primary_font_options_exclude_fallback_only_cjk_fonts() {
-        let fonts = TerminalTheme::available_monospace_fonts();
-
-        assert!(!fonts.contains(&"Noto Sans Mono CJK SC"));
-        assert!(!fonts.contains(&"Source Han Mono SC"));
-    }
-
-    #[test]
-    fn terminal_primary_font_normalizes_fallback_only_cjk_fonts() {
-        for font in [
-            "Noto Sans Mono CJK SC",
-            "Source Han Mono SC",
-            "PingFang SC",
-            "Microsoft YaHei",
-            "SimSun",
-            "Apple Color Emoji",
-        ] {
-            assert_eq!(
-                default_monospace_font(),
-                normalize_terminal_primary_font(font)
-            );
-        }
-        assert_eq!(
-            "JetBrains Mono",
-            normalize_terminal_primary_font("JetBrains Mono")
-        );
-    }
-
-    #[test]
-    fn terminal_cell_width_keeps_measured_width_unless_extreme() {
-        fn assert_px_close(expected: Pixels, actual: Pixels) {
-            let expected = f32::from(expected);
-            let actual = f32::from(actual);
-            assert!((expected - actual).abs() < 0.001);
-        }
-
-        assert_px_close(
-            px(14.0),
-            terminal_cell_width_from_advance(px(14.0), px(14.0)),
-        );
-        assert_px_close(
-            px(8.4),
-            terminal_cell_width_from_advance(px(14.0), px(20.0)),
-        );
-        assert_px_close(px(8.4), terminal_cell_width_from_advance(px(14.0), px(2.0)));
-        assert_px_close(px(8.0), terminal_cell_width_from_advance(px(14.0), px(8.0)));
-    }
-
-    #[test]
-    fn terminal_cell_width_uses_widest_representative_advance() {
-        fn assert_px_close(expected: Pixels, actual: Pixels) {
-            let expected = f32::from(expected);
-            let actual = f32::from(actual);
-            assert!((expected - actual).abs() < 0.001);
-        }
-
-        assert_px_close(
-            px(10.0),
-            terminal_cell_width_from_advances(px(14.0), [px(8.0), px(10.0), px(9.0)]),
-        );
-        assert_px_close(
-            px(8.4),
-            terminal_cell_width_from_advances(px(14.0), std::iter::empty()),
-        );
-    }
-}
+#[path = "theme_tests.rs"]
+mod tests;

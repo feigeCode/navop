@@ -228,6 +228,23 @@ impl Default for CliTheme {
     }
 }
 
+impl CliTheme {
+    pub fn from_application_theme(theme: &gpui_component::Theme) -> Self {
+        let mut cli = Self::default();
+        cli.background = theme.background;
+        cli.foreground = theme.foreground;
+        cli.hint = theme.muted_foreground;
+        cli.prompt = theme.primary;
+        cli.command = theme.foreground;
+        cli.success = theme.success;
+        cli.error = theme.danger;
+        cli.cursor = theme.primary;
+        cli.selection_background = theme.selection;
+        cli.selection_foreground = theme.foreground;
+        cli
+    }
+}
+
 fn default_monospace_font() -> &'static str {
     if cfg!(target_os = "macos") {
         "Menlo"

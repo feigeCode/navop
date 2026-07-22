@@ -15,52 +15,6 @@ TerminalWorkspace:
     zh-HK: 當前工作區包含 %{count} 個終端分屏，關閉後將斷開所有會話。
 
 # 主题
-Theme:
-  application:
-    en: Application
-    zh-CN: 跟随应用
-    zh-HK: 跟隨應用
-  midnight:
-    en: Midnight
-    zh-CN: 暗夜
-    zh-HK: 暗夜
-  daylight:
-    en: Daylight
-    zh-CN: 明亮
-    zh-HK: 明亮
-  ink:
-    en: Ink
-    zh-CN: 墨黑
-    zh-HK: 墨黑
-  paper:
-    en: Paper
-    zh-CN: 纸白
-    zh-HK: 紙白
-  ocean:
-    en: Ocean
-    zh-CN: 海浪
-    zh-HK: 海浪
-  obsidian:
-    en: Obsidian
-    zh-CN: 黑曜
-    zh-HK: 黑曜
-  lotus:
-    en: Lotus
-    zh-CN: 莲白
-    zh-HK: 蓮白
-  neon_blue:
-    en: Neon Blue
-    zh-CN: 霓蓝
-    zh-HK: 霓藍
-  matrix:
-    en: Matrix
-    zh-CN: 矩阵
-    zh-HK: 矩陣
-  crimson:
-    en: Crimson
-    zh-CN: 赤红
-    zh-HK: 赤紅
-
 # 通用文本
 Common:
   save:

@@ -521,8 +521,6 @@ pub enum TerminalSidebarEvent {
     FontSizeChanged(f32),
     /// 字体变更
     FontFamilyChanged(String),
-    /// 主题变更
-    ThemeChanged(TerminalTheme),
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
     /// 请求询问 AI
@@ -755,10 +753,6 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::FontFamilyChanged(family) => {
                     cx.emit(TerminalSidebarEvent::FontFamilyChanged(family.clone()));
-                }
-                settings_panel::SettingsPanelEvent::ThemeChanged(theme) => {
-                    this.colors = theme.colors();
-                    cx.emit(TerminalSidebarEvent::ThemeChanged(theme.clone()));
                 }
                 settings_panel::SettingsPanelEvent::CursorBlinkChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::CursorBlinkChanged(*enabled));
@@ -1610,6 +1604,7 @@ mod tests {
     };
     use crate::theme::TerminalTheme;
     use agent_runtime::{ResourceCapability, ResourceKind, ResourceRef};
+    use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
     use terminal::terminal::TerminalConnectionKind;
@@ -1751,7 +1746,8 @@ mod tests {
 
     #[test]
     fn agent_theme_preserves_terminal_dark_mode_for_markdown() {
-        let terminal_theme = TerminalTheme::matrix();
+        let application_theme = Theme::from(ThemeColor::dark().as_ref());
+        let terminal_theme = TerminalTheme::from_application_theme(&application_theme);
         let agent_theme = agent_theme_from_terminal_theme(&terminal_theme);
         let markdown_style = agent_theme.markdown_style();
 

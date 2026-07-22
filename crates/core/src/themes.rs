@@ -1,5 +1,6 @@
 use crate::settings::AppSettings;
 use crate::storage::get_config_dir;
+use crate::theme_import::normalize_theme_source;
 use crate::theme_sources::BUNDLED_THEMES;
 use gpui::{Action, App, SharedString, hsla};
 use gpui_component::{
@@ -67,15 +68,16 @@ pub fn import_theme_files(paths: &[std::path::PathBuf], cx: &mut App) -> Result<
     for path in paths {
         let source = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {}", path.display(), error))?;
-        validate_theme_source(&source).map_err(|error| format!("{}: {}", path.display(), error))?;
+        let normalized = normalize_theme_source(path, &source)
+            .map_err(|error| format!("{}: {}", path.display(), error))?;
         ThemeRegistry::global_mut(cx)
-            .load_themes_from_str(&source)
+            .load_themes_from_str(&normalized)
             .map_err(|error| format!("{}: {}", path.display(), error))?;
         let file_stem = path
             .file_stem()
             .and_then(|name| name.to_str())
             .ok_or_else(|| format!("无效主题文件名: {}", path.display()))?;
-        std::fs::write(directory.join(format!("{file_stem}.json")), source)
+        std::fs::write(directory.join(format!("{file_stem}.json")), normalized)
             .map_err(|error| error.to_string())?;
         imported += 1;
     }
@@ -87,6 +89,7 @@ fn imported_themes_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(get_config_dir()?.join("themes"))
 }
 
+#[cfg(test)]
 fn validate_theme_source(source: &str) -> Result<(), String> {
     let set = serde_json::from_str::<gpui_component::ThemeSet>(source)
         .map_err(|error| error.to_string())?;

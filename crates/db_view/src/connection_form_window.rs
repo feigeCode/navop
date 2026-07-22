@@ -265,14 +265,14 @@ impl Render for ConnectionFormWindow {
                         .py_2()
                         .rounded_md()
                         .bg(if is_success {
-                            gpui::rgb(0xdcfce7)
+                            cx.theme().success.opacity(0.12)
                         } else {
-                            gpui::rgb(0xfee2e2)
+                            cx.theme().danger.opacity(0.12)
                         })
                         .text_color(if is_success {
-                            gpui::rgb(0x166534)
+                            cx.theme().success
                         } else {
-                            gpui::rgb(0x991b1b)
+                            cx.theme().danger
                         })
                         .child(
                             div()

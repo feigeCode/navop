@@ -7,6 +7,7 @@ use gpui::{
     ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{
+    ActiveTheme,
     button::{Button, ButtonVariants},
     h_flex,
     highlighter::Language,
@@ -152,7 +153,7 @@ impl Render for UserEditorView {
                     .gap_2()
                     .p_2()
                     .border_b_1()
-                    .border_color(gpui::rgb(0xe0e0e0))
+                    .border_color(cx.theme().border)
                     .child(tab_on_click(form_button, EditorTab::Form, cx))
                     .child(tab_on_click(sql_button, EditorTab::SqlPreview, cx)),
             )
@@ -166,8 +167,8 @@ impl Render for UserEditorView {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(gpui::rgb(0xfee2e2))
-                    .text_color(gpui::rgb(0x991b1b))
+                    .bg(cx.theme().danger.opacity(0.12))
+                    .text_color(cx.theme().danger)
                     .child(format!("× {}", message)),
             );
         }

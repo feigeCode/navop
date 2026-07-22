@@ -5,6 +5,7 @@ use gpui::{
     ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{
+    ActiveTheme,
     button::{Button, ButtonVariants},
     h_flex,
     highlighter::Language,
@@ -167,7 +168,7 @@ impl Render for SchemaEditorView {
                     .gap_2()
                     .p_2()
                     .border_b_1()
-                    .border_color(gpui::rgb(0xe0e0e0))
+                    .border_color(cx.theme().border)
                     .child(form_button.on_click(cx.listener(|this, _, _, cx| {
                         this.current_tab = EditorTab::Form;
                         cx.notify();
@@ -187,8 +188,8 @@ impl Render for SchemaEditorView {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(gpui::rgb(0xfee2e2))
-                    .text_color(gpui::rgb(0x991b1b))
+                    .bg(cx.theme().danger.opacity(0.12))
+                    .text_color(cx.theme().danger)
                     .child(format!("✗ {}", msg)),
             );
         }

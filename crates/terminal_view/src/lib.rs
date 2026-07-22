@@ -15,7 +15,7 @@ pub mod sidebar;
 mod ssh_form_mfa;
 pub mod ssh_form_window;
 pub mod terminal_element;
-pub mod theme;
+mod theme;
 pub mod view;
 pub mod workspace;
 
@@ -33,7 +33,8 @@ pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,
 };
 pub use theme::{
-    DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
+    DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors,
+    available_monospace_fonts, default_font_fallbacks,
 };
 pub use view::{TerminalView, init, refresh_keybindings};
 pub use workspace::TerminalWorkspace;

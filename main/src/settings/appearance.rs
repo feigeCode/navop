@@ -4,8 +4,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, ThemeColor, ThemeConfig, ThemeMode, ThemeRegistry,
-    button::{Button, Toggle, ToggleGroup, ToggleVariants},
+    ActiveTheme, Icon, IconName, Selectable, Sizable, ThemeColor, ThemeConfig, ThemeMode,
+    ThemeRegistry,
+    button::{Button, ButtonVariants},
     color_picker::ColorPicker,
     h_flex,
     slider::Slider,
@@ -48,32 +49,34 @@ fn render_mode(cx: &App) -> impl IntoElement {
         ("system", t!("Settings.General.Appearance.mode_system")),
         ("dark", t!("Settings.General.Appearance.mode_dark")),
     ];
-    let toggles = labels.into_iter().map(|(value, label)| {
-        Toggle::new(SharedString::from(format!("appearance-mode-{value}")))
-            .label(label)
-            .checked(mode == value)
-    });
     h_flex()
         .justify_between()
         .items_center()
         .child(div().child(t!("Settings.General.Appearance.theme_mode")))
         .child(
-            ToggleGroup::new("appearance-theme-mode")
-                .children(toggles)
-                .outline()
-                .segmented()
-                .on_click(|checked, _, cx| {
-                    let Some(index) = checked.iter().position(|selected| *selected) else {
-                        return;
-                    };
-                    let value = ["light", "system", "dark"][index];
-                    AppSettings::update_and_save(cx, |settings| {
-                        settings.theme_mode = value.to_string();
-                        settings.auto_switch_theme = value == "system";
-                    });
-                    themes::apply_appearance(&AppSettings::current(cx), cx);
-                }),
+            h_flex()
+                .gap_1()
+                .children(labels.into_iter().map(|(value, label)| {
+                    let selected = mode == value;
+                    Button::new(SharedString::from(format!("appearance-mode-{value}")))
+                        .label(label)
+                        .selected(selected)
+                        .when(selected, |button| button.primary())
+                        .small()
+                        .on_click(move |_, _, cx| set_theme_mode(value, cx))
+                })),
         )
+}
+
+fn set_theme_mode(mode: &'static str, cx: &mut App) {
+    if AppSettings::global(cx).theme_mode == mode {
+        return;
+    }
+    AppSettings::update_and_save(cx, |settings| {
+        settings.theme_mode = mode.to_string();
+        settings.auto_switch_theme = mode == "system";
+    });
+    themes::apply_appearance(&AppSettings::current(cx), cx);
 }
 
 fn render_opacity(
@@ -259,7 +262,10 @@ mod tests {
         let source = include_str!("appearance.rs");
 
         assert_eq!(&[100.0, 85.0, 70.0], OPACITY_PRESETS);
-        assert!(source.contains("[\"light\", \"system\", \"dark\"]"));
+        assert!(source.contains("set_theme_mode(value, cx)"));
+        assert!(source.contains("(\"light\", t!"));
+        assert!(source.contains("(\"system\", t!"));
+        assert!(source.contains("(\"dark\", t!"));
         assert!(source.contains("ThemeRegistry::global"));
         assert!(source.contains("Slider::new"));
         assert!(source.contains("ColorPicker::new"));

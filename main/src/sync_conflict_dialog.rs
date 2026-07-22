@@ -4,9 +4,9 @@ use gpui::{
     AnyElement, App, AppContext, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
-use gpui_component::button::ButtonVariant;
 use gpui_component::{
-    Sizable, WindowExt,
+    ActiveTheme, Sizable, WindowExt,
+    button::ButtonVariant,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -101,10 +101,10 @@ fn render_conflict_item(
     v_flex()
         .gap_2()
         .p_3()
-        .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))
+        .bg(cx.theme().muted)
         .rounded_md()
         .child(conflict_title(item))
-        .child(conflict_detail(item))
+        .child(conflict_detail(item, cx))
         .child(strategy_buttons(item, current, strategies))
         .into_any_element()
 }
@@ -117,10 +117,10 @@ fn conflict_title(item: &SyncConflictDialogItem) -> AnyElement {
         .into_any_element()
 }
 
-fn conflict_detail(item: &SyncConflictDialogItem) -> AnyElement {
+fn conflict_detail(item: &SyncConflictDialogItem, cx: &App) -> AnyElement {
     div()
         .text_xs()
-        .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
+        .text_color(cx.theme().muted_foreground)
         .child(item.detail.clone())
         .into_any_element()
 }

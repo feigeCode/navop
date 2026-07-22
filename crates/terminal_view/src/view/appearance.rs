@@ -1,17 +1,6 @@
 use super::*;
 
 impl TerminalView {
-    /// Apply a terminal theme.
-    pub fn set_theme(&mut self, theme: TerminalTheme, cx: &mut Context<Self>) {
-        self.current_theme = theme;
-        cx.notify();
-    }
-
-    /// Get current theme
-    pub fn current_theme(&self) -> &TerminalTheme {
-        &self.current_theme
-    }
-
     /// 获取连接类型（本地 / SSH）
     pub fn connection_kind(&self, cx: &App) -> TerminalConnectionKind {
         self.terminal.read(cx).connection_kind()
@@ -25,11 +14,6 @@ impl TerminalView {
     /// 获取本地终端的工作目录
     pub fn local_working_dir(&self) -> Option<&std::path::Path> {
         self.local_working_dir.as_deref()
-    }
-
-    /// Get all available themes
-    pub fn available_themes() -> Vec<TerminalTheme> {
-        TerminalTheme::all()
     }
 
     /// 设置字体大小

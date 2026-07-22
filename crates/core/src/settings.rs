@@ -672,8 +672,6 @@ pub struct AppSettings {
     pub terminal_paste_image_upload: bool,
     #[serde(default = "default_true")]
     pub terminal_sync_path_with_terminal: bool,
-    #[serde(default = "default_terminal_theme")]
-    pub terminal_theme: String,
     #[serde(default)]
     pub terminal_cursor_blink: bool,
     #[serde(default = "default_true")]
@@ -954,10 +952,6 @@ fn default_terminal_font_size() -> f64 {
     15.0
 }
 
-fn default_terminal_theme() -> String {
-    "application".to_string()
-}
-
 fn default_true() -> bool {
     true
 }
@@ -1008,7 +1002,6 @@ impl Default for AppSettings {
             terminal_right_click_paste: false,
             terminal_paste_image_upload: default_true(),
             terminal_sync_path_with_terminal: true,
-            terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
@@ -1085,7 +1078,6 @@ impl AppSettings {
         self.window_opacity = self
             .window_opacity
             .clamp(Self::MIN_WINDOW_OPACITY, Self::MAX_WINDOW_OPACITY);
-        self.terminal_theme = default_terminal_theme();
         if self.custom_accent_color.trim().is_empty() {
             self.custom_accent_color = default_custom_accent_color();
         }
@@ -1323,10 +1315,8 @@ mod tests {
         assert_eq!(AppSettings::MIN_WINDOW_OPACITY, settings.window_opacity);
 
         settings.auto_switch_theme = true;
-        settings.terminal_theme = "matrix".to_string();
         settings.normalize_appearance_settings();
         assert_eq!("system", settings.theme_mode);
-        assert_eq!("application", settings.terminal_theme);
     }
 
     #[test]

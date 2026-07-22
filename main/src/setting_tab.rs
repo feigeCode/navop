@@ -76,7 +76,7 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
-use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme};
+use terminal_view::{MAX_FONT_SIZE, MIN_FONT_SIZE, available_monospace_fonts};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -107,7 +107,7 @@ fn app_font_options(cx: &App) -> Vec<(SharedString, SharedString)> {
 }
 
 fn builtin_monospace_font_options() -> Vec<(SharedString, SharedString)> {
-    TerminalTheme::available_monospace_fonts()
+    available_monospace_fonts()
         .into_iter()
         .map(|font| (font.into(), font.into()))
         .collect()

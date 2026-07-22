@@ -82,6 +82,7 @@ schemars = "1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml = "0.9"
+toml = "0.8.23"
 serde_repr = "0.1"
 shell-words = "1.1.1"
 smallvec = "1"

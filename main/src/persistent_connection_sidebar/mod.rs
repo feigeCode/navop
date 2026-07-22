@@ -7,10 +7,12 @@ use gpui_component::{
     h_flex,
     input::{InputEvent, InputState},
 };
-use terminal_view::theme::TerminalColors;
+use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
 
+mod connection_context_menu;
+mod context_menu;
 mod drag;
 mod rail;
 mod resize;
@@ -20,6 +22,7 @@ mod row_parts;
 mod rows;
 mod tree;
 mod tree_model;
+mod workspace_context_menu;
 
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {

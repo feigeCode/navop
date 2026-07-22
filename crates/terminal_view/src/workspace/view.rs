@@ -9,7 +9,7 @@ use terminal::terminal::TerminalConnectionKind;
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::resize::WorkspaceSidebarResize;
 use super::{TerminalPaneId, TerminalSplitTree};
-use crate::{theme::TerminalTheme, view::TerminalView};
+use crate::view::TerminalView;
 
 pub struct TerminalWorkspace {
     pub(super) active_pane_id: TerminalPaneId,
@@ -113,10 +113,6 @@ impl TerminalWorkspace {
 
     pub fn connection_id(&self, cx: &App) -> Option<i64> {
         self.active_pane().read(cx).connection_id(cx)
-    }
-
-    pub fn current_theme(&self, cx: &App) -> TerminalTheme {
-        self.active_pane().read(cx).current_theme().clone()
     }
 
     pub(super) fn active_pane(&self) -> Entity<TerminalView> {

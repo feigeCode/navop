@@ -1793,7 +1793,7 @@ impl Render for SshFormWindow {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(gpui::rgb(0xfee2e2))
+                    .bg(cx.theme().danger.opacity(0.12))
                     .text_sm()
                     .text_color(cx.theme().danger)
                     .max_h(px(120.0))
