@@ -40,6 +40,11 @@ impl TerminalView {
         self.apply_settings_snapshot(&settings, window, cx);
     }
 
+    pub(super) fn handle_app_theme_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = TerminalTheme::from_application_theme(cx.theme());
+        self.apply_theme(&theme, window, cx);
+    }
+
     /// 处理侧边栏事件
     pub(super) fn handle_sidebar_event(
         &mut self,
@@ -72,11 +77,8 @@ impl TerminalView {
                     settings.font_family = family;
                 });
             }
-            TerminalSidebarEvent::ThemeChanged(theme) => {
-                let theme_name = theme.name.to_string();
-                let _ = update_settings(cx, move |settings| {
-                    settings.theme = theme_name;
-                });
+            TerminalSidebarEvent::ThemeChanged(_theme) => {
+                // 终端配色统一由宿主应用主题驱动，不再写入独立终端主题。
             }
             TerminalSidebarEvent::ExecuteCommand(command) => {
                 // 仅粘贴命令，不自动回车执行，降低误操作风险

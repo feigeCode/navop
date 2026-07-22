@@ -14,6 +14,7 @@ impl TerminalView {
         };
         let mfa_request = self.terminal.read(cx).ssh_mfa_request();
         let has_mfa_request = mfa_request.is_some();
+        let theme = cx.theme();
 
         div()
             .absolute()
@@ -34,7 +35,7 @@ impl TerminalView {
                     .items_center()
                     .gap_4()
                     .p_6()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(theme.popover)
                     .rounded_lg()
                     .shadow_lg()
                     .w(px(560.0))
@@ -53,16 +54,16 @@ impl TerminalView {
                                 .color()
                                 .with_size(px(24.0))
                                 .text_color(if is_connecting {
-                                    rgb(0xfbbf24)
+                                    theme.warning
                                 } else {
-                                    rgb(0xef4444)
+                                    theme.danger
                                 }),
                             )
                             .child(
                                 div()
                                     .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(theme.popover_foreground)
                                     .child(if is_connecting {
                                         t!("SshSession.connecting")
                                     } else {
@@ -76,25 +77,22 @@ impl TerminalView {
                                 .px_3()
                                 .py_2()
                                 .rounded_md()
-                                .bg(rgb(0x1f1f1f))
+                                .bg(theme.danger.opacity(0.12))
                                 .text_sm()
-                                .text_color(rgb(0xef4444))
+                                .text_color(theme.danger)
                                 .max_w(px(480.0))
                                 .max_h(px(160.0))
                                 .overflow_y_scrollbar()
                                 .child(msg),
                         )
                     })
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0x9ca3af))
-                            .child(if is_connecting {
-                                t!("SshSession.establishing")
-                            } else {
-                                t!("SshSession.disconnected")
-                            }),
-                    )
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(
+                        if is_connecting {
+                            t!("SshSession.establishing")
+                        } else {
+                            t!("SshSession.disconnected")
+                        },
+                    ))
                     .when_some(mfa_request, |this, request| {
                         this.child(
                             v_flex()

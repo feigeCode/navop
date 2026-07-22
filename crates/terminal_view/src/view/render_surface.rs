@@ -189,6 +189,7 @@ impl TerminalView {
 
     fn render_addon_tooltip(&self) -> Option<AnyElement> {
         let (tooltip, position) = self.addon_manager.tooltip().zip(self.mouse_position)?;
+        let colors = self.current_theme.colors();
         let relative_x = position.x - self.terminal_bounds.origin.x;
         let relative_y = position.y - self.terminal_bounds.origin.y;
         Some(
@@ -198,7 +199,7 @@ impl TerminalView {
                 .top(relative_y + px(20.0))
                 .px_2()
                 .py_1()
-                .bg(rgb(0x3d3d3d))
+                .bg(colors.muted)
                 .rounded_md()
                 .shadow_md()
                 .text_size(px(11.0))
@@ -210,12 +211,16 @@ impl TerminalView {
                         .child(
                             div()
                                 .px_1()
-                                .bg(rgb(0x4d4d4d))
+                                .bg(colors.background)
                                 .rounded_sm()
-                                .text_color(rgb(0xcccccc))
+                                .text_color(colors.foreground)
                                 .child(tooltip.action_hint),
                         )
-                        .child(div().text_color(rgb(0x888888)).child(tooltip.action_text)),
+                        .child(
+                            div()
+                                .text_color(colors.muted_foreground)
+                                .child(tooltip.action_text),
+                        ),
                 )
                 .child(
                     div()

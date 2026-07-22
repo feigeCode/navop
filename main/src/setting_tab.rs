@@ -10,6 +10,7 @@ use crate::local_terminal_profiles::{
     setting_options as local_terminal_profile_options,
 };
 use crate::onetcli_app::{GlobalHomePage, GlobalOnetCliApp};
+use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
@@ -30,8 +31,8 @@ use gpui::{
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
-    TitleBar, WindowExt,
+    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, TitleBar,
+    WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -602,52 +603,7 @@ impl SettingsPanel {
                     notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Appearance.dark_mode"),
-                                SettingField::switch(
-                                    |cx: &App| cx.theme().mode.is_dark(),
-                                    |val: bool, cx: &mut App| {
-                                        let mode = if val {
-                                            ThemeMode::Dark
-                                        } else {
-                                            ThemeMode::Light
-                                        };
-                                        Theme::global_mut(cx).mode = mode;
-                                        Theme::change(mode, None, cx);
-
-                                        let theme_mode = if val {
-                                            "dark".to_string()
-                                        } else {
-                                            "light".to_string()
-                                        };
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.theme_mode = theme_mode;
-                                        });
-                                    },
-                                )
-                                .default_value(false),
-                            )
-                            .description(
-                                t!("Settings.General.Appearance.dark_mode_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Appearance.auto_switch_theme"),
-                                SettingField::checkbox(
-                                    |cx: &App| AppSettings::global(cx).auto_switch_theme,
-                                    |val: bool, cx: &mut App| {
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.auto_switch_theme = val;
-                                        });
-                                    },
-                                )
-                                .default_value(default_settings.auto_switch_theme),
-                            )
-                            .description(
-                                t!("Settings.General.Appearance.auto_switch_theme_desc")
-                                    .to_string(),
-                            ),
-                        ]),
+                        .item(SettingItem::render(render_appearance_settings)),
                     SettingGroup::new()
                         .title(t!("Settings.General.Font.group_title"))
                         .item(

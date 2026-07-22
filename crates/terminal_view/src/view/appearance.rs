@@ -129,9 +129,8 @@ impl TerminalView {
         self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
         self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
-        if let Some(theme) = TerminalTheme::find_by_name(&settings.theme) {
-            self.apply_theme(&theme, window, cx);
-        }
+        let theme = TerminalTheme::from_application_theme(cx.theme());
+        self.apply_theme(&theme, window, cx);
     }
 
     pub(super) fn apply_custom_highlight_rules(
@@ -158,7 +157,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.current_theme.name == theme.name {
+        if self.current_theme == *theme {
             return;
         }
         self.current_theme = theme.clone();

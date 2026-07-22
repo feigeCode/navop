@@ -21,12 +21,6 @@ mod rows;
 mod tree;
 mod tree_model;
 
-pub(super) const TOP_BAR_BACKGROUND: u32 = 0x2b2b2b;
-pub(super) const TOP_BAR_BORDER: u32 = 0x1e1e1e;
-pub(super) const TOP_BAR_FOREGROUND: u32 = 0xf2f2f2;
-pub(super) const TOP_BAR_MUTED: u32 = 0x3a3a3a;
-pub(super) const TOP_BAR_MUTED_FOREGROUND: u32 = 0xaaaaaa;
-
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {
     pub background: Hsla,

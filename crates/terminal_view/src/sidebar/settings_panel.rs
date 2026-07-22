@@ -10,7 +10,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    Colorize, Icon, IconName, Sizable, Size, WindowExt,
+    ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
     color_picker::{ColorPicker, ColorPickerState},
     dialog::DialogButtonProps,
@@ -1397,10 +1397,10 @@ impl SettingsPanel {
         let muted_fg = colors.muted_foreground;
 
         // 预先收集所有主题项
-        let theme_items: Vec<AnyElement> = TerminalTheme::all()
-            .into_iter()
-            .map(|theme| self.render_theme_item(theme, cx))
-            .collect();
+        let theme_items: Vec<AnyElement> =
+            std::iter::once(TerminalTheme::from_application_theme(cx.theme()))
+                .map(|theme| self.render_theme_item(theme, cx))
+                .collect();
 
         v_flex()
             .gap_3()

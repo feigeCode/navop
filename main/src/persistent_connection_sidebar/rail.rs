@@ -13,8 +13,6 @@ use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
 use super::SidebarPalette;
-#[cfg(target_os = "macos")]
-use super::{TOP_BAR_BACKGROUND, TOP_BAR_BORDER};
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
@@ -69,10 +67,10 @@ pub(super) fn render_navigation_rail(
                         .w_full()
                         .h(MACOS_TITLE_BAR_HEIGHT)
                         .flex_shrink_0()
-                        .bg(gpui::rgb(TOP_BAR_BACKGROUND))
+                        .bg(palette.background)
                         .border_r_1()
                         .border_b_1()
-                        .border_color(gpui::rgb(TOP_BAR_BORDER)),
+                        .border_color(palette.border),
                 )
             }
             #[cfg(not(target_os = "macos"))]

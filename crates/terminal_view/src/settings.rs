@@ -203,6 +203,7 @@ pub fn update_settings<T>(
     let mut next = previous.clone();
     updater(&mut next);
     next.font_family = normalize_terminal_primary_font(&next.font_family);
+    next.theme = crate::theme::APPLICATION_THEME_NAME.to_string();
     if previous == next {
         return Some(next);
     }

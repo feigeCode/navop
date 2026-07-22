@@ -23,6 +23,7 @@ pub mod tab_container;
 pub mod tab_navigation;
 mod tab_split_help;
 pub mod tab_switcher;
+mod theme_sources;
 // pub mod tab_persistence;
 pub mod settings;
 pub mod themes;

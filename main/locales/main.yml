@@ -1266,6 +1266,62 @@ Settings:
         en: Automatically switch theme based on system settings
         zh-CN: 根据系统设置自动切换主题
         zh-HK: 根據系統設定自動切換主題
+      theme_mode:
+        en: Theme Mode
+        zh-CN: 主题模式
+        zh-HK: 主題模式
+      mode_light:
+        en: Light
+        zh-CN: 浅色
+        zh-HK: 淺色
+      mode_system:
+        en: System
+        zh-CN: 跟随系统
+        zh-HK: 跟隨系統
+      mode_dark:
+        en: Dark
+        zh-CN: 深色
+        zh-HK: 深色
+      theme_palette:
+        en: Theme Palette
+        zh-CN: 主题配色
+        zh-HK: 主題配色
+      import_theme:
+        en: Import Theme
+        zh-CN: 导入主题
+        zh-HK: 匯入主題
+      import_theme_desc:
+        en: Import a GPUI theme JSON file. Imported themes remain available after restart.
+        zh-CN: 导入 GPUI 主题 JSON 文件，重启应用后仍然可用。
+        zh-HK: 匯入 GPUI 主題 JSON 檔案，重新啟動應用後仍然可用。
+      select_theme_files:
+        en: Select theme files
+        zh-CN: 选择主题文件
+        zh-HK: 選擇主題檔案
+      import_theme_success:
+        en: Imported %{count} theme file(s)
+        zh-CN: 已导入 %{count} 个主题文件
+        zh-HK: 已匯入 %{count} 個主題檔案
+      import_theme_failed:
+        en: "Failed to import theme: %{error}"
+        zh-CN: "导入主题失败：%{error}"
+        zh-HK: "匯入主題失敗：%{error}"
+      window_opacity:
+        en: Window Transparency
+        zh-CN: 窗口透明度
+        zh-HK: 視窗透明度
+      window_opacity_desc:
+        en: Adjust the opacity of the entire application window. Lower values make the background more transparent.
+        zh-CN: 调整整个应用窗口的不透明度，数值越低背景越透明。
+        zh-HK: 調整整個應用視窗的不透明度，數值越低背景越透明。
+      custom_accent:
+        en: Custom Accent Color
+        zh-CN: 自定义强调色
+        zh-HK: 自訂強調色
+      custom_accent_desc:
+        en: Override interactive controls, focus rings, selections, and terminal cursor colors.
+        zh-CN: 统一覆盖交互控件、焦点环、选区和终端光标颜色。
+        zh-HK: 統一覆蓋互動控制項、焦點環、選區和終端游標顏色。
 
     # 字体设置
     Font:

@@ -19,8 +19,8 @@ impl TerminalView {
         let connection_kind = terminal.read(cx).connection_kind();
         let is_local_terminal = connection_kind == TerminalConnectionKind::Local;
 
-        // 创建默认主题（需要在创建侧边栏之前）
-        let default_theme = TerminalTheme::ocean();
+        // 终端默认跟随应用主题（需要在创建侧边栏之前）。
+        let default_theme = TerminalTheme::from_application_theme(cx.theme());
         let default_font_size = px(TERMINAL_RESET_FONT_SIZE);
         let default_font_family: SharedString = default_monospace_font().into();
         let default_font_fallbacks = default_font_fallbacks();
@@ -142,6 +142,9 @@ impl TerminalView {
         }
         subscriptions
             .push(cx.observe_global_in::<AppSettings>(window, Self::handle_app_settings_changed));
+        subscriptions.push(
+            cx.observe_global_in::<gpui_component::Theme>(window, Self::handle_app_theme_changed),
+        );
 
         let scrollbar_metrics = Rc::new(RefCell::new(TerminalScrollbarMetrics::default()));
         let scrollbar_handle = TerminalScrollbarHandle::new(

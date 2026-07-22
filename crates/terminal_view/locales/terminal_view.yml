@@ -16,6 +16,10 @@ TerminalWorkspace:
 
 # 主题
 Theme:
+  application:
+    en: Application
+    zh-CN: 跟随应用
+    zh-HK: 跟隨應用
   midnight:
     en: Midnight
     zh-CN: 暗夜

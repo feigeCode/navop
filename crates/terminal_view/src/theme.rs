@@ -15,6 +15,7 @@
 //! - 在 `accent` 上使用 `accent_foreground`
 
 use gpui::{Hsla, Pixels, SharedString, rgb};
+use gpui_component::Theme;
 use one_core::settings::{
     default_grid_font_fallback_families, default_grid_monospace_font_family,
     is_supported_grid_monospace_font, normalize_grid_monospace_font_family,
@@ -26,6 +27,8 @@ pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 /// 默认行高比例
 pub const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.4;
+/// 使用应用主题作为终端配色时的内部主题标识。
+pub const APPLICATION_THEME_NAME: &str = "application";
 const TERMINAL_CELL_WIDTH_RATIO: f32 = 0.6;
 const MIN_TERMINAL_CELL_WIDTH_RATIO: f32 = 0.3;
 const MAX_TERMINAL_CELL_WIDTH_RATIO: f32 = 1.2;
@@ -140,6 +143,25 @@ pub fn default_font_fallbacks() -> Vec<SharedString> {
 }
 
 impl TerminalTheme {
+    /// 从应用主题的语义色生成终端主题。
+    ///
+    /// 终端只需要背景、前景、光标和选区四种基础颜色，因此直接复用
+    /// 应用主题的对应语义色，避免终端侧边栏和主界面出现两套配色。
+    pub fn from_application_theme(theme: &Theme) -> Self {
+        Self::new(
+            APPLICATION_THEME_NAME,
+            theme.foreground,
+            theme.background,
+            theme.primary,
+            theme.selection,
+        )
+    }
+
+    /// 判断当前主题是否跟随应用主题。
+    pub fn is_application(&self) -> bool {
+        self.name == APPLICATION_THEME_NAME
+    }
+
     /// 获取所有可用主题
     pub fn all() -> Vec<Self> {
         vec![
@@ -442,11 +464,25 @@ impl TerminalTheme {
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalTheme, default_font_fallbacks, default_monospace_font,
+        APPLICATION_THEME_NAME, TerminalTheme, default_font_fallbacks, default_monospace_font,
         normalize_terminal_primary_font, terminal_cell_width_from_advance,
         terminal_cell_width_from_advances,
     };
     use gpui::{Pixels, px};
+    use gpui_component::{Theme, ThemeColor};
+
+    #[test]
+    fn application_theme_reuses_application_semantic_colors() {
+        let app_theme = Theme::from(ThemeColor::dark().as_ref());
+        let terminal_theme = TerminalTheme::from_application_theme(&app_theme);
+
+        assert_eq!(APPLICATION_THEME_NAME, terminal_theme.name);
+        assert_eq!(app_theme.background, terminal_theme.background);
+        assert_eq!(app_theme.foreground, terminal_theme.foreground);
+        assert_eq!(app_theme.primary, terminal_theme.cursor);
+        assert_eq!(app_theme.selection, terminal_theme.selection);
+        assert!(terminal_theme.is_application());
+    }
 
     #[test]
     fn terminal_default_fallbacks_put_cjk_before_emoji_and_symbols() {

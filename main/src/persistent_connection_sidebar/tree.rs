@@ -13,10 +13,7 @@ use super::tree_model::{
     ConnectionNodeInput, ConnectionTreeRow, WorkspaceNodeInput, build_connection_tree_rows,
     filter_connection_tree_inputs,
 };
-use super::{
-    PersistentConnectionSidebar, SidebarPalette, TOP_BAR_BACKGROUND, TOP_BAR_BORDER,
-    TOP_BAR_FOREGROUND, TOP_BAR_MUTED, TOP_BAR_MUTED_FOREGROUND,
-};
+use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
 
 impl PersistentConnectionSidebar {
@@ -37,7 +34,7 @@ impl PersistentConnectionSidebar {
             .flex_shrink_0()
             .bg(palette.background)
             .text_color(palette.foreground)
-            .child(self.render_tree_header(cx))
+            .child(self.render_tree_header(palette, cx))
             .child(self.render_tree_search(palette, cx))
             .child(
                 div()
@@ -141,7 +138,7 @@ impl PersistentConnectionSidebar {
             .into_any_element()
     }
 
-    fn render_tree_header(&self, cx: &gpui::Context<Self>) -> AnyElement {
+    fn render_tree_header(&self, palette: SidebarPalette, cx: &gpui::Context<Self>) -> AnyElement {
         let home_for_new = self.home_page.clone();
         let home_for_refresh = self.home_page.clone();
         let connection_count = {
@@ -152,7 +149,6 @@ impl PersistentConnectionSidebar {
                 .count()
         };
         let view = cx.entity();
-        let top_bar_foreground: gpui::Hsla = gpui::rgb(TOP_BAR_FOREGROUND).into();
         h_flex()
             .w_full()
             .h(px(40.0))
@@ -160,11 +156,11 @@ impl PersistentConnectionSidebar {
             .px_2()
             .items_center()
             .justify_between()
-            .bg(gpui::rgb(TOP_BAR_BACKGROUND))
-            .text_color(top_bar_foreground)
+            .bg(palette.background)
+            .text_color(palette.foreground)
             .border_r_1()
             .border_b_1()
-            .border_color(gpui::rgb(TOP_BAR_BORDER))
+            .border_color(palette.border)
             .child(
                 h_flex()
                     .min_w_0()
@@ -180,9 +176,9 @@ impl PersistentConnectionSidebar {
                         div()
                             .px_1p5()
                             .rounded_full()
-                            .bg(gpui::rgb(TOP_BAR_MUTED))
+                            .bg(palette.muted)
                             .text_xs()
-                            .text_color(gpui::rgb(TOP_BAR_MUTED_FOREGROUND))
+                            .text_color(palette.muted_foreground)
                             .child(connection_count.to_string()),
                     ),
             )
@@ -194,7 +190,7 @@ impl PersistentConnectionSidebar {
                             .icon(IconName::ChevronsUpDown)
                             .ghost()
                             .xsmall()
-                            .text_color(top_bar_foreground)
+                            .text_color(palette.foreground)
                             .tooltip(t!("Connection.collapse_all"))
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| this.collapse_all_groups(cx));
@@ -205,7 +201,7 @@ impl PersistentConnectionSidebar {
                             .icon(IconName::FolderOpen)
                             .ghost()
                             .xsmall()
-                            .text_color(top_bar_foreground)
+                            .text_color(palette.foreground)
                             .tooltip(t!("Workspace.new"))
                             .on_click(move |_, window, cx| {
                                 let sort_order = home_for_new.read(cx).workspaces.len() as i32;
@@ -225,7 +221,7 @@ impl PersistentConnectionSidebar {
                             .icon(IconName::Refresh)
                             .ghost()
                             .xsmall()
-                            .text_color(top_bar_foreground)
+                            .text_color(palette.foreground)
                             .tooltip(t!("Home.refresh"))
                             .on_click(move |_, _, cx| {
                                 home_for_refresh

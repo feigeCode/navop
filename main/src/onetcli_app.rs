@@ -150,6 +150,7 @@ use one_core::tab_container::{TabContainer, TabContainerEvent, TabContentRegistr
 use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
+use one_core::themes;
 use sftp_view::{PasteUpload as SftpPasteUpload, SFTP_VIEW_CONTEXT};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -622,6 +623,8 @@ pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
 
 pub fn init(cx: &mut App) {
     gpui_component::init(cx);
+    one_core::themes::load_bundled(cx);
+    one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx);
     ai_chat_view::init(cx);
@@ -985,6 +988,7 @@ pub struct OnetCliApp {
     home_page_style: HomePageStyle,
     quit_state: QuitRequestState,
     main_window_size_save_task: Option<Task<()>>,
+    _appearance_subscription: gpui::Subscription,
 }
 
 impl OnetCliApp {
@@ -1019,17 +1023,7 @@ impl OnetCliApp {
         let home_page_style = settings.home_page_style;
         let show_persistent_sidebar = home_page_style.uses_persistent_sidebar();
         let tab_container = cx.new(|cx| {
-            let mut container = TabContainer::new(window, cx)
-                .with_tab_bar_colors(
-                    Some(gpui::rgb(0x2b2b2b).into()),
-                    Some(gpui::rgb(0x1e1e1e).into()),
-                )
-                .with_tab_item_colors(
-                    Some(gpui::rgb(0x555555).into()),
-                    Some(gpui::rgb(0x3a3a3a).into()),
-                )
-                .with_inactive_tab_bg_color(Some(gpui::rgb(0x3a3a3a).into()))
-                .with_tab_content_colors(Some(gpui::white()), Some(gpui::rgb(0xaaaaaa).into()));
+            let mut container = TabContainer::new(window, cx);
 
             if show_persistent_sidebar {
                 container = container.with_navigation_sidebar_toggle(connection_sidebar_expanded);
@@ -1133,6 +1127,12 @@ impl OnetCliApp {
             },
         )
         .detach();
+        let appearance_subscription = window.observe_window_appearance(|_, cx| {
+            let settings = AppSettings::current(cx);
+            if settings.auto_switch_theme || settings.theme_mode == "system" {
+                themes::apply_appearance(&settings, cx);
+            }
+        });
 
         Self {
             tab_container,
@@ -1140,6 +1140,7 @@ impl OnetCliApp {
             home_page_style,
             quit_state: QuitRequestState::default(),
             main_window_size_save_task: None,
+            _appearance_subscription: appearance_subscription,
         }
     }
 
@@ -1643,6 +1644,7 @@ impl Render for OnetCliApp {
         div()
             .size_full()
             .relative()
+            .opacity(AppSettings::global(cx).window_opacity)
             .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
                 if !this.home_page_style.uses_persistent_sidebar() {
                     return;

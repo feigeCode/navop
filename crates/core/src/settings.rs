@@ -626,10 +626,20 @@ pub struct AppSettings {
     pub main_window_size: Option<MainWindowSize>,
     #[serde(default = "default_locale")]
     pub locale: String,
-    #[serde(default)]
+    #[serde(default = "default_theme_mode")]
     pub theme_mode: String,
     #[serde(default)]
     pub auto_switch_theme: bool,
+    #[serde(default = "default_light_theme")]
+    pub light_theme: String,
+    #[serde(default = "default_dark_theme")]
+    pub dark_theme: String,
+    #[serde(default = "default_window_opacity")]
+    pub window_opacity: f32,
+    #[serde(default)]
+    pub custom_accent_enabled: bool,
+    #[serde(default = "default_custom_accent_color")]
+    pub custom_accent_color: String,
     #[serde(default = "default_font_family")]
     pub font_family: String,
     #[serde(default = "default_font_size")]
@@ -732,6 +742,26 @@ fn default_font_family() -> String {
 
 fn default_locale() -> String {
     LOCALE_SYSTEM.to_string()
+}
+
+fn default_theme_mode() -> String {
+    "light".to_string()
+}
+
+fn default_light_theme() -> String {
+    "Default Light".to_string()
+}
+
+fn default_dark_theme() -> String {
+    "Default Dark".to_string()
+}
+
+fn default_window_opacity() -> f32 {
+    1.0
+}
+
+fn default_custom_accent_color() -> String {
+    "#3b82f6".to_string()
 }
 
 fn default_font_size() -> f64 {
@@ -925,7 +955,7 @@ fn default_terminal_font_size() -> f64 {
 }
 
 fn default_terminal_theme() -> String {
-    "ocean".to_string()
+    "application".to_string()
 }
 
 fn default_true() -> bool {
@@ -957,8 +987,13 @@ impl Default for AppSettings {
         Self {
             main_window_size: None,
             locale: default_locale(),
-            theme_mode: "light".to_string(),
+            theme_mode: default_theme_mode(),
             auto_switch_theme: false,
+            light_theme: default_light_theme(),
+            dark_theme: default_dark_theme(),
+            window_opacity: default_window_opacity(),
+            custom_accent_enabled: false,
+            custom_accent_color: default_custom_accent_color(),
             font_family: default_font_family(),
             font_size: default_font_size(),
             sql_editor_font_family: default_monospace_font_family(),
@@ -1020,6 +1055,9 @@ impl MainWindowSize {
 impl Global for AppSettings {}
 
 impl AppSettings {
+    pub const MIN_WINDOW_OPACITY: f32 = 0.5;
+    pub const MAX_WINDOW_OPACITY: f32 = 1.0;
+
     fn migrate_legacy_mcp_toolsets(&mut self) {
         let Some(toolsets) = self.mcp.legacy_toolsets.take() else {
             return;
@@ -1038,6 +1076,31 @@ impl AppSettings {
             normalize_grid_monospace_font_family(&self.terminal_font_family);
     }
 
+    pub fn normalize_appearance_settings(&mut self) {
+        if self.auto_switch_theme {
+            self.theme_mode = "system".to_string();
+        } else if !matches!(self.theme_mode.as_str(), "light" | "system" | "dark") {
+            self.theme_mode = default_theme_mode();
+        }
+        self.window_opacity = self
+            .window_opacity
+            .clamp(Self::MIN_WINDOW_OPACITY, Self::MAX_WINDOW_OPACITY);
+        self.terminal_theme = default_terminal_theme();
+        if self.custom_accent_color.trim().is_empty() {
+            self.custom_accent_color = default_custom_accent_color();
+        }
+    }
+
+    pub fn effective_theme_mode(&self, system_mode: ThemeMode) -> ThemeMode {
+        if self.auto_switch_theme || self.theme_mode == "system" {
+            system_mode
+        } else if self.theme_mode == "dark" {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        }
+    }
+
     pub fn current(cx: &App) -> Self {
         cx.try_global::<AppSettings>().cloned().unwrap_or_default()
     }
@@ -1054,6 +1117,7 @@ impl AppSettings {
         let mut settings = Self::current(cx);
         update(&mut settings);
         settings.normalize_font_settings();
+        settings.normalize_appearance_settings();
         cx.set_global(settings);
     }
 
@@ -1061,6 +1125,7 @@ impl AppSettings {
         let mut settings = Self::current(cx);
         update(&mut settings);
         settings.normalize_font_settings();
+        settings.normalize_appearance_settings();
         settings.save();
         cx.set_global(settings);
     }
@@ -1096,6 +1161,7 @@ impl AppSettings {
                     info!("Settings loaded from {:?}", path);
                     settings.migrate_legacy_mcp_toolsets();
                     settings.normalize_font_settings();
+                    settings.normalize_appearance_settings();
                     settings
                 }
                 Err(e) => {
@@ -1139,14 +1205,7 @@ impl AppSettings {
 
     pub fn apply(&self, cx: &mut App) {
         gpui_component::set_locale(effective_locale_for_setting(&self.locale));
-
-        let mode = if self.theme_mode == "dark" {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        };
-        Theme::global_mut(cx).mode = mode;
-        Theme::change(mode, None, cx);
+        crate::themes::apply_appearance(self, cx);
         self.apply_font_size(cx);
 
         // 同步自动保存配置
@@ -1174,7 +1233,7 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use gpui::px;
-    use gpui_component::Theme;
+    use gpui_component::{Theme, ThemeMode};
 
     use super::{
         AppSettings, CustomFont, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
@@ -1226,6 +1285,77 @@ mod tests {
                 .check_remote_modified_before_upload
         );
         assert!(settings.remote_file_editor.auto_upload_external_changes);
+    }
+
+    #[test]
+    fn appearance_settings_migrate_with_safe_defaults() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "auto_switch_theme": false
+        }))
+        .expect("legacy appearance settings should deserialize");
+
+        assert_eq!("light", settings.theme_mode);
+        assert_eq!("Default Light", settings.light_theme);
+        assert_eq!("Default Dark", settings.dark_theme);
+        assert_eq!(1.0, settings.window_opacity);
+        assert!(!settings.custom_accent_enabled);
+        assert_eq!("#3b82f6", settings.custom_accent_color);
+    }
+
+    #[test]
+    fn appearance_settings_normalize_opacity_and_mode() {
+        let mut settings = AppSettings {
+            theme_mode: "unknown".to_string(),
+            window_opacity: 2.0,
+            custom_accent_color: String::new(),
+            ..AppSettings::default()
+        };
+
+        settings.normalize_appearance_settings();
+
+        assert_eq!("light", settings.theme_mode);
+        assert_eq!(1.0, settings.window_opacity);
+        assert_eq!("#3b82f6", settings.custom_accent_color);
+
+        settings.window_opacity = 0.1;
+        settings.normalize_appearance_settings();
+        assert_eq!(AppSettings::MIN_WINDOW_OPACITY, settings.window_opacity);
+
+        settings.auto_switch_theme = true;
+        settings.terminal_theme = "matrix".to_string();
+        settings.normalize_appearance_settings();
+        assert_eq!("system", settings.theme_mode);
+        assert_eq!("application", settings.terminal_theme);
+    }
+
+    #[test]
+    fn appearance_settings_resolve_light_dark_and_system_modes() {
+        let mut settings = AppSettings::default();
+
+        assert_eq!(
+            ThemeMode::Light,
+            settings.effective_theme_mode(ThemeMode::Dark)
+        );
+
+        settings.theme_mode = "dark".to_string();
+        assert_eq!(
+            ThemeMode::Dark,
+            settings.effective_theme_mode(ThemeMode::Light)
+        );
+
+        settings.theme_mode = "system".to_string();
+        assert_eq!(
+            ThemeMode::Dark,
+            settings.effective_theme_mode(ThemeMode::Dark)
+        );
+
+        settings.theme_mode = "light".to_string();
+        settings.auto_switch_theme = true;
+        assert_eq!(
+            ThemeMode::Dark,
+            settings.effective_theme_mode(ThemeMode::Dark)
+        );
     }
 
     #[test]
@@ -1556,6 +1686,7 @@ mod tests {
     #[gpui::test]
     fn app_settings_apply_updates_theme_font_size(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
+            gpui_component::init(cx);
             cx.set_global(Theme::default());
 
             let mut settings = AppSettings::default();
