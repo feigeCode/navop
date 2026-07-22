@@ -77,6 +77,12 @@ impl WorkspaceExplorer {
         let change_for_menu = change.clone();
         let change_for_selection = change.clone();
         let explorer = cx.entity();
+        let selection_background = self.theme.selection_background();
+        let hover_background = if selected {
+            self.theme.selection_hover_background()
+        } else {
+            self.theme.muted
+        };
         h_flex()
             .id(SharedString::from(format!("workspace-git-change-{path}")))
             .items_center()
@@ -84,8 +90,8 @@ impl WorkspaceExplorer {
             .h(px(27.0))
             .px_2()
             .cursor_pointer()
-            .when(selected, |this| this.bg(self.theme.accent))
-            .hover(|style| style.bg(self.theme.muted))
+            .when(selected, |this| this.bg(selection_background))
+            .hover(move |style| style.bg(hover_background))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_change(change_for_click.clone(), window, cx);
             }))
@@ -152,6 +158,12 @@ impl WorkspaceExplorer {
         let menu_path = path.clone();
         let selection_path = path.clone();
         let explorer = cx.entity();
+        let selection_background = self.theme.selection_background();
+        let hover_background = if selected {
+            self.theme.selection_hover_background()
+        } else {
+            self.theme.muted
+        };
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-file-row-{}",
@@ -163,8 +175,8 @@ impl WorkspaceExplorer {
             .pl(px(8.0 + row.depth as f32 * 14.0))
             .pr_2()
             .cursor_pointer()
-            .when(selected, |this| this.bg(self.theme.accent))
-            .hover(|style| style.bg(self.theme.muted))
+            .when(selected, |this| this.bg(selection_background))
+            .hover(move |style| style.bg(hover_background))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.selected_path = Some(path.clone());
                 if is_dir {

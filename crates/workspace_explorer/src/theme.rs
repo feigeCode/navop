@@ -20,6 +20,18 @@ pub struct WorkspaceTheme {
 }
 
 impl WorkspaceTheme {
+    /// Use a translucent accent for list selections. Terminal themes commonly
+    /// use a high-contrast cursor color as `accent` (often pure white), which
+    /// is appropriate for buttons but too strong as a full-width tree-row
+    /// background.
+    pub(crate) fn selection_background(&self) -> Hsla {
+        self.accent.opacity(0.24)
+    }
+
+    pub(crate) fn selection_hover_background(&self) -> Hsla {
+        self.accent.opacity(0.32)
+    }
+
     pub(crate) fn highlight_theme(&self) -> Arc<HighlightTheme> {
         if self.background.l < 0.5 {
             HighlightTheme::default_dark()
@@ -108,5 +120,7 @@ mod tests {
         assert_eq!(dark.menu_style().background, dark.background);
         assert_eq!(dark.menu_style().accent, dark.muted);
         assert_eq!(dark.menu_style().foreground, dark.foreground);
+        assert_eq!(dark.selection_background(), dark.accent.opacity(0.24));
+        assert_eq!(dark.selection_hover_background(), dark.accent.opacity(0.32));
     }
 }
