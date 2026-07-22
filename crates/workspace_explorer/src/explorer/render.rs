@@ -2,13 +2,17 @@ use super::WorkspaceExplorer;
 use crate::git::{GitChange, GitChangeKind};
 use crate::model::{ExplorerRow, visible_rows};
 use gpui::{
-    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px,
 };
+use gpui_component::menu::ContextMenuExt as _;
 use gpui_component::{Icon, IconName, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
 use rust_i18n::t;
 
+use super::file_actions::{
+    build_file_context_menu, build_files_context_menu, build_git_change_context_menu,
+};
 use super::header::ExplorerSection;
 
 impl WorkspaceExplorer {
@@ -68,7 +72,11 @@ impl WorkspaceExplorer {
             GitChangeKind::Modified | GitChangeKind::Renamed => self.theme.warning,
         };
         let path = change.path.display().to_string();
+        let selected = self.selected_change_path.as_ref() == Some(&change.path);
         let change_for_click = change.clone();
+        let change_for_menu = change.clone();
+        let change_for_selection = change.clone();
+        let explorer = cx.entity();
         h_flex()
             .id(SharedString::from(format!("workspace-git-change-{path}")))
             .items_center()
@@ -76,10 +84,18 @@ impl WorkspaceExplorer {
             .h(px(27.0))
             .px_2()
             .cursor_pointer()
+            .when(selected, |this| this.bg(self.theme.accent))
             .hover(|style| style.bg(self.theme.muted))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_change(change_for_click.clone(), window, cx);
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, _, cx| {
+                    this.selected_change_path = Some(change_for_selection.path.clone());
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .w(px(18.0))
@@ -98,14 +114,30 @@ impl WorkspaceExplorer {
                         .child(t!("WorkspaceExplorer.badge.staged")),
                 )
             })
+            .context_menu(move |menu, window, cx| {
+                build_git_change_context_menu(
+                    menu,
+                    explorer.clone(),
+                    change_for_menu.clone(),
+                    window,
+                    cx,
+                )
+            })
             .into_any_element()
     }
 
     fn render_files(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = visible_rows(&self.root, &self.listings, &self.expanded);
-        let mut section = v_flex()
-            .w_full()
-            .child(self.render_section_header(ExplorerSection::Files, cx));
+        let explorer = cx.entity();
+        let root = self.root.clone();
+        let mut section = v_flex().w_full().child(
+            div()
+                .id("workspace-files-context-region")
+                .child(self.render_section_header(ExplorerSection::Files, cx))
+                .context_menu(move |menu, window, cx| {
+                    build_files_context_menu(menu, explorer.clone(), root.clone(), window, cx)
+                }),
+        );
         if self.files_expanded {
             section = section.children(rows.into_iter().map(|row| self.render_file_row(row, cx)));
         }
@@ -117,6 +149,9 @@ impl WorkspaceExplorer {
         let is_dir = row.entry.is_dir;
         let selected = self.selected_path.as_ref() == Some(&path);
         let loading = self.loading_directories.contains(&path);
+        let menu_path = path.clone();
+        let selection_path = path.clone();
+        let explorer = cx.entity();
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-file-row-{}",
@@ -131,12 +166,20 @@ impl WorkspaceExplorer {
             .when(selected, |this| this.bg(self.theme.accent))
             .hover(|style| style.bg(self.theme.muted))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.selected_path = Some(path.clone());
                 if is_dir {
                     this.toggle_directory(path.clone(), cx);
                 } else {
                     this.open_file(path.clone(), window, cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, _, cx| {
+                    this.selected_path = Some(selection_path.clone());
+                    cx.notify();
+                }),
+            )
             .child(self.render_file_icon(&row, loading))
             .child(
                 div()
@@ -146,6 +189,16 @@ impl WorkspaceExplorer {
                     .text_sm()
                     .child(row.entry.name),
             )
+            .context_menu(move |menu, window, cx| {
+                build_file_context_menu(
+                    menu,
+                    explorer.clone(),
+                    menu_path.clone(),
+                    is_dir,
+                    window,
+                    cx,
+                )
+            })
             .into_any_element()
     }
 
@@ -185,6 +238,10 @@ impl Render for WorkspaceExplorer {
             .bg(self.theme.background)
             .text_color(self.theme.foreground)
             .child(self.render_root_bar(cx))
+            .when(
+                self.file_action_editor.is_some() || self.file_confirmation.is_some(),
+                |this| this.child(self.render_file_action_panel(cx)),
+            )
             .child(
                 v_flex()
                     .id("workspace-explorer-scroll")

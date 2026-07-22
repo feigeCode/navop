@@ -6,6 +6,8 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
+use super::popup_menu::LocalMenuStyle;
+
 #[derive(IntoElement)]
 pub(crate) struct MenuItemElement {
     id: ElementId,
@@ -13,6 +15,7 @@ pub(crate) struct MenuItemElement {
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    local_style: Option<LocalMenuStyle>,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
@@ -28,6 +31,7 @@ impl MenuItemElement {
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            local_style: None,
             on_click: None,
             on_hover: None,
             children: SmallVec::new(),
@@ -37,6 +41,11 @@ impl MenuItemElement {
     /// Set ListItem as the selected item style.
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub(crate) fn local_style(mut self, style: Option<LocalMenuStyle>) -> Self {
+        self.local_style = style;
         self
     }
 
@@ -84,6 +93,22 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let foreground = self
+            .local_style
+            .map(|style| style.foreground)
+            .unwrap_or(cx.theme().foreground);
+        let muted_foreground = self
+            .local_style
+            .map(|style| style.muted_foreground)
+            .unwrap_or(cx.theme().muted_foreground);
+        let accent = self
+            .local_style
+            .map(|style| style.accent)
+            .unwrap_or(cx.theme().accent);
+        let accent_foreground = self
+            .local_style
+            .map(|style| style.accent_foreground)
+            .unwrap_or(cx.theme().accent_foreground);
         h_flex()
             .id(self.id)
             .group(&self.group_name)
@@ -91,7 +116,7 @@ impl RenderOnce for MenuItemElement {
             .py_1()
             .px_2()
             .text_base()
-            .text_color(cx.theme().foreground)
+            .text_color(foreground)
             .relative()
             .items_center()
             .justify_between()
@@ -101,12 +126,10 @@ impl RenderOnce for MenuItemElement {
             })
             .when(!self.disabled, |this| {
                 this.group_hover(self.group_name, |this| {
-                    this.bg(cx.theme().accent)
-                        .text_color(cx.theme().accent_foreground)
+                    this.bg(accent).text_color(accent_foreground)
                 })
                 .when(self.selected, |this| {
-                    this.bg(cx.theme().accent)
-                        .text_color(cx.theme().accent_foreground)
+                    this.bg(accent).text_color(accent_foreground)
                 })
                 .when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -115,9 +138,7 @@ impl RenderOnce for MenuItemElement {
                     .on_click(on_click)
                 })
             })
-            .when(self.disabled, |this| {
-                this.text_color(cx.theme().muted_foreground)
-            })
+            .when(self.disabled, |this| this.text_color(muted_foreground))
             .children(self.children)
     }
 }

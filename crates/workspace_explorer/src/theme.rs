@@ -1,4 +1,5 @@
 use gpui::{App, Hsla};
+use gpui_component::menu::LocalMenuStyle;
 use gpui_component::{
     button::ButtonCustomVariant, highlighter::HighlightTheme, tab::LocalTabStyle,
 };
@@ -43,6 +44,14 @@ impl WorkspaceTheme {
             .active(self.muted)
     }
 
+    pub(crate) fn danger_button_style(&self, cx: &App) -> ButtonCustomVariant {
+        ButtonCustomVariant::new(cx)
+            .color(self.danger)
+            .foreground(self.accent_foreground)
+            .hover(self.danger.opacity(0.85))
+            .active(self.danger.opacity(0.75))
+    }
+
     pub(crate) fn tab_style(&self) -> LocalTabStyle {
         LocalTabStyle {
             bar_background: self.muted,
@@ -55,6 +64,18 @@ impl WorkspaceTheme {
             disabled_foreground: self.muted_foreground,
             border: self.border,
             accent: self.accent,
+        }
+    }
+
+    pub(crate) fn menu_style(&self) -> LocalMenuStyle {
+        LocalMenuStyle {
+            background: self.background,
+            foreground: self.foreground,
+            muted_foreground: self.muted_foreground,
+            border: self.border,
+            accent: self.muted,
+            accent_foreground: self.foreground,
+            radius: gpui::px(8.0),
         }
     }
 }
@@ -84,5 +105,8 @@ mod tests {
         assert!(!light.highlight_theme().appearance.is_dark());
         assert_eq!(dark.tab_style().selected_background, dark.background);
         assert_eq!(dark.tab_style().bar_background, dark.muted);
+        assert_eq!(dark.menu_style().background, dark.background);
+        assert_eq!(dark.menu_style().accent, dark.muted);
+        assert_eq!(dark.menu_style().foreground, dark.foreground);
     }
 }

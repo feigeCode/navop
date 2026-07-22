@@ -146,6 +146,87 @@ fn staged_rename_keeps_original_path_and_rename_diff() {
 }
 
 #[test]
+fn change_operations_stage_unstage_and_discard_worktree_changes() {
+    let root = initialized_repository();
+    std::fs::write(root.join("main.rs"), "modified\n").unwrap();
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let modified = find_change(&repository, "main.rs");
+
+    stage_change(&repository, &modified).unwrap();
+    assert!(find_change(&repository, "main.rs").staged);
+
+    let staged = find_change(&repository, "main.rs");
+    unstage_change(&repository, &staged).unwrap();
+    assert!(!find_change(&repository, "main.rs").staged);
+
+    let unstaged = find_change(&repository, "main.rs");
+    discard_change(&repository, &unstaged).unwrap();
+    assert_eq!(
+        "fn main() {}\n",
+        std::fs::read_to_string(root.join("main.rs")).unwrap()
+    );
+    assert!(load_changes(&repository).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn discard_removes_untracked_and_staged_added_files() {
+    let root = initialized_repository();
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    std::fs::create_dir(root.join("untracked")).unwrap();
+    std::fs::write(root.join("untracked/file.txt"), "untracked\n").unwrap();
+    let untracked = find_change(&repository, "untracked/file.txt");
+    discard_change(&repository, &untracked).unwrap();
+    assert!(!root.join("untracked").exists());
+
+    std::fs::write(root.join("added.txt"), "added\n").unwrap();
+    run_test_git(&root, &["add", "added.txt"]);
+    let added = find_change(&repository, "added.txt");
+    assert!(added.staged);
+    discard_change(&repository, &added).unwrap();
+    assert!(!root.join("added.txt").exists());
+    assert!(load_changes(&repository).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn discard_staged_rename_restores_original_path() {
+    let root = initialized_repository();
+    run_test_git(&root, &["mv", "main.rs", "renamed.rs"]);
+    let repository = discover_repository(&root).unwrap().unwrap();
+    let renamed = find_change(&repository, "renamed.rs");
+
+    discard_change(&repository, &renamed).unwrap();
+
+    assert!(root.join("main.rs").is_file());
+    assert!(!root.join("renamed.rs").exists());
+    assert!(load_changes(&repository).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn unborn_repository_can_unstage_and_discard_added_file() {
+    let root = empty_repository();
+    std::fs::write(root.join("new.txt"), "new\n").unwrap();
+    run_test_git(&root, &["add", "new.txt"]);
+    let repository = discover_repository(&root).unwrap().unwrap();
+
+    let staged = find_change(&repository, "new.txt");
+    unstage_change(&repository, &staged).unwrap();
+    assert!(root.join("new.txt").is_file());
+    assert_eq!(
+        GitChangeKind::Untracked,
+        find_change(&repository, "new.txt").kind
+    );
+
+    let untracked = find_change(&repository, "new.txt");
+    discard_change(&repository, &untracked).unwrap();
+    assert!(!root.join("new.txt").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn branch_parser_separates_local_and_remote_branches() {
     let branches = parse_branches(
         "refs/heads/dev\tdev\t*\torigin/dev\n\
@@ -232,6 +313,14 @@ fn pushing_branch_sets_up_and_updates_remote_branch() {
     assert!(remote_ref.status.success());
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(remote);
+}
+
+fn find_change(repository: &GitRepository, path: &str) -> GitChange {
+    load_changes(repository)
+        .unwrap()
+        .into_iter()
+        .find(|change| change.path == Path::new(path))
+        .unwrap_or_else(|| panic!("missing change for {path}"))
 }
 
 fn initialized_repository() -> PathBuf {

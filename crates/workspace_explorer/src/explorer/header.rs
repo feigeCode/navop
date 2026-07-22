@@ -223,7 +223,9 @@ fn build_frame_options_menu(
     let remove_view = view.clone();
     let hidden_view = view.clone();
     let ignored_view = view.clone();
-    menu.min_w(px(220.0))
+    let theme = view.read(cx).theme.menu_style();
+    menu.local_style(theme)
+        .min_w(px(220.0))
         .item(
             PopupMenuItem::new(t!("WorkspaceExplorer.tooltip.show_hidden_files").to_string())
                 .icon(IconName::Eye)
@@ -249,7 +251,7 @@ fn build_frame_options_menu(
             move |submenu, _window, _cx| {
                 FRAME_PLACEMENTS
                     .into_iter()
-                    .fold(submenu, |submenu, option| {
+                    .fold(submenu.local_style(theme), |submenu, option| {
                         let view = view.clone();
                         let current = option == placement;
                         submenu.item(

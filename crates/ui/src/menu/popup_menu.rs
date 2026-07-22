@@ -6,7 +6,7 @@ use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_fle
 use crate::{Side, Size, StyledExt, kbd::Kbd};
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, KeyBinding,
     ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
     WeakEntity, Window, anchored, div, prelude::FluentBuilder, px, rems,
 };
@@ -15,6 +15,19 @@ use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription}
 use std::rc::Rc;
 
 const CONTEXT: &str = "PopupMenu";
+
+/// Optional colors for a popup menu embedded in a surface that has its own
+/// theme instead of using the application-wide theme.
+#[derive(Clone, Copy, Debug)]
+pub struct LocalMenuStyle {
+    pub background: Hsla,
+    pub foreground: Hsla,
+    pub muted_foreground: Hsla,
+    pub border: Hsla,
+    pub accent: Hsla,
+    pub accent_foreground: Hsla,
+    pub radius: Pixels,
+}
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -287,6 +300,7 @@ pub struct PopupMenu {
     parent_menu: Option<WeakEntity<Self>>,
     scrollable: bool,
     external_link_icon: bool,
+    local_style: Option<LocalMenuStyle>,
     scroll_handle: ScrollHandle,
     // This will update on render
     submenu_anchor: (Anchor, Pixels),
@@ -310,6 +324,7 @@ impl PopupMenu {
             scrollable: false,
             scroll_handle: ScrollHandle::default(),
             external_link_icon: true,
+            local_style: None,
             size: Size::default(),
             submenu_anchor: (Anchor::TopLeft, Pixels::ZERO),
             _subscriptions: vec![],
@@ -365,6 +380,13 @@ impl PopupMenu {
     /// Set max height of the popup menu, default is half of the window height
     pub fn max_h(mut self, height: impl Into<Pixels>) -> Self {
         self.max_height = Some(height.into());
+        self
+    }
+
+    /// Use colors from the surface that owns this menu rather than the global
+    /// application theme.
+    pub fn local_style(mut self, style: LocalMenuStyle) -> Self {
+        self.local_style = Some(style);
         self
     }
 
@@ -1103,6 +1125,7 @@ impl PopupMenu {
             .px(INNER_PADDING)
             .rounded(radius)
             .items_center()
+            .local_style(self.local_style)
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
@@ -1122,7 +1145,11 @@ impl PopupMenu {
                 .my_0p5()
                 .mx_neg_1()
                 .border_b(px(2.))
-                .border_color(cx.theme().border)
+                .border_color(
+                    self.local_style
+                        .map(|style| style.border)
+                        .unwrap_or(cx.theme().border),
+                )
                 .disabled(true),
             PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
                 h_flex()
@@ -1203,9 +1230,11 @@ impl PopupMenu {
                                     .gap_1p5()
                                     .child(label.clone())
                                     .child(
-                                        Icon::new(IconName::ExternalLink)
-                                            .xsmall()
-                                            .text_color(cx.theme().muted_foreground),
+                                        Icon::new(IconName::ExternalLink).xsmall().text_color(
+                                            self.local_style
+                                                .map(|style| style.muted_foreground)
+                                                .unwrap_or(cx.theme().muted_foreground),
+                                        ),
                                     ),
                             )
                         })
@@ -1242,9 +1271,11 @@ impl PopupMenu {
                                 .justify_between()
                                 .child(label.clone())
                                 .child(
-                                    Icon::new(IconName::ChevronRight)
-                                        .xsmall()
-                                        .text_color(cx.theme().muted_foreground),
+                                    Icon::new(IconName::ChevronRight).xsmall().text_color(
+                                        self.local_style
+                                            .map(|style| style.muted_foreground)
+                                            .unwrap_or(cx.theme().muted_foreground),
+                                    ),
                                 ),
                         ),
                 )
@@ -1307,7 +1338,11 @@ impl Render for PopupMenu {
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,
-            radius: cx.theme().radius.min(px(8.)),
+            radius: self
+                .local_style
+                .map(|style| style.radius)
+                .unwrap_or(cx.theme().radius)
+                .min(px(8.)),
         };
 
         v_flex()
@@ -1321,8 +1356,18 @@ impl Render for PopupMenu {
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
-            .popover_style(cx)
-            .text_color(cx.theme().popover_foreground)
+            .when(self.local_style.is_none(), |this| this.popover_style(cx))
+            .when_some(self.local_style, |this, style| {
+                this.bg(style.background)
+                    .text_color(style.foreground)
+                    .border_1()
+                    .border_color(style.border)
+                    .shadow_lg()
+                    .rounded(style.radius)
+            })
+            .when(self.local_style.is_none(), |this| {
+                this.text_color(cx.theme().popover_foreground)
+            })
             .relative()
             .occlude()
             .child(

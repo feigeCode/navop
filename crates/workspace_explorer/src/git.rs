@@ -80,6 +80,90 @@ pub(crate) fn load_changes(repository: &GitRepository) -> Result<Vec<GitChange>>
     parse_porcelain_v1_z(&output.stdout)
 }
 
+pub(crate) fn stage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+    let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
+    append_change_path_args(&mut args, change);
+    run_git_operation(repository, "git add", args)
+}
+
+pub(crate) fn unstage_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+    let mut args = if repository_has_head(repository)? {
+        vec![
+            "reset".to_string(),
+            "-q".to_string(),
+            "HEAD".to_string(),
+            "--".to_string(),
+        ]
+    } else {
+        vec![
+            "rm".to_string(),
+            "--cached".to_string(),
+            "-r".to_string(),
+            "--ignore-unmatch".to_string(),
+            "--".to_string(),
+        ]
+    };
+    append_change_path_args(&mut args, change);
+    run_git_operation(repository, "git unstage", args)
+}
+
+/// Restores all index and working-tree changes represented by `change`.
+///
+/// Paths that exist in HEAD are restored from HEAD. Newly-added and untracked
+/// paths are removed from the working tree after their index entries have been
+/// reset. Handling each rename path independently avoids `git restore`
+/// rejecting the new side of a rename because it does not exist in HEAD.
+pub(crate) fn discard_change(repository: &GitRepository, change: &GitChange) -> Result<()> {
+    if change.kind == GitChangeKind::Untracked {
+        let path = repository.root.join(&change.path);
+        remove_worktree_path(&path)?;
+        remove_empty_parent_directories(&repository.root, path.parent())?;
+        return Ok(());
+    }
+
+    if !repository_has_head(repository)? {
+        if change.staged {
+            unstage_change(repository, change)?;
+        }
+        for path in change_paths(change) {
+            let path = repository.root.join(path);
+            remove_worktree_path_if_present(&path)?;
+            remove_empty_parent_directories(&repository.root, path.parent())?;
+        }
+        return Ok(());
+    }
+
+    let mut reset_args = vec![
+        "reset".to_string(),
+        "-q".to_string(),
+        "HEAD".to_string(),
+        "--".to_string(),
+    ];
+    append_change_path_args(&mut reset_args, change);
+    run_git_operation(repository, "git reset", reset_args)?;
+
+    for path in change_paths(change) {
+        if path_exists_in_head(repository, path)? {
+            run_git_operation(
+                repository,
+                "git restore",
+                vec![
+                    "restore".to_string(),
+                    "--source=HEAD".to_string(),
+                    "--worktree".to_string(),
+                    "--".to_string(),
+                    path.to_string_lossy().into_owned(),
+                ],
+            )?;
+        } else {
+            let path = repository.root.join(path);
+            remove_worktree_path_if_present(&path)?;
+            remove_empty_parent_directories(&repository.root, path.parent())?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn load_branches(repository: &GitRepository) -> Result<Vec<GitBranch>> {
     let output = run_git(
         &repository.root,
@@ -370,6 +454,82 @@ fn run_git_operation(repository: &GitRepository, label: &str, args: Vec<String>)
     } else {
         Err(git_command_error(label, &output))
     }
+}
+
+fn repository_has_head(repository: &GitRepository) -> Result<bool> {
+    let output = run_git(
+        &repository.root,
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+    )?;
+    Ok(output.status.success())
+}
+
+fn path_exists_in_head(repository: &GitRepository, path: &Path) -> Result<bool> {
+    let output = run_git_vec(
+        &repository.root,
+        vec![
+            "ls-tree".to_string(),
+            "-r".to_string(),
+            "--name-only".to_string(),
+            "-z".to_string(),
+            "HEAD".to_string(),
+            "--".to_string(),
+            path.to_string_lossy().into_owned(),
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(git_command_error("git ls-tree", &output));
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .any(|entry| entry == path.as_os_str().as_encoded_bytes()))
+}
+
+fn change_paths(change: &GitChange) -> impl Iterator<Item = &Path> {
+    std::iter::once(change.path.as_path()).chain(change.original_path.as_deref())
+}
+
+fn append_change_path_args(args: &mut Vec<String>, change: &GitChange) {
+    args.push(change.path.to_string_lossy().into_owned());
+    if let Some(original_path) = change.original_path.as_ref() {
+        args.push(original_path.to_string_lossy().into_owned());
+    }
+}
+
+fn remove_worktree_path_if_present(path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path).is_err() {
+        return Ok(());
+    }
+    remove_worktree_path(path)
+}
+
+fn remove_worktree_path(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("Unable to inspect {}", path.display()))?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+            .with_context(|| format!("Unable to remove directory {}", path.display()))
+    } else {
+        fs::remove_file(path).with_context(|| format!("Unable to remove {}", path.display()))
+    }
+}
+
+fn remove_empty_parent_directories(root: &Path, mut parent: Option<&Path>) -> Result<()> {
+    while let Some(directory) = parent.filter(|directory| *directory != root) {
+        match fs::remove_dir(directory) {
+            Ok(()) => parent = directory.parent(),
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                parent = directory.parent();
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Unable to remove {}", directory.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn git_diff_against_base(

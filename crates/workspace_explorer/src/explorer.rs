@@ -1,4 +1,5 @@
 mod branches;
+mod file_actions;
 mod frame;
 mod header;
 mod load;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 
 use self::load::{WorkspaceSnapshot, load_workspace};
 use branches::BranchManager;
+use file_actions::{ExplorerConfirmation, FileActionEditor};
 
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 
@@ -29,6 +31,7 @@ pub struct WorkspaceExplorer {
     expanded: HashSet<PathBuf>,
     loading_directories: HashSet<PathBuf>,
     selected_path: Option<PathBuf>,
+    selected_change_path: Option<PathBuf>,
     repository: Option<GitRepository>,
     branch_manager: Option<Entity<BranchManager>>,
     changes: Vec<GitChange>,
@@ -48,6 +51,10 @@ pub struct WorkspaceExplorer {
     ignore_matcher: Option<Arc<Gitignore>>,
     show_frame_controls: bool,
     frame_placement: ExplorerFramePlacement,
+    file_action_editor: Option<FileActionEditor>,
+    file_confirmation: Option<ExplorerConfirmation>,
+    file_operation_running: bool,
+    file_action_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -78,6 +85,7 @@ impl WorkspaceExplorer {
             expanded: HashSet::new(),
             loading_directories: HashSet::new(),
             selected_path: None,
+            selected_change_path: None,
             repository: None,
             branch_manager: None,
             changes: Vec::new(),
@@ -97,6 +105,10 @@ impl WorkspaceExplorer {
             ignore_matcher: None,
             show_frame_controls,
             frame_placement: ExplorerFramePlacement::Right,
+            file_action_editor: None,
+            file_confirmation: None,
+            file_operation_running: false,
+            file_action_subscription: None,
             _subscriptions: vec![editor_subscription],
         };
         this.refresh(cx);
@@ -121,12 +133,17 @@ impl WorkspaceExplorer {
         self.expanded.clear();
         self.loading_directories.clear();
         self.selected_path = None;
+        self.selected_change_path = None;
         self.repository = None;
         self.branch_manager = None;
         self.changes.clear();
         self.ignore_matcher = None;
         self.git_loading = false;
         self.git_refresh_pending = false;
+        self.file_action_editor = None;
+        self.file_confirmation = None;
+        self.file_operation_running = false;
+        self.file_action_subscription = None;
     }
 
     pub fn set_theme(&mut self, theme: WorkspaceTheme, cx: &mut Context<Self>) {
@@ -197,6 +214,13 @@ impl WorkspaceExplorer {
         self.selected_path = None;
         self.repository = snapshot.repository;
         self.changes = snapshot.changes;
+        if self
+            .selected_change_path
+            .as_ref()
+            .is_some_and(|selected| !self.changes.iter().any(|change| &change.path == selected))
+        {
+            self.selected_change_path = None;
+        }
         self.ignore_matcher = snapshot.ignore_matcher;
         self.git_loading = false;
         self.git_refresh_pending = false;
@@ -233,7 +257,14 @@ impl WorkspaceExplorer {
                 }
                 this.git_loading = false;
                 match result {
-                    Ok(changes) => this.changes = changes,
+                    Ok(changes) => {
+                        if this.selected_change_path.as_ref().is_some_and(|selected| {
+                            !changes.iter().any(|change| &change.path == selected)
+                        }) {
+                            this.selected_change_path = None;
+                        }
+                        this.changes = changes;
+                    }
                     Err(error) => this.git_error = Some(error.to_string()),
                 }
                 let refresh_again = this.git_refresh_pending;
@@ -295,13 +326,15 @@ impl WorkspaceExplorer {
         cx.notify();
     }
 
-    fn open_change(&self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_change(&mut self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
         let Some(repository) = self.repository.clone() else {
             return;
         };
+        self.selected_change_path = Some(change.path.clone());
         self.editor.update(cx, |editor, cx| {
             editor.open_git_change(GitDiffRequest { repository, change }, window, cx);
         });
+        cx.notify();
     }
 }
 
