@@ -1,35 +1,8 @@
-use cditor_app::{
-    CditorCommand, CditorCommandAction, CditorKeyBinding, CommandDescriptor, bind_command_keys,
-    init_for_external_keymap,
-};
-use gpui::{App, KeyBinding};
-use one_core::keybindings::{rebind_keybindings, shortcuts_for};
+use gpui::{Action, App, KeyBinding};
+use markdown_editor::*;
+use one_core::keybindings::rebind_keybindings;
 
-const CDITOR_KEY_CONTEXT: &str = "CditorEditor";
-
-const DEFAULT_SHORTCUTS: &[(&str, &[&str])] = &[
-    ("edit.undo", &["secondary-z"]),
-    ("edit.redo", &["secondary-shift-z", "secondary-y"]),
-    ("edit.select_all", &["secondary-a"]),
-    ("format.toggle_bold", &["secondary-b"]),
-    ("format.toggle_italic", &["secondary-i"]),
-    ("format.toggle_underline", &["secondary-u"]),
-    ("format.toggle_strike", &["secondary-shift-x"]),
-    ("format.toggle_inline_code", &["secondary-e"]),
-    ("block.set_paragraph", &["secondary-0"]),
-    ("block.set_heading_1", &["secondary-1"]),
-    ("block.set_heading_2", &["secondary-2"]),
-    ("block.set_heading_3", &["secondary-3"]),
-    ("block.set_heading_4", &["secondary-4"]),
-    ("block.set_heading_5", &["secondary-5"]),
-    ("block.set_heading_6", &["secondary-6"]),
-    ("block.toggle_bullet_list", &["secondary-shift-8"]),
-    ("block.toggle_ordered_list", &["secondary-shift-7"]),
-    ("block.toggle_task_list", &["secondary-shift-t"]),
-    ("block.toggle_quote", &["secondary-shift-q"]),
-    ("block.toggle_code", &["secondary-alt-c"]),
-    ("block.duplicate_selected", &["secondary-d"]),
-];
+const INPUT_CONTEXT: &str = "MarkdownEditor > Input";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesShortcutDescriptor {
@@ -38,65 +11,92 @@ pub struct NotesShortcutDescriptor {
     pub default_keys: Vec<String>,
 }
 
+macro_rules! bind_commands {
+    ($bindings:expr, $cx:expr, $(($id:expr, $title:expr, $keys:expr, $action:expr),)*) => {
+        $(append_bindings(&mut $bindings, $cx, $id, $keys, $action);)*
+    };
+}
+
+macro_rules! collect_descriptors {
+    ($descriptors:expr, $(($id:expr, $title:expr, $keys:expr, $action:expr),)*) => {
+        $descriptors.extend([$(descriptor($id, $title, $keys)),*]);
+    };
+}
+
+macro_rules! command_list {
+    ($visitor:ident $(, $args:expr)*) => {
+        $visitor! {
+            $($args,)*
+            ("edit.undo", "Undo", &["secondary-z"], UndoSourceEdit),
+            ("edit.redo", "Redo", &["secondary-shift-z", "secondary-y"], RedoSourceEdit),
+            ("edit.select_all", "Select All", &["secondary-a"], SelectAll),
+            ("format.toggle_bold", "Bold", &["secondary-b"], ToggleBold),
+            ("format.toggle_italic", "Italic", &["secondary-i"], ToggleItalic),
+            ("format.toggle_underline", "Underline", &["secondary-u"], ToggleUnderline),
+            ("format.toggle_strike", "Strikethrough", &["secondary-shift-x"], ToggleStrike),
+            ("format.toggle_inline_code", "Inline Code", &["secondary-e"], ToggleInlineCode),
+            ("block.set_paragraph", "Paragraph", &["secondary-0"], SetParagraph),
+            ("block.set_heading_1", "Heading 1", &["secondary-1"], SetHeading1),
+            ("block.set_heading_2", "Heading 2", &["secondary-2"], SetHeading2),
+            ("block.set_heading_3", "Heading 3", &["secondary-3"], SetHeading3),
+            ("block.set_heading_4", "Heading 4", &["secondary-4"], SetHeading4),
+            ("block.set_heading_5", "Heading 5", &["secondary-5"], SetHeading5),
+            ("block.set_heading_6", "Heading 6", &["secondary-6"], SetHeading6),
+            ("block.toggle_bullet_list", "Bullet List", &["secondary-shift-8"], ToggleBulletList),
+            ("block.toggle_ordered_list", "Ordered List", &["secondary-shift-7"], ToggleOrderedList),
+            ("block.toggle_task_list", "Task List", &["secondary-shift-t"], ToggleTaskList),
+            ("block.toggle_quote", "Quote", &["secondary-shift-q"], ToggleQuote),
+            ("block.toggle_code", "Code Block", &["secondary-alt-c"], ToggleCodeBlock),
+            ("block.move_up", "Move Block Up", &["secondary-shift-up"], MoveBlockUp),
+            ("block.move_down", "Move Block Down", &["secondary-shift-down"], MoveBlockDown),
+            ("block.duplicate_selected", "Duplicate Block", &["secondary-d"], DuplicateBlock),
+            ("block.delete_current", "Delete Block", &["secondary-shift-backspace"], DeleteBlock),
+        }
+    };
+}
+
 pub fn init(cx: &mut App) {
-    init_for_external_keymap(cx);
-    if let Err(error) = bind_command_keys(cx, configured_bindings(cx)) {
-        tracing::error!(%error, "failed to bind Notes editor shortcuts");
-    }
+    refresh(cx);
 }
 
 pub fn refresh(cx: &mut App) {
-    let mut keybindings = Vec::new();
-    for descriptor in CditorCommand::shortcut_descriptors() {
-        keybindings.extend(refreshable_bindings(&descriptor, cx));
-    }
-    cx.bind_keys(keybindings);
+    let mut bindings = Vec::new();
+    command_list!(bind_commands, bindings, cx);
+    cx.bind_keys(bindings);
 }
 
 pub fn descriptors() -> Vec<NotesShortcutDescriptor> {
-    CditorCommand::shortcut_descriptors()
-        .into_iter()
-        .map(|descriptor| NotesShortcutDescriptor {
-            default_keys: default_keys(&descriptor.id)
-                .iter()
-                .map(|key| (*key).to_string())
-                .collect(),
-            command_id: descriptor.id,
-            title: descriptor.title,
-        })
-        .collect()
+    let mut descriptors = Vec::new();
+    command_list!(collect_descriptors, descriptors);
+    descriptors
 }
 
-fn configured_bindings(cx: &App) -> Vec<CditorKeyBinding> {
-    descriptors()
-        .into_iter()
-        .flat_map(|descriptor| {
-            shortcuts_for(
-                cx,
-                &descriptor.command_id,
-                &default_keys(&descriptor.command_id),
-            )
-            .into_iter()
-            .map(move |key| CditorKeyBinding::new(key, descriptor.command_id.clone()))
-        })
-        .collect()
-}
-
-fn refreshable_bindings(descriptor: &CommandDescriptor, cx: &App) -> Vec<KeyBinding> {
-    rebind_keybindings(
+fn append_bindings<A: Action + Clone>(
+    bindings: &mut Vec<KeyBinding>,
+    cx: &App,
+    id: &'static str,
+    defaults: &'static [&'static str],
+    action: A,
+) {
+    bindings.extend(rebind_keybindings(
         cx,
-        &descriptor.id,
-        default_keys(&descriptor.id),
-        Some(CDITOR_KEY_CONTEXT),
-        CditorCommandAction::new(&descriptor.id),
-    )
+        id,
+        defaults,
+        Some(INPUT_CONTEXT),
+        action,
+    ));
 }
 
-fn default_keys(command_id: &str) -> &'static [&'static str] {
-    DEFAULT_SHORTCUTS
-        .iter()
-        .find_map(|(id, keys)| (*id == command_id).then_some(*keys))
-        .unwrap_or_default()
+fn descriptor(
+    id: &'static str,
+    title: &'static str,
+    defaults: &'static [&'static str],
+) -> NotesShortcutDescriptor {
+    NotesShortcutDescriptor {
+        command_id: id.to_owned(),
+        title: title.to_owned(),
+        default_keys: defaults.iter().map(|key| (*key).to_owned()).collect(),
+    }
 }
 
 #[cfg(test)]
@@ -105,34 +105,14 @@ mod tests {
     use gpui::Keystroke;
 
     #[test]
-    fn default_shortcuts_use_valid_public_commands_and_keystrokes() {
-        for (command_id, shortcuts) in DEFAULT_SHORTCUTS {
-            assert!(CditorCommand::from_stable_id(command_id).is_some());
-            for shortcut in *shortcuts {
-                for key in shortcut.split_whitespace() {
-                    Keystroke::parse(key).unwrap();
-                }
+    fn markdown_shortcuts_have_valid_unique_commands_and_keys() {
+        let descriptors = descriptors();
+        let mut ids = std::collections::HashSet::new();
+        for descriptor in descriptors {
+            assert!(ids.insert(descriptor.command_id));
+            for key in descriptor.default_keys {
+                Keystroke::parse(&key).unwrap();
             }
-        }
-    }
-
-    #[test]
-    fn descriptors_follow_cditor_catalog() {
-        let expected = CditorCommand::shortcut_descriptors();
-        let actual = descriptors();
-        assert_eq!(expected.len(), actual.len());
-        assert_eq!(expected[0].id, actual[0].command_id);
-    }
-
-    #[test]
-    fn configurable_defaults_leave_core_input_keys_to_cditor() {
-        let reserved = ["enter", "secondary-enter", "tab", "shift-tab"];
-        for (_, shortcuts) in DEFAULT_SHORTCUTS {
-            assert!(
-                shortcuts
-                    .iter()
-                    .all(|shortcut| !reserved.contains(shortcut))
-            );
         }
     }
 }

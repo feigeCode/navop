@@ -1,7 +1,5 @@
 use crate::notes_actions::CreateKind;
-use crate::notes_export::NotesExportFormat;
 use crate::notes_view::NotesLoadState;
-use crate::theme_provider::cditor_theme;
 use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
 use gpui::{
     Context, Entity, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
@@ -25,19 +23,15 @@ const NOTES_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(28.0);
 enum SidebarContextTarget {
     Background,
     Directory,
-    RichTextDocument,
     MarkdownDocument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarMenuAction {
-    NewRichText,
     NewMarkdown,
     NewFolder,
     RevealInFileManager,
     Refresh,
-    ConvertToMarkdown,
-    Export,
     Rename,
     Delete,
 }
@@ -45,36 +39,22 @@ enum SidebarMenuAction {
 fn sidebar_menu_actions(target: SidebarContextTarget) -> Vec<SidebarMenuAction> {
     match target {
         SidebarContextTarget::Background => vec![
-            SidebarMenuAction::NewRichText,
             SidebarMenuAction::NewMarkdown,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
             SidebarMenuAction::Refresh,
         ],
         SidebarContextTarget::Directory => vec![
-            SidebarMenuAction::NewRichText,
             SidebarMenuAction::NewMarkdown,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
-            SidebarMenuAction::Rename,
-            SidebarMenuAction::Delete,
-        ],
-        SidebarContextTarget::RichTextDocument => vec![
-            SidebarMenuAction::NewRichText,
-            SidebarMenuAction::NewMarkdown,
-            SidebarMenuAction::NewFolder,
-            SidebarMenuAction::RevealInFileManager,
-            SidebarMenuAction::ConvertToMarkdown,
-            SidebarMenuAction::Export,
             SidebarMenuAction::Rename,
             SidebarMenuAction::Delete,
         ],
         SidebarContextTarget::MarkdownDocument => vec![
-            SidebarMenuAction::NewRichText,
             SidebarMenuAction::NewMarkdown,
             SidebarMenuAction::NewFolder,
             SidebarMenuAction::RevealInFileManager,
-            SidebarMenuAction::Export,
             SidebarMenuAction::Rename,
             SidebarMenuAction::Delete,
         ],
@@ -266,19 +246,13 @@ impl NotesView {
                     .is_some_and(|id| self.markdown_sessions.contains_key(id)),
                 |this| this.child(self.render_markdown_editor(cx)),
             )
-            .when_some(self.active_editor.as_ref(), |this, handle| {
-                this.child(handle.entity().clone())
+            .when(self.active_document_id.is_none(), |this| {
+                this.flex().items_center().justify_center().child(
+                    div()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("Notes.select_or_create").to_string()),
+                )
             })
-            .when(
-                self.active_editor.is_none() && self.active_document_id.is_none(),
-                |this| {
-                    this.flex().items_center().justify_center().child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("Notes.select_or_create").to_string()),
-                    )
-                },
-            )
             .into_any_element()
     }
 
@@ -299,20 +273,6 @@ impl NotesView {
                     .text_sm()
                     .font_semibold()
                     .child(self.notebook_name.clone()),
-            )
-            .child(
-                Button::new("new_note_document")
-                    .icon(IconName::RichTextColor.color())
-                    .ghost()
-                    .xsmall()
-                    .tooltip(t!("Notes.new_rich_text_document").to_string())
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.start_create(
-                            CreateKind::Document(DocumentFormat::RichText),
-                            window,
-                            cx,
-                        )
-                    })),
             )
             .child(
                 Button::new("new_note_markdown")
@@ -360,9 +320,6 @@ impl NotesView {
         let icon = match (kind, row.expanded, row.format) {
             (NodeKind::Directory, true, _) => Icon::new(IconName::FolderOpen),
             (NodeKind::Directory, false, _) => Icon::new(IconName::Folder),
-            (NodeKind::Document, _, Some(DocumentFormat::RichText)) => {
-                IconName::RichTextColor.color()
-            }
             (NodeKind::Document, _, Some(DocumentFormat::Markdown)) => {
                 IconName::MarkdownColor.color()
             }
@@ -444,9 +401,6 @@ impl NotesView {
 fn sidebar_context_target(row: &TreeRow) -> SidebarContextTarget {
     match (row.kind, row.format) {
         (NodeKind::Directory, _) => SidebarContextTarget::Directory,
-        (NodeKind::Document, Some(DocumentFormat::RichText)) => {
-            SidebarContextTarget::RichTextDocument
-        }
         (NodeKind::Document, _) => SidebarContextTarget::MarkdownDocument,
     }
 }
@@ -471,6 +425,7 @@ fn build_sidebar_context_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    let _ = cx;
     let actions = sidebar_menu_actions(target);
     for (index, action) in actions.iter().copied().enumerate() {
         if index > 0
@@ -478,29 +433,12 @@ fn build_sidebar_context_menu(
                 action,
                 SidebarMenuAction::RevealInFileManager
                     | SidebarMenuAction::Refresh
-                    | SidebarMenuAction::ConvertToMarkdown
-                    | SidebarMenuAction::Export
                     | SidebarMenuAction::Rename
             )
         {
             menu = menu.separator();
         }
         menu = match action {
-            SidebarMenuAction::NewRichText => {
-                let directory = directory.clone();
-                menu.item(
-                    PopupMenuItem::new(t!("Notes.new_rich_text_document").to_string())
-                        .icon(IconName::RichTextColor.color())
-                        .on_click(window.listener_for(&view, move |view, _, window, cx| {
-                            view.start_create_in(
-                                directory.clone(),
-                                CreateKind::Document(DocumentFormat::RichText),
-                                window,
-                                cx,
-                            );
-                        })),
-                )
-            }
             SidebarMenuAction::NewMarkdown => {
                 let directory = directory.clone();
                 menu.item(
@@ -554,37 +492,6 @@ fn build_sidebar_context_menu(
                         cx.notify();
                     })),
             ),
-            SidebarMenuAction::ConvertToMarkdown => {
-                let row = row.clone().expect("document context menu requires a row");
-                menu.item(
-                    PopupMenuItem::new(t!("Notes.convert_to_markdown").to_string())
-                        .icon(IconName::Copy)
-                        .on_click(window.listener_for(&view, move |view, _, window, cx| {
-                            view.convert_to_markdown(&row, window, cx);
-                        })),
-                )
-            }
-            SidebarMenuAction::Export => {
-                let row = row.clone().expect("document context menu requires a row");
-                let submenu_view = view.clone();
-                let submenu = PopupMenu::build(window, cx, move |submenu, window, _cx| {
-                    NotesExportFormat::ALL
-                        .into_iter()
-                        .fold(submenu, |submenu, format| {
-                            let row = row.clone();
-                            let view = submenu_view.clone();
-                            submenu.item(PopupMenuItem::new(format.label()).on_click(
-                                window.listener_for(&view, move |view, _, window, cx| {
-                                    view.export_document(row.clone(), format, window, cx);
-                                }),
-                            ))
-                        })
-                });
-                menu.item(PopupMenuItem::submenu(
-                    t!("Notes.export").to_string(),
-                    submenu,
-                ))
-            }
             SidebarMenuAction::Rename => {
                 let row = row.clone().expect("node context menu requires a row");
                 menu.item(
@@ -613,34 +520,19 @@ fn build_sidebar_context_menu(
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor_theme = self.resolved_editor_theme(cx);
-        let theme_changed = self.theme_provider.refresh(cditor_theme(
-            editor_theme.background,
-            editor_theme.foreground,
-            editor_theme.muted_foreground,
-            editor_theme.border,
-            editor_theme.primary,
-            editor_theme.danger,
-        ));
-        if theme_changed {
-            let mut editors = self
-                .editors
-                .values()
-                .map(|editor| editor.handle.clone())
-                .collect::<Vec<_>>();
-            editors.extend(
-                self.markdown_sessions
-                    .values()
-                    .map(|session| session.preview.clone()),
-            );
-            for editor in editors {
-                editor.entity().update(cx, |_view, cx| cx.notify());
-            }
+        let markdown_theme = markdown_editor::MarkdownEditorTheme {
+            background: editor_theme.background,
+            foreground: editor_theme.foreground,
+            muted_foreground: editor_theme.muted_foreground,
+            border: editor_theme.border,
+            primary: editor_theme.primary,
+            highlight_theme: editor_theme.highlight_theme.clone(),
+        };
+        for session in self.markdown_sessions.values() {
+            session.preview.update(cx, |editor, cx| {
+                editor.set_theme(markdown_theme.clone(), cx)
+            });
         }
-        self.syntax_highlight_provider.refresh_theme(
-            editor_theme.highlight_theme,
-            editor_theme.background,
-            editor_theme.foreground,
-        );
         let content = match &self.load_state {
             NotesLoadState::NeedsLocation => self.render_location_setup(cx),
             NotesLoadState::Ready => self.render_ready(cx),
@@ -665,7 +557,6 @@ mod tests {
         assert_eq!(
             sidebar_menu_actions(SidebarContextTarget::Background),
             vec![
-                SidebarMenuAction::NewRichText,
                 SidebarMenuAction::NewMarkdown,
                 SidebarMenuAction::NewFolder,
                 SidebarMenuAction::RevealInFileManager,
@@ -679,7 +570,6 @@ mod tests {
         assert_eq!(
             sidebar_menu_actions(SidebarContextTarget::Directory),
             vec![
-                SidebarMenuAction::NewRichText,
                 SidebarMenuAction::NewMarkdown,
                 SidebarMenuAction::NewFolder,
                 SidebarMenuAction::RevealInFileManager,
@@ -690,22 +580,16 @@ mod tests {
     }
 
     #[test]
-    fn rich_text_document_menu_is_the_only_menu_with_conversion() {
-        assert!(
-            sidebar_menu_actions(SidebarContextTarget::RichTextDocument)
-                .contains(&SidebarMenuAction::ConvertToMarkdown)
-        );
-        assert!(
-            !sidebar_menu_actions(SidebarContextTarget::MarkdownDocument)
-                .contains(&SidebarMenuAction::ConvertToMarkdown)
-        );
-        assert!(
-            sidebar_menu_actions(SidebarContextTarget::RichTextDocument)
-                .contains(&SidebarMenuAction::Export)
-        );
-        assert!(
-            sidebar_menu_actions(SidebarContextTarget::MarkdownDocument)
-                .contains(&SidebarMenuAction::Export)
+    fn markdown_document_menu_only_has_markdown_and_file_actions() {
+        assert_eq!(
+            sidebar_menu_actions(SidebarContextTarget::MarkdownDocument),
+            vec![
+                SidebarMenuAction::NewMarkdown,
+                SidebarMenuAction::NewFolder,
+                SidebarMenuAction::RevealInFileManager,
+                SidebarMenuAction::Rename,
+                SidebarMenuAction::Delete,
+            ]
         );
     }
 }

@@ -62,7 +62,7 @@
 
 - **终端命令栏与快捷命令** — 支持命令建议、持久化快捷命令、固定常用命令，并可从终端主视图或侧栏快速调用。
 - **Workspace Explorer 与 Git 工具** — 在终端工作区内浏览和管理文件、使用多标签编辑器、查看 diff、切换和推送分支，以及回滚变更。
-- **源码安全的 Markdown 编辑** — File Explorer 使用 Notes/Cditor 原生组件和工作区主题渲染 Markdown；无损文档可以直接编辑，不能安全往返的语法保持只读渲染预览，并可在源码模式中精确编辑。
+- **源码安全的 Markdown 编辑** — File Explorer 与 Notes 使用 Navop 原生源码保真 Markdown 编辑器；Markdown 始终是权威数据，富文本预览可直接编辑，未知语法原样保留并可精确编辑源码。
 - **常驻连接导航** — 从首页导航栏筛选并打开数据库、SSH 等资源，同时快速进入 Notes、扩展、设置和团队管理。
 - **跨平台稳定性** — 正确保留 Redis 二进制值，支持清空仅包含图片的 Markdown 表格单元格，并覆盖 macOS、Windows、x86_64 Linux 与 ARM64 Linux 发布产物。
 
@@ -348,7 +348,7 @@ Navop 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle �
 <details>
 <summary><strong>Navop 是免费的吗？</strong></summary>
 
-所有功能不依赖赞助解锁。Navop 自有源码适用 Apache License 2.0 和 Navop 补充协议；Notes 工作区同时包含 GPL 许可证的 Cditor 依赖，发行物还必须遵守所有适用的第三方许可证条款。
+所有功能不依赖赞助解锁。Navop 自有源码适用 Apache License 2.0 和 Navop 补充协议，发行物还必须遵守所有适用的第三方许可证条款。
 </details>
 
 <details>
@@ -380,9 +380,7 @@ ER 图渲染基于 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
 
 Navop 源代码基于 [Apache License 2.0](LICENSE-APACHE) 开源。
 
-Notes 工作区包含 [Cditor](https://github.com/feigeCode/Cditor) 这一 GPL 许可证依赖。包含 Cditor 组件的发行物和相关衍生分发必须遵守适用的 GNU GPL 条款，以及 Cditor 提供的许可证和版权声明。
-
-Navop 自有代码还须遵守 [Navop 补充协议](NAVOP_LICENSE)，该补充协议在 Apache 2.0 基础上增加以下限制。补充协议不会替代或限制 Cditor 等第三方组件自身适用的许可证：
+Navop 自有代码还须遵守 [Navop 补充协议](NAVOP_LICENSE)，该补充协议在 Apache 2.0 基础上增加以下限制。补充协议不会替代或限制第三方组件自身适用的许可证：
 
 - 禁止二次分发、转售或将本软件作为独立产品再分发
 - 禁止基于本软件代码创建竞争性产品或服务

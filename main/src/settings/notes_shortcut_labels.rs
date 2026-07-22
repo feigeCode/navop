@@ -100,9 +100,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_current_cditor_command_has_a_localized_label() {
+    fn every_current_markdown_command_has_a_label() {
         for descriptor in notes::shortcut_descriptors() {
-            assert!(command_translation_key(&descriptor.command_id).is_some());
+            assert!(!command_label(&descriptor).is_empty());
         }
     }
 }

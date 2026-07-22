@@ -1590,79 +1590,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cditor-ai"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "async-channel",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cditor-app"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "async-trait",
- "cditor-ai",
- "cditor-core",
- "cditor-editor",
- "cditor-runtime",
- "cditor-storage",
- "ding-board",
- "futures",
- "gpui",
- "html5ever 0.27.0",
- "image",
- "markup5ever_rcdom",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "cditor-core"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "serde",
- "serde_json",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "cditor-editor"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "cditor-core",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "cditor-runtime"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "cditor-ai",
- "cditor-core",
- "cditor-editor",
-]
-
-[[package]]
-name = "cditor-storage"
-version = "0.2.6"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "async-trait",
- "cditor-core",
- "tokio",
-]
-
-[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3087,18 +3014,6 @@ dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
  "ctutils",
-]
-
-[[package]]
-name = "ding-board"
-version = "0.1.0"
-source = "git+https://github.com/feigeCode/Cditor.git?rev=5d88a358e9bba50f2271b241b77040fb360c022e#5d88a358e9bba50f2271b241b77040fb360c022e"
-dependencies = [
- "gpui",
- "log",
- "serde",
- "serde_json",
- "ttf-parser",
 ]
 
 [[package]]
@@ -6911,6 +6826,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "markdown-editor"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "markdown-source",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "markdown-source"
+version = "0.1.0"
+dependencies = [
+ "markdown",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7559,19 +7492,16 @@ name = "notes"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cditor-app",
  "chrono",
  "dirs 6.0.0",
  "dunce",
- "extension-runtime",
- "extension-wasm",
- "extension_view",
  "futures",
  "gpui",
  "gpui-component",
- "image",
+ "markdown-editor",
+ "markdown-source",
+ "notify",
  "one-core",
- "resvg",
  "ropey",
  "rust-i18n",
  "serde",
@@ -7579,7 +7509,6 @@ dependencies = [
  "sha2 0.10.9",
  "smol",
  "tempfile",
- "tokio",
  "tracing",
  "uuid",
 ]

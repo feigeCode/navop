@@ -26,6 +26,8 @@ members = [
     "crates/public_mcp",
     "crates/terminal",
     "crates/terminal_view",
+    "crates/markdown-source",
+    "crates/markdown-editor",
     "crates/workspace_explorer",
     "crates/port_forwarding",
     "crates/connection_tunnel",
@@ -69,6 +71,7 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
 anyhow = "1.0.102"
 argon2 = "0.5.3"
 log = "0.4"
+markdown = { version = "1.0.0", features = ["serde"] }
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 notify = "7.0.0"
 plist = "1"
@@ -124,7 +127,8 @@ onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }
-cditor-app = { git = "https://github.com/feigeCode/Cditor.git", rev = "5d88a358e9bba50f2271b241b77040fb360c022e", default-features = false }
+markdown-source = { path = "crates/markdown-source" }
+markdown-editor = { path = "crates/markdown-editor" }
 er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }

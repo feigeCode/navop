@@ -89,6 +89,16 @@ impl WorkspaceEditor {
     }
 
     pub(super) fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(markdown) = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.markdown.clone())
+        {
+            markdown.update(cx, |view, cx| {
+                view.reload_active_markdown_from_disk(window, cx)
+            });
+            return;
+        }
         self.reload_tab(self.active_tab, window, cx);
     }
 

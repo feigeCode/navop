@@ -450,10 +450,7 @@ impl Default for McpSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AiChatSettings {
-    #[serde(default)]
-    pub notes_model_id: Option<String>,
-}
+pub struct AiChatSettings {}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomFont {
@@ -1538,26 +1535,6 @@ mod tests {
         assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
         assert_eq!(HomePageStyle::Legacy, settings.home_page_style);
         assert!(!settings.connection_sidebar_expanded);
-    }
-
-    #[test]
-    fn app_settings_defaults_notes_ai_model_to_none() {
-        let settings = AppSettings::default();
-
-        assert_eq!(None, settings.ai_chat.notes_model_id);
-    }
-
-    #[test]
-    fn app_settings_deserializes_saved_notes_ai_model() {
-        let settings: AppSettings = serde_json::from_value(serde_json::json!({
-            "ai_chat": { "notes_model_id": "navop:7:deepseek-chat" }
-        }))
-        .expect("Notes AI model setting should deserialize");
-
-        assert_eq!(
-            Some("navop:7:deepseek-chat"),
-            settings.ai_chat.notes_model_id.as_deref()
-        );
     }
 
     #[test]

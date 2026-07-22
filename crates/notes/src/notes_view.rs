@@ -1,36 +1,19 @@
-use crate::document_rendering::NavopDocumentRendererProvider;
 use crate::notes_notifications::notify_operation_error;
-use crate::syntax_highlighting::NavopSyntaxHighlightProvider;
-use crate::theme_provider::{MarkdownEditorTheme, NavopThemeProvider, cditor_theme};
-use crate::{
-    DocumentDescriptor, DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow,
-    TreeState,
-};
+use crate::theme_provider::MarkdownEditorTheme;
+use crate::{DocumentDescriptor, DocumentFormat, NodeKind, NotesStorage, TreeRow, TreeState};
 use anyhow::{Context as _, bail};
-use cditor_app::{AiProvider, Editor, EditorHandle};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Window,
 };
 use gpui_component::input::InputState;
-use one_core::settings::AppSettings;
 use one_core::tab_container::TabContentEvent;
 use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
-
-const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) enum NotesLoadState {
     NeedsLocation,
     Ready,
-}
-
-pub(crate) struct CachedEditor {
-    pub relative_path: PathBuf,
-    pub handle: EditorHandle,
-    pub persistence: FileDocumentPersistence,
 }
 
 #[derive(Clone, Debug)]
@@ -43,18 +26,12 @@ pub struct NotesView {
     pub(crate) load_state: NotesLoadState,
     pub(crate) tree: TreeState,
     pub(crate) rows: Vec<TreeRow>,
-    pub(crate) editors: HashMap<String, CachedEditor>,
     pub(crate) markdown_sessions: HashMap<String, crate::markdown_session::MarkdownSession>,
-    pub(crate) active_editor: Option<EditorHandle>,
     pub(crate) active_document_id: Option<String>,
     pub(crate) current_directory: PathBuf,
     pub(crate) selected_sidebar_path: Option<PathBuf>,
     pub(crate) context_menu_path: Option<PathBuf>,
     pub(crate) notebook_name: SharedString,
-    pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
-    pub(crate) syntax_highlight_provider: Arc<NavopSyntaxHighlightProvider>,
-    pub(crate) document_renderer_provider: Option<Arc<NavopDocumentRendererProvider>>,
-    pub(crate) theme_provider: Arc<NavopThemeProvider>,
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
@@ -142,13 +119,12 @@ impl NotesView {
                         .update(cx, |input, cx| input.focus(window, cx));
                 }
                 crate::MarkdownViewMode::Wysiwyg => {
-                    let _ = session.preview.focus(cx);
+                    session
+                        .preview
+                        .update(cx, |editor, cx| editor.focus(window, cx));
                 }
             }
             return;
-        }
-        if let Some(editor) = self.active_editor.as_ref() {
-            let _ = editor.focus(cx);
         }
     }
 
@@ -167,51 +143,17 @@ impl NotesView {
                 .placeholder(t!("Notes.notebook_path_placeholder").to_string())
                 .default_value(initial_root.to_string_lossy())
         });
-        let ai_provider = match crate::ai_provider::build_provider(cx) {
-            Ok(provider) => provider,
-            Err(error) => {
-                notify_operation_error(window, cx, error);
-                None
-            }
-        };
-        let resolved_theme = editor_theme
-            .clone()
-            .unwrap_or_else(|| MarkdownEditorTheme::from_app(cx));
-        let syntax_highlight_provider = Arc::new(NavopSyntaxHighlightProvider::new(
-            resolved_theme.highlight_theme.clone(),
-            resolved_theme.background,
-            resolved_theme.foreground,
-        ));
-        let document_renderer_provider = cx
-            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
-            .cloned()
-            .map(NavopDocumentRendererProvider::new)
-            .map(Arc::new);
-        let theme_provider = Arc::new(NavopThemeProvider::new(cditor_theme(
-            resolved_theme.background,
-            resolved_theme.foreground,
-            resolved_theme.muted_foreground,
-            resolved_theme.border,
-            resolved_theme.primary,
-            resolved_theme.danger,
-        )));
         Self {
             storage: None,
             load_state,
             tree: TreeState::default(),
             rows: Vec::new(),
-            editors: HashMap::new(),
             markdown_sessions: HashMap::new(),
-            active_editor: None,
             active_document_id: None,
             current_directory: PathBuf::new(),
             selected_sidebar_path: None,
             context_menu_path: None,
             notebook_name,
-            ai_provider,
-            syntax_highlight_provider,
-            document_renderer_provider,
-            theme_provider,
             setup_path: setup_path.clone(),
             focus_handle: cx.focus_handle(),
             standalone_markdown,
@@ -246,7 +188,6 @@ impl NotesView {
         if let Some(path) = self.tree.selected_document.clone() {
             self.open_document(&path, window, cx)?;
         } else {
-            self.active_editor = None;
             self.active_document_id = None;
         }
         Ok(())
@@ -259,50 +200,7 @@ impl NotesView {
         cx: &mut Context<Self>,
     ) -> anyhow::Result<()> {
         let descriptor = self.storage()?.descriptor(path)?;
-        if descriptor.format == DocumentFormat::Markdown {
-            return self.open_markdown_document(descriptor, window, cx);
-        }
-        let document_id = descriptor.document_id.clone();
-        let handle = if let Some(cached) = self.editors.get(&descriptor.document_id) {
-            cached.handle.clone()
-        } else {
-            let persistence = FileDocumentPersistence::new(descriptor.absolute_path);
-            let (event_sender, events) = smol::channel::unbounded();
-            let mut builder = Editor::builder()
-                .document_id(descriptor.document_id.clone())
-                .persistence(persistence.clone())
-                .autosave(AUTOSAVE_INTERVAL)
-                .on_event(move |event| {
-                    let _ = event_sender.try_send(event);
-                });
-            builder = match self.ai_provider.clone() {
-                Some(provider) => builder.ai_provider_arc(provider),
-                None => builder.without_ai(),
-            };
-            builder = builder.syntax_highlight_provider_arc(self.syntax_highlight_provider.clone());
-            builder = builder.theme_provider_arc(self.theme_provider.clone());
-            builder = builder.source_editor_provider_arc(Arc::new(
-                crate::source_editor_provider::NotesSourceEditorProvider,
-            ));
-            if let Some(provider) = self.document_renderer_provider.clone() {
-                builder = builder.document_renderer_provider_arc(provider);
-            }
-            let handle = builder.build(cx)?;
-            self.restore_ai_model(&handle, cx);
-            self.observe_editor_events(events, window, cx);
-            self.editors.insert(
-                descriptor.document_id,
-                CachedEditor {
-                    relative_path: descriptor.relative_path,
-                    handle: handle.clone(),
-                    persistence,
-                },
-            );
-            handle
-        };
-        self.active_document_id = Some(document_id);
-        self.active_editor = Some(handle);
-        Ok(())
+        self.open_markdown_document(descriptor, window, cx)
     }
 
     pub(crate) fn select_row(
@@ -334,18 +232,6 @@ impl NotesView {
         self.storage
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("notes storage is unavailable"))
-    }
-
-    pub(crate) fn restore_ai_model(&self, handle: &EditorHandle, cx: &mut App) {
-        let Some(model_id) = cx
-            .try_global::<AppSettings>()
-            .and_then(|settings| settings.ai_chat.notes_model_id.clone())
-        else {
-            return;
-        };
-        if let Err(error) = handle.select_ai_model(&model_id, cx) {
-            tracing::debug!(%error, model_id, "saved Notes AI model is unavailable");
-        }
     }
 }
 
@@ -391,6 +277,7 @@ impl Focusable for NotesView {
 #[cfg(test)]
 mod external_markdown_tests {
     use super::*;
+    use crate::markdown_session::MarkdownSyncState;
     use gpui::{TestAppContext, VisualTestContext, WindowOptions};
     use gpui_component::Root;
 
@@ -439,7 +326,7 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
-    fn standalone_preview_and_mode_switch_preserve_source(cx: &mut TestAppContext) {
+    fn standalone_source_preserving_preview_and_mode_switch_keep_bytes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -470,12 +357,19 @@ mod external_markdown_tests {
         let document_id = view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.clone().unwrap();
             let session = view.markdown_sessions.get(&id).unwrap();
-            assert!(session.source_authoritative);
-            assert!(matches!(
-                session.compatibility,
-                cditor_app::MarkdownCompatibility::SourceOnly(_)
-            ));
-            assert!(session.preview.is_readonly(cx));
+            assert_eq!(
+                source,
+                session.source_document.lock().unwrap().source.as_str()
+            );
+            assert_eq!(
+                concat!(
+                    "> <https://example.com/path_(item)>\n\n",
+                    "README and snake_case(value)\n\n",
+                    "2. second\n\nitalic\n",
+                ),
+                session.preview.read(cx).projected_text()
+            );
+            assert!(!session.preview.read(cx).is_dirty());
             id
         });
         cx.update(|window, cx| {
@@ -514,12 +408,250 @@ mod external_markdown_tests {
         view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.as_ref().unwrap();
             let session = view.markdown_sessions.get(id).unwrap();
-            assert!(session.source_authoritative);
             assert_eq!(
-                cditor_app::MarkdownCompatibility::Editable,
-                session.compatibility
+                "# Title\n\nBody\n",
+                session.source_document.lock().unwrap().source.as_str()
             );
-            assert!(!session.preview.is_readonly(cx));
+            assert!(!session.preview.read(cx).is_dirty());
+        });
+    }
+
+    #[gpui::test]
+    fn standalone_open_and_mode_switch_preserve_file_byte_boundaries(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let cases = [
+            ("empty.md", ""),
+            ("bom-crlf.md", "\u{feff}# 标题\r\n\r\nBody  \r\nnext\r\n"),
+            ("no-trailing-newline.md", "_italic_\n\n\nend"),
+        ];
+        for (name, source) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join(name);
+            std::fs::write(&path, source.as_bytes()).unwrap();
+            let (window, view) = cx.update(|cx| {
+                let mut view = None;
+                let window = cx
+                    .open_window(WindowOptions::default(), |window, cx| {
+                        let entity =
+                            cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                        view = Some(entity.clone());
+                        cx.new(|cx| Root::new(entity, window, cx))
+                    })
+                    .unwrap();
+                (window, view.unwrap())
+            });
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            visual.run_until_parked();
+            let id = view.read_with(&visual, |view, _| view.active_document_id.clone().unwrap());
+            view.update_in(&mut visual, |view, window, cx| {
+                view.toggle_markdown_mode(id.clone(), window, cx);
+                view.toggle_markdown_mode(id.clone(), window, cx);
+            });
+            visual.run_until_parked();
+            assert_eq!(source.as_bytes(), std::fs::read(&path).unwrap());
+        }
+    }
+
+    #[gpui::test]
+    fn source_mode_undo_uses_the_shared_markdown_history(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source-undo.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, window, cx| {
+            view.toggle_markdown_mode(id, window, cx);
+        });
+        cx.run_until_parked();
+        let source_editor = view.read_with(&cx, |view, _| {
+            view.markdown_sessions
+                .values()
+                .next()
+                .unwrap()
+                .source_editor
+                .clone()
+        });
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.values().next().unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "after",
+                        markdown_source::SourceSelection { anchor: 5, head: 5 },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+            session.source_editor.update(cx, |input, cx| {
+                input.set_value("after", window, cx);
+                input.focus(window, cx);
+            });
+        });
+        cx.run_until_parked();
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.values().next().unwrap();
+            assert_eq!("after", session.preview.read(cx).source());
+        });
+        #[cfg(target_os = "macos")]
+        cx.simulate_keystrokes("cmd-z");
+        #[cfg(not(target_os = "macos"))]
+        cx.simulate_keystrokes("ctrl-z");
+        cx.run_until_parked();
+        assert_eq!(
+            "before",
+            source_editor.read_with(&cx, |input, _| input.value().to_string())
+        );
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.values().next().unwrap();
+            assert_eq!("before", session.preview.read(cx).source());
+        });
+    }
+
+    #[gpui::test]
+    fn clean_external_reload_updates_both_markdown_modes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("reload.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        std::fs::write(&path, "external _change_").unwrap();
+        view.update_in(&mut visual, |view, window, cx| {
+            view.reload_active_markdown_from_disk(window, cx);
+        });
+        view.read_with(&visual, |view, cx| {
+            let session = view
+                .markdown_sessions
+                .get(view.active_document_id.as_ref().unwrap())
+                .unwrap();
+            assert_eq!("external _change_", session.preview.read(cx).source());
+            assert_eq!(
+                "external _change_",
+                session.source_editor.read(cx).value().as_ref()
+            );
+            assert_eq!(
+                crate::markdown_session::MarkdownSyncState::Clean,
+                session.state.sync_state
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn external_change_event_reloads_clean_session(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("watched.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        std::fs::write(&path, "external").unwrap();
+        let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, window, cx| {
+            view.markdown_file_changed_on_disk(&id, window, cx);
+        });
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.values().next().unwrap();
+            assert_eq!("external", session.preview.read(cx).source());
+            assert!(matches!(session.state.sync_state, MarkdownSyncState::Clean));
+        });
+    }
+
+    #[gpui::test]
+    fn external_change_event_marks_dirty_session_as_conflicted(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("dirty-watched.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "local",
+                        markdown_source::SourceSelection { anchor: 5, head: 5 },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        std::fs::write(&path, "external").unwrap();
+        view.update_in(&mut cx, |view, window, cx| {
+            view.markdown_file_changed_on_disk(&id, window, cx);
+        });
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert_eq!("local", session.preview.read(cx).source());
+            assert!(matches!(
+                session.state.sync_state,
+                MarkdownSyncState::Conflict
+            ));
         });
     }
 }

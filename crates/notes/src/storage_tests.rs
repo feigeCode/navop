@@ -5,19 +5,16 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 #[test]
-fn creates_and_manages_notebook_tree() -> Result<()> {
+fn creates_and_manages_markdown_notebook_tree() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     let metadata = storage.create_notebook("My Notes", "Local")?;
     assert_eq!(Some(metadata), storage.load_notebook()?);
     let work = storage.create_directory(Path::new(""), "工作")?;
     let document = storage.create_document(&work, "项目计划")?;
-    assert_eq!(
-        Path::new("工作/项目计划.cditor.json"),
-        document.relative_path
-    );
+    assert_eq!(Path::new("工作/项目计划.md"), document.relative_path);
     let renamed = storage.rename_node(&document.relative_path, "计划")?;
-    assert_eq!(Path::new("工作/计划.cditor.json"), renamed);
+    assert_eq!(Path::new("工作/计划.md"), renamed);
     assert_eq!(
         document.document_id,
         storage.descriptor(&renamed)?.document_id
@@ -36,11 +33,9 @@ fn configured_root_defaults_and_persists_custom_location() -> Result<()> {
         default,
         NotesStorage::configured_root_from(&config, &default)?
     );
-
     let custom = temp.path().join("custom-notes");
     std::fs::create_dir_all(&custom)?;
     NotesStorage::save_configured_root_to(&config, &custom)?;
-
     assert!(NotesStorage::has_configured_root_at(&config)?);
     assert_eq!(
         custom.canonicalize()?,
@@ -54,120 +49,22 @@ fn creating_notebook_does_not_overwrite_existing_notebook() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     let created = storage.create_notebook("Original", "kept")?;
-
     assert!(storage.create_notebook("Replacement", "lost").is_err());
     assert_eq!(Some(created), storage.load_notebook()?);
     Ok(())
 }
 
 #[test]
-fn markdown_documents_use_md_files_and_stable_index_ids() -> Result<()> {
+fn markdown_documents_use_stable_index_ids() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     storage.create_notebook("Notes", "")?;
-    let created =
-        storage.create_document_with_format(Path::new(""), "README", DocumentFormat::Markdown)?;
+    let created = storage.create_document(Path::new(""), "README")?;
     assert_eq!(Path::new("README.md"), created.relative_path);
     assert_eq!(DocumentFormat::Markdown, created.format);
-    assert!(created.absolute_path.is_file());
-
     let renamed = storage.rename_node(&created.relative_path, "Guide")?;
     let reopened = storage.descriptor(&renamed)?;
     assert_eq!(created.document_id, reopened.document_id);
-    assert_eq!(DocumentFormat::Markdown, reopened.format);
-    Ok(())
-}
-
-#[test]
-fn converts_rich_text_to_markdown_without_removing_source() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let storage = NotesStorage::open(temp.path().join("notes"))?;
-    storage.create_notebook("Notes", "")?;
-    let rich_text = storage.create_document(Path::new(""), "Guide")?;
-    let document =
-        cditor_app::EditorDocument::from_markdown(&rich_text.document_id, "# Guide\n\n**bold**")?;
-    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
-
-    let markdown = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
-
-    assert!(rich_text.absolute_path.is_file());
-    assert_eq!(Path::new("Guide.md"), markdown.relative_path);
-    assert_eq!(DocumentFormat::Markdown, markdown.format);
-    assert_ne!(rich_text.document_id, markdown.document_id);
-    let source = std::fs::read_to_string(markdown.absolute_path)?;
-    assert!(source.contains("# Guide"));
-    assert!(source.contains("**bold**"));
-    Ok(())
-}
-
-#[test]
-fn conversion_does_not_overwrite_existing_markdown() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let storage = NotesStorage::open(temp.path().join("notes"))?;
-    storage.create_notebook("Notes", "")?;
-    let rich_text = storage.create_document(Path::new(""), "Guide")?;
-    let markdown =
-        storage.create_document_with_format(Path::new(""), "Guide", DocumentFormat::Markdown)?;
-    std::fs::write(&markdown.absolute_path, "existing")?;
-
-    assert!(
-        storage
-            .convert_rich_text_to_markdown(&rich_text.relative_path)
-            .is_err()
-    );
-    assert_eq!("existing", std::fs::read_to_string(markdown.absolute_path)?);
-    Ok(())
-}
-
-#[test]
-fn conversion_normalizes_rich_text_marks_that_markdown_cannot_preserve() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let storage = NotesStorage::open(temp.path().join("notes"))?;
-    storage.create_notebook("Notes", "")?;
-    let rich_text = storage.create_document(Path::new(""), "Underlined")?;
-    let mut document = cditor_app::EditorDocument::from_markdown(&rich_text.document_id, "Body")?;
-    let mut value = serde_json::to_value(&document)?;
-    value["blocks"][0]["payload"]["payload"]["RichText"]["spans"][0]["marks"] =
-        serde_json::json!(["Underline"]);
-    document = cditor_app::EditorDocument::from_json(&serde_json::to_string(&value)?)?;
-    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
-
-    let converted = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
-    assert_eq!("Body", std::fs::read_to_string(converted.absolute_path)?);
-    Ok(())
-}
-
-#[test]
-fn conversion_flattens_whiteboard_to_preview_image_only() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let storage = NotesStorage::open(temp.path().join("notes"))?;
-    storage.create_notebook("Notes", "")?;
-    let rich_text = storage.create_document(Path::new(""), "Board")?;
-    let runtime = cditor_app::runtime::DocumentRuntime::from_payloads(
-        1,
-        vec![cditor_app::core::rich_text::BlockPayloadRecord {
-            block_id: 1,
-            content_version: 1,
-            kind: cditor_app::core::rich_text::RichBlockKind::Whiteboard,
-            payload: cditor_app::core::rich_text::BlockPayload::Whiteboard(
-                cditor_app::core::rich_text::WhiteboardPayload {
-                    scene_json: r#"{"camera":{"x":0.0,"y":0.0,"zoom":1.0},"elements":[]}"#
-                        .to_owned(),
-                },
-            ),
-        }],
-        720.0,
-    );
-    let document = cditor_app::EditorDocument::from_runtime(&rich_text.document_id, &runtime)?;
-    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
-
-    let converted = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
-    let markdown = std::fs::read_to_string(&converted.absolute_path)?;
-    assert!(!markdown.contains("cditor:whiteboard"));
-    assert!(markdown.contains("![Whiteboard](<Board.assets/whiteboard-1.svg>)"));
-    let assets = converted.absolute_path.with_file_name("Board.assets");
-    assert!(assets.join("whiteboard-1.svg").is_file());
-    assert!(!assets.join("whiteboard-1.cditor-board.json").exists());
     Ok(())
 }
 
@@ -178,11 +75,26 @@ fn scan_discovers_external_markdown_once() -> Result<()> {
     let storage = NotesStorage::open(root.clone())?;
     storage.create_notebook("Notes", "")?;
     std::fs::write(root.join("files/external.md"), "# External\n")?;
-
     let first = storage.descriptor(Path::new("external.md"))?;
     storage.scan_tree()?;
     let second = storage.descriptor(Path::new("external.md"))?;
     assert_eq!(first.document_id, second.document_id);
+    Ok(())
+}
+
+#[test]
+fn scan_ignores_legacy_cditor_documents() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("notes");
+    let storage = NotesStorage::open(root.clone())?;
+    storage.create_notebook("Notes", "")?;
+    std::fs::write(root.join("files/legacy.cditor.json"), "{}")?;
+    assert!(
+        storage
+            .scan_tree()?
+            .iter()
+            .all(|node| node.display_name != "legacy")
+    );
     Ok(())
 }
 
@@ -192,8 +104,7 @@ fn pending_rename_finishes_after_file_move() -> Result<()> {
     let root = temp.path().join("notes");
     let storage = NotesStorage::open(root.clone())?;
     storage.create_notebook("Notes", "")?;
-    let document =
-        storage.create_document_with_format(Path::new(""), "before", DocumentFormat::Markdown)?;
+    let document = storage.create_document(Path::new(""), "before")?;
     let mut index = DocumentIndex::load(&root.join(DOCUMENT_INDEX_FILE))?;
     index.pending_operation = Some(PendingDocumentOperation::Rename {
         from: PathBuf::from("before.md"),
@@ -201,41 +112,16 @@ fn pending_rename_finishes_after_file_move() -> Result<()> {
     });
     index.save(&root.join(DOCUMENT_INDEX_FILE))?;
     std::fs::rename(root.join("files/before.md"), root.join("files/after.md"))?;
-
-    let recovered = storage.descriptor(Path::new("after.md"))?;
-    assert_eq!(document.document_id, recovered.document_id);
-    Ok(())
-}
-
-#[test]
-fn rich_text_descriptor_repairs_stale_index_id() -> Result<()> {
-    let temp = tempfile::tempdir()?;
-    let root = temp.path().join("notes");
-    let storage = NotesStorage::open(root.clone())?;
-    storage.create_notebook("Notes", "")?;
-    let document = storage.create_document(Path::new(""), "native")?;
-    let index_path = root.join(DOCUMENT_INDEX_FILE);
-    let mut index = DocumentIndex::load(&index_path)?;
-    index.record(
-        document.relative_path.clone(),
-        uuid::Uuid::new_v4(),
-        DocumentFormat::RichText,
-    );
-    index.save(&index_path)?;
-
-    let reopened = storage.descriptor(&document.relative_path)?;
-    assert_eq!(document.document_id, reopened.document_id);
-    let repaired = DocumentIndex::load(&index_path)?;
     assert_eq!(
         document.document_id,
-        repaired.documents[&document.relative_path].id.to_string()
+        storage.descriptor(Path::new("after.md"))?.document_id
     );
     Ok(())
 }
 
 #[test]
 fn rejects_unsafe_names_and_paths() -> Result<()> {
-    for name in ["", "..", "a/b", "a.cditor.json"] {
+    for name in ["", "..", "a/b", "a.md"] {
         assert!(validate_node_name(name).is_err());
     }
     let temp = tempfile::tempdir()?;
@@ -251,14 +137,10 @@ fn rejects_unsafe_names_and_paths() -> Result<()> {
 }
 
 #[test]
-fn document_names_accept_their_explicit_extension() -> Result<()> {
+fn document_names_accept_the_markdown_extension() -> Result<()> {
     assert_eq!(
         "Guide.md",
         document_file_name("Guide.md", DocumentFormat::Markdown)?
-    );
-    assert_eq!(
-        "Guide.cditor.json",
-        document_file_name("Guide.cditor.json", DocumentFormat::RichText)?
     );
     Ok(())
 }
@@ -267,7 +149,6 @@ fn document_names_accept_their_explicit_extension() -> Result<()> {
 #[test]
 fn scan_ignores_symbolic_links() -> Result<()> {
     use std::os::unix::fs::symlink;
-
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;
     storage.create_notebook("Notes", "")?;

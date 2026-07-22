@@ -1,10 +1,7 @@
 use crate::markdown_file_store::MarkdownSaveOutcome;
-use crate::markdown_persistence::CONFLICT_MESSAGE;
 use crate::{NotesView, NotesViewEvent};
-use cditor_app::EditorEvent;
-use gpui::{AppContext, AsyncApp, Context, Window};
+use gpui::{Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
-use one_core::settings::AppSettings;
 use rust_i18n::t;
 
 pub(crate) fn notify_operation_error<T>(
@@ -42,7 +39,11 @@ impl NotesView {
         let mut saved_path = None;
         let notification = match result {
             Ok(Some(MarkdownSaveOutcome::Saved(_))) => {
+                let is_current = generation == session.state.generation;
                 session.state.source_saved(generation);
+                if is_current {
+                    session.preview.update(cx, |editor, _| editor.mark_saved());
+                }
                 saved_path = session.store.path().ok();
                 None
             }
@@ -69,78 +70,5 @@ impl NotesView {
             cx.emit(NotesViewEvent::FileSaved(path));
         }
         cx.notify();
-    }
-
-    pub(crate) fn observe_editor_events(
-        &self,
-        events: smol::channel::Receiver<EditorEvent>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let window_handle = window.window_handle();
-        let weak = cx.entity().downgrade();
-        cx.spawn(async move |_, cx: &mut AsyncApp| {
-            while let Ok(event) = events.recv().await {
-                match event {
-                    EditorEvent::Saved { document_id, .. } => {
-                        let weak = weak.clone();
-                        let _ = cx.update_window(window_handle, move |_, _, cx| {
-                            let _ = weak.update(cx, |view, cx| {
-                                if let Some(path) = view
-                                    .markdown_sessions
-                                    .get(&document_id)
-                                    .and_then(|session| session.store.path().ok())
-                                {
-                                    cx.emit(NotesViewEvent::FileSaved(path));
-                                }
-                                cx.notify();
-                            });
-                        });
-                    }
-                    EditorEvent::SaveFailed {
-                        document_id,
-                        message,
-                        ..
-                    } => {
-                        if message == CONFLICT_MESSAGE {
-                            let message = t!("Notes.markdown_external_change").to_string();
-                            let weak = weak.clone();
-                            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                                let _ = weak.update(cx, |view, cx| {
-                                    if let Some(session) =
-                                        view.markdown_sessions.get_mut(&document_id)
-                                    {
-                                        session.state.conflict();
-                                    }
-                                    cx.notify();
-                                });
-                                window.push_notification(
-                                    Notification::warning(message).autohide(false),
-                                    cx,
-                                );
-                            });
-                        } else {
-                            let message =
-                                t!("Notes.markdown_save_failed", error = message).to_string();
-                            let _ = cx.update_window(window_handle, |_, window, cx| {
-                                window.push_notification(
-                                    Notification::error(message).autohide(false),
-                                    cx,
-                                );
-                            });
-                        }
-                    }
-                    EditorEvent::AiModelChanged { model } => {
-                        let _ = cx.update(|cx| {
-                            AppSettings::update_and_save(cx, |settings| {
-                                settings.ai_chat.notes_model_id = Some(model.id.clone());
-                            });
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        })
-        .detach();
     }
 }

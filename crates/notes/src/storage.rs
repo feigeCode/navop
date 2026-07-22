@@ -8,7 +8,6 @@ use crate::storage_support::{
     scan_directory, write_json_atomic, write_text_atomic,
 };
 use anyhow::{Context, Result, bail};
-use cditor_app::EditorDocument;
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -70,7 +69,7 @@ impl NotesStorage {
     }
 
     pub fn create_document(&self, parent: &Path, name: &str) -> Result<DocumentDescriptor> {
-        self.create_document_with_format(parent, name, DocumentFormat::RichText)
+        self.create_document_with_format(parent, name, DocumentFormat::Markdown)
     }
 
     pub fn create_document_with_format(
@@ -85,13 +84,7 @@ impl NotesStorage {
             bail!("document already exists: {}", path.display());
         }
         let document_id = Uuid::new_v4().to_string();
-        match format {
-            DocumentFormat::RichText => {
-                let document = EditorDocument::from_markdown(&document_id, "")?;
-                write_text_atomic(&path, &document.to_json()?)?;
-            }
-            DocumentFormat::Markdown => write_text_atomic(&path, "")?,
-        }
+        write_text_atomic(&path, "")?;
         let descriptor = DocumentDescriptor {
             document_id,
             format,
@@ -205,18 +198,12 @@ impl NotesStorage {
         format: DocumentFormat,
     ) -> Result<String> {
         let mut index = self.load_index()?;
-        let id = match format {
-            DocumentFormat::RichText => {
-                EditorDocument::from_json(&fs::read_to_string(absolute_path)?)?
-                    .document_id
-                    .parse()?
-            }
-            DocumentFormat::Markdown => index
-                .documents
-                .get(relative_path)
-                .map(|record| record.id)
-                .unwrap_or_else(Uuid::new_v4),
-        };
+        let _ = absolute_path;
+        let id = index
+            .documents
+            .get(relative_path)
+            .map(|record| record.id)
+            .unwrap_or_else(Uuid::new_v4);
         let needs_update = index
             .documents
             .get(relative_path)
@@ -244,15 +231,7 @@ impl NotesStorage {
             if index.documents.contains_key(path) {
                 continue;
             }
-            let absolute = self.files_root().join(path);
-            let id = match format {
-                DocumentFormat::RichText => {
-                    EditorDocument::from_json(&fs::read_to_string(absolute)?)?
-                        .document_id
-                        .parse()?
-                }
-                DocumentFormat::Markdown => Uuid::new_v4(),
-            };
+            let id = Uuid::new_v4();
             index.record(path.clone(), id, *format);
             changed = true;
         }

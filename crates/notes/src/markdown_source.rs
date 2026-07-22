@@ -1,6 +1,23 @@
 use crate::NotesView;
-use gpui::{AppContext, Context, Entity, Subscription, Window};
+use gpui::{App, AppContext, Context, Entity, KeyBinding, Subscription, Window, actions};
 use gpui_component::input::{InputEvent, InputState};
+
+pub(crate) const SOURCE_CONTEXT: &str = "NotesMarkdownSource";
+const SOURCE_INPUT_CONTEXT: &str = "NotesMarkdownSource > Input";
+actions!(notes_markdown_source, [UndoSourceMode, RedoSourceMode]);
+
+pub(crate) fn init(cx: &mut App) {
+    cx.bind_keys([
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-z", UndoSourceMode, Some(SOURCE_INPUT_CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-z", RedoSourceMode, Some(SOURCE_INPUT_CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-z", UndoSourceMode, Some(SOURCE_INPUT_CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-y", RedoSourceMode, Some(SOURCE_INPUT_CONTEXT)),
+    ]);
+}
 
 pub(crate) fn create_source_editor(
     source: &str,
@@ -19,15 +36,30 @@ pub(crate) fn create_source_editor(
 
 pub(crate) fn subscribe_source_changes(
     input: &Entity<InputState>,
-    document_id: String,
+    preview: &Entity<markdown_editor::MarkdownEditor>,
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> Subscription {
-    cx.subscribe_in(input, window, move |view, input, event, window, cx| {
+    let preview = preview.clone();
+    cx.subscribe_in(input, window, move |_, input, event, window, cx| {
         if !matches!(event, InputEvent::Change) {
             return;
         }
         let source = input.read(cx).value().to_string();
-        view.markdown_source_changed(&document_id, source, window, cx);
+        let range = input.read(cx).selected_range();
+        let selection = markdown_source::SourceSelection {
+            anchor: range.start,
+            head: range.end,
+        };
+        let applied = preview.update(cx, |editor, cx| {
+            editor.apply_source_value(&source, selection, window, cx)
+        });
+        match applied {
+            Ok(true) => {}
+            Ok(false) => {}
+            Err(error) => {
+                crate::notes_notifications::notify_operation_error(window, cx, error);
+            }
+        }
     })
 }

@@ -155,9 +155,6 @@ impl NotesView {
             return;
         };
         self.remap_tree_paths(&old_path, &new_path);
-        if let Err(error) = self.remap_cached_editors(&old_path, &new_path) {
-            notify_operation_error(window, cx, error);
-        }
         if let Err(error) = self.remap_markdown_sessions(&old_path, &new_path) {
             notify_operation_error(window, cx, error);
         }
@@ -166,19 +163,14 @@ impl NotesView {
 
     fn apply_delete(&mut self, row: &TreeRow, window: &mut Window, cx: &mut Context<Self>) {
         let path = &row.relative_path;
-        if self
-            .editors
-            .values()
-            .any(|cached| cached.relative_path.starts_with(path) && cached.handle.is_dirty(cx))
-            || self.markdown_sessions.values().any(|session| {
-                session.relative_path.starts_with(path)
-                    && (session.preview.is_dirty(cx)
-                        || !matches!(
-                            session.state.sync_state,
-                            crate::markdown_session::MarkdownSyncState::Clean
-                        ))
-            })
-        {
+        if self.markdown_sessions.values().any(|session| {
+            session.relative_path.starts_with(path)
+                && (session.preview.read(cx).is_dirty()
+                    || !matches!(
+                        session.state.sync_state,
+                        crate::markdown_session::MarkdownSyncState::Clean
+                    ))
+        }) {
             notify_error_message(
                 window,
                 cx,
@@ -189,8 +181,6 @@ impl NotesView {
         }
         let result = self.storage().and_then(|storage| storage.delete_node(path));
         if result.is_ok() {
-            self.editors
-                .retain(|_, cached| !cached.relative_path.starts_with(path));
             self.remove_markdown_sessions_under(path);
             if self
                 .tree
@@ -258,22 +248,6 @@ impl NotesView {
             .collect();
         self.current_directory = remap_path(&self.current_directory, old, new);
     }
-    fn remap_cached_editors(&mut self, old: &Path, new: &Path) -> anyhow::Result<()> {
-        let updates = self
-            .editors
-            .iter()
-            .filter(|(_, cached)| cached.relative_path.starts_with(old))
-            .map(|(id, cached)| (id.clone(), remap_path(&cached.relative_path, old, new)))
-            .collect::<Vec<_>>();
-        for (id, relative_path) in updates {
-            let absolute_path = self.storage()?.descriptor(&relative_path)?.absolute_path;
-            if let Some(cached) = self.editors.get_mut(&id) {
-                cached.persistence.set_path(absolute_path)?;
-                cached.relative_path = relative_path;
-            }
-        }
-        Ok(())
-    }
 }
 
 fn open_name_dialog(
@@ -285,7 +259,6 @@ fn open_name_dialog(
 ) {
     let title = match kind {
         CreateKind::Directory => t!("Notes.new_directory").to_string(),
-        CreateKind::Document(DocumentFormat::RichText) => t!("Notes.new_rich_text").to_string(),
         CreateKind::Document(DocumentFormat::Markdown) => t!("Notes.new_markdown").to_string(),
     };
     let input_for_focus = input.clone();
