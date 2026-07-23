@@ -26,12 +26,12 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SshAuthMethod, SshParams,
-    StoredConnection, Workspace,
+    StoredConnection, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
-    JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
-    SshConnectConfig, SshSessionManager,
+    ChannelEvent, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth,
+    SshChannel, SshClient, SshConnectConfig, SshSessionManager,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -184,6 +184,8 @@ pub struct SshFormWindow {
     remark_input: Entity<InputState>,
 
     last_tested_signature: Option<String>,
+    /// 测试连接成功时探测到的远端操作系统 ID（/etc/os-release 的 ID 字段）
+    detected_os_id: Option<String>,
 
     // 云同步开关
     sync_enabled: bool,
@@ -193,7 +195,7 @@ pub struct SshFormWindow {
 
     is_testing: bool,
     is_uninstalling_shell_integration: bool,
-    test_result: Option<Result<(), String>>,
+    test_result: Option<Result<Option<String>, String>>,
     shell_integration_uninstall_result: Option<Result<(), String>>,
     on_saved: Option<SshFormSavedCallback>,
     save_action: SaveAction,
@@ -226,6 +228,53 @@ fn build_connection_test_signature(params: &SshParams) -> String {
 
 fn format_connection_error(error: &anyhow::Error, host: &str) -> String {
     format_connection_error_for_platform(error, host, cfg!(target_os = "macos"))
+}
+
+/// 测试连接成功后尽力探测远端操作系统 ID（/etc/os-release 的 ID 字段）。
+/// 任何失败都返回 None，不影响连接测试结果。
+async fn detect_remote_os_id(client: &mut RusshClient) -> Option<String> {
+    const DETECT_COMMAND: &str =
+        "cat /etc/os-release 2>/dev/null || cat /usr/lib/os-release 2>/dev/null || uname -s";
+
+    let output = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut channel = client.open_channel().await.ok()?;
+        channel.exec(DETECT_COMMAND).await.ok()?;
+
+        let mut stdout = Vec::new();
+        while let Some(event) = channel.recv().await {
+            match event {
+                ChannelEvent::Data(data) => stdout.extend(data),
+                ChannelEvent::Eof | ChannelEvent::Close => break,
+                _ => {}
+            }
+        }
+        let _ = channel.close().await;
+        String::from_utf8(stdout).ok()
+    })
+    .await
+    .ok()??;
+
+    parse_os_release_id(&output).or_else(|| match output.trim() {
+        // 无 os-release 的系统回退到 uname（如 macOS）
+        "Darwin" => Some("macos".to_string()),
+        _ => None,
+    })
+}
+
+/// 从 /etc/os-release 内容中解析 ID 字段（统一小写）。
+fn parse_os_release_id(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ID=").map(|value| {
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_lowercase()
+            })
+        })
+        .filter(|id| !id.is_empty())
 }
 
 fn format_connection_error_for_platform(
@@ -462,12 +511,14 @@ impl SshFormWindow {
         let mut proxy_type = ProxyTypeSelection::default();
         let mut sync_enabled = true; // 默认启用云同步
         let mut disable_shell_integration = false;
+        let mut detected_os_id: Option<String> = None;
 
         if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
             sync_enabled = conn.sync_enabled;
 
             if let Ok(params) = conn.to_ssh_params() {
+                detected_os_id = params.os_id.clone();
                 name_input.update(cx, |s, cx| s.set_value(&conn.name, window, cx));
                 host_input.update(cx, |s, cx| s.set_value(&params.host, window, cx));
                 port_input.update(cx, |s, cx| {
@@ -661,6 +712,7 @@ impl SshFormWindow {
             default_directory_input,
             remark_input,
             last_tested_signature: None,
+            detected_os_id,
             sync_enabled,
             disable_shell_integration,
             is_testing: false,
@@ -860,6 +912,7 @@ impl SshFormWindow {
             },
             jump_server,
             proxy,
+            os_id: self.detected_os_id.clone(),
         })
     }
 
@@ -1041,8 +1094,9 @@ impl SshFormWindow {
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let spawn_result = Tokio::spawn_result(cx, async move {
                 let mut client = RusshClient::connect(config).await?;
+                let os_id = detect_remote_os_id(&mut client).await;
                 client.disconnect().await?;
-                Ok::<(), anyhow::Error>(())
+                Ok::<Option<String>, anyhow::Error>(os_id)
             })
             .await;
 
@@ -1050,7 +1104,7 @@ impl SshFormWindow {
                 Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
                 _ => None,
             };
-            let test_result: Result<(), String> = match spawn_result {
+            let test_result: Result<Option<String>, String> = match spawn_result {
                 Ok(task) => Ok(task),
                 Err(error) => Err(format_connection_error(&error, &target_host)),
             };
@@ -1065,6 +1119,9 @@ impl SshFormWindow {
                     } else {
                         this.last_tested_signature =
                             test_result.as_ref().ok().map(|_| signature.clone());
+                        if let Ok(os_id) = &test_result {
+                            this.detected_os_id = os_id.clone();
+                        }
                         this.test_result = Some(test_result);
                     }
                     cx.notify();
@@ -1780,11 +1837,17 @@ impl Render for SshFormWindow {
         let active_tab = self.active_tab;
 
         let test_result_element = match &self.test_result {
-            Some(Ok(())) => Some(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().success)
-                    .child(t!("SSH.test_success").to_string())
+            Some(Ok(os_id)) => Some(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(ssh_os_icon(os_id.as_deref()).color().with_size(px(16.0)))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().success)
+                            .child(t!("SSH.test_success").to_string()),
+                    )
                     .into_any_element(),
             ),
             Some(Err(e)) => Some(
@@ -1924,7 +1987,8 @@ impl Render for SshFormWindow {
 mod tests {
     use super::{
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
-        format_connection_error, format_connection_error_for_platform, validate_save_state,
+        format_connection_error, format_connection_error_for_platform, parse_os_release_id,
+        validate_save_state,
     };
     use anyhow::Context as _;
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
@@ -1945,6 +2009,7 @@ mod tests {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         }
     }
 
@@ -2043,6 +2108,29 @@ mod tests {
     #[test]
     fn save_gate_allows_saving_without_successful_connection_test() {
         assert_eq!(validate_save_state(false, false), Ok(()));
+    }
+
+    #[test]
+    fn os_release_id_parsing_handles_common_distros() {
+        assert_eq!(
+            Some("ubuntu".to_string()),
+            parse_os_release_id("NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n")
+        );
+        assert_eq!(
+            Some("rhel".to_string()),
+            parse_os_release_id("NAME=\"Red Hat Enterprise Linux\"\nID=\"rhel\"\n")
+        );
+        assert_eq!(
+            Some("centos".to_string()),
+            parse_os_release_id("NAME=\"CentOS Stream\"\nID=centos\nID_LIKE=\"rhel fedora\"\n")
+        );
+    }
+
+    #[test]
+    fn os_release_id_parsing_ignores_id_like_and_empty_values() {
+        assert_eq!(None, parse_os_release_id("ID_LIKE=debian\n"));
+        assert_eq!(None, parse_os_release_id("ID=\n"));
+        assert_eq!(None, parse_os_release_id("Linux\n"));
     }
 
     #[test]

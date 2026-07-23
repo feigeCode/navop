@@ -75,6 +75,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
         disable_shell_integration: None,
         jump_server: None,
         proxy: None,
+        os_id: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_ssh(

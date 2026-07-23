@@ -23,6 +23,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         },
         None,
     );

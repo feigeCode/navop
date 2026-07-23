@@ -69,6 +69,7 @@ fn tab_duplicate_is_supported_for_local_ssh_and_serial_terminals() {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         },
         None,
     );
@@ -143,6 +144,7 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         },
         None,
     );

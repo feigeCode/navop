@@ -15,10 +15,10 @@ impl HomePage {
                 })
                 .unwrap_or_else(|_| IconName::Database.color())
                 .with_size(size),
-            ConnectionType::SshSftp => IconName::TerminalColor
-                .color()
-                .with_size(size)
-                .text_color(gpui::rgb(0x8b5cf6)),
+            ConnectionType::SshSftp => conn
+                .to_ssh_params()
+                .map(|params| params.os_icon().color().with_size(size))
+                .unwrap_or_else(|_| IconName::LinuxPenguinColor.color().with_size(size)),
             ConnectionType::Redis => IconName::Redis
                 .color()
                 .with_size(size)

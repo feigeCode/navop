@@ -20,6 +20,7 @@ fn ssh_connection() -> StoredConnection {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         },
         None,
     )

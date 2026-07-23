@@ -280,6 +280,35 @@ pub struct SshParams {
     /// 代理配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    /// 远端操作系统 ID（测试连接时从 /etc/os-release 探测，用于连接图标展示）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub os_id: Option<String>,
+}
+
+impl SshParams {
+    /// 根据探测到的操作系统 ID 选择连接图标，未识别时默认 Linux 企鹅。
+    pub fn os_icon(&self) -> IconName {
+        ssh_os_icon(self.os_id.as_deref())
+    }
+}
+
+/// 根据图标 ID（通常为 /etc/os-release 的 ID 或手动选择值）选择 SSH 连接图标，
+/// 未识别时默认 Linux 企鹅。
+pub fn ssh_os_icon(os_id: Option<&str>) -> IconName {
+    match os_id {
+        Some("ubuntu") => IconName::UbuntuColor,
+        Some("debian") => IconName::DebianColor,
+        Some("centos") => IconName::CentosColor,
+        Some("almalinux") => IconName::AlmalinuxColor,
+        Some("rhel" | "redhat" | "fedora" | "rocky" | "ol" | "amzn") => IconName::RedhatColor,
+        Some("opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "suse") => {
+            IconName::OpensuseColor
+        }
+        Some("macos" | "darwin") => IconName::MacosColor,
+        Some("windows") => IconName::WindowsColor,
+        Some("docker") => IconName::DockerColor,
+        _ => IconName::LinuxPenguinColor,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1446,6 +1475,7 @@ mod tests {
                 disable_shell_integration: None,
                 jump_server: None,
                 proxy: None,
+                os_id: None,
             },
             Some(7),
         );
@@ -1606,6 +1636,7 @@ mod tests {
             disable_shell_integration: None,
             jump_server: None,
             proxy: None,
+            os_id: None,
         };
         assert_eq!(
             "root@localhost:22",
@@ -2317,5 +2348,66 @@ mod serial_tests {
         let parsed: SshAuthMethod =
             serde_json::from_str(&json).expect("自动公钥认证方式应可反序列化");
         assert!(matches!(parsed, SshAuthMethod::AutoPublicKey));
+    }
+
+    #[test]
+    fn ssh_os_icon_maps_known_distros_and_defaults_to_penguin() {
+        use super::ssh_os_icon;
+
+        assert!(matches!(ssh_os_icon(Some("ubuntu")), IconName::UbuntuColor));
+        assert!(matches!(ssh_os_icon(Some("centos")), IconName::CentosColor));
+        assert!(matches!(ssh_os_icon(Some("debian")), IconName::DebianColor));
+        assert!(matches!(
+            ssh_os_icon(Some("almalinux")),
+            IconName::AlmalinuxColor
+        ));
+        assert!(matches!(
+            ssh_os_icon(Some("opensuse-leap")),
+            IconName::OpensuseColor
+        ));
+        assert!(matches!(ssh_os_icon(Some("macos")), IconName::MacosColor));
+        assert!(matches!(
+            ssh_os_icon(Some("windows")),
+            IconName::WindowsColor
+        ));
+        assert!(matches!(ssh_os_icon(Some("docker")), IconName::DockerColor));
+        for id in ["rhel", "redhat", "rocky", "fedora"] {
+            assert!(
+                matches!(ssh_os_icon(Some(id)), IconName::RedhatColor),
+                "{id} 应映射到 RedHat 图标"
+            );
+        }
+        assert!(matches!(
+            ssh_os_icon(Some("kylin")),
+            IconName::LinuxPenguinColor
+        ));
+        assert!(matches!(ssh_os_icon(None), IconName::LinuxPenguinColor));
+    }
+
+    #[test]
+    fn ssh_params_os_id_round_trips_through_json() {
+        let mut params = SshParams {
+            host: "example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: SshAuthMethod::Agent,
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            jump_server: None,
+            proxy: None,
+            os_id: Some("ubuntu".to_string()),
+        };
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("\"os_id\":\"ubuntu\""));
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(Some("ubuntu".to_string()), parsed.os_id);
+
+        params.os_id = None;
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(!json.contains("os_id"));
     }
 }
