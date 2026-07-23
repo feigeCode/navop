@@ -135,6 +135,17 @@ fn seed_pre_scope_database(connection: &Connection) {
                 group_name TEXT,
                 group_color TEXT
              );
+             CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT,
+                icon TEXT,
+                cloud_id TEXT,
+                last_synced_at INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
              INSERT INTO team_key_cache VALUES (
                 'team-1', 'Platform', 1, 'unsafe-secret', 1, 1, 'admin', 'verify'
              );",
