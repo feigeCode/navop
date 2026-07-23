@@ -7204,6 +7204,7 @@ dependencies = [
  "extension-protocol",
  "futures-util",
  "mongodb",
+ "percent-encoding",
  "rust-i18n",
  "serde_json",
  "tempfile",

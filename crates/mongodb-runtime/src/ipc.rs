@@ -12,8 +12,11 @@ use extension_protocol::mongodb::{
 };
 use std::sync::Arc;
 
-use crate::uri::replace_mongodb_uri_authority;
-use crate::{MongoConnection, MongoConnectionConfig, MongoError, MongoFindOptions};
+use crate::uri::{mongodb_uri_database, replace_mongodb_uri_authority};
+use crate::{
+    DEFAULT_MONGODB_MODERN_DRIVER_ID, MongoConnection, MongoConnectionConfig, MongoError,
+    MongoFindOptions,
+};
 
 /// IPC facade placeholder for the UI/runtime boundary.
 ///
@@ -125,9 +128,21 @@ impl MongoConnection for IpcMongoConnection {
             .is_some_and(|session| !session.is_closed())
     }
     async fn list_databases(&self) -> Result<Vec<String>, MongoError> {
-        let result = self
-            .command_document("admin", doc! { "listDatabases": 1, "nameOnly": true })
-            .await?;
+        let result = match self
+            .command_document(
+                "admin",
+                list_databases_command(self.config.driver_id == DEFAULT_MONGODB_MODERN_DRIVER_ID),
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(error) if is_authorization_error(&error) => {
+                return mongodb_uri_database(&self.config.connection_string)
+                    .map(|database| vec![database])
+                    .ok_or(error);
+            }
+            Err(error) => return Err(error),
+        };
         bson_documents(&result, "databases")?
             .into_iter()
             .map(|document| bson_string(&document, "name"))
@@ -418,6 +433,22 @@ fn document_wire(document: Document) -> MongoBsonDocument {
     }
 }
 
+fn list_databases_command(authorized_only: bool) -> Document {
+    let mut command = doc! {
+        "listDatabases": 1,
+        "nameOnly": true,
+    };
+    if authorized_only {
+        command.insert("authorizedDatabases", true);
+    }
+    command
+}
+
+fn is_authorization_error(error: &MongoError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("not authorized") || message.contains("unauthorized")
+}
+
 fn decode_document(document: MongoBsonDocument) -> Result<Document, MongoError> {
     let WireBytes::Base64(value) = document.bson else {
         return Err(MongoError::Serialization(
@@ -456,6 +487,39 @@ fn decode_packed_documents(bytes: &[u8]) -> Result<Vec<Document>, MongoError> {
 #[cfg(test)]
 mod blob_tests {
     use super::*;
+
+    #[test]
+    fn database_listing_is_limited_to_authorized_databases() {
+        assert_eq!(
+            doc! {
+                "listDatabases": 1,
+                "nameOnly": true,
+                "authorizedDatabases": true,
+            },
+            list_databases_command(true)
+        );
+    }
+
+    #[test]
+    fn legacy_database_listing_avoids_unsupported_authorization_option() {
+        assert_eq!(
+            doc! {
+                "listDatabases": 1,
+                "nameOnly": true,
+            },
+            list_databases_command(false)
+        );
+    }
+
+    #[test]
+    fn recognizes_list_database_authorization_errors() {
+        assert!(is_authorization_error(&MongoError::connection(
+            "protocol error: [-39000] not authorized on admin to execute command"
+        )));
+        assert!(!is_authorization_error(&MongoError::connection(
+            "connection reset by peer"
+        )));
+    }
 
     #[test]
     fn packed_bson_documents_round_trip() {

@@ -1,7 +1,10 @@
 //! MongoDB 连接实现
 
-use crate::uri::replace_mongodb_uri_authority;
-use crate::{MongoConnection, MongoConnectionConfig, MongoError, MongoFindOptions};
+use crate::uri::{mongodb_uri_database, replace_mongodb_uri_authority};
+use crate::{
+    DEFAULT_MONGODB_MODERN_DRIVER_ID, MongoConnection, MongoConnectionConfig, MongoError,
+    MongoFindOptions,
+};
 use async_trait::async_trait;
 use bson::{Bson, Document, doc};
 use connection_tunnel::{TunnelGuard, resolve_connection_target};
@@ -10,8 +13,6 @@ use mongodb::Client;
 use mongodb::options::FindOptions as SdkFindOptions;
 use rust_i18n::t;
 use tracing::{error, info, warn};
-
-/// MongoDB 连接 trait
 
 /// MongoDB 连接实现
 pub struct MongoConnectionImpl {
@@ -48,6 +49,11 @@ impl MongoConnectionImpl {
         message.contains("SCRAM failure")
             || message.contains("AuthenticationFailed")
             || message.contains("code 18")
+    }
+
+    fn is_authorization_failed(error: &mongodb::error::Error) -> bool {
+        let message = error.to_string().to_ascii_lowercase();
+        message.contains("not authorized") || message.contains("unauthorized")
     }
 
     fn append_admin_auth_source(connection_string: &str) -> String {
@@ -286,12 +292,31 @@ impl MongoConnection for MongoConnectionImpl {
 
     async fn list_databases(&self) -> Result<Vec<String>, MongoError> {
         let client = self.client()?;
-        client.list_database_names().await.map_err(|e| {
-            MongoError::command_with_source(
+        let result = if self.config.driver_id == DEFAULT_MONGODB_MODERN_DRIVER_ID {
+            client
+                .list_database_names()
+                .authorized_databases(true)
+                .await
+        } else {
+            client.list_database_names().await
+        };
+        match result {
+            Ok(databases) => Ok(databases),
+            Err(error) if Self::is_authorization_failed(&error) => {
+                mongodb_uri_database(&self.config.connection_string)
+                    .map(|database| vec![database])
+                    .ok_or_else(|| {
+                        MongoError::command_with_source(
+                            t!("MongoConnection.list_databases_failed").to_string(),
+                            error,
+                        )
+                    })
+            }
+            Err(error) => Err(MongoError::command_with_source(
                 t!("MongoConnection.list_databases_failed").to_string(),
-                e,
-            )
-        })
+                error,
+            )),
+        }
     }
 
     async fn list_collections(&self, database_name: &str) -> Result<Vec<String>, MongoError> {
@@ -703,7 +728,7 @@ impl MongoConnection for MongoConnectionImpl {
             find_doc.insert("projection", projection);
         }
         if let Some(skip) = options.skip {
-            find_doc.insert("skip", skip as i64);
+            find_doc.insert("skip", skip);
         }
         if let Some(limit) = options.limit {
             find_doc.insert("limit", limit);
