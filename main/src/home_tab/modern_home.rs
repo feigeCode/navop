@@ -1,7 +1,6 @@
 use gpui::{
     AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
-    prelude::FluentBuilder as _,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt,
@@ -229,9 +228,11 @@ impl HomePage {
             .bg(cx.theme().background)
             .cursor_pointer()
             .hover(|style| style.bg(cx.theme().muted))
-            .on_click(window.listener_for(&cx.entity(), move |home, _, window, cx| {
-                home.open_connection_from_quick(&conn, window, cx);
-            }))
+            .on_click(
+                window.listener_for(&cx.entity(), move |home, _, window, cx| {
+                    home.open_connection_from_quick(&conn, window, cx);
+                }),
+            )
             .child(icon)
             .child(
                 v_flex()
