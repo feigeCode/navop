@@ -22,6 +22,7 @@ use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt as _, Sizable, Size, h_flex,
     v_flex,
@@ -87,6 +88,19 @@ fn render_tab_display_number(number: usize, text_color: gpui::Hsla) -> AnyElemen
         .text_xs()
         .text_color(text_color)
         .child(number.to_string())
+        .into_any_element()
+}
+
+fn render_tab_title(title: SharedString, text_color: gpui::Hsla) -> AnyElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_sm()
+        .text_color(text_color)
+        .text_ellipsis()
+        .child(title)
         .into_any_element()
 }
 
@@ -3003,6 +3017,7 @@ impl TabContainer {
                     .enumerate()
                     .map(|(pinned_index, pinned)| {
                         let pinned_title = pinned.title(cx);
+                        let tooltip_title = pinned_title.clone();
                         let pinned_icon = pinned.content().icon(cx);
                         let is_pinned_active = self.active_pinned_index == Some(pinned_index);
                         let view_for_pinned = view.clone();
@@ -3029,6 +3044,9 @@ impl TabContainer {
                                     .bg(inactive_tab_color)
                             })
                             .cursor_pointer()
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(tooltip_title.clone()).build(window, cx)
+                            })
                             .on_click(move |_, window, cx| {
                                 view_for_pinned.update(cx, |this, cx| {
                                     this.activate_pinned_tab_at(pinned_index, window, cx);
@@ -3038,15 +3056,7 @@ impl TabContainer {
                             .when_some(pinned_icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
-                            .child(
-                                div()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_sm()
-                                    .text_color(text_color)
-                                    .text_ellipsis()
-                                    .child(pinned_title.to_string()),
-                            )
+                            .child(render_tab_title(pinned_title, text_color))
                     }),
             )
             .when(!self.pinned_tabs.is_empty(), |this| {
@@ -3151,6 +3161,8 @@ impl TabContainer {
                             .as_ref()
                             .filter(|renaming_id| *renaming_id == &tab_id)
                             .and_then(|_| self.rename_input.clone());
+                        let show_title_tooltip = rename_input_for_tab.is_none();
+                        let tooltip_title = title.clone();
 
                         div()
                             .id(idx)
@@ -3169,6 +3181,11 @@ impl TabContainer {
                             .when(!is_active, |el| {
                                 el.hover(move |style| style.bg(hover_tab_color))
                                     .bg(inactive_tab_color)
+                            })
+                            .when(show_title_tooltip, |el| {
+                                el.tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip_title.clone()).build(window, cx)
+                                })
                             })
                             .when(has_activity, |el| {
                                 el.child(
@@ -3259,15 +3276,7 @@ impl TabContainer {
                                     .min_w_0()
                                     .child(Input::new(&input).small().w_full())
                                     .into_any_element(),
-                                None => div()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_sm()
-                                    .text_color(text_color)
-                                    .text_ellipsis()
-                                    .child(title_clone.to_string())
-                                    .into_any_element(),
+                                None => render_tab_title(title_clone, text_color),
                             })
                             .when(closeable, |el| {
                                 let view_clone = view_clone.clone();
@@ -3840,6 +3849,13 @@ mod tests {
         let source = include_str!("tab_container.rs");
         assert!(source.contains("navigation_sidebar_expanded == Some(false)"));
         assert!(source.contains("left_padding = px(80.0)"));
+    }
+
+    #[test]
+    fn tab_titles_expose_full_text_on_hover() {
+        let source = include_str!("tab_container.rs");
+        let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
+        assert!(source.matches(&tooltip_builder).count() >= 2);
     }
 
     #[gpui::test]

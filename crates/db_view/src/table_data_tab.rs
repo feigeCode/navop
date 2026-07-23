@@ -90,13 +90,17 @@ impl EventEmitter<TabContentEvent> for TableDataTabContent {}
 
 impl EventEmitter<TableDataTabEvent> for TableDataTabContent {}
 
+fn table_data_tab_title(database_name: &str, table_name: &str) -> String {
+    format!("{table_name} - Data ({database_name})")
+}
+
 impl TabContent for TableDataTabContent {
     fn content_key(&self) -> &'static str {
         "TableData"
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        format!("{}.{} - Data", self.database_name, self.table_name).into()
+        table_data_tab_title(&self.database_name, &self.table_name).into()
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
@@ -195,5 +199,18 @@ impl Clone for TableDataTabContent {
             focus_handle: self.focus_handle.clone(),
             _data_grid_sub: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_data_tab_title_keeps_table_name_at_front() {
+        assert_eq!(
+            "orders - Data (analytics)",
+            table_data_tab_title("analytics", "orders")
+        );
     }
 }
