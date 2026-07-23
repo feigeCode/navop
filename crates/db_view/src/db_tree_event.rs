@@ -38,6 +38,7 @@ const TAB_META_DATABASE_TYPE: &str = "database_type";
 const TAB_KIND_TABLE_DATA: &str = "table_data";
 const TAB_KIND_VIEW_DATA: &str = "view_data";
 const TAB_KIND_TABLE_DESIGNER: &str = "table_designer";
+const TAB_KIND_NAMED_QUERY: &str = "named_query";
 
 // Event handler for database tree view events
 pub struct DatabaseEventHandler {
@@ -136,6 +137,21 @@ impl DatabaseEventHandler {
         match node.node_type {
             DbNodeType::Table | DbNodeType::View => format!("{} - Query", node.name),
             _ => format!("{} - Query", database.unwrap_or("New Query")),
+        }
+    }
+
+    fn named_query_tab_id(node: &DbNode) -> String {
+        format!("query-{}", node.id)
+    }
+
+    fn named_query_title(
+        query_name: &str,
+        connection_name: &str,
+        database: Option<&str>,
+    ) -> String {
+        match database.filter(|database| !database.trim().is_empty()) {
+            Some(database) => format!("{query_name} · {connection_name} / {database}"),
+            None => format!("{query_name} · {connection_name}"),
         }
     }
 }
@@ -3408,10 +3424,20 @@ impl DatabaseEventHandler {
             let database_type = node.database_type.clone();
             let database = node.get_database_name();
             let schema = node.get_schema_name();
-            let tab_id = format!("query-{}", query_name);
+            let tab_id = Self::named_query_tab_id(&node);
+            let tab_metadata = Self::tab_metadata_for_node(&node, TAB_KIND_NAMED_QUERY);
+            let connection_name = cx
+                .global::<GlobalDbState>()
+                .get_config(&connection_id)
+                .map(|config| config.name)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| connection_id.clone());
+            let query_title =
+                Self::named_query_title(&query_name, &connection_name, database.as_deref());
 
             let tab_id_clone = tab_id.clone();
             let conn_id_clone = connection_id.clone();
+            let tab_metadata_clone = tab_metadata.clone();
 
             tab_container.update(cx, |container, cx| {
                 container.activate_or_add_tab_lazy(
@@ -3420,7 +3446,7 @@ impl DatabaseEventHandler {
                         let sql_editor = cx.new(|cx| {
                             SqlEditorTab::new_with_config(
                                 crate::sql_editor_view::SqlEditorTabConfig {
-                                    title: query_name.clone().into(),
+                                    title: query_title.clone().into(),
                                     connection_id: connection_id.clone(),
                                     database_type,
                                     file_path: Some(path.clone()),
@@ -3432,6 +3458,7 @@ impl DatabaseEventHandler {
                             )
                         });
                         TabItem::new(tab_id_clone.clone(), conn_id_clone.clone(), sql_editor)
+                            .with_metadata(tab_metadata_clone)
                     },
                     window,
                     cx,
@@ -3901,6 +3928,37 @@ mod tests {
         assert_eq!(
             "app - Query",
             DatabaseEventHandler::query_title_for_node(&node, Some("app"))
+        );
+    }
+
+    #[test]
+    fn named_queries_with_same_name_in_different_connections_use_distinct_tabs() {
+        let primary = DbNode::new(
+            "conn-1:rating_report:queries_folder:query-1",
+            "查询1",
+            DbNodeType::NamedQuery,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+        let secondary = DbNode::new(
+            "conn-2:rating_report:queries_folder:query-1",
+            "查询1",
+            DbNodeType::NamedQuery,
+            "conn-2".to_string(),
+            DatabaseType::MySQL,
+        );
+
+        assert_ne!(
+            DatabaseEventHandler::named_query_tab_id(&primary),
+            DatabaseEventHandler::named_query_tab_id(&secondary)
+        );
+    }
+
+    #[test]
+    fn named_query_title_identifies_connection_and_database() {
+        assert_eq!(
+            "查询1 · 同业-主1 / rating_report",
+            DatabaseEventHandler::named_query_title("查询1", "同业-主1", Some("rating_report"))
         );
     }
 
