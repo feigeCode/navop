@@ -16,3 +16,4 @@ pub use ssh::{
     authenticate_with_strategy, connect_via_proxy, defaults, expand_auto_publickey_auth,
     start_local_port_forward, start_local_port_forward_with_config,
 };
+pub use x11_forwarding::{ForwardRequest, X11Proxy};

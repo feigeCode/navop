@@ -1262,6 +1262,7 @@ impl Terminal {
                 }
             }),
             keyboard_interactive_responder: None,
+            x11_forwarding: ssh_params.x11_forwarding.unwrap_or(false),
         };
 
         let pty_config = PtyConfig::default();

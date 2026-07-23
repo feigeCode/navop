@@ -14,6 +14,7 @@ rust-i18n = { workspace = true }
 dirs.workspace = true
 # SSH and SFTP
 russh.workspace = true
+x11_forwarding.workspace = true
 # Proxy support
 tokio-socks.workspace = true
 

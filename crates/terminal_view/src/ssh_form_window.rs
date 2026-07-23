@@ -195,6 +195,9 @@ pub struct SshFormWindow {
     // 关闭 shell integration 注入(走裸 request_shell,失去 OSC 集成)
     disable_shell_integration: bool,
 
+    // 启用 X11 转发(需要本机有可用 X server,如 macOS 的 XQuartz)
+    x11_forwarding: bool,
+
     is_testing: bool,
     is_uninstalling_shell_integration: bool,
     test_result: Option<Result<Option<String>, String>>,
@@ -513,6 +516,7 @@ impl SshFormWindow {
         let mut proxy_type = ProxyTypeSelection::default();
         let mut sync_enabled = true; // 默认启用云同步
         let mut disable_shell_integration = false;
+        let mut x11_forwarding = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
 
@@ -586,6 +590,7 @@ impl SshFormWindow {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
                 }
                 disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
+                x11_forwarding = params.x11_forwarding.unwrap_or(false);
 
                 // 加载跳板机设置
                 if let Some(ref jump) = params.jump_server {
@@ -720,6 +725,7 @@ impl SshFormWindow {
             manual_icon,
             sync_enabled,
             disable_shell_integration,
+            x11_forwarding,
             is_testing: false,
             is_uninstalling_shell_integration: false,
             test_result: None,
@@ -915,6 +921,11 @@ impl SshFormWindow {
             } else {
                 None
             },
+            x11_forwarding: if self.x11_forwarding {
+                Some(true)
+            } else {
+                None
+            },
             jump_server,
             proxy,
             os_id: self.detected_os_id.clone(),
@@ -1002,6 +1013,7 @@ impl SshFormWindow {
             jump_server,
             proxy,
             keyboard_interactive_responder: None,
+            x11_forwarding: params.x11_forwarding.unwrap_or(false),
         }
     }
 
@@ -1575,6 +1587,27 @@ impl SshFormWindow {
             )
             .child(
                 self.render_form_row(
+                    &t!("SSH.x11_forwarding"),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("x11-forwarding")
+                                .checked(self.x11_forwarding)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.x11_forwarding = !this.x11_forwarding;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.x11_forwarding_desc").to_string()),
+                        ),
+                ),
+            )
+            .child(
+                self.render_form_row(
                     &t!("SSH.remote_shell_integration"),
                     v_flex()
                         .gap_1()
@@ -2076,6 +2109,7 @@ mod tests {
             proxy: None,
             os_id: None,
             icon: None,
+            x11_forwarding: None,
         }
     }
 

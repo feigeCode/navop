@@ -274,6 +274,9 @@ pub struct SshParams {
     /// 关闭 shell integration 注入(走裸 request_shell,牺牲 prompt hook / 命令记录)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_shell_integration: Option<bool>,
+    /// 启用 X11 转发（需要本机有可用 X server，如 macOS 的 XQuartz）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x11_forwarding: Option<bool>,
     /// 跳板机配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_server: Option<JumpServerConfig>,
@@ -1490,6 +1493,7 @@ mod tests {
                 default_directory: None,
                 init_script: None,
                 disable_shell_integration: None,
+                x11_forwarding: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -1652,6 +1656,7 @@ mod tests {
             default_directory: None,
             init_script: None,
             disable_shell_integration: None,
+            x11_forwarding: None,
             jump_server: None,
             proxy: None,
             os_id: None,
@@ -2416,6 +2421,7 @@ mod serial_tests {
             default_directory: None,
             init_script: None,
             disable_shell_integration: None,
+            x11_forwarding: None,
             jump_server: None,
             proxy: None,
             os_id: Some("ubuntu".to_string()),

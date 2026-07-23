@@ -32,6 +32,7 @@ pub(crate) fn ssh_config_for(connection: &StoredConnection) -> Result<SshConnect
             password: proxy.password,
         }),
         keyboard_interactive_responder: None,
+        x11_forwarding: false,
     })
 }
 
@@ -82,6 +83,7 @@ mod tests {
                 default_directory: None,
                 init_script: None,
                 disable_shell_integration: None,
+                x11_forwarding: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

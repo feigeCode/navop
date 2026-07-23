@@ -206,6 +206,7 @@ async fn resolve_ssh_target(
         jump_server: None,
         proxy: proxy.map(ProxyTunnelConfig::to_ssh_proxy).transpose()?,
         keyboard_interactive_responder: None,
+        x11_forwarding: false,
     };
 
     let tunnel_result = timeout(

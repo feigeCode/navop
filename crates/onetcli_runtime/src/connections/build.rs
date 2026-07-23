@@ -73,6 +73,7 @@ fn build_ssh(input: &Value) -> Result<StoredConnection, ToolError> {
         default_directory: optional_value_str(values, "default_directory").map(str::to_string),
         init_script: None,
         disable_shell_integration: None,
+        x11_forwarding: None,
         jump_server: None,
         proxy: None,
         os_id: None,

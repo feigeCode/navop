@@ -275,6 +275,7 @@ impl RedisConnectionImpl {
             jump_server: None,
             proxy: None,
             keyboard_interactive_responder: None,
+            x11_forwarding: false,
         };
 
         let tunnel_result = timeout(

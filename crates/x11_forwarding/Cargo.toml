@@ -1,0 +1,18 @@
+[package]
+name = "x11_forwarding"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+hex.workspace = true
+rand.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tracing.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

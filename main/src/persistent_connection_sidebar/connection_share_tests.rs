@@ -18,6 +18,7 @@ fn ssh_connection() -> StoredConnection {
             default_directory: None,
             init_script: None,
             disable_shell_integration: None,
+            x11_forwarding: None,
             jump_server: None,
             proxy: None,
             os_id: None,

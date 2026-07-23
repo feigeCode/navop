@@ -12,6 +12,7 @@ use rust_i18n::t;
 use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
+use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
 /// keepalive/超时的集中默认值，供 ssh 与 sftp 两侧共享。
 pub mod defaults {
@@ -83,6 +84,8 @@ pub struct SshConnectConfig {
     pub proxy: Option<ProxyConnectConfig>,
     /// keyboard-interactive/MFA 输入回调。用于跳板机或目标服务器按需请求二次认证。
     pub keyboard_interactive_responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    /// 是否启用 X11 转发（需要本机有可用 X server，如 macOS 的 XQuartz）。
+    pub x11_forwarding: bool,
 }
 
 /// 跳板机连接配置
@@ -210,6 +213,13 @@ pub trait SshChannel: Send {
     async fn request_pty(&mut self, config: &PtyConfig) -> Result<()>;
     async fn exec(&mut self, command: &str) -> Result<()>;
     async fn request_shell(&mut self) -> Result<()>;
+    /// 请求 sshd 为该会话启用 X11 转发（`x11-req`）。
+    /// 默认实现返回错误，表示该通道实现不支持 X11 转发。
+    async fn request_x11_forwarding(&mut self, _request: &ForwardRequest) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "X11 forwarding is not supported by this channel"
+        ))
+    }
     async fn set_env(&mut self, name: &str, value: &str) -> Result<()>;
     async fn send_data(&mut self, data: &[u8]) -> Result<()>;
     async fn resize_pty(&mut self, width: u32, height: u32) -> Result<()>;
@@ -241,9 +251,16 @@ pub trait SshClient: Send + Sync {
             Err(anyhow::anyhow!("session not connected"))
         }
     }
+
+    /// 连接级 X11 转发管理器。`None` 表示未启用或本机没有可用 X server。
+    fn x11_forwarding(&self) -> Option<&X11Proxy> {
+        None
+    }
 }
 
-struct RusshHandler;
+struct RusshHandler {
+    x11_handle: Option<X11ProxyHandle>,
+}
 
 impl client::Handler for RusshHandler {
     type Error = russh::Error;
@@ -254,12 +271,46 @@ impl client::Handler for RusshHandler {
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
+
+    /// sshd 为远端 X client 回连的 `x11` 通道：按 fake cookie 找到注册会话，
+    /// 改写为本机 real cookie 后桥接到本机 X server。
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<client::Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let Some(x11_handle) = self.x11_handle.clone() else {
+            tracing::warn!(
+                target: "ssh.x11",
+                originator_address,
+                originator_port,
+                "收到 x11 回连通道，但本连接未启用 X11 转发，直接关闭"
+            );
+            let _ = channel.close().await;
+            return Ok(());
+        };
+
+        let originator = Some((
+            originator_address.to_string(),
+            u16::try_from(originator_port).unwrap_or(0),
+        ));
+        tokio::spawn(async move {
+            x11_handle
+                .run_channel(channel.into_stream(), originator)
+                .await;
+        });
+        Ok(())
+    }
 }
 
 pub struct RusshClient {
     session: client::Handle<RusshHandler>,
     /// 跳板机会话（如果使用跳板机连接）
     _jump_session: Option<client::Handle<RusshHandler>>,
+    /// 本机 X11 转发管理器（仅在配置启用且本机 X server 可用时存在）。
+    x11_proxy: Option<X11Proxy>,
 }
 
 pub struct LocalPortForwardTunnel {
@@ -1324,6 +1375,14 @@ impl SshClient for RusshClient {
             ..<_>::default()
         });
 
+        // X11 转发依赖本机 X server（DISPLAY/XAUTHORITY），解析失败仅降级不阻断连接。
+        let x11_proxy = if config.x11_forwarding {
+            detect_x11_proxy().await
+        } else {
+            None
+        };
+        let x11_handle = x11_proxy.as_ref().map(|proxy| proxy.handle());
+
         let connect = async {
             // 情况1: 使用跳板机连接
             if let Some(ref jump) = config.jump_server {
@@ -1333,11 +1392,11 @@ impl SshClient for RusshClient {
                 let jump_session = if let Some(ref proxy) = config.proxy {
                     tracing::info!("通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                     let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                    let handler = RusshHandler;
+                    let handler = RusshHandler { x11_handle: None };
                     client::connect_stream(russh_config.clone(), stream, handler).await?
                 } else {
                     let addrs = (jump.host.as_str(), jump.port);
-                    let handler = RusshHandler;
+                    let handler = RusshHandler { x11_handle: None };
                     client::connect(russh_config.clone(), addrs, handler).await?
                 };
 
@@ -1360,7 +1419,9 @@ impl SshClient for RusshClient {
                     .await?;
 
                 // 使用转发通道创建SSH会话
-                let handler = RusshHandler;
+                let handler = RusshHandler {
+                    x11_handle: x11_handle.clone(),
+                };
                 let mut session =
                     client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
                         .await?;
@@ -1379,6 +1440,7 @@ impl SshClient for RusshClient {
                 Ok(Self {
                     session,
                     _jump_session: Some(jump_session),
+                    x11_proxy: x11_proxy.clone(),
                 })
             }
             // 情况2: 仅使用代理连接
@@ -1391,7 +1453,9 @@ impl SshClient for RusshClient {
                     config.port
                 );
                 let stream = connect_via_proxy(proxy, &config.host, config.port).await?;
-                let handler = RusshHandler;
+                let handler = RusshHandler {
+                    x11_handle: x11_handle.clone(),
+                };
                 let mut session = client::connect_stream(russh_config, stream, handler).await?;
 
                 authenticate_with_strategy_for_target(
@@ -1407,12 +1471,15 @@ impl SshClient for RusshClient {
                 Ok(Self {
                     session,
                     _jump_session: None,
+                    x11_proxy: x11_proxy.clone(),
                 })
             }
             // 情况3: 直接连接
             else {
                 let addrs = (config.host.as_str(), config.port);
-                let handler = RusshHandler;
+                let handler = RusshHandler {
+                    x11_handle: x11_handle.clone(),
+                };
                 let mut session = client::connect(russh_config, addrs, handler).await?;
 
                 authenticate_with_strategy_for_target(
@@ -1428,6 +1495,7 @@ impl SshClient for RusshClient {
                 Ok(Self {
                     session,
                     _jump_session: None,
+                    x11_proxy: x11_proxy.clone(),
                 })
             }
         };
@@ -1467,11 +1535,45 @@ impl SshClient for RusshClient {
             Err(_) => Err(anyhow::anyhow!("ping timed out after 3s")),
         }
     }
+
+    fn x11_forwarding(&self) -> Option<&X11Proxy> {
+        self.x11_proxy.as_ref()
+    }
 }
 
 impl RusshClient {
     pub async fn open_raw_channel(&mut self) -> Result<Channel<client::Msg>> {
         Ok(self.session.channel_open_session().await?)
+    }
+}
+
+/// 解析本机 X server 环境，失败仅告警并返回 None（X11 转发静默停用）。
+async fn detect_x11_proxy() -> Option<X11Proxy> {
+    match tokio::task::spawn_blocking(x11_forwarding::detect_local_server).await {
+        Ok(Ok(proxy)) => {
+            tracing::info!(
+                target: "ssh.x11",
+                endpoint = ?proxy.endpoint(),
+                "本机 X server 可用，X11 转发已启用"
+            );
+            Some(proxy)
+        }
+        Ok(Err(error)) => {
+            tracing::warn!(
+                target: "ssh.x11",
+                error = %error,
+                "本机 X server 不可用，X11 转发停用"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "ssh.x11",
+                error = %error,
+                "解析本机 X11 环境失败，X11 转发停用"
+            );
+            None
+        }
     }
 }
 
@@ -1593,6 +1695,7 @@ mod port_forward_tests {
             jump_server: None,
             proxy: None,
             keyboard_interactive_responder: None,
+            x11_forwarding: false,
         };
 
         let result = RusshClient::connect(config).await;
@@ -1662,6 +1765,19 @@ impl SshChannel for RusshChannel {
 
     async fn request_shell(&mut self) -> Result<()> {
         self.channel.request_shell(true).await?;
+        Ok(())
+    }
+
+    async fn request_x11_forwarding(&mut self, request: &ForwardRequest) -> Result<()> {
+        self.channel
+            .request_x11(
+                true,
+                request.single_use,
+                request.auth_name(),
+                request.cookie_hex().to_string(),
+                request.screen,
+            )
+            .await?;
         Ok(())
     }
 

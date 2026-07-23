@@ -11576,6 +11576,7 @@ dependencies = [
  "tokio",
  "tokio-socks",
  "tracing",
+ "x11_forwarding",
 ]
 
 [[package]]
@@ -15504,6 +15505,20 @@ dependencies = [
  "libc",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "x11_forwarding"
+version = "0.1.0"
+dependencies = [
+ "dashmap 5.5.3",
+ "hex",
+ "rand 0.8.6",
+ "subtle",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

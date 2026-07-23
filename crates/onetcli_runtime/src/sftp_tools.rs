@@ -250,6 +250,7 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         jump_server: params.jump_server.as_ref().map(jump_config),
         proxy: params.proxy.as_ref().map(proxy_config),
         keyboard_interactive_responder: None,
+        x11_forwarding: false,
     }
 }
 

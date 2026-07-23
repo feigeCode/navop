@@ -200,6 +200,7 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
             password: proxy.password.clone(),
         }),
         keyboard_interactive_responder: None,
+        x11_forwarding: false,
     }
 }
 

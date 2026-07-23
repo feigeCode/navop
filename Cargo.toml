@@ -37,7 +37,7 @@ members = [
     "crates/remote_desktop",
     "crates/remote_desktop_view",
     "crates/notes",
-    "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
+    "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 
 [workspace.package]
@@ -109,6 +109,7 @@ redis-runtime = { path = "crates/redis-runtime" }
 mongodb-runtime = { path = "crates/mongodb-runtime" }
 one-ui = { path = "crates/one_ui" }
 ssh = { path = "crates/ssh" }
+x11_forwarding = { path = "crates/x11_forwarding" }
 sftp = { path = "crates/sftp" }
 terminal = { path = "crates/terminal" }
 terminal_view = { path = "crates/terminal_view" }
@@ -192,6 +193,8 @@ rand = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
 security-framework = "3.7.0"
+subtle = "2.6"
+zeroize = "1"
 
 # Terminal emulation
 alacritty_terminal = "0.26"

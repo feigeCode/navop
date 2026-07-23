@@ -818,7 +818,7 @@ impl SshBackend {
         };
 
         let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(&mut channel, pty_config, setup.as_ref()).await?;
+        Self::start_interactive_shell(client, &mut channel, pty_config, setup.as_ref()).await?;
         Ok((channel, new_setup))
     }
 
@@ -827,7 +827,7 @@ impl SshBackend {
         pty_config: &PtyConfig,
     ) -> anyhow::Result<C::Channel> {
         let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(&mut channel, pty_config, None).await?;
+        Self::start_interactive_shell(client, &mut channel, pty_config, None).await?;
         Ok(channel)
     }
 
@@ -1028,14 +1028,33 @@ impl SshBackend {
         }
     }
 
-    async fn start_interactive_shell(
-        channel: &mut dyn SshChannel,
+    async fn start_interactive_shell<C: SshClient>(
+        client: &C,
+        channel: &mut C::Channel,
         pty_config: &PtyConfig,
         _setup: Option<&ShellIntegrationSetup>,
     ) -> anyhow::Result<()> {
         channel.request_pty(pty_config).await?;
+        Self::maybe_request_x11_forwarding(client, channel).await;
         channel.request_shell().await?;
         Ok(())
+    }
+
+    /// 连接启用了 X11 转发时在 pty 之后、shell 之前发送 x11-req。
+    /// 服务端拒绝（如 sshd 未开 X11Forwarding）只告警降级，不影响终端使用。
+    async fn maybe_request_x11_forwarding<C: SshClient>(client: &C, channel: &mut C::Channel) {
+        let Some(proxy) = client.x11_forwarding() else {
+            return;
+        };
+        let request = proxy.issue_request(false);
+        if let Err(error) = channel.request_x11_forwarding(&request).await {
+            proxy.retract_request(&request);
+            tracing::warn!(
+                target: "terminal.ssh.x11",
+                error = %error,
+                "服务端拒绝 X11 转发请求，本会话停用 X11 转发"
+            );
+        }
     }
 }
 

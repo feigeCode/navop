@@ -356,6 +356,14 @@ SSH:
     en: Disable OSC shell hooks for future connections; command history, prompt status, working-directory tracking, and terminal/file-manager path sync will be unavailable. This does not remove remote files; use Uninstall below when cleanup is needed.
     zh-CN: 后续连接将禁用 OSC Shell hook，无法使用命令历史、prompt 状态、工作目录跟踪及终端/文件管理器路径同步。此选项不会删除远端文件；需要清理时请点击下方“卸载”。
     zh-HK: 後續連線將禁用 OSC Shell hook，無法使用命令歷史、prompt 狀態、工作目錄追蹤及終端/檔案管理器路徑同步。此選項不會刪除遠端檔案；需要清理時請點擊下方「解除安裝」。
+  x11_forwarding:
+    en: X11 Forwarding
+    zh-CN: X11 转发
+    zh-HK: X11 轉發
+  x11_forwarding_desc:
+    en: Forward remote X11 graphical applications to the local X server (e.g. XQuartz on macOS). Applies to new terminal sessions.
+    zh-CN: 将远端 X11 图形应用转发到本机 X server（如 macOS 上的 XQuartz）显示。对新开的终端会话生效。
+    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server（如 macOS 上的 XQuartz）顯示。對新開的終端工作階段生效。
   remote_shell_integration:
     en: Remote Shell Integration
     zh-CN: 远端 Shell 集成
