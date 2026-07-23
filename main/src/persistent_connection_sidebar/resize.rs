@@ -8,7 +8,7 @@ use one_ui::resize_handle::ResizePanel;
 use super::PersistentConnectionSidebar;
 
 pub(super) const CONNECTION_TREE_DEFAULT_WIDTH: Pixels = px(260.0);
-pub(super) const CONNECTION_TREE_MIN_WIDTH: Pixels = px(200.0);
+pub(super) const CONNECTION_TREE_MIN_WIDTH: Pixels = px(140.0);
 pub(super) const CONNECTION_TREE_MAX_WIDTH: Pixels = px(520.0);
 
 impl PersistentConnectionSidebar {
