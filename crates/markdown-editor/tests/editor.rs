@@ -5,8 +5,8 @@ use gpui::{
 use gpui_component::{Root, highlighter::HighlightTheme, input::Position};
 use markdown_editor::{MarkdownEditor, MarkdownEditorTheme};
 use markdown_source::{BlockMoveDirection, SourceBlockKind, TableCellAddress, TableInsertPosition};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[gpui::test]
 fn cursor_reveals_only_the_active_inline_source(cx: &mut TestAppContext) {
@@ -1325,6 +1325,95 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
 }
 
 #[gpui::test]
+fn math_and_mermaid_provider_dispatch_uses_the_background_executor(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = include_str!("../src/editor/render/block_renderer.rs");
+
+    assert_eq!(
+        2,
+        source
+            .matches("cx.background_spawn(async move { provider(request).await })")
+            .count(),
+        "block and inline math providers must both run on the background executor"
+    );
+    assert!(
+        !source.contains("let result = provider(request).await;"),
+        "render providers must not be polled from a foreground GPUI task"
+    );
+}
+
+#[gpui::test]
+fn pending_mermaid_render_does_not_block_edits_or_overwrite_new_output(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "```mermaid\ngraph TD\nA --> B\n```";
+    let updated_source = "```mermaid\ngraph TD\nX --> Y\n```";
+    let (release_old, old_result) = futures::channel::oneshot::channel::<
+        Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+    >();
+    let old_result = Arc::new(Mutex::new(Some(old_result)));
+    let pending_result = old_result.clone();
+    let pending_provider = Arc::new(move |_| {
+        let receiver = pending_result
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the pending provider should be requested once");
+        Box::pin(async move {
+            receiver
+                .await
+                .unwrap_or_else(|_| Err("pending renderer was dropped".to_owned()))
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+            >
+    });
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(pending_provider), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.replace_source(updated_source, window, cx).unwrap();
+        editor.set_block_render_provider(Some(svg_render_provider_with_height(180.)), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert_eq!(
+        updated_source,
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    let block_id = markdown_source::SourceMarkdownDocument::parse(updated_source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let selector = Box::leak(format!("markdown-rendered-block-{}", block_id.0).into_boxed_str());
+    let replacement_height = cx
+        .debug_bounds(selector)
+        .expect("replacement render should be visible")
+        .size
+        .height;
+
+    release_old
+        .send(Ok(Some(svg_artifact(64.))))
+        .expect("pending render should still be awaiting its result");
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        replacement_height,
+        cx.debug_bounds(selector)
+            .expect("stale completion must not remove the replacement render")
+            .size
+            .height
+    );
+}
+
+#[gpui::test]
 fn inline_math_uses_svg_preview_and_overlays_source_markers_when_activated(
     cx: &mut TestAppContext,
 ) {
@@ -1656,16 +1745,23 @@ fn markdown_block_shortcuts_change_heading_and_move_blocks(cx: &mut TestAppConte
 }
 
 fn svg_render_provider() -> markdown_editor::MarkdownBlockRenderProvider {
-    Arc::new(|_| {
-        Box::pin(async {
-            Ok(Some(markdown_editor::MarkdownBlockRenderArtifact {
-                media_type: "image/svg+xml".to_owned(),
-                bytes: br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="64"><rect width="120" height="64" fill="#4488ff"/></svg>"##.to_vec(),
-                intrinsic_width: Some(120.),
-                intrinsic_height: Some(64.),
-            }))
-        })
-    })
+    svg_render_provider_with_height(64.)
+}
+
+fn svg_render_provider_with_height(height: f32) -> markdown_editor::MarkdownBlockRenderProvider {
+    Arc::new(move |_| Box::pin(async move { Ok(Some(svg_artifact(height))) }))
+}
+
+fn svg_artifact(height: f32) -> markdown_editor::MarkdownBlockRenderArtifact {
+    markdown_editor::MarkdownBlockRenderArtifact {
+        media_type: "image/svg+xml".to_owned(),
+        bytes: format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="{height}"><rect width="120" height="{height}" fill="#4488ff"/></svg>"##
+        )
+        .into_bytes(),
+        intrinsic_width: Some(120.),
+        intrinsic_height: Some(height),
+    }
 }
 
 fn open_editor(

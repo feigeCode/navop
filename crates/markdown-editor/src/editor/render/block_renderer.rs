@@ -1,8 +1,8 @@
 use super::MarkdownEditor;
 use crate::{MarkdownBlockRenderKind, MarkdownBlockRenderRequest};
 use gpui::{
-    Context, Image, ImageFormat, InteractiveElement, IntoElement, ObjectFit, ParentElement, Styled,
-    StyledImage, img, px,
+    AppContext, Context, Image, ImageFormat, InteractiveElement, IntoElement, ObjectFit,
+    ParentElement, Styled, StyledImage, img, px,
 };
 use markdown_source::{SourceBlock, SourceBlockKind, SourceNodeId};
 use std::ops::Range;
@@ -52,8 +52,9 @@ impl MarkdownEditor {
         let generation = self.block_render_generation;
         self.pending_inline_math_renders.insert(source.clone());
         let weak = cx.entity().downgrade();
+        let task = cx.background_spawn(async move { provider(request).await });
         cx.spawn(async move |_, cx| {
-            let result = provider(request).await;
+            let result = task.await;
             let _ = weak.update(cx, |editor, cx| {
                 editor.finish_inline_math_render(source, generation, result);
                 editor.refresh_projection_highlights(cx);
@@ -151,8 +152,9 @@ impl MarkdownEditor {
         let generation = self.block_render_generation;
         self.pending_block_renders.insert(block_id, source.clone());
         let weak = cx.entity().downgrade();
+        let task = cx.background_spawn(async move { provider(request).await });
         cx.spawn(async move |_, cx| {
-            let result = provider(request).await;
+            let result = task.await;
             let _ = weak.update(cx, |editor, cx| {
                 editor.finish_block_render(block_id, source, generation, result);
                 cx.notify();
