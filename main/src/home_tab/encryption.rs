@@ -35,6 +35,22 @@ impl HomePage {
         crypto::has_repo_password_set() && !crypto::has_master_key()
     }
 
+    pub(crate) fn startup_master_key_lock_active(&self, cx: &App) -> bool {
+        AppSettings::current(cx).require_master_key_on_startup && self.saved_connections_locked()
+    }
+
+    pub(crate) fn show_pending_master_key_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.master_key_unlock_prompt_pending || !self.saved_connections_locked() {
+            return;
+        }
+        self.master_key_unlock_prompt_pending = false;
+        self.show_encryption_key_dialog(window, cx);
+    }
+
     pub(super) fn show_encryption_key_dialog(
         &mut self,
         window: &mut Window,
@@ -50,10 +66,16 @@ impl HomePage {
         let has_key_in_memory = crypto::has_master_key();
         let is_first_setup = !has_password_set;
         let is_change_mode = has_password_set && has_key_in_memory;
-        let initial_master_key = crypto::get_raw_master_key().or_else(|| {
-            let storage = key_storage::get_key_storage();
-            storage.load()
-        });
+        let require_master_key_on_startup = AppSettings::current(cx).require_master_key_on_startup;
+        let startup_lock = require_master_key_on_startup && has_password_set && !has_key_in_memory;
+        let initial_master_key = (!startup_lock)
+            .then(|| {
+                crypto::get_raw_master_key().or_else(|| {
+                    let storage = key_storage::get_key_storage();
+                    storage.load()
+                })
+            })
+            .flatten();
 
         let key_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
@@ -91,6 +113,9 @@ impl HomePage {
                 .title(dialog_title.to_string())
                 .width(px(450.))
                 .confirm()
+                .overlay_closable(!startup_lock)
+                .close_button(!startup_lock)
+                .on_cancel(move |_, _, _| !startup_lock)
                 .on_ok(move |_, _window, cx| {
                     let input_key = key_input_ok.read(cx).text().to_string();
 
@@ -103,7 +128,11 @@ impl HomePage {
                     }
 
                     if is_first_setup {
-                        crypto::set_master_key(&input_key);
+                        if require_master_key_on_startup {
+                            crypto::set_master_key_for_session(&input_key);
+                        } else {
+                            crypto::set_master_key(&input_key);
+                        }
                         return true;
                     }
 
@@ -120,7 +149,14 @@ impl HomePage {
                         };
 
                         if input_key != old_key {
-                            match crypto::change_master_key(&old_key, &input_key, &input_key) {
+                            let result = if require_master_key_on_startup {
+                                crypto::change_master_key_for_session(
+                                    &old_key, &input_key, &input_key,
+                                )
+                            } else {
+                                crypto::change_master_key(&old_key, &input_key, &input_key)
+                            };
+                            match result {
                                 Ok(()) => {
                                     let storage = cx.global::<GlobalStorageState>().storage.clone();
                                     match re_encrypt_all_connections(&storage) {
@@ -153,7 +189,12 @@ impl HomePage {
                         return true;
                     }
 
-                    match crypto::verify_and_set_master_key(&input_key) {
+                    let result = if require_master_key_on_startup {
+                        crypto::verify_and_set_master_key_for_session(&input_key)
+                    } else {
+                        crypto::verify_and_set_master_key(&input_key)
+                    };
+                    match result {
                         Ok(()) => true,
                         Err(_) => {
                             error_msg_ok.update(cx, |msg, cx| {
@@ -184,6 +225,14 @@ impl HomePage {
                     v_flex()
                         .gap_4()
                         .p_4()
+                        .when(startup_lock, |content| {
+                            content.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().warning)
+                                    .child(t!("Encryption.startup_lock_notice").to_string()),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .items_center()
@@ -217,6 +266,7 @@ impl HomePage {
                         }),
                 )
         });
+        key_input.update(cx, |input, cx| input.focus(window, cx));
     }
 
     pub(super) fn team_management_url(&self) -> Result<String, String> {
@@ -240,6 +290,7 @@ impl HomePage {
         }
     }
 }
+
 /// 使用当前主密钥重新加密并保存所有连接。
 pub(super) fn re_encrypt_all_connections(
     storage: &one_core::storage::StorageManager,
@@ -257,4 +308,37 @@ pub(super) fn re_encrypt_all_connections(
     }
 
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn startup_lock_dialog_cannot_be_dismissed_and_does_not_prefill_the_key() {
+        let source = include_str!("encryption.rs");
+        let dialog = source
+            .split("pub(super) fn show_encryption_key_dialog(")
+            .nth(1)
+            .and_then(|source| source.split("pub(super) fn team_management_url").next())
+            .expect("show_encryption_key_dialog source");
+
+        assert!(dialog.contains("let startup_lock ="));
+        assert!(dialog.contains("let initial_master_key = (!startup_lock)"));
+        assert!(dialog.contains(".overlay_closable(!startup_lock)"));
+        assert!(dialog.contains(".close_button(!startup_lock)"));
+        assert!(dialog.contains(".on_cancel(move |_, _, _| !startup_lock)"));
+    }
+
+    #[test]
+    fn startup_lock_keeps_the_unlocked_key_in_memory_only() {
+        let source = include_str!("encryption.rs");
+        let dialog = source
+            .split("pub(super) fn show_encryption_key_dialog(")
+            .nth(1)
+            .and_then(|source| source.split("pub(super) fn team_management_url").next())
+            .expect("show_encryption_key_dialog source");
+
+        assert!(dialog.contains("crypto::set_master_key_for_session"));
+        assert!(dialog.contains("crypto::verify_and_set_master_key_for_session"));
+        assert!(dialog.contains("crypto::change_master_key_for_session"));
+    }
 }

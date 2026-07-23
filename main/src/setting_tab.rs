@@ -508,6 +508,38 @@ impl SettingsPanel {
                             .description(
                                 t!("Settings.General.Startup.default_page_desc").to_string(),
                             ),
+                            SettingItem::new(
+                                t!("Settings.General.Startup.require_master_key"),
+                                SettingField::switch(
+                                    |cx: &App| {
+                                        AppSettings::global(cx).require_master_key_on_startup
+                                    },
+                                    |val: bool, cx: &mut App| {
+                                        if val {
+                                            if let Err(error) = crypto::forget_persisted_master_key()
+                                            {
+                                                tracing::warn!(
+                                                    "删除自动解锁主密钥失败，启动锁会在下次启动时重试: {error}"
+                                                );
+                                            }
+                                        } else if let Err(error) =
+                                            crypto::remember_master_key_for_future_startups()
+                                        {
+                                            tracing::warn!(
+                                                "保存自动解锁主密钥失败，后续启动仍可能要求输入主密钥: {error}"
+                                            );
+                                        }
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.require_master_key_on_startup = val;
+                                        });
+                                    },
+                                )
+                                .default_value(default_settings.require_master_key_on_startup),
+                            )
+                            .description(
+                                t!("Settings.General.Startup.require_master_key_desc")
+                                    .to_string(),
+                            ),
                         ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.ConnectionDisplay.group_title"))

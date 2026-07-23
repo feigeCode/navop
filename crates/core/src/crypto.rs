@@ -73,6 +73,12 @@ const VERIFICATION_MAGIC: &str = "ONEHUB_KEY_VERIFY_V1";
 /// 密钥验证文件名
 const KEY_VERIFICATION_FILE: &str = "key_verification";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MasterKeyPersistence {
+    Persistent,
+    SessionOnly,
+}
+
 /// 全局加密密钥存储（派生后的密钥）
 static ENCRYPTION_KEY: RwLock<Option<[u8; 32]>> = RwLock::new(None);
 
@@ -185,6 +191,17 @@ pub fn verify_master_key(master_key: &str, verification_data: &str) -> bool {
 /// 如果是首次设置，会生成并保存验证数据。
 /// 同时会将密钥保存到存储后端，以便应用重启后自动恢复。
 pub fn set_master_key(master_key: &str) {
+    set_master_key_with_persistence(master_key, MasterKeyPersistence::Persistent);
+}
+
+/// 仅为当前应用会话设置主密钥。
+///
+/// 该模式会删除存储后端中的主密钥，确保下次启动仍需手动解锁。
+pub fn set_master_key_for_session(master_key: &str) {
+    set_master_key_with_persistence(master_key, MasterKeyPersistence::SessionOnly);
+}
+
+fn set_master_key_with_persistence(master_key: &str, persistence: MasterKeyPersistence) {
     let key = derive_key(master_key);
     if let Ok(mut guard) = ENCRYPTION_KEY.write() {
         *guard = Some(key);
@@ -201,10 +218,10 @@ pub fn set_master_key(master_key: &str) {
         save_verification_data(&verification);
     }
 
-    // 保存到存储后端
+    // 按启动解锁策略更新存储后端
     let storage = key_storage::get_key_storage();
-    if let Err(e) = storage.save(master_key) {
-        tracing::warn!("[{}] 保存密钥失败: {}", storage.name(), e);
+    if let Err(e) = update_key_storage(storage.as_ref(), master_key, persistence) {
+        tracing::warn!("[{}] 更新密钥存储失败: {}", storage.name(), e);
     }
 }
 
@@ -213,18 +230,50 @@ pub fn set_master_key(master_key: &str) {
 /// 如果已设置过密码，需要先验证密钥是否正确。
 /// 返回 Ok(()) 表示设置成功，Err 表示密码错误。
 pub fn verify_and_set_master_key(master_key: &str) -> Result<(), &'static str> {
-    if has_repo_password_set() {
-        // 已设置过密码，需要验证
-        if let Some(verification_data) = load_verification_data() {
-            if !verify_master_key(master_key, &verification_data) {
-                return Err("密码错误");
-            }
-        }
+    verify_and_set_master_key_with_persistence(master_key, MasterKeyPersistence::Persistent)
+}
+
+/// 验证主密钥并仅在当前应用会话中解锁。
+pub fn verify_and_set_master_key_for_session(master_key: &str) -> Result<(), &'static str> {
+    verify_and_set_master_key_with_persistence(master_key, MasterKeyPersistence::SessionOnly)
+}
+
+fn verify_and_set_master_key_with_persistence(
+    master_key: &str,
+    persistence: MasterKeyPersistence,
+) -> Result<(), &'static str> {
+    if has_repo_password_set()
+        && let Some(verification_data) = load_verification_data()
+        && !verify_master_key(master_key, &verification_data)
+    {
+        return Err("密码错误");
     }
 
     // 验证通过或首次设置，设置密钥
-    set_master_key(master_key);
+    set_master_key_with_persistence(master_key, persistence);
     Ok(())
+}
+
+fn update_key_storage(
+    storage: &dyn key_storage::KeyStorage,
+    master_key: &str,
+    persistence: MasterKeyPersistence,
+) -> Result<(), String> {
+    match persistence {
+        MasterKeyPersistence::Persistent => storage.save(master_key),
+        MasterKeyPersistence::SessionOnly => storage.delete(),
+    }
+}
+
+/// 删除为自动解锁而持久化的主密钥，不影响当前会话中的解锁状态。
+pub fn forget_persisted_master_key() -> Result<(), String> {
+    key_storage::get_key_storage().delete()
+}
+
+/// 将当前会话中的主密钥保存到存储后端，供后续启动自动解锁。
+pub fn remember_master_key_for_future_startups() -> Result<(), String> {
+    let master_key = get_raw_master_key().ok_or_else(|| "主密钥尚未解锁，无法保存".to_string())?;
+    key_storage::get_key_storage().save(&master_key)
 }
 
 /// 清除主密钥
@@ -460,6 +509,34 @@ pub fn change_master_key(
     new_key: &str,
     confirm_new_key: &str,
 ) -> Result<(), CryptoError> {
+    change_master_key_with_persistence(
+        old_key,
+        new_key,
+        confirm_new_key,
+        MasterKeyPersistence::Persistent,
+    )
+}
+
+/// 修改主密钥，但不为后续启动持久化新密钥。
+pub fn change_master_key_for_session(
+    old_key: &str,
+    new_key: &str,
+    confirm_new_key: &str,
+) -> Result<(), CryptoError> {
+    change_master_key_with_persistence(
+        old_key,
+        new_key,
+        confirm_new_key,
+        MasterKeyPersistence::SessionOnly,
+    )
+}
+
+fn change_master_key_with_persistence(
+    old_key: &str,
+    new_key: &str,
+    confirm_new_key: &str,
+    persistence: MasterKeyPersistence,
+) -> Result<(), CryptoError> {
     // 检查是否已设置过密码
     if !has_repo_password_set() {
         return Err(CryptoError::NoPasswordSet);
@@ -501,9 +578,9 @@ pub fn change_master_key(
         *guard = Some(new_key.to_string());
     }
 
-    // 更新存储后端中的密钥
+    // 按启动解锁策略更新存储后端中的密钥
     let storage = key_storage::get_key_storage();
-    if let Err(e) = storage.save(new_key) {
+    if let Err(e) = update_key_storage(storage.as_ref(), new_key, persistence) {
         tracing::warn!("[{}] 更新密钥失败: {}", storage.name(), e);
     }
 
@@ -586,7 +663,37 @@ pub fn try_restore_master_key() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key_storage::KeyStorage;
     use std::sync::{Mutex, OnceLock};
+
+    #[derive(Default)]
+    struct MemoryKeyStorage {
+        key: Mutex<Option<String>>,
+    }
+
+    impl KeyStorage for MemoryKeyStorage {
+        fn name(&self) -> &'static str {
+            "test-memory"
+        }
+
+        fn save(&self, master_key: &str) -> Result<(), String> {
+            *self.key.lock().expect("test key storage lock") = Some(master_key.to_string());
+            Ok(())
+        }
+
+        fn load(&self) -> Option<String> {
+            self.key.lock().expect("test key storage lock").clone()
+        }
+
+        fn delete(&self) -> Result<(), String> {
+            *self.key.lock().expect("test key storage lock") = None;
+            Ok(())
+        }
+
+        fn exists(&self) -> bool {
+            self.key.lock().expect("test key storage lock").is_some()
+        }
+    }
 
     fn test_mutex() -> &'static Mutex<()> {
         static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -662,5 +769,26 @@ mod tests {
         assert_eq!(encrypted, double_encrypted);
 
         clear_master_key();
+    }
+
+    #[test]
+    fn session_only_master_key_forgets_any_persisted_copy() {
+        let storage = MemoryKeyStorage::default();
+        storage.save("stale-key").expect("seed persisted key");
+
+        update_key_storage(&storage, "session-key", MasterKeyPersistence::SessionOnly)
+            .expect("session-only persistence policy");
+
+        assert_eq!(None, storage.load());
+    }
+
+    #[test]
+    fn remembered_master_key_is_saved_for_future_startups() {
+        let storage = MemoryKeyStorage::default();
+
+        update_key_storage(&storage, "remembered-key", MasterKeyPersistence::Persistent)
+            .expect("persistent policy");
+
+        assert_eq!(Some("remembered-key".to_string()), storage.load());
     }
 }

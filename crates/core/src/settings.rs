@@ -764,6 +764,9 @@ pub struct AppSettings {
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
     #[serde(default)]
     pub startup_default_page: StartupDefaultPage,
+    /// 是否要求每次启动时输入主密钥后才能访问已保存的连接
+    #[serde(default)]
+    pub require_master_key_on_startup: bool,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
     #[serde(default)]
@@ -1078,6 +1081,7 @@ impl Default for AppSettings {
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
+            require_master_key_on_startup: false,
             home_connection_layout: HomeConnectionLayout::default(),
             home_page_style: HomePageStyle::default(),
             connection_sidebar_expanded: true,
@@ -1512,6 +1516,21 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(StartupDefaultPage::Home, settings.startup_default_page);
+    }
+
+    #[test]
+    fn app_settings_does_not_require_master_key_on_startup_by_default() {
+        assert!(!AppSettings::default().require_master_key_on_startup);
+    }
+
+    #[test]
+    fn app_settings_deserializes_master_key_startup_lock() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "require_master_key_on_startup": true
+        }))
+        .expect("require_master_key_on_startup 应能读取");
+
+        assert!(settings.require_master_key_on_startup);
     }
 
     #[test]

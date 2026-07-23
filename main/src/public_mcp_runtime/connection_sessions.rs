@@ -125,6 +125,9 @@ fn open_connection_on_navop_window(
         .ok_or_else(|| "home page is not initialized".to_string())?
         .home_page
         .clone();
+    if home_page.read(cx).startup_master_key_lock_active(cx) {
+        return Err("Navop is locked; enter the master key in the app first".to_string());
+    }
     let connection_id = connection.id;
     let connection_name = connection.name.clone();
     let connection_type = connection.connection_type.label().to_string();
@@ -147,4 +150,23 @@ fn open_connection_on_navop_window(
         "connection_type": connection_type,
         "activated": open_mode == TabOpenMode::Activate
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn public_session_open_cannot_replace_the_startup_lock_dialog() {
+        let source = include_str!("connection_sessions.rs");
+        let open = source
+            .split("fn open_connection_on_navop_window(")
+            .nth(1)
+            .and_then(|source| source.split("\n#[cfg(test)]").next())
+            .expect("open_connection_on_navop_window source");
+
+        let guard = open
+            .find("startup_master_key_lock_active")
+            .expect("startup lock guard");
+        let close_dialogs = open.find("close_all_dialogs").expect("dialog replacement");
+        assert!(guard < close_dialogs);
+    }
 }

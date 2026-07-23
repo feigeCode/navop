@@ -933,6 +933,9 @@ fn init_action_handlers(cx: &mut App) {
         let home_page = home.home_page.clone();
         cx.defer(move |cx| {
             _ = active_window.update(cx, |_, window, cx| {
+                if home_page.read(cx).startup_master_key_lock_active(cx) {
+                    return;
+                }
                 if window.has_active_dialog(cx) {
                     window.close_all_dialogs(cx);
                 }
@@ -952,6 +955,9 @@ fn init_action_handlers(cx: &mut App) {
         let home_page = home.home_page.clone();
         cx.defer(move |cx| {
             _ = active_window.update(cx, |_, window, cx| {
+                if home_page.read(cx).startup_master_key_lock_active(cx) {
+                    return;
+                }
                 if window.has_active_dialog(cx) {
                     window.close_all_dialogs(cx);
                 }
@@ -971,6 +977,9 @@ fn init_action_handlers(cx: &mut App) {
         let home_page = home.home_page.clone();
         cx.defer(move |cx| {
             _ = active_window.update(cx, |_, window, cx| {
+                if home_page.read(cx).startup_master_key_lock_active(cx) {
+                    return;
+                }
                 if window.has_active_dialog(cx) {
                     window.close_all_dialogs(cx);
                 }
@@ -1073,6 +1082,12 @@ impl OnetCliApp {
         let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
         cx.set_global(GlobalHomePage {
             home_page: home_page.clone(),
+        });
+        let home_for_startup_prompt = home_page.clone();
+        window.defer(cx, move |window, cx| {
+            home_for_startup_prompt.update(cx, |home, cx| {
+                home.show_pending_master_key_prompt(window, cx);
+            });
         });
         let connection_sidebar = cx.new(|cx| {
             PersistentConnectionSidebar::new(
@@ -1332,6 +1347,39 @@ mod tests {
         assert_eq!(0, home_layout.active_pinned_index);
         assert!(ai_layout.pin_workbench);
         assert_eq!(1, ai_layout.active_pinned_index);
+    }
+
+    #[test]
+    fn startup_master_key_prompt_is_scheduled_even_when_home_is_not_active() {
+        let source = include_str!("onetcli_app.rs");
+        let constructor = source
+            .split("pub fn new(window:")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("\n    pub(crate) fn set_home_page_style")
+                    .next()
+            })
+            .expect("OnetCliApp::new source");
+
+        assert!(constructor.contains("home.show_pending_master_key_prompt(window, cx)"));
+    }
+
+    #[test]
+    fn connection_and_terminal_shortcuts_cannot_replace_the_startup_lock_dialog() {
+        let source = include_str!("onetcli_app.rs");
+        let handlers = source
+            .split("fn init_action_handlers(")
+            .nth(1)
+            .and_then(|source| source.split("\npub struct OnetCliApp").next())
+            .expect("init_action_handlers source");
+
+        assert_eq!(
+            3,
+            handlers
+                .matches("home_page.read(cx).startup_master_key_lock_active(cx)")
+                .count()
+        );
     }
 
     #[test]
