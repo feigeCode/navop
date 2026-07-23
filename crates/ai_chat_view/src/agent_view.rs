@@ -3477,8 +3477,9 @@ mod tests {
     };
     use async_trait::async_trait;
     use gpui::{
-        Entity, IntoElement, Modifiers, ParentElement, Render, ScrollDelta, ScrollWheelEvent,
-        Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point, px,
+        Entity, IntoElement, Modifiers, ParentElement, Pixels, Render, ScrollDelta,
+        ScrollWheelEvent, Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div,
+        point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
     use serde_json::json;
@@ -3488,6 +3489,7 @@ mod tests {
 
     struct FixedSidebarHost {
         view: Entity<AgentChatView>,
+        height: Pixels,
     }
 
     fn test_acp_permission_request() -> AcpPermissionRequest {
@@ -3515,11 +3517,19 @@ mod tests {
 
     impl FixedSidebarHost {
         fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            Self::with_height(px(640.0), window, cx)
+        }
+
+        fn short(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            Self::with_height(px(200.0), window, cx)
+        }
+
+        fn with_height(height: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
             let config =
                 AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
                     .sidebar_mode(true);
             let view = cx.new(|cx| AgentChatView::new(config, window, cx));
-            Self { view }
+            Self { view, height }
         }
     }
 
@@ -3528,7 +3538,7 @@ mod tests {
             v_flex()
                 .debug_selector(|| "fixed-sidebar-host".to_string())
                 .w(px(420.0))
-                .h(px(640.0))
+                .h(self.height)
                 .overflow_hidden()
                 .child(
                     div()
@@ -5386,6 +5396,53 @@ mod tests {
         assert_eq!(root.size.width, input_area.size.width);
         assert_eq!(input_area.origin.x, input.origin.x);
         assert_eq!(input_area.size.width, input.size.width);
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_keeps_input_visible_after_long_agent_reply(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::short);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript
+                .messages
+                .push(crate::ChatMessageUI::assistant(
+                    std::iter::repeat_n(
+                        "这是 Agent 返回的一段较长回复，用于验证消息内容只能在消息区域内部滚动。",
+                        40,
+                    )
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let slot = cx
+            .debug_bounds("fixed-sidebar-content-slot")
+            .expect("fixed sidebar content slot should render");
+        let messages = cx
+            .debug_bounds("ai-chat-messages")
+            .expect("messages area should render");
+        let input_area = cx
+            .debug_bounds("agent-input-area")
+            .expect("input area should remain rendered");
+        let input = cx
+            .debug_bounds("agent-input-root")
+            .expect("input root should remain rendered");
+
+        assert!(
+            messages.bottom() <= input_area.origin.y,
+            "messages must end before the input area: messages={messages:?}, input={input_area:?}"
+        );
+        assert!(
+            input_area.bottom() <= slot.bottom(),
+            "input area must stay inside the sidebar viewport: slot={slot:?}, input={input_area:?}"
+        );
+        assert!(
+            input.bottom() <= slot.bottom(),
+            "input root must stay visible after the reply: slot={slot:?}, input={input:?}"
+        );
     }
 
     #[gpui::test]
