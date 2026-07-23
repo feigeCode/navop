@@ -33,7 +33,6 @@ mod card;
 mod cards;
 mod chart_json;
 mod chat_state;
-mod chat_tab;
 mod chat_view;
 mod code_block;
 mod code_block_parse;
@@ -91,7 +90,6 @@ pub use chart_json::{
     ChartJsonBlock, ChartPiePoint, ChartType, ChartXYPoint, parse_chart_json_block,
 };
 pub use chat_state::ChatViewState;
-pub use chat_tab::{CHAT_TAB_CONTENT_KEY, ChatTabContent};
 pub use chat_view::{ChatView, chat_task_sidebar_title};
 pub use code_block::{
     CodeBlockAction, CodeBlockActionBuilder, CodeBlockActionCallback, CodeBlockActionPreview,
