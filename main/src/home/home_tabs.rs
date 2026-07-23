@@ -131,13 +131,15 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_uses_color_user_avatar() {
+    fn persistent_sidebar_uses_line_style_rail_icons() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
 
-        assert!(source.contains("IconName::UserColor"));
-        assert!(icons.contains("UserColor"));
-        assert!(icons.contains("icons/user_color.svg"));
+        assert!(source.contains("IconName::User"));
+        assert!(source.contains("filter_line_icon"));
+        assert!(icons.contains("icons/user.svg"));
+        assert!(icons.contains("icons/server_line.svg"));
+        assert!(icons.contains("icons/rdp_line.svg"));
     }
 
     #[test]
