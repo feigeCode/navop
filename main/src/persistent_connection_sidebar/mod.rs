@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use gpui::{
-    AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Pixels, Render, Styled, Window,
+    AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Pixels, Render, Styled,
+    UniformListScrollHandle, Window,
 };
 use gpui_component::{
     h_flex,
@@ -77,6 +78,7 @@ pub(crate) struct PersistentConnectionSidebar {
     pub(super) search_input: Entity<InputState>,
     tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
+    pub(super) tree_scroll_handle: UniformListScrollHandle,
 }
 
 impl PersistentConnectionSidebar {
@@ -106,6 +108,7 @@ impl PersistentConnectionSidebar {
             search_input,
             tree_width: resize::CONNECTION_TREE_DEFAULT_WIDTH,
             terminal_colors: None,
+            tree_scroll_handle: UniformListScrollHandle::new(),
         }
     }
 

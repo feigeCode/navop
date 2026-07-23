@@ -1,10 +1,13 @@
-use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, px};
+use std::ops::Range;
+
+use gpui::{
+    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
+};
 use gpui_component::{
     Icon, IconName, Sizable, Size, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, LocalInputStyle},
-    scroll::ScrollableElement,
     v_flex,
 };
 use rust_i18n::t;
@@ -46,10 +49,18 @@ impl PersistentConnectionSidebar {
                     .border_r_1()
                     .border_color(palette.border)
                     .child(
-                        v_flex().size_full().py_1().overflow_y_scrollbar().children(
-                            rows.into_iter()
-                                .map(|row| self.render_tree_row(row, palette, cx)),
-                        ),
+                        uniform_list("persistent-connection-tree", rows.len(), {
+                            cx.processor(move |this, range: Range<usize>, _window, cx| {
+                                range
+                                    .filter_map(|idx| rows.get(idx).cloned())
+                                    .map(|row| this.render_tree_row(row, palette, cx))
+                                    .collect()
+                            })
+                        })
+                        .size_full()
+                        .py_1()
+                        .track_scroll(&self.tree_scroll_handle)
+                        .with_sizing_behavior(ListSizingBehavior::Auto),
                     ),
             )
             .child(self.render_tree_resize_handle(cx))
