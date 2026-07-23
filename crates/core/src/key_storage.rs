@@ -60,6 +60,9 @@ impl KeyStorage for LocalFileStorage {
     }
 
     fn save(&self, master_key: &str) -> Result<(), String> {
+        if !persistent_storage_allowed() {
+            return Err("便携模式不允许持久化主密钥".to_string());
+        }
         let path = get_key_storage_path().ok_or_else(|| "无法获取密钥存储路径".to_string())?;
 
         if let Some(parent) = path.parent() {
@@ -87,6 +90,9 @@ impl KeyStorage for LocalFileStorage {
     }
 
     fn load(&self) -> Option<String> {
+        if !persistent_storage_allowed() {
+            return None;
+        }
         let path = get_key_storage_path()?;
 
         if !path.exists() {
@@ -120,6 +126,9 @@ impl KeyStorage for LocalFileStorage {
     }
 
     fn exists(&self) -> bool {
+        if !persistent_storage_allowed() {
+            return false;
+        }
         get_key_storage_path().map(|p| p.exists()).unwrap_or(false)
     }
 }
@@ -159,4 +168,8 @@ fn get_data_dir() -> Option<PathBuf> {
 /// 获取本地密钥存储文件路径
 fn get_key_storage_path() -> Option<PathBuf> {
     get_data_dir().map(|p| p.join(KEY_STORAGE_FILE))
+}
+
+fn persistent_storage_allowed() -> bool {
+    crate::app_paths::initialized_paths().is_none_or(|paths| paths.allows_persistent_master_key())
 }

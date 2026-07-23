@@ -4,6 +4,7 @@ rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 pub mod agent;
 pub mod app_dirs;
+pub mod app_paths;
 pub mod cloud_sync;
 pub mod command_registry;
 pub mod config;

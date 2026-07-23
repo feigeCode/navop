@@ -83,6 +83,11 @@ impl UpdateDialogView {
             return;
         }
 
+        if one_core::app_paths::is_portable() {
+            cx.open_url(GITHUB_LATEST_RELEASE_URL);
+            return;
+        }
+
         if self.completed {
             self.apply_downloaded_update(cx);
             return;
@@ -334,7 +339,9 @@ impl Render for UpdateDialogView {
         } else {
             self.status_message.clone()
         };
-        let action_text = if self.applying {
+        let action_text = if one_core::app_paths::is_portable() {
+            t!("Update.open_release_page").to_string()
+        } else if self.applying {
             t!("Update.action_applying").to_string()
         } else if self.downloading {
             t!("Update.action_downloading").to_string()

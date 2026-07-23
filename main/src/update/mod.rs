@@ -128,6 +128,7 @@ pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
     if !should_run_update_check(
         UpdateCheckTrigger::Automatic,
         AppSettings::global(cx).auto_update,
+        one_core::app_paths::is_portable(),
     ) {
         return;
     }
@@ -241,8 +242,12 @@ async fn fetch_dialog_info_from_source(
     }
 }
 
-fn should_run_update_check(trigger: UpdateCheckTrigger, auto_update_enabled: bool) -> bool {
-    matches!(trigger, UpdateCheckTrigger::Manual) || auto_update_enabled
+fn should_run_update_check(
+    trigger: UpdateCheckTrigger,
+    auto_update_enabled: bool,
+    portable: bool,
+) -> bool {
+    matches!(trigger, UpdateCheckTrigger::Manual) || auto_update_enabled && !portable
 }
 
 fn notify_no_update_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp) {
@@ -442,16 +447,34 @@ mod tests {
 
     #[test]
     fn manual_check_bypasses_auto_update_switch() {
-        assert!(should_run_update_check(UpdateCheckTrigger::Manual, false));
+        assert!(should_run_update_check(
+            UpdateCheckTrigger::Manual,
+            false,
+            true
+        ));
     }
 
     #[test]
     fn automatic_check_still_respects_auto_update_switch() {
         assert!(!should_run_update_check(
             UpdateCheckTrigger::Automatic,
+            false,
             false
         ));
-        assert!(should_run_update_check(UpdateCheckTrigger::Automatic, true));
+        assert!(should_run_update_check(
+            UpdateCheckTrigger::Automatic,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn portable_mode_skips_automatic_update_checks() {
+        assert!(!should_run_update_check(
+            UpdateCheckTrigger::Automatic,
+            true,
+            true
+        ));
     }
 
     #[cfg(not(feature = "github-updates"))]

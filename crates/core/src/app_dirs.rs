@@ -15,15 +15,33 @@ enum MigrationOutcome {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
+    if let Some(paths) = crate::app_paths::initialized_paths() {
+        return Ok(paths.config_dir().clone());
+    }
+    installed_config_dir()
+}
+
+pub(crate) fn installed_config_dir() -> Result<PathBuf> {
     let root = config_root()?;
     Ok(preferred_dir_from_root(&root))
 }
 
 pub fn data_dir() -> Option<PathBuf> {
+    if let Some(paths) = crate::app_paths::initialized_paths() {
+        return paths.data_dir().cloned();
+    }
+    installed_data_dir()
+}
+
+pub(crate) fn installed_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|root| preferred_dir_from_root(&root))
 }
 
 pub fn migrate_legacy_directories() -> Result<()> {
+    if crate::app_paths::initialized_paths().is_some_and(|paths| paths.is_portable()) {
+        return Ok(());
+    }
+
     let config_root = config_root()?;
     migrate_root(&config_root).context("migrate legacy configuration directory")?;
 

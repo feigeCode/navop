@@ -393,8 +393,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
+          New-Item -ItemType Directory -Force portable-package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
-          Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "portable-package/${{ matrix.binary }}"
+          Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
+          Compress-Archive -Path "portable-package/*" -DestinationPath "${{ matrix.archive }}"
 
       - name: Install WiX Toolset
         if: runner.os == 'Windows'

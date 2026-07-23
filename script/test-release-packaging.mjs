@@ -81,6 +81,23 @@ test("Windows release builds an installable per-user MSI", () => {
   assert.match(wix, /Root="HKCU"/);
 });
 
+test("Windows ZIP is portable without making the MSI portable", () => {
+  const release = read(".github/workflows/release.yml");
+  const manual = read(".github/workflows/build-windows-msi.yml");
+
+  for (const workflow of [release, manual]) {
+    assert.match(workflow, /portable-package/);
+    assert.match(workflow, /navop\.portable/);
+    assert.match(
+      workflow,
+      /Compress-Archive -Path "portable-package\/\*"/,
+    );
+    assert.match(workflow, /navop-x86_64-pc-windows-msvc\.zip/);
+    assert.match(workflow, /-d SourceDir=.*\\package/);
+    assert.doesNotMatch(workflow, /-d SourceDir=.*portable-package/);
+  }
+});
+
 test("Windows MSI appends Navop to the directory chosen by users", () => {
   const release = read(".github/workflows/release.yml");
   const wix = read("installer/windows/navop.wxs");

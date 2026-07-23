@@ -36,7 +36,9 @@ impl HomePage {
     }
 
     pub(crate) fn startup_master_key_lock_active(&self, cx: &App) -> bool {
-        AppSettings::current(cx).require_master_key_on_startup && self.saved_connections_locked()
+        one_core::app_paths::master_key_on_startup_required(
+            AppSettings::current(cx).require_master_key_on_startup,
+        ) && self.saved_connections_locked()
     }
 
     pub(crate) fn show_pending_master_key_prompt(
@@ -66,7 +68,9 @@ impl HomePage {
         let has_key_in_memory = crypto::has_master_key();
         let is_first_setup = !has_password_set;
         let is_change_mode = has_password_set && has_key_in_memory;
-        let require_master_key_on_startup = AppSettings::current(cx).require_master_key_on_startup;
+        let require_master_key_on_startup = one_core::app_paths::master_key_on_startup_required(
+            AppSettings::current(cx).require_master_key_on_startup,
+        );
         let startup_lock = require_master_key_on_startup && has_password_set && !has_key_in_memory;
         let initial_master_key = (!startup_lock)
             .then(|| {

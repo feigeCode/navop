@@ -97,8 +97,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
+          New-Item -ItemType Directory -Force portable-package | Out-Null
           Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "package/navop.exe"
-          Compress-Archive -Path "package/*" -DestinationPath "navop-x86_64-pc-windows-msvc.zip"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "portable-package/navop.exe"
+          Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
+          Compress-Archive -Path "portable-package/*" -DestinationPath "navop-x86_64-pc-windows-msvc.zip"
 
       - name: Install WiX Toolset
         shell: pwsh

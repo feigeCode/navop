@@ -137,12 +137,45 @@ fn main() {
         return;
     }
 
-    if let Err(error) = one_core::app_dirs::migrate_legacy_directories() {
+    let startup_arguments =
+        match one_core::app_paths::parse_startup_arguments(std::env::args_os().skip(1)) {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                eprintln!("Failed to parse startup arguments: {error:#}");
+                return;
+            }
+        };
+    let path_context = match one_core::app_paths::process_context() {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("Failed to resolve application paths: {error:#}");
+            return;
+        }
+    };
+    let resolved_paths = match one_core::app_paths::resolve_app_paths(
+        &startup_arguments.path_overrides,
+        &path_context,
+    ) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Failed to resolve application paths: {error:#}");
+            return;
+        }
+    };
+    if !resolved_paths.is_portable()
+        && let Err(error) = one_core::app_dirs::migrate_legacy_directories()
+    {
         eprintln!("Failed to migrate legacy application directories: {error:#}");
+    }
+    if let Err(error) =
+        one_core::app_paths::initialize_app_paths(&startup_arguments.path_overrides, &path_context)
+    {
+        eprintln!("Failed to initialize application paths: {error:#}");
+        return;
     }
 
     let (file_open_tx, file_open_rx) = smol::channel::unbounded();
-    for argument in std::env::args_os().skip(1) {
+    for argument in startup_arguments.remaining {
         let _ = file_open_tx.try_send(file_open::FileOpenInput::Path(argument.into()));
     }
 
@@ -162,7 +195,9 @@ fn main() {
 
     app.run(move |cx| {
         onetcli_app::init(cx);
-        file_association::schedule_registration(cx);
+        if !one_core::app_paths::is_portable() {
+            file_association::schedule_registration(cx);
+        }
         notes::init(cx);
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
@@ -234,7 +269,7 @@ mod embedded_cli_removal_tests {
     fn associated_files_are_accepted_from_startup_and_platform_events() {
         let source = include_str!("main.rs");
 
-        assert!(source.contains("std::env::args_os().skip(1)"));
+        assert!(source.contains("startup_arguments.remaining"));
         assert!(source.contains("app.on_open_urls"));
         assert!(source.contains("file_open_rx.recv().await"));
         assert!(source.contains("file_open::open_input(input, window, cx)"));
@@ -250,6 +285,12 @@ mod embedded_cli_removal_tests {
     #[test]
     fn startup_migrates_legacy_application_directories_before_loading_assets() {
         let source = include_str!("main.rs");
+        let resolution = source
+            .find("resolve_app_paths")
+            .expect("startup path resolution");
+        let initialization = source
+            .find("initialize_app_paths")
+            .expect("startup path initialization");
         let migration = source
             .find("migrate_legacy_directories()")
             .expect("startup directory migration");
@@ -257,7 +298,17 @@ mod embedded_cli_removal_tests {
             .find("AppAssets::new()")
             .expect("application asset initialization");
 
+        assert!(resolution < migration);
+        assert!(migration < initialization);
         assert!(migration < assets);
+    }
+
+    #[test]
+    fn portable_mode_does_not_register_host_file_associations() {
+        let source = include_str!("main.rs");
+
+        assert!(source.contains("if !one_core::app_paths::is_portable()"));
+        assert!(source.contains("file_association::schedule_registration(cx)"));
     }
 
     #[test]

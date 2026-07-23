@@ -512,9 +512,12 @@ impl SettingsPanel {
                                 t!("Settings.General.Startup.require_master_key"),
                                 SettingField::switch(
                                     |cx: &App| {
-                                        AppSettings::global(cx).require_master_key_on_startup
+                                        one_core::app_paths::master_key_on_startup_required(
+                                            AppSettings::global(cx).require_master_key_on_startup,
+                                        )
                                     },
                                     |val: bool, cx: &mut App| {
+                                        let val = val || one_core::app_paths::is_portable();
                                         if val {
                                             if let Err(error) = crypto::forget_persisted_master_key()
                                             {

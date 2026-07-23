@@ -11,6 +11,8 @@ pub(super) fn startup_master_key_policy(
     require_master_key_on_startup: bool,
     has_repo_password: bool,
 ) -> StartupMasterKeyPolicy {
+    let require_master_key_on_startup =
+        one_core::app_paths::master_key_on_startup_required(require_master_key_on_startup);
     if require_master_key_on_startup {
         StartupMasterKeyPolicy {
             restore_from_storage: false,
