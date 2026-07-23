@@ -280,6 +280,7 @@ fn ssh_params() -> SshParams {
         jump_server: None,
         proxy: None,
         os_id: None,
+        icon: None,
     }
 }
 

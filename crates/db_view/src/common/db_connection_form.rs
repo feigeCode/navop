@@ -3017,6 +3017,7 @@ mod tests {
                 jump_server: None,
                 proxy: None,
                 os_id: None,
+                icon: None,
             },
             None,
         );

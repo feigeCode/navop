@@ -25,8 +25,8 @@ use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SshAuthMethod, SshParams,
-    StoredConnection, Workspace, ssh_os_icon,
+    JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAuthMethod,
+    SshParams, StoredConnection, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -186,6 +186,8 @@ pub struct SshFormWindow {
     last_tested_signature: Option<String>,
     /// 测试连接成功时探测到的远端操作系统 ID（/etc/os-release 的 ID 字段）
     detected_os_id: Option<String>,
+    /// 手动指定的连接图标 ID（None = 自动跟随探测结果）
+    manual_icon: Option<String>,
 
     // 云同步开关
     sync_enabled: bool,
@@ -512,6 +514,7 @@ impl SshFormWindow {
         let mut sync_enabled = true; // 默认启用云同步
         let mut disable_shell_integration = false;
         let mut detected_os_id: Option<String> = None;
+        let mut manual_icon: Option<String> = None;
 
         if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
@@ -519,6 +522,7 @@ impl SshFormWindow {
 
             if let Ok(params) = conn.to_ssh_params() {
                 detected_os_id = params.os_id.clone();
+                manual_icon = params.icon.clone();
                 name_input.update(cx, |s, cx| s.set_value(&conn.name, window, cx));
                 host_input.update(cx, |s, cx| s.set_value(&params.host, window, cx));
                 port_input.update(cx, |s, cx| {
@@ -713,6 +717,7 @@ impl SshFormWindow {
             remark_input,
             last_tested_signature: None,
             detected_os_id,
+            manual_icon,
             sync_enabled,
             disable_shell_integration,
             is_testing: false,
@@ -913,6 +918,7 @@ impl SshFormWindow {
             jump_server,
             proxy,
             os_id: self.detected_os_id.clone(),
+            icon: self.manual_icon.clone(),
         })
     }
 
@@ -1320,6 +1326,64 @@ impl SshFormWindow {
             .child(div().flex_1().child(child))
     }
 
+    /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
+    fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = cx.theme().border;
+        let accent = cx.theme().accent;
+
+        let tile = |id: &str, selected: bool, icon: Option<IconName>| {
+            let id_string = (!id.is_empty()).then(|| id.to_string());
+            let mut tile = div()
+                .id(SharedString::from(format!(
+                    "ssh-icon-{}",
+                    if id.is_empty() { "auto" } else { id }
+                )))
+                .w(px(36.0))
+                .h(px(36.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .border_1()
+                .cursor_pointer();
+            if selected {
+                tile = tile.border_color(accent).bg(accent.opacity(0.12));
+            } else {
+                tile = tile.border_color(border);
+            }
+            match icon {
+                Some(icon) => tile.child(icon.color().with_size(px(22.0))),
+                None => tile.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("SSH.icon_auto").to_string()),
+                ),
+            }
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.manual_icon = id_string.clone();
+                cx.notify();
+            }))
+        };
+
+        let mut row = h_flex().gap_2().flex_wrap().items_center();
+        // 自动：跟随测试连接探测到的系统图标（未探测到时为默认企鹅）
+        row = row.child(tile("", self.manual_icon.is_none(), None));
+        for id in SSH_ICON_IDS {
+            row = row.child(tile(
+                id,
+                self.manual_icon.as_deref() == Some(*id),
+                Some(ssh_os_icon(Some(id))),
+            ));
+        }
+        row.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("SSH.icon_hint").to_string()),
+        )
+    }
+
     /// 渲染基本信息标签页
     fn render_basic_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let auth_method = self.auth_method;
@@ -1327,6 +1391,7 @@ impl SshFormWindow {
         v_flex()
             .gap_2()
             .child(self.render_form_row(&t!("SSH.name"), Input::new(&self.name_input)))
+            .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), Input::new(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), Input::new(&self.port_input)))
             .child(self.render_form_row(&t!("SSH.username"), Input::new(&self.username_input)))
@@ -2010,6 +2075,7 @@ mod tests {
             jump_server: None,
             proxy: None,
             os_id: None,
+            icon: None,
         }
     }
 

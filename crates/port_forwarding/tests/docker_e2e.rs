@@ -114,6 +114,7 @@ fn ssh_connection(port: u16, username: String, password: String) -> StoredConnec
             jump_server: None,
             proxy: None,
             os_id: None,
+            icon: None,
         },
         None,
     );

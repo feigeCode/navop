@@ -283,14 +283,31 @@ pub struct SshParams {
     /// 远端操作系统 ID（测试连接时从 /etc/os-release 探测，用于连接图标展示）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os_id: Option<String>,
+    /// 手动指定的连接图标 ID（None = 按探测到的 os_id 自动选择）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 impl SshParams {
-    /// 根据探测到的操作系统 ID 选择连接图标，未识别时默认 Linux 企鹅。
+    /// 选择连接图标：手动指定优先，其次按探测到的操作系统 ID，未识别时默认 Linux 企鹅。
     pub fn os_icon(&self) -> IconName {
-        ssh_os_icon(self.os_id.as_deref())
+        ssh_os_icon(self.icon.as_deref().or(self.os_id.as_deref()))
     }
 }
+
+/// SSH 连接可选的图标 ID 列表（"linux" 为默认企鹅）。
+pub const SSH_ICON_IDS: &[&str] = &[
+    "linux",
+    "ubuntu",
+    "debian",
+    "redhat",
+    "centos",
+    "almalinux",
+    "opensuse",
+    "macos",
+    "windows",
+    "docker",
+];
 
 /// 根据图标 ID（通常为 /etc/os-release 的 ID 或手动选择值）选择 SSH 连接图标，
 /// 未识别时默认 Linux 企鹅。
@@ -1476,6 +1493,7 @@ mod tests {
                 jump_server: None,
                 proxy: None,
                 os_id: None,
+                icon: None,
             },
             Some(7),
         );
@@ -1637,6 +1655,7 @@ mod tests {
             jump_server: None,
             proxy: None,
             os_id: None,
+            icon: None,
         };
         assert_eq!(
             "root@localhost:22",
@@ -2400,6 +2419,7 @@ mod serial_tests {
             jump_server: None,
             proxy: None,
             os_id: Some("ubuntu".to_string()),
+            icon: None,
         };
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(json.contains("\"os_id\":\"ubuntu\""));
@@ -2409,5 +2429,21 @@ mod serial_tests {
         params.os_id = None;
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(!json.contains("os_id"));
+    }
+
+    #[test]
+    fn ssh_params_manual_icon_overrides_detected_os() {
+        let mut params: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent","os_id":"ubuntu"}"#,
+        )
+        .expect("SshParams 应可反序列化");
+        assert!(matches!(params.os_icon(), IconName::UbuntuColor));
+
+        params.icon = Some("docker".to_string());
+        assert!(matches!(params.os_icon(), IconName::DockerColor));
+
+        params.icon = None;
+        params.os_id = None;
+        assert!(matches!(params.os_icon(), IconName::LinuxPenguinColor));
     }
 }

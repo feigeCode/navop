@@ -191,6 +191,30 @@ SSH:
     en: Connection test successful
     zh-CN: 连接测试成功
     zh-HK: 連線測試成功
+  icon:
+    en: Icon
+    zh-CN: 图标
+    zh-HK: 圖標
+  icon_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  icon_hint:
+    en: Auto follows the OS detected by a successful connection test
+    zh-CN: 自动模式跟随测试连接探测到的系统类型，也可以手动固定图标
+    zh-HK: 自動模式跟隨連線測試偵測到的系統類型，也可以手動固定圖標
+  icon:
+    en: Icon
+    zh-CN: 图标
+    zh-HK: 圖標
+  icon_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  icon_hint:
+    en: Auto follows the OS detected by a successful connection test
+    zh-CN: 自动模式跟随测试连接探测到的系统类型，也可以手动固定图标
+    zh-HK: 自動模式跟隨連線測試偵測到的系統類型，也可以手動固定圖標
   # 标签页
   tab_basic:
     en: Basic

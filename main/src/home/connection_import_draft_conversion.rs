@@ -131,6 +131,7 @@ fn to_ssh_connection(
         jump_server: None,
         proxy: None,
         os_id: None,
+        icon: None,
     };
     Ok(StoredConnection::new_ssh(name, params, None))
 }
