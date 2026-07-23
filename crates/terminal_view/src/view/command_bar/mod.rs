@@ -21,6 +21,7 @@ mod suggestion_render;
 #[derive(Clone, Debug)]
 pub(super) enum TerminalCommandBarEvent {
     Submit(String),
+    InputToPty(String),
     FocusTerminal,
 }
 

@@ -179,6 +179,7 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(render_source.contains("toggle_collapsed"));
     assert!(interaction_source.contains("TerminalCommandBarEvent::FocusTerminal"));
     assert!(interaction_source.contains("auto_grow(4, 12)"));
+    assert!(interaction_source.contains("collapsed: true"));
     assert!(render_source.contains("COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0"));
     assert!(render_source.contains("fn popover_bottom_offset(&self) -> f32"));
     assert!(render_source.contains("self.input_height + COMMAND_BAR_POPOVER_GAP"));
@@ -206,17 +207,28 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .nth(1)
         .and_then(|source| source.split("impl Render for TerminalCommandBar").next())
         .expect("expanded command input row should exist");
-    assert!(!expanded_row.contains("terminal-command-collapse-toggle"));
+    assert!(render_source.contains("terminal-command-collapse-toggle-expanded"));
+    assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
+    assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
     assert!(!expanded_row.contains("target_label"));
     assert!(!expanded_row.contains("IconName::ChevronRight"));
     assert!(expanded_row.contains("pr(px(COMMAND_BAR_ACTIONS_WIDTH))"));
     assert!(expanded_row.contains(".absolute()"));
     assert!(expanded_row.contains(".top_2()"));
     assert!(expanded_row.contains(".right_0()"));
-    assert!(expanded_row.contains("child(self.render_quick_command_button(cx))"));
+    assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
-    assert!(quick_interaction_source.contains("self.collapsed = false"));
-    assert!(quick_interaction_source.contains("set_command_input_value(state, command"));
+    let choose_quick_command = quick_interaction_source
+        .split("pub(super) fn choose_command")
+        .nth(1)
+        .and_then(|source| source.split("pub(super) fn select_quick_group").next())
+        .expect("quick command selection implementation should exist");
+    assert!(choose_quick_command.contains("if self.collapsed"));
+    assert!(choose_quick_command.contains("TerminalCommandBarEvent::InputToPty(command)"));
+    assert!(choose_quick_command.contains("set_command_input_value(state, command"));
+    assert!(
+        include_str!("../command_bar_events.rs").contains("self.paste_text(command, window, cx)")
+    );
     assert!(interaction_source.contains("set_command_input_value(state, command"));
     assert!(
         include_str!("../command_bar/mod.rs")

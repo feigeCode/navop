@@ -36,6 +36,9 @@ impl TerminalView {
                 }
                 self.focus_terminal(window, cx);
             }
+            TerminalCommandBarEvent::InputToPty(command) => {
+                self.paste_text(command, window, cx);
+            }
             TerminalCommandBarEvent::FocusTerminal => self.focus_terminal(window, cx),
         }
     }

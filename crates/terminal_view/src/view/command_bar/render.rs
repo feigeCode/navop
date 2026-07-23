@@ -19,7 +19,7 @@ const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0;
 const COMMAND_BAR_INPUT_MAX_HEIGHT: f32 = 400.0;
 const COMMAND_BAR_RESIZE_HANDLE_HEIGHT: f32 = 6.0;
 const COMMAND_BAR_POPOVER_GAP: f32 = 8.0;
-const COMMAND_BAR_ACTIONS_WIDTH: f32 = 160.0;
+const COMMAND_BAR_ACTIONS_WIDTH: f32 = 192.0;
 
 #[derive(Clone)]
 struct CommandBarResize {
@@ -177,6 +177,23 @@ impl TerminalCommandBar {
             .into_any_element()
     }
 
+    fn render_expanded_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .gap_1()
+            .child(
+                Button::new("terminal-command-collapse-toggle-expanded")
+                    .icon(IconName::ChevronDown)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("TerminalCommandBar.collapse").to_string())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_collapsed(window, cx);
+                    })),
+            )
+            .child(self.render_quick_command_button(cx))
+            .into_any_element()
+    }
+
     fn render_input_row(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .relative()
@@ -205,7 +222,7 @@ impl TerminalCommandBar {
                     .absolute()
                     .top_2()
                     .right_0()
-                    .child(self.render_quick_command_button(cx)),
+                    .child(self.render_expanded_actions(cx)),
             )
             .into_any_element()
     }

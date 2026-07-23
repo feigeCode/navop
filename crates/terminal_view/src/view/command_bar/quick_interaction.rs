@@ -70,7 +70,12 @@ impl TerminalCommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.collapsed = false;
+        if self.collapsed {
+            self.reset_overlays(cx);
+            cx.emit(TerminalCommandBarEvent::InputToPty(command));
+            cx.notify();
+            return;
+        }
         self.input_state.update(cx, |state, cx| {
             set_command_input_value(state, command, window, cx);
         });

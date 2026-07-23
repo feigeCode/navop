@@ -35,7 +35,7 @@ impl TerminalCommandBar {
             quick_group_filter: QuickGroupFilter::default(),
             selected_quick_command: None,
             quick_commands_open: false,
-            collapsed: false,
+            collapsed: true,
             input_height: COMMAND_BAR_INPUT_DEFAULT_HEIGHT,
             autocomplete_enabled: true,
             colors: config.colors,
