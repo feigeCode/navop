@@ -69,7 +69,14 @@ impl MarkdownProjection {
         source_range: Range<usize>,
         reveal_active: bool,
     ) -> Self {
-        let hidden = hidden_syntax_ranges(document, active_inline, &source_range, reveal_active);
+        let mut hidden =
+            hidden_syntax_ranges(document, active_inline, &source_range, reveal_active);
+        if source_range != (0..document.source.len())
+            && let Some(separator) = trailing_line_ending(&document.source, &source_range)
+        {
+            hidden.push(separator);
+            hidden.sort_by_key(|range| range.start);
+        }
         let mut builder =
             ProjectionBuilder::new(document.source.len(), active_inline, source_range.clone());
         builder.append_source(&document.source, source_range, &hidden);
@@ -128,6 +135,18 @@ impl MarkdownProjection {
             replacement: value[prefix..new_end].to_owned(),
         })
     }
+}
+
+fn trailing_line_ending(source: &str, range: &Range<usize>) -> Option<Range<usize>> {
+    let value = source.get(range.clone())?;
+    let length = if value.ends_with("\r\n") {
+        2
+    } else if value.ends_with('\n') {
+        1
+    } else {
+        0
+    };
+    (length > 0).then(|| range.end - length..range.end)
 }
 
 struct ProjectionBuilder {
