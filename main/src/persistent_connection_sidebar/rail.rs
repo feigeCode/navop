@@ -16,11 +16,7 @@ use super::SidebarPalette;
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
-const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(56.0);
-#[cfg(target_os = "macos")]
-// The traffic-light cluster needs roughly 64px from the window edge; keep a
-// small margin so the narrower rail never clips the macOS window buttons.
-const MACOS_NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(72.0);
+const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(44.0);
 #[cfg(target_os = "macos")]
 const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
 
@@ -41,21 +37,8 @@ pub(super) fn render_navigation_rail(
         .map(|user| user.resolved_display_name())
         .unwrap_or_else(|| t!("Auth.login").to_string());
 
-    let rail_width = if cfg!(target_os = "macos") {
-        #[cfg(target_os = "macos")]
-        {
-            MACOS_NAVIGATION_RAIL_WIDTH
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            NAVIGATION_RAIL_WIDTH
-        }
-    } else {
-        NAVIGATION_RAIL_WIDTH
-    };
-
     v_flex()
-        .w(rail_width)
+        .w(NAVIGATION_RAIL_WIDTH)
         .h_full()
         .flex_shrink_0()
         .items_center()
