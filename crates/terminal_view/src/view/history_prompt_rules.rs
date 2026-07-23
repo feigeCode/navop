@@ -118,6 +118,9 @@ const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
 const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
 const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
 const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
+const HISTORY_PROMPT_DROPDOWN_ROW_GAP: f32 = 4.0;
+const HISTORY_PROMPT_DROPDOWN_BORDER_Y: f32 = 2.0;
+const HISTORY_PROMPT_DROPDOWN_INPUT_CLEARANCE: f32 = 8.0;
 
 pub(super) fn history_prompt_dropdown_background(background: Hsla) -> Hsla {
     background.opacity(HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY)
@@ -134,13 +137,17 @@ fn estimate_history_prompt_dropdown_height(
 ) -> Pixels {
     let row_count = match_count.max(1) as f32;
     let rows_height = (line_height + px(HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y)) * row_count;
+    let row_gaps = px(HISTORY_PROMPT_DROPDOWN_ROW_GAP) * (row_count - 1.0).max(0.0);
     let header_height = if search_mode {
-        px(HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT)
+        px(HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT + HISTORY_PROMPT_DROPDOWN_ROW_GAP)
     } else {
         px(0.0)
     };
 
-    px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y) + header_height + rows_height
+    px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y + HISTORY_PROMPT_DROPDOWN_BORDER_Y)
+        + header_height
+        + rows_height
+        + row_gaps
 }
 
 pub(super) fn history_prompt_dropdown_origin(
@@ -167,7 +174,9 @@ pub(super) fn history_prompt_dropdown_origin(
     let min_top = terminal_bounds.origin.y;
     let max_top = (terminal_bounds.bottom() - dropdown_height).max(min_top);
     let fits_below = below_top + dropdown_height <= terminal_bounds.bottom();
-    let preferred_above_top = cursor_top - dropdown_height - px(HISTORY_PROMPT_DROPDOWN_GAP_Y);
+    let preferred_above_top = cursor_top
+        - dropdown_height
+        - px(HISTORY_PROMPT_DROPDOWN_GAP_Y + HISTORY_PROMPT_DROPDOWN_INPUT_CLEARANCE);
     let top = if fits_below {
         below_top.min(max_top)
     } else {
