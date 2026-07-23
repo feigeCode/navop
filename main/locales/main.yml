@@ -164,6 +164,10 @@ Home:
       en: Quick Open
       zh-CN: 快速打开
       zh-HK: 快速開啟
+    recent:
+      en: Recent
+      zh-CN: 最近使用
+      zh-HK: 最近使用
     tools:
       en: Tools
       zh-CN: 常用工具

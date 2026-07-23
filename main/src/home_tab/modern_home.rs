@@ -1,12 +1,14 @@
 use gpui::{
-    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px,
+    prelude::FluentBuilder as _,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
+use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
 use super::{HomePage, modern_home_shortcuts::render_shortcuts};
@@ -49,6 +51,10 @@ impl HomePage {
                             .child(render_account_actions(
                                 syncing, sync_view, key_view, window, cx,
                             ))
+                            .when_some(
+                                self.render_recent_connections(window, cx),
+                                |this, recent| this.child(recent),
+                            )
                             .child(render_tool_cards(
                                 import_view,
                                 notes_view,
@@ -67,17 +73,17 @@ impl HomePage {
 fn render_brand(cx: &gpui::App) -> impl IntoElement {
     v_flex()
         .items_center()
-        .gap_2()
+        .gap_1()
         .child(
             div()
-                .text_3xl()
+                .text_xl()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(cx.theme().foreground)
                 .child("Navop"),
         )
         .child(
             div()
-                .text_sm()
+                .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(t!("Home.StartCenter.subtitle")),
         )
@@ -157,13 +163,97 @@ impl HomePage {
             .child(
                 Button::new("modern-home-quick-open")
                     .icon(IconName::Search)
-                    .large()
+                    .outline()
                     .label(t!("Home.StartCenter.quick_open"))
                     .on_click(window.listener_for(&view, |home, _, window, cx| {
                         home.show_connection_quick_open(window, cx);
                     })),
             )
             .text_color(cx.theme().foreground)
+    }
+
+    /// Recently opened connections, most recent first, so the home page works
+    /// as a dashboard instead of a splash screen. Hidden when empty.
+    fn render_recent_connections(
+        &self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let mut recent: Vec<StoredConnection> = self
+            .connections
+            .iter()
+            .filter(|conn| conn.last_used_at.is_some())
+            .cloned()
+            .collect();
+        recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at));
+        recent.truncate(6);
+        if recent.is_empty() {
+            return None;
+        }
+
+        let cards: Vec<AnyElement> = recent
+            .into_iter()
+            .map(|conn| self.render_recent_connection_card(conn, window, cx))
+            .collect();
+        Some(
+            v_flex()
+                .w_full()
+                .gap_2()
+                .child(section_title(t!("Home.StartCenter.recent"), cx))
+                .child(div().grid().grid_cols(2).gap_3().children(cards)),
+        )
+    }
+
+    fn render_recent_connection_card(
+        &self,
+        conn: StoredConnection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let icon = self.connection_icon(&conn, px(20.0));
+        let name = conn.name.clone();
+        let type_label = conn.connection_type.label().to_string();
+        h_flex()
+            .id(SharedString::from(format!(
+                "recent-conn-{}",
+                conn.id.unwrap_or(0)
+            )))
+            .min_h(px(56.0))
+            .items_center()
+            .gap_3()
+            .px_4()
+            .py_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().muted))
+            .on_click(window.listener_for(&cx.entity(), move |home, _, window, cx| {
+                home.open_connection_from_quick(&conn, window, cx);
+            }))
+            .child(icon)
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(name),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(type_label),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
