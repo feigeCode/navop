@@ -23,7 +23,6 @@ pub use agent_runtime::{
 mod acp;
 mod agent_cards;
 mod agent_skills;
-mod agent_tab;
 mod agent_tool_config;
 mod agent_tool_input;
 mod agent_transcript;
@@ -75,7 +74,6 @@ pub use acp::{
     set_acp_permission_grant_provider, set_acp_tool_mode_provider, set_current_acp_tool_mode,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
-pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
 pub use agent_tool_config::emit_agent_tool_config_changed;
 pub use agent_transcript::AgentTranscript;
 pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
