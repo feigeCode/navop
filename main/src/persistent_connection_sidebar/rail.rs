@@ -42,7 +42,7 @@ pub(super) fn render_navigation_rail(
         .h_full()
         .flex_shrink_0()
         .items_center()
-        .bg(palette.background)
+        .bg(palette.rail_background)
         .text_color(palette.foreground)
         .when(cfg!(target_os = "macos"), |this| {
             #[cfg(target_os = "macos")]
@@ -52,10 +52,7 @@ pub(super) fn render_navigation_rail(
                         .w_full()
                         .h(MACOS_TITLE_BAR_HEIGHT)
                         .flex_shrink_0()
-                        .bg(palette.background)
-                        .border_r_1()
-                        .border_b_1()
-                        .border_color(palette.border),
+                        .bg(palette.rail_background),
                 )
             }
             #[cfg(not(target_os = "macos"))]
@@ -69,9 +66,7 @@ pub(super) fn render_navigation_rail(
                 .flex_1()
                 .min_h_0()
                 .items_center()
-                .bg(palette.background)
-                .border_r_1()
-                .border_color(palette.border)
+                .bg(palette.rail_background)
                 .child(render_filter_buttons(home_page, selected_filter, palette))
                 .child(
                     v_flex()
@@ -209,11 +204,7 @@ fn filter_icon_color(filter: ConnectionType, selected: bool) -> Hsla {
         ConnectionType::Vnc => 0x10B981,
     };
     let color: Hsla = rgb(base).into();
-    if selected {
-        color
-    } else {
-        color.opacity(0.65)
-    }
+    if selected { color } else { color.opacity(0.65) }
 }
 
 fn rail_button(

@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
 };
@@ -164,13 +165,19 @@ impl PersistentConnectionSidebar {
             .w_full()
             .h(px(40.0))
             .flex_shrink_0()
-            .px_2()
+            .pr_2()
+            // On macOS the traffic-light cluster (~64px from the window edge)
+            // extends past the narrow navigation rail; pad the header so its
+            // content clears the window buttons.
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(28.0)))
+            .when(!cfg!(target_os = "macos"), |this| this.pl_2())
             .items_center()
             .justify_between()
-            .bg(palette.background)
+            // Match the navigation rail so the whole top title-bar strip
+            // (traffic lights + header) reads as one uniform color.
+            .bg(palette.rail_background)
             .text_color(palette.foreground)
             .border_r_1()
-            .border_b_1()
             .border_color(palette.border)
             .child(
                 h_flex()

@@ -32,6 +32,7 @@ mod workspace_context_menu;
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {
     pub background: Hsla,
+    pub rail_background: Hsla,
     pub foreground: Hsla,
     pub muted: Hsla,
     pub muted_foreground: Hsla,
@@ -44,8 +45,10 @@ impl SidebarPalette {
     fn app(cx: &gpui::App) -> Self {
         use gpui_component::ActiveTheme as _;
 
+        let background = cx.theme().sidebar;
         Self {
-            background: cx.theme().sidebar,
+            background,
+            rail_background: shade(background, cx.theme().is_dark()),
             foreground: cx.theme().foreground,
             muted: cx.theme().sidebar_accent,
             muted_foreground: cx.theme().muted_foreground,
@@ -60,6 +63,7 @@ impl From<&TerminalColors> for SidebarPalette {
     fn from(colors: &TerminalColors) -> Self {
         Self {
             background: colors.background,
+            rail_background: shade(colors.background, true),
             foreground: colors.foreground,
             muted: colors.muted,
             muted_foreground: colors.muted_foreground,
@@ -67,6 +71,16 @@ impl From<&TerminalColors> for SidebarPalette {
             accent: colors.accent,
             accent_foreground: colors.accent_foreground,
         }
+    }
+}
+
+/// Slightly darken a background color so the navigation rail stays visually
+/// distinct from the connection panel next to it.
+fn shade(color: Hsla, dark_mode: bool) -> Hsla {
+    let amount = if dark_mode { -0.04 } else { -0.03 };
+    Hsla {
+        l: (color.l + amount).clamp(0.0, 1.0),
+        ..color
     }
 }
 
