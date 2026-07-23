@@ -227,6 +227,19 @@ pub enum IconName {
     Rdp,
     Vnc,
     DuckDB,
+    ServerLine,
+    TerminalLine,
+    DatabaseLine,
+    RedisLine,
+    MongoDBLine,
+    SerialLine,
+    PortForwardingLine,
+    RdpLine,
+    VncLine,
+    AILine,
+    TeamLine,
+    NotesLine,
+    ExtensionsLine,
 }
 
 impl IconName {
@@ -440,6 +453,19 @@ impl IconNamed for IconName {
             Self::Rdp => "icons/rdp.svg",
             Self::Vnc => "icons/vnc.svg",
             Self::DuckDB => "icons/duckdb.svg",
+            Self::ServerLine => "icons/server_line.svg",
+            Self::TerminalLine => "icons/terminal_line.svg",
+            Self::DatabaseLine => "icons/database_line.svg",
+            Self::RedisLine => "icons/redis_line.svg",
+            Self::MongoDBLine => "icons/mongodb_line.svg",
+            Self::SerialLine => "icons/serial_line.svg",
+            Self::PortForwardingLine => "icons/port_forwarding_line.svg",
+            Self::RdpLine => "icons/rdp_line.svg",
+            Self::VncLine => "icons/vnc_line.svg",
+            Self::AILine => "icons/ai_line.svg",
+            Self::TeamLine => "icons/team_line.svg",
+            Self::NotesLine => "icons/notes_line.svg",
+            Self::ExtensionsLine => "icons/extensions_line.svg",
         }
         .into()
     }

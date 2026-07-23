@@ -1,9 +1,9 @@
 #[cfg(target_os = "macos")]
 use gpui::div;
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, Entity, IntoElement, ParentElement, Styled, px};
+use gpui::{AnyElement, Entity, Hsla, IntoElement, ParentElement, Styled, px, rgb};
 use gpui_component::{
-    Icon, Selectable, Sizable, Size,
+    Icon, IconName, Selectable, Sizable, Size,
     button::{Button, ButtonVariants as _},
     v_flex,
 };
@@ -16,9 +16,11 @@ use super::SidebarPalette;
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
-const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(68.0);
+const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(56.0);
 #[cfg(target_os = "macos")]
-const MACOS_NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(80.0);
+// The traffic-light cluster needs roughly 64px from the window edge; keep a
+// small margin so the narrower rail never clips the macOS window buttons.
+const MACOS_NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(72.0);
 #[cfg(target_os = "macos")]
 const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
 
@@ -99,9 +101,10 @@ pub(super) fn render_navigation_rail(
                         .when(show_ai_workbench_entry, |this| {
                             this.child(rail_button(
                                 "persistent-open-ai-workbench",
-                                gpui_component::IconName::AI,
+                                IconName::AILine,
                                 t!("Settings.General.Startup.default_page_ai_workbench")
                                     .to_string(),
+                                palette,
                                 home_page,
                                 |home, window, cx| home.add_ai_workbench_tab(window, cx),
                             ))
@@ -109,37 +112,42 @@ pub(super) fn render_navigation_rail(
                         .when(show_team, |this| {
                             this.child(rail_button(
                                 "persistent-open-team",
-                                gpui_component::IconName::TeamColor,
+                                IconName::TeamLine,
                                 t!("TeamManagement.title").to_string(),
+                                palette,
                                 home_page,
                                 |home, window, cx| home.open_team_management(window, cx),
                             ))
                         })
                         .child(rail_button(
                             "persistent-open-notes",
-                            gpui_component::IconName::NotesColor,
+                            IconName::NotesLine,
                             t!("Home.notes").to_string(),
+                            palette,
                             home_page,
                             |home, window, cx| home.add_notes_tab(window, cx),
                         ))
                         .child(rail_button(
                             "persistent-open-extensions",
-                            gpui_component::IconName::ExtensionsColor,
+                            IconName::ExtensionsLine,
                             t!("Home.extensions").to_string(),
+                            palette,
                             home_page,
                             |home, window, cx| home.add_extensions_tab(window, cx),
                         ))
                         .child(rail_button(
                             "persistent-open-settings",
-                            gpui_component::IconName::SettingColor,
+                            IconName::Settings,
                             t!("Common.settings").to_string(),
+                            palette,
                             home_page,
                             |home, window, cx| home.add_settings_tab(window, cx),
                         ))
                         .child(rail_button(
                             "persistent-user",
-                            gpui_component::IconName::UserColor,
+                            IconName::User,
                             user_tooltip,
+                            palette,
                             home_page,
                             |home, window, cx| {
                                 if GlobalCurrentUser::get_user(cx).is_none() {
@@ -164,7 +172,11 @@ fn render_filter_buttons(
         let selected = selected_filter == filter;
         filters = filters.child(
             Button::new(format!("persistent-filter-{}", filter.label()))
-                .icon(Icon::new(filter.icon()).color().with_size(Size::Large))
+                .icon(
+                    Icon::new(filter_line_icon(filter))
+                        .text_color(filter_icon_color(filter, selected))
+                        .with_size(Size::Large),
+                )
                 .ghost()
                 .large()
                 .selected(selected)
@@ -183,16 +195,55 @@ fn render_filter_buttons(
     filters.into_any_element()
 }
 
+/// Unified line-style icon for each connection filter, replacing the previous
+/// mix of brand SVGs and filled backplate icons.
+fn filter_line_icon(filter: ConnectionType) -> IconName {
+    match filter {
+        ConnectionType::All => IconName::ServerLine,
+        ConnectionType::Database => IconName::DatabaseLine,
+        ConnectionType::SshSftp => IconName::TerminalLine,
+        ConnectionType::Redis => IconName::RedisLine,
+        ConnectionType::MongoDB => IconName::MongoDBLine,
+        ConnectionType::Serial => IconName::SerialLine,
+        ConnectionType::PortForwarding => IconName::PortForwardingLine,
+        ConnectionType::Rdp => IconName::RdpLine,
+        ConnectionType::Vnc => IconName::VncLine,
+    }
+}
+
+/// Harmonized identity colors for the filter icons (consistent saturation and
+/// lightness). Unselected icons are dimmed; the selected one keeps full color.
+fn filter_icon_color(filter: ConnectionType, selected: bool) -> Hsla {
+    let base = match filter {
+        ConnectionType::All => 0x64748B,
+        ConnectionType::SshSftp => 0xF97316,
+        ConnectionType::Database => 0x3B82F6,
+        ConnectionType::Redis => 0xEF4444,
+        ConnectionType::MongoDB => 0x22C55E,
+        ConnectionType::Serial => 0x8B5CF6,
+        ConnectionType::PortForwarding => 0x0EA5E9,
+        ConnectionType::Rdp => 0x6366F1,
+        ConnectionType::Vnc => 0x10B981,
+    };
+    let color: Hsla = rgb(base).into();
+    if selected {
+        color
+    } else {
+        color.opacity(0.65)
+    }
+}
+
 fn rail_button(
     id: &'static str,
-    icon: gpui_component::IconName,
+    icon: IconName,
     tooltip: String,
+    palette: SidebarPalette,
     home_page: &Entity<HomePage>,
     on_click: impl Fn(&mut HomePage, &mut gpui::Window, &mut gpui::Context<HomePage>) + 'static,
 ) -> impl IntoElement {
     let home = home_page.clone();
     Button::new(id)
-        .icon(Icon::new(icon).color())
+        .icon(Icon::new(icon).text_color(palette.muted_foreground))
         .ghost()
         .large()
         .tooltip(tooltip)
