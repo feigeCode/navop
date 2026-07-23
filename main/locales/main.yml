@@ -891,6 +891,10 @@ Encryption:
     en: Unlock
     zh-CN: 解锁
     zh-HK: 解鎖
+  startup_lock_notice:
+    en: Startup protection is enabled. Unlock Navop with your master key to continue.
+    zh-CN: 已启用启动保护，请输入主密钥解锁 Navop 后继续。
+    zh-HK: 已啟用啟動保護，請輸入主密鑰解鎖 Navop 後繼續。
   change_repo_password:
     en: Change Master Key
     zh-CN: 修改主密钥
@@ -1541,6 +1545,14 @@ Settings:
         en: AI Workbench
         zh-CN: AI 工作台
         zh-HK: AI 工作台
+      require_master_key:
+        en: Require master key on startup
+        zh-CN: 启动时要求输入主密钥
+        zh-HK: 啟動時要求輸入主密鑰
+      require_master_key_desc:
+        en: Do not restore the master key automatically; saved connections remain unavailable until you unlock them.
+        zh-CN: 不自动恢复主密钥；解锁前无法使用已保存的连接。
+        zh-HK: 不自動恢復主密鑰；解鎖前無法使用已保存的連線。
 
     # 连接显示设置
     ConnectionDisplay:

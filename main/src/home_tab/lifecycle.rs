@@ -1,5 +1,31 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StartupMasterKeyPolicy {
+    pub(super) restore_from_storage: bool,
+    pub(super) prompt_for_unlock: bool,
+    pub(super) forget_persisted_key: bool,
+}
+
+pub(super) fn startup_master_key_policy(
+    require_master_key_on_startup: bool,
+    has_repo_password: bool,
+) -> StartupMasterKeyPolicy {
+    if require_master_key_on_startup {
+        StartupMasterKeyPolicy {
+            restore_from_storage: false,
+            prompt_for_unlock: has_repo_password,
+            forget_persisted_key: true,
+        }
+    } else {
+        StartupMasterKeyPolicy {
+            restore_from_storage: has_repo_password,
+            prompt_for_unlock: false,
+            forget_persisted_key: false,
+        }
+    }
+}
+
 impl HomePage {
     pub fn new(
         tab_container: Entity<TabContainer>,
@@ -70,13 +96,26 @@ impl HomePage {
         // 异步加载工作区
         page.load_workspaces(cx);
 
-        // 尝试从存储后端恢复主密钥
-        let key_restored = crypto::try_restore_master_key();
+        let has_repo_password = crypto::has_repo_password_set();
+        let master_key_policy = startup_master_key_policy(
+            AppSettings::current(cx).require_master_key_on_startup,
+            has_repo_password,
+        );
+        if master_key_policy.forget_persisted_key
+            && let Err(error) = crypto::forget_persisted_master_key()
+        {
+            tracing::warn!("删除自动解锁主密钥失败: {error}");
+        }
+
+        // 仅在未启用启动锁时尝试从存储后端恢复主密钥
+        let key_restored =
+            master_key_policy.restore_from_storage && crypto::try_restore_master_key();
         if key_restored {
             tracing::info!("已恢复主密钥");
-        } else if crypto::has_repo_password_set() {
-            // 有验证文件但恢复失败，提示用户需要重新输入密钥
-            tracing::warn!("密钥恢复失败，需要用户重新输入主密钥");
+        } else if master_key_policy.prompt_for_unlock
+            || master_key_policy.restore_from_storage && has_repo_password
+        {
+            tracing::warn!("启动时需要用户输入主密钥解锁");
             page.master_key_unlock_prompt_pending = true;
         } else {
             tracing::info!("首次使用，需要设置主密钥");
@@ -161,5 +200,61 @@ impl HomePage {
         }
 
         page
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StartupMasterKeyPolicy, startup_master_key_policy};
+
+    #[test]
+    fn startup_lock_requires_unlock_without_restoring_the_saved_key() {
+        assert_eq!(
+            StartupMasterKeyPolicy {
+                restore_from_storage: false,
+                prompt_for_unlock: true,
+                forget_persisted_key: true,
+            },
+            startup_master_key_policy(true, true)
+        );
+    }
+
+    #[test]
+    fn startup_lock_does_not_prompt_before_a_master_key_exists() {
+        assert_eq!(
+            StartupMasterKeyPolicy {
+                restore_from_storage: false,
+                prompt_for_unlock: false,
+                forget_persisted_key: true,
+            },
+            startup_master_key_policy(true, false)
+        );
+    }
+
+    #[test]
+    fn default_startup_behavior_keeps_existing_auto_restore_flow() {
+        assert_eq!(
+            StartupMasterKeyPolicy {
+                restore_from_storage: true,
+                prompt_for_unlock: false,
+                forget_persisted_key: false,
+            },
+            startup_master_key_policy(false, true)
+        );
+    }
+
+    #[test]
+    fn home_startup_applies_the_master_key_policy() {
+        let source = include_str!("lifecycle.rs");
+        let constructor = source
+            .split("pub fn new(")
+            .nth(1)
+            .and_then(|source| source.split("\n        page\n").next())
+            .expect("HomePage::new source");
+
+        assert!(constructor.contains("let master_key_policy = startup_master_key_policy("));
+        assert!(constructor.contains("master_key_policy.forget_persisted_key"));
+        assert!(constructor.contains("master_key_policy.restore_from_storage"));
+        assert!(constructor.contains("master_key_policy.prompt_for_unlock"));
     }
 }

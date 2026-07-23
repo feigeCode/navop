@@ -51,11 +51,10 @@ impl Render for HomePage {
         }
 
         if self.master_key_unlock_prompt_pending && self.saved_connections_locked() {
-            self.master_key_unlock_prompt_pending = false;
             let view = cx.entity();
             window.defer(cx, move |window, cx| {
                 view.update(cx, |this, cx| {
-                    this.show_encryption_key_dialog(window, cx);
+                    this.show_pending_master_key_prompt(window, cx);
                 });
             });
         }
