@@ -14,3 +14,15 @@ pub(super) fn common_suffix(left: &str, right: &str) -> usize {
         .map(|((_, ch), _)| ch.len_utf8())
         .sum()
 }
+
+pub(super) fn minimal_text_patch(current: &str, target: &str) -> Option<(Range<usize>, String)> {
+    if current == target {
+        return None;
+    }
+    let prefix = common_prefix(current, target);
+    let suffix = common_suffix(&current[prefix..], &target[prefix..]);
+    let current_end = current.len().saturating_sub(suffix);
+    let target_end = target.len().saturating_sub(suffix);
+    Some((prefix..current_end, target[prefix..target_end].to_owned()))
+}
+use std::ops::Range;

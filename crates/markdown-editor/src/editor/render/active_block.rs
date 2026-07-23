@@ -1,23 +1,25 @@
 use super::{MARKDOWN_BODY_FONT_SIZE, MARKDOWN_BODY_LINE_HEIGHT, MarkdownEditor};
 use gpui::{
-    InteractiveElement, IntoElement, ParentElement, Pixels, Styled, prelude::FluentBuilder as _, px,
+    Context, InteractiveElement, IntoElement, ParentElement, Styled, prelude::FluentBuilder as _,
+    px,
 };
-use gpui_component::{StyledExt, input::Input, v_flex};
+use gpui_component::{ElementExt, StyledExt, input::Input, v_flex};
 use markdown_source::{SourceBlock, SourceBlockKind};
 
 impl MarkdownEditor {
     pub(super) fn render_active_block(
         &self,
         block: &SourceBlock,
-        reserved_height: Option<Pixels>,
+        cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let editor = cx.entity();
+        let block_id = block.id;
         let heading = heading_level(block);
         let source_code = is_source_code(block);
         let list_gutter = super::list_marker_source::list_gutter_width(block);
         let content = gpui::div()
             .w_full()
-            .when_some(reserved_height, |this, height| this.h(height))
-            .when(reserved_height.is_none(), |this| this.h_full())
+            .min_w_0()
             .when(source_code, |this| self.style_source_editor(this))
             .when(matches!(block.kind, SourceBlockKind::BlockQuote), |this| {
                 this.border_l_3()
@@ -27,7 +29,6 @@ impl MarkdownEditor {
             })
             .relative()
             .child(self.active_input(heading))
-            .children(self.active_inline_marker_overlay())
             .children(self.active_inline_math_overlays())
             .when_some(list_gutter, |this, gutter| {
                 this.pl(px(gutter))
@@ -37,15 +38,20 @@ impl MarkdownEditor {
             .id(("markdown-active-block", block.id.0))
             .debug_selector(|| format!("markdown-active-block-{}", block.id.0))
             .w_full()
-            .when(reserved_height.is_none(), |this| this.h_full())
             .min_w_0()
+            .on_prepaint(move |bounds, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.record_measured_block_height(block_id, bounds.size.height, cx);
+                });
+            })
             .child(content)
             .into_any_element()
     }
 
     fn active_input(&self, heading: Option<u8>) -> Input {
         Input::new(&self.input)
-            .size_full()
+            .w_full()
+            .h_auto()
             .bare()
             .bordered(false)
             .focus_bordered(false)

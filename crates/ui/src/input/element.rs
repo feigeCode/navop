@@ -2471,23 +2471,45 @@ mod tests {
             left: px(7.),
         };
 
-        let layout =
-            EditorScrollbarLayout::new(input_bounds, px(40.), size(px(1000.), px(200.)), paddings);
+        let layout = EditorScrollbarLayout::new(
+            input_bounds,
+            px(40.),
+            size(px(1000.), px(200.)),
+            paddings,
+            false,
+        );
 
         assert_eq!(
             layout.bounds,
             Bounds::new(point(px(47.), px(18.)), size(px(266.), px(87.)))
         );
-        assert_eq!(layout.scroll_size, size(px(976.), px(200.)));
+        assert_eq!(layout.scroll_size, size(px(966.), px(200.)));
 
-        let layout_without_gutter =
-            EditorScrollbarLayout::new(input_bounds, px(0.), size(px(500.), px(120.)), paddings);
+        let layout_without_gutter = EditorScrollbarLayout::new(
+            input_bounds,
+            px(0.),
+            size(px(500.), px(120.)),
+            paddings,
+            false,
+        );
 
         assert_eq!(
             layout_without_gutter.bounds,
             Bounds::new(point(px(10.), px(18.)), size(px(303.), px(87.)))
         );
-        assert_eq!(layout_without_gutter.scroll_size, size(px(513.), px(120.)));
+        assert_eq!(layout_without_gutter.scroll_size, size(px(503.), px(120.)));
+
+        let layout_with_text_margin = EditorScrollbarLayout::new(
+            input_bounds,
+            px(40.),
+            size(px(1000.), px(200.)),
+            paddings,
+            true,
+        );
+        assert_eq!(
+            layout_with_text_margin.scroll_size,
+            size(px(976.), px(200.))
+        );
     }
 
     #[test]

@@ -19,6 +19,26 @@ pub(super) struct PendingBackgroundParse {
     pub is_folding: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AutoGrowBounds {
+    min_rows: usize,
+    max_rows: usize,
+}
+
+impl AutoGrowBounds {
+    fn new(min_rows: usize, max_rows: usize) -> Self {
+        let min_rows = min_rows.max(1);
+        Self {
+            min_rows,
+            max_rows: max_rows.max(min_rows),
+        }
+    }
+
+    fn clamp(self, rows: usize) -> usize {
+        rows.clamp(self.min_rows, self.max_rows)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum InputMode {
     /// A plain text input mode.
@@ -38,6 +58,7 @@ pub(crate) enum InputMode {
         multi_line: bool,
         tab: TabSize,
         rows: usize,
+        auto_grow: Option<AutoGrowBounds>,
         /// Show line number
         line_number: bool,
         language: SharedString,
@@ -70,6 +91,7 @@ impl InputMode {
     pub(super) fn code_editor(language: impl Into<SharedString>) -> Self {
         InputMode::CodeEditor {
             rows: 2,
+            auto_grow: None,
             multi_line: true,
             tab: TabSize::default(),
             language: language.into(),
@@ -84,10 +106,24 @@ impl InputMode {
 
     /// Create an auto grow input mode with given min and max rows.
     pub(super) fn auto_grow(min_rows: usize, max_rows: usize) -> Self {
+        let bounds = AutoGrowBounds::new(min_rows, max_rows);
         InputMode::AutoGrow {
-            rows: min_rows,
-            min_rows,
-            max_rows,
+            rows: bounds.min_rows,
+            min_rows: bounds.min_rows,
+            max_rows: bounds.max_rows,
+        }
+    }
+
+    pub(super) fn enable_auto_grow(&mut self, min_rows: usize, max_rows: usize) {
+        let bounds = AutoGrowBounds::new(min_rows, max_rows);
+        match self {
+            InputMode::CodeEditor {
+                rows, auto_grow, ..
+            } => {
+                *rows = bounds.clamp(*rows);
+                *auto_grow = Some(bounds);
+            }
+            _ => *self = InputMode::auto_grow(bounds.min_rows, bounds.max_rows),
         }
     }
 
@@ -130,6 +166,13 @@ impl InputMode {
     #[inline]
     pub(super) fn is_auto_grow(&self) -> bool {
         matches!(self, InputMode::AutoGrow { .. })
+            || matches!(
+                self,
+                InputMode::CodeEditor {
+                    auto_grow: Some(_),
+                    ..
+                }
+            )
     }
 
     #[inline]
@@ -146,8 +189,10 @@ impl InputMode {
             InputMode::PlainText { rows, .. } => {
                 *rows = new_rows;
             }
-            InputMode::CodeEditor { rows, .. } => {
-                *rows = new_rows;
+            InputMode::CodeEditor {
+                rows, auto_grow, ..
+            } => {
+                *rows = auto_grow.map_or(new_rows, |bounds| bounds.clamp(new_rows));
             }
             InputMode::AutoGrow {
                 rows,
@@ -187,6 +232,10 @@ impl InputMode {
     pub(super) fn min_rows(&self) -> usize {
         match self {
             InputMode::AutoGrow { min_rows, .. } => *min_rows,
+            InputMode::CodeEditor {
+                auto_grow: Some(bounds),
+                ..
+            } => bounds.min_rows,
             _ => 1,
         }
         .max(1)
@@ -200,6 +249,10 @@ impl InputMode {
 
         match self {
             InputMode::AutoGrow { max_rows, .. } => *max_rows,
+            InputMode::CodeEditor {
+                auto_grow: Some(bounds),
+                ..
+            } => bounds.max_rows,
             _ => usize::MAX,
         }
     }
@@ -403,6 +456,7 @@ mod tests {
             indent_guides: true,
             folding: true,
             rows: 0,
+            auto_grow: None,
             tab: Default::default(),
             language: "rust".into(),
             highlighter: Default::default(),
@@ -462,5 +516,13 @@ mod tests {
 
         mode.set_rows(10);
         assert_eq!(mode.rows(), 5);
+
+        let mut code = InputMode::code_editor("rust");
+        code.enable_auto_grow(1, 8);
+        code.set_rows(20);
+        assert!(code.is_code_editor());
+        assert!(code.is_auto_grow());
+        assert_eq!(code.rows(), 8);
+        assert_eq!(code.max_rows(), 8);
     }
 }

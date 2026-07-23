@@ -521,6 +521,25 @@ pub struct InputState {
 
 impl EventEmitter<InputEvent> for InputState {}
 
+fn offset_after_replacement(offset: usize, range: &Range<usize>, replacement_len: usize) -> usize {
+    if range.is_empty() {
+        return if offset < range.start {
+            offset
+        } else {
+            offset.saturating_add(replacement_len)
+        };
+    }
+    if offset <= range.start {
+        return offset;
+    }
+    if offset < range.end {
+        return range.start.saturating_add(replacement_len);
+    }
+    offset
+        .saturating_sub(range.len())
+        .saturating_add(replacement_len)
+}
+
 impl InputState {
     /// Create a Input state with default [`InputMode::SingleLine`] mode.
     ///
@@ -697,6 +716,21 @@ impl InputState {
         self.set_soft_wrap(true, window, cx);
     }
 
+    /// Make the current multi-line mode grow with its wrapped content.
+    ///
+    /// Code editor mode keeps its syntax highlighter and indentation behavior.
+    pub fn set_auto_grow_mode(
+        &mut self,
+        min_rows: usize,
+        max_rows: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.mode.enable_auto_grow(min_rows, max_rows);
+        self.mode.update_auto_grow(&self.display_map);
+        self.set_soft_wrap(true, window, cx);
+    }
+
     /// Set this input to read-only while preserving focus, selection, search,
     /// copying, and scrolling.
     pub fn read_only(mut self, read_only: bool) -> Self {
@@ -733,7 +767,11 @@ impl InputState {
         highlights: impl Into<Rc<[InputTextHighlight]>>,
         cx: &mut Context<Self>,
     ) {
-        self.text_highlights = highlights.into();
+        let highlights = highlights.into();
+        if self.text_highlights.as_ref() == highlights.as_ref() {
+            return;
+        }
+        self.text_highlights = highlights;
         cx.notify();
     }
 
@@ -988,6 +1026,37 @@ impl InputState {
 
         self.history.clear();
         cx.notify();
+    }
+
+    /// Replace one UTF-8 text range without resetting scroll, selection, or history.
+    ///
+    /// This is intended for model-to-view synchronization where the caller applies
+    /// a minimal diff and then restores the desired selection explicitly.
+    pub fn replace_text_range(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let start = range.start.min(self.text.len());
+        let end = range.end.min(self.text.len()).max(start);
+        let range = start..end;
+        let selection = Range::<usize>::from(self.selected_range);
+        let selection_reversed = self.selection_reversed;
+        let scroll_offset = self.scroll_handle.offset();
+        let range_utf16 = self.range_to_utf16(&range);
+        self.history.ignore = true;
+        self.emit_events = false;
+        self.replace_text_in_range_silent(Some(range_utf16), text, window, cx);
+        self.emit_events = true;
+        self.history.ignore = false;
+        let selected_range = offset_after_replacement(selection.start, &range, text.len())
+            ..offset_after_replacement(selection.end, &range, text.len());
+        self.selected_range = selected_range.clone().into();
+        self.selection_reversed = selection_reversed && !selected_range.is_empty();
+        self.scroll_handle.set_offset(scroll_offset);
+        self.deferred_scroll_offset = Some(scroll_offset);
     }
 
     /// Insert text at the current cursor position.
@@ -3026,6 +3095,53 @@ mod tests {
                 state.set_value("after", window, cx);
                 assert_eq!("after", state.text.to_string());
                 assert!(state.read_only);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_text_range_preserves_selection_and_scroll(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let text = (0..120)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+                state.selected_range = (6..11).into();
+                state.selection_reversed = false;
+                state.scroll_handle.set_offset(point(px(0.), px(-120.)));
+            });
+        });
+        let before_scroll =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.scroll_offset()));
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_range(0..5, "longer", window, cx);
+            });
+        });
+        draw_input(cx, &input);
+        let (selection, scroll) = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                (state.selected_range(), state.scroll_offset())
+            })
+        });
+        assert_eq!(7..12, selection);
+        assert_eq!(before_scroll, scroll);
+    }
+
+    #[gpui::test]
+    fn set_auto_grow_mode_keeps_code_editor_capabilities(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_auto_grow_mode(1, 12, window, cx);
+                assert!(state.mode.is_code_editor());
+                assert!(state.mode.is_auto_grow());
+                assert_eq!(12, state.mode.max_rows());
             });
         });
     }

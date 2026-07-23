@@ -72,7 +72,7 @@ fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
     }
 }
 
-fn estimated_visual_lines(source: &str) -> usize {
+pub(super) fn estimated_visual_lines(source: &str) -> usize {
     source
         .lines()
         .map(|line| {

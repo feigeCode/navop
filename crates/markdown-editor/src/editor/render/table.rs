@@ -115,8 +115,8 @@ impl MarkdownEditor {
 
     fn render_active_table_cell(
         &self,
-        address: TableCellAddress,
-        cell: &SourceTableCell,
+        _address: TableCellAddress,
+        _cell: &SourceTableCell,
         alignment: TextAlign,
     ) -> gpui::AnyElement {
         gpui::div()
@@ -124,37 +124,22 @@ impl MarkdownEditor {
             .min_w_0()
             .relative()
             .child(
-                gpui::div()
+                Input::new(&self.input)
                     .w_full()
-                    .opacity(0.)
-                    .child(self.render_table_cell_preview(address, cell, "placeholder")),
+                    .h_auto()
+                    .bare()
+                    .bordered(false)
+                    .focus_bordered(false)
+                    .local_style(self.input_style())
+                    .highlight_theme(self.theme.highlight_theme.clone())
+                    .editor_scrollbar(false)
+                    .text_layout_margin(false)
+                    .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
+                    .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
+                    .text_align(alignment)
+                    .caret_color(self.theme.primary),
             )
-            .child(
-                gpui::div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .child(
-                        Input::new(&self.input)
-                            .size_full()
-                            .min_h(rems(2.25))
-                            .bare()
-                            .bordered(false)
-                            .focus_bordered(false)
-                            .local_style(self.input_style())
-                            .highlight_theme(self.theme.highlight_theme.clone())
-                            .editor_scrollbar(false)
-                            .text_layout_margin(false)
-                            .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-                            .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-                            .text_align(alignment)
-                            .caret_color(self.theme.primary),
-                    )
-                    .children(self.active_inline_marker_overlay())
-                    .children(self.active_inline_math_overlays()),
-            )
+            .children(self.active_inline_math_overlays())
             .into_any_element()
     }
 

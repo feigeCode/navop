@@ -1,9 +1,8 @@
 use super::MarkdownEditor;
-use crate::{MarkdownEditorEvent, MarkdownProjection, ProjectionStyle};
-use gpui::{
-    App, Context, FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, UnderlineStyle,
-    Window, px,
-};
+use super::projection_styles::projection_highlights;
+use super::text_diff::minimal_text_patch;
+use crate::{MarkdownEditorEvent, MarkdownProjection};
+use gpui::{App, Context, Window};
 use gpui_component::input::Position;
 use markdown_source::{SourceInlineKind, SourceNodeId, SourceSelection, TableCellAddress};
 
@@ -140,13 +139,7 @@ impl MarkdownEditor {
         self.active_table_cell = None;
         self.projection = active_block.map_or_else(
             || MarkdownProjection::build(document, active),
-            |block| {
-                MarkdownProjection::build_range_preserving_layout(
-                    document,
-                    active,
-                    block.source_range.clone(),
-                )
-            },
+            |block| MarkdownProjection::build_range(document, active, block.source_range.clone()),
         );
         self.sync_input_mode(window, cx);
         self.sync_image_property_inputs(window, cx);
@@ -171,11 +164,8 @@ impl MarkdownEditor {
             .map(|node| node.id);
         self.active_block = Some(address.block_id);
         self.active_table_cell = Some(address);
-        self.projection = MarkdownProjection::build_range_preserving_layout(
-            document,
-            active,
-            cell.content_range.clone(),
-        );
+        self.projection =
+            MarkdownProjection::build_range(document, active, cell.content_range.clone());
         self.sync_input_mode(window, cx);
         self.sync_image_property_inputs(window, cx);
         self.sync_input(source_cursor, window, cx);
@@ -192,10 +182,12 @@ impl MarkdownEditor {
     fn sync_input(&mut self, source_cursor: usize, window: &mut Window, cx: &mut Context<Self>) {
         let display_cursor = self.projection.source_to_display(source_cursor);
         let position = position_for_offset(&self.projection.text, display_cursor);
+        let current = self.input.read(cx).value();
+        let patch = minimal_text_patch(&current, &self.projection.text);
         self.syncing_input = true;
         self.input.update(cx, |input, cx| {
-            if input.value() != self.projection.text {
-                input.set_value(self.projection.text.clone(), window, cx);
+            if let Some((range, replacement)) = patch {
+                input.replace_text_range(range, &replacement, window, cx);
             }
             input.set_text_highlights(
                 projection_highlights(&self.projection, &self.theme, &self.inline_math_artifacts),
@@ -248,6 +240,7 @@ impl MarkdownEditor {
             } else {
                 input.set_rich_text_mode(window, cx);
             }
+            input.set_auto_grow_mode(1, usize::MAX, window, cx);
         });
     }
 
@@ -287,68 +280,6 @@ impl MarkdownEditor {
             source: self.source().to_owned(),
             revision: self.revision(),
         });
-    }
-}
-
-pub(super) fn projection_highlights(
-    projection: &MarkdownProjection,
-    theme: &crate::MarkdownEditorTheme,
-    inline_math_artifacts: &std::collections::HashMap<String, crate::MarkdownBlockRenderArtifact>,
-) -> Vec<gpui_component::input::InputTextHighlight> {
-    projection
-        .styles
-        .iter()
-        .map(|span| {
-            let mut style = projection_style(span.style, theme);
-            if span.style == ProjectionStyle::InlineMath
-                && projection.active_inline != Some(span.node_id)
-                && inline_math_artifacts.contains_key(&projection.text[span.range.clone()])
-            {
-                style.color = Some(theme.foreground.opacity(0.));
-                style.background_color = None;
-            }
-            (span.range.clone(), style)
-        })
-        .collect()
-}
-
-fn projection_style(style: ProjectionStyle, theme: &crate::MarkdownEditorTheme) -> HighlightStyle {
-    match style {
-        ProjectionStyle::Emphasis => HighlightStyle {
-            font_style: Some(FontStyle::Italic),
-            ..Default::default()
-        },
-        ProjectionStyle::Strong => HighlightStyle {
-            font_weight: Some(FontWeight::BOLD),
-            ..Default::default()
-        },
-        ProjectionStyle::InlineCode | ProjectionStyle::InlineMath => HighlightStyle {
-            color: theme
-                .highlight_theme
-                .style
-                .syntax
-                .string_special
-                .map(Into::into)
-                .and_then(|style: HighlightStyle| style.color),
-            background_color: Some(theme.border.opacity(0.22)),
-            ..Default::default()
-        },
-        ProjectionStyle::Link | ProjectionStyle::Image => HighlightStyle {
-            color: Some(theme.primary),
-            underline: Some(UnderlineStyle {
-                thickness: px(1.),
-                color: Some(theme.primary),
-                wavy: false,
-            }),
-            ..Default::default()
-        },
-        ProjectionStyle::Delete => HighlightStyle {
-            strikethrough: Some(StrikethroughStyle {
-                thickness: px(1.),
-                color: Some(theme.muted_foreground),
-            }),
-            ..Default::default()
-        },
     }
 }
 

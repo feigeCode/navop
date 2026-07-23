@@ -1,12 +1,12 @@
-use markdown_source::{
-    SourceBlockKind, SourceInlineKind, SourceInlineNode, SourceMarkdownDocument, SourceNodeId,
-};
+use markdown_source::{SourceMarkdownDocument, SourceNodeId};
 use std::ops::Range;
 
 mod block_syntax;
 use block_syntax::block_hidden_ranges;
 mod syntax;
 use syntax::{block_inline_nodes, hidden_syntax_ranges};
+mod styles;
+use styles::{active_marker_style_spans, projection_style_spans};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionSegment {
@@ -16,6 +16,7 @@ pub enum ProjectionSegment {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionStyle {
+    Marker,
     Emphasis,
     Strong,
     InlineCode,
@@ -62,16 +63,6 @@ impl MarkdownProjection {
         Self::build_range_with_reveal(document, active_inline, source_range, true)
     }
 
-    /// Build the editor projection without changing text metrics when an inline node is active.
-    /// The active node is still recorded for source mapping and marker overlays.
-    pub fn build_range_preserving_layout(
-        document: &SourceMarkdownDocument,
-        active_inline: Option<SourceNodeId>,
-        source_range: Range<usize>,
-    ) -> Self {
-        Self::build_range_with_reveal(document, active_inline, source_range, false)
-    }
-
     fn build_range_with_reveal(
         document: &SourceMarkdownDocument,
         active_inline: Option<SourceNodeId>,
@@ -84,6 +75,12 @@ impl MarkdownProjection {
         builder.append_source(&document.source, source_range, &hidden);
         let mut projection = builder.finish();
         projection.styles = projection_style_spans(document, &projection);
+        projection.styles.extend(active_marker_style_spans(
+            document,
+            active_inline,
+            &projection,
+        ));
+        projection.styles.sort_by_key(|span| span.range.start);
         projection
     }
 
@@ -205,68 +202,6 @@ impl ProjectionBuilder {
             source_to_display: self.source_to_display,
         }
     }
-}
-
-fn projection_style_spans(
-    document: &SourceMarkdownDocument,
-    projection: &MarkdownProjection,
-) -> Vec<ProjectionStyleSpan> {
-    document
-        .blocks
-        .iter()
-        .flat_map(block_inline_nodes)
-        .filter(|node| range_contains(&projection.source_range, &node.source_range))
-        .filter_map(|node| node_style_span(node, projection))
-        .collect()
-}
-
-fn node_style_span(
-    node: &SourceInlineNode,
-    projection: &MarkdownProjection,
-) -> Option<ProjectionStyleSpan> {
-    let (source_range, style) = node_style_source_range(node)?;
-    let range = projection.source_to_display(source_range.start)
-        ..projection.source_to_display(source_range.end);
-    (!range.is_empty()).then_some(ProjectionStyleSpan {
-        range,
-        style,
-        node_id: node.id,
-    })
-}
-
-fn node_style_source_range(node: &SourceInlineNode) -> Option<(Range<usize>, ProjectionStyle)> {
-    match &node.kind {
-        SourceInlineKind::Emphasis { .. } => {
-            Some((node.content_range.clone()?, ProjectionStyle::Emphasis))
-        }
-        SourceInlineKind::Strong { .. } => {
-            Some((node.content_range.clone()?, ProjectionStyle::Strong))
-        }
-        SourceInlineKind::InlineCode {
-            opening_marker,
-            closing_marker,
-        } => Some((
-            opening_marker.end..closing_marker.start,
-            ProjectionStyle::InlineCode,
-        )),
-        SourceInlineKind::InlineMath {
-            opening_marker,
-            closing_marker,
-        } => Some((
-            opening_marker.end..closing_marker.start,
-            ProjectionStyle::InlineMath,
-        )),
-        SourceInlineKind::Link(link) => Some((link.label_range.clone(), ProjectionStyle::Link)),
-        SourceInlineKind::Image(image) => Some((image.alt_range.clone(), ProjectionStyle::Image)),
-        SourceInlineKind::Delete { .. } => {
-            Some((node.content_range.clone()?, ProjectionStyle::Delete))
-        }
-        _ => None,
-    }
-}
-
-fn range_contains(outer: &Range<usize>, inner: &Range<usize>) -> bool {
-    outer.start <= inner.start && inner.end <= outer.end
 }
 
 fn common_prefix(left: &str, right: &str) -> usize {

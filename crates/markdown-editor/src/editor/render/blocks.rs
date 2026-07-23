@@ -3,7 +3,7 @@ use super::{
     active_block::active_block_height,
     layout_metrics::{
         DOCUMENT_BOTTOM_PADDING, DOCUMENT_MAX_WIDTH, DOCUMENT_SIDE_PADDING, DOCUMENT_TOP_PADDING,
-        block_size, should_virtualize, virtual_item_sizes,
+        estimated_visual_lines, should_virtualize, virtual_item_sizes,
     },
 };
 use gpui::{
@@ -140,7 +140,6 @@ impl MarkdownEditor {
             return gpui::div().into_any_element();
         };
         let block_count = self.history.document().blocks.len();
-        let content_height = self.rendered_block_height(&block, block_size(&block).height);
         gpui::div()
             .id(("markdown-block-frame", block.id.0))
             .debug_selector(move || format!("markdown-block-frame-{}", block.id.0))
@@ -156,7 +155,7 @@ impl MarkdownEditor {
                     .when(index + 1 == block_count, |this| {
                         this.pb(px(DOCUMENT_BOTTOM_PADDING))
                     })
-                    .child(self.render_block_content(&block, active_block, content_height, cx)),
+                    .child(self.render_block_content(&block, active_block, cx)),
             )
             .into_any_element()
     }
@@ -169,7 +168,10 @@ impl MarkdownEditor {
         if self.active_block != Some(block.id) {
             return preview_height;
         }
-        let rows = self.projection.text.lines().count().max(1) as f32;
+        if let Some(measured) = self.measured_block_heights.get(&block.id) {
+            return *measured;
+        }
+        let rows = estimated_visual_lines(&self.projection.text) as f32;
         let heading = match block.kind {
             SourceBlockKind::Heading { level, .. } => Some(level),
             _ => None,
@@ -186,7 +188,6 @@ impl MarkdownEditor {
         &self,
         block: &SourceBlock,
         active_block: Option<markdown_source::SourceNodeId>,
-        reserved_height: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if active_block != Some(block.id)
@@ -196,9 +197,7 @@ impl MarkdownEditor {
         }
         match &block.kind {
             SourceBlockKind::Table(table) => self.render_table(block, table, cx),
-            _ if active_block == Some(block.id) => {
-                self.render_active_block(block, Some(reserved_height))
-            }
+            _ if active_block == Some(block.id) => self.render_active_block(block, cx),
             _ => self.render_preview_block(block, cx),
         }
     }

@@ -50,11 +50,14 @@
   预览/编辑布局度量；当前文字起点和长行换行已基本一致，任务列表编辑态
   checkbox 尚未完成绘制验收。
 - [x] 行内粗体、斜体、删除线、行内代码、链接和数学公式的源码 marker
-  必须以不占正文布局宽度的 overlay/inlay 显示；光标进入节点时不能因为
-  `**`、反引号、`$` 等 marker 触发临界行重新换行。
+  必须是活动 Input 中可选择、可编辑的真实文本，并以正文同字号、muted 颜色
+  显示；禁止使用 canvas/absolute overlay 计算坐标后贴字。
+- [x] 光标进入或离开行内节点时，marker 出现或隐藏可以像 Typora 一样触发
+  自然换行；同步过程必须使用最小文本补丁，不能通过全量 `set_value` 重置
+  Input 滚动、选区或整块 rope。
 - [x] 块级代码继续使用 Input 编辑，并保持多行、换行与 Tab/Shift-Tab 缩进。
-- [ ] 建立覆盖字体度量、块 bounds、后续块 y 坐标、换行点和外层滚动偏移的
-  统一视觉回归，确保“进入编辑态只多出光标和必要源码标记”。
+- [ ] 建立覆盖字体度量、活动 Input 内容高度、后续块 y 坐标、自然换行和外层
+  滚动偏移的统一视觉回归，确保 marker 显隐只产生内容本身需要的布局变化。
 
 ### C. 列表编辑
 
@@ -81,17 +84,17 @@
 
 ### D1. 公式与 Mermaid 扩展加载性能
 
-- [ ] 数学公式和 Mermaid 的扩展发现、WASM/渲染器初始化、编译和 SVG 生成
+- [x] 数学公式和 Mermaid 的扩展发现、WASM/渲染器初始化、编译和 SVG 生成
   不得在 GPUI UI 线程同步执行。
-- [ ] 打开文档、首次滚动到公式/Mermaid、切换活动块和输入时，UI 线程必须
+- [x] 打开文档、首次滚动到公式/Mermaid、切换活动块和输入时，UI 线程必须
   保持可响应；前台只负责提交任务、展示 loading/fallback 和应用结果。
 - [ ] 相同扩展、相同源码和相同渲染参数要去重并缓存，不能因虚拟列表重绘或
   光标移动重复初始化扩展。
-- [ ] 异步结果必须带请求版本/源码 fingerprint；旧任务晚到时不能覆盖新源码
+- [x] 异步结果必须带请求版本/源码 fingerprint；旧任务晚到时不能覆盖新源码
   或新主题下的结果。
 - [ ] 渲染失败必须保留可读源码，提供明确的失败状态和再次触发渲染的路径，
   不能阻塞编辑器或让块消失。
-- [ ] 增加慢渲染器 contract：后台任务延迟期间仍可点击、输入、滚动和切换
+- [x] 增加慢渲染器 contract：后台任务延迟期间仍可点击、输入、滚动和切换
   活动块；完成后只更新对应块。
 - [ ] 需要运行公式/Mermaid 相关测试、虚拟列表可见性测试和主工程启动检查，
   确认扩展加载不再卡住 UI 线程。
@@ -120,12 +123,19 @@
 - [ ] 定向修复 task checkbox 绘制，并用 GPUI layout bounds 测试和 Headless
   截图共同确认所有 marker 可见。
 - [x] 完成嵌套有序列表编号 contract 与编辑器回归测试。
-- [x] 完成行内 marker 不占宽方案和临界换行回归测试。
+- [x] 删除行内 marker overlay 子系统，完成真实 marker、局部同步和自然换行
+  回归测试。
+- [x] `InputState` 提供不重置滚动和选区的最小范围文本替换 API；相同文本
+  highlight 不重复 notify。
+- [x] 活动块使用 auto-grow Input 进入正常文档流；标准布局不再使用透明
+  placeholder 与 absolute 覆盖层，虚拟布局回灌活动块实测高度。
 - [ ] 完成表格尺寸 Popover 展开态、真实按钮点击和工具条视觉回归。
-- [ ] 运行 `cargo test -p markdown-editor`、`cargo test -p markdown-source`、
-  `cargo test -p notes`。
-- [ ] 运行 Markdown 相关 crate 的 Clippy、`cargo fmt --all -- --check`、
-  `git diff --check` 和 `cargo check -p main`。
+- [~] `cargo test -p markdown-editor`（76 通过、1 忽略）和
+  `cargo test -p markdown-source`（30 通过）已通过；`cargo test -p notes`
+  被工作区并行中的 X11 forwarding 未完成导出阻塞。
+- [~] Markdown editor/source Clippy、定向 rustfmt、`git diff --check` 和
+  `cargo check -p markdown-editor` 已通过；全仓 fmt/main 检查被工作区并行中的
+  `x11_forwarding::detect` 缺失及未完成导出阻塞。
 - [ ] 根据最新测试与截图逐项回填本清单；只有所有 `[ ]` 和 `[~]` 收敛后，
   才能声明 Typora 风格 Markdown 编辑阶段完成。
 
@@ -190,7 +200,8 @@
 
 ## 当前明确边界
 
-- 已完成 Typora 式行内源码显隐的交互语义：默认隐藏 marker，进入节点仅展开该节点源码。
+- 已确定 Typora 式行内源码显隐的最终语义：默认隐藏 marker，进入节点后由
+  Input 显示该节点的真实源码字符，并允许内容驱动的自然重排。
 - 已完成行内语义样式、真实光标切换测试和 Markdown 源码级 Undo/Redo 快捷键路由。
 - 已完成块级富文本预览、当前块原位编辑、HTML 预览、Raw 卡片、表格网格、图片属性和块结构事务。
 - 活动 Heading 已按层级保留字号和字重；细节仍可继续与 `TextView` 的精确行高、段前段后距对齐。

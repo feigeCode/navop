@@ -44,14 +44,14 @@ fn cursor_reveals_only_the_active_inline_source(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     assert_eq!(
-        "Before italic and bold after",
+        "Before _italic_ and bold after",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
     assert!(
         cx.debug_bounds(Box::leak(
             format!("markdown-active-inline-markers-{}", italic_id.0).into_boxed_str(),
         ))
-        .is_some()
+        .is_none()
     );
     assert_eq!(
         source,
@@ -74,7 +74,7 @@ fn nested_inline_edit_reveals_only_the_innermost_source(cx: &mut TestAppContext)
     cx.run_until_parked();
 
     assert_eq!(
-        "Before bold nested text after",
+        "Before bold _nested_ text after",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
 }
@@ -98,16 +98,19 @@ fn cursor_reveals_inline_code_source_until_another_node_becomes_active(cx: &mut 
     });
     cx.run_until_parked();
     assert_eq!(
-        "Run cargo test then ship",
+        "Run `cargo test` then ship",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
 
+    let ship = editor.read_with(&cx, |editor, _| {
+        editor.projected_text().find("ship").unwrap() + 1
+    });
     input.update_in(&mut cx, |input, window, cx| {
-        input.set_cursor_position(Position::new(0, 23), window, cx);
+        input.set_cursor_position(Position::new(0, ship as u32), window, cx);
     });
     cx.run_until_parked();
     assert_eq!(
-        "Run cargo test then ship",
+        "Run cargo test then **ship**",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
     assert_eq!(
@@ -117,9 +120,7 @@ fn cursor_reveals_inline_code_source_until_another_node_becomes_active(cx: &mut 
 }
 
 #[gpui::test]
-fn inline_marker_overlay_does_not_change_wrapping_or_following_block_position(
-    cx: &mut TestAppContext,
-) {
+fn real_inline_markers_reflow_without_overlay_or_inner_scroll(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "This deliberately long paragraph approaches the editor wrap boundary before a **strong inline node** near the end.\n\nFollowing block";
     let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
@@ -139,8 +140,7 @@ fn inline_marker_overlay_does_not_change_wrapping_or_following_block_position(
     let first_selector = Box::leak(format!("markdown-block-frame-{}", first_id.0).into_boxed_str());
     let following_selector =
         Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
-    let before_first = cx.debug_bounds(first_selector).unwrap();
-    let before_following = cx.debug_bounds(following_selector).unwrap();
+    let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
     let input = editor.read_with(&cx, |editor, _| editor.input_state());
     let strong_display = editor.read_with(&cx, |editor, _| {
         editor.projected_text().find("strong").unwrap() + 2
@@ -151,16 +151,24 @@ fn inline_marker_overlay_does_not_change_wrapping_or_following_block_position(
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
 
-    assert_eq!(before_first, cx.debug_bounds(first_selector).unwrap());
+    let first = cx.debug_bounds(first_selector).unwrap();
+    let following = cx.debug_bounds(following_selector).unwrap();
+    assert!(following.top() >= first.bottom());
     assert_eq!(
-        before_following,
-        cx.debug_bounds(following_selector).unwrap()
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+    assert!(cx.debug_bounds("editor-scrollbar").is_none());
+    assert!(
+        editor
+            .read_with(&cx, |editor, _| editor.projected_text().to_owned())
+            .contains("**strong inline node**")
     );
     assert!(
         cx.debug_bounds(Box::leak(
             format!("markdown-active-inline-markers-{}", strong_id.0).into_boxed_str(),
         ))
-        .is_some()
+        .is_none()
     );
 }
 
@@ -190,7 +198,7 @@ fn projected_edit_updates_only_inline_content_and_can_undo(cx: &mut TestAppConte
     editor.update_in(&mut cx, |editor, window, cx| {
         assert!(
             editor
-                .edit_projected_value("Use new here", window, cx)
+                .edit_projected_value("Use _new_ here", window, cx)
                 .unwrap()
         );
     });
@@ -623,11 +631,11 @@ fn active_table_toolbar_is_an_overlay_and_structure_edits_are_undoable(cx: &mut 
         ))
         .is_some()
     );
-    assert_eq!(table_before, cx.debug_bounds(table_selector).unwrap());
-    assert_eq!(
-        following_before.origin.y,
-        cx.debug_bounds(following_selector).unwrap().origin.y
-    );
+    let table_after = cx.debug_bounds(table_selector).unwrap();
+    let following_after = cx.debug_bounds(following_selector).unwrap();
+    assert_eq!(table_before.origin, table_after.origin);
+    assert!(following_after.top() >= table_after.bottom());
+    assert!((following_after.top() - following_before.top()).abs() <= px(24.));
 
     editor.update_in(&mut cx, |editor, window, cx| {
         assert!(
@@ -1026,7 +1034,9 @@ fn standard_document_uses_natural_preview_height_without_estimated_blank_space(
 }
 
 #[gpui::test]
-fn activating_structured_blocks_keeps_layout_and_markers_stable(cx: &mut TestAppContext) {
+fn activating_structured_blocks_uses_content_driven_height_and_stable_markers(
+    cx: &mut TestAppContext,
+) {
     cx.update(gpui_component::init);
     let source = "- First **item**\n- Second item\n\n> Quoted text\n\n# Heading\n\nFollowing";
     let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
@@ -1041,20 +1051,18 @@ fn activating_structured_blocks_keeps_layout_and_markers_stable(cx: &mut TestApp
     cx.run_until_parked();
     let following =
         Box::leak(format!("markdown-preview-block-{}", following_id.0).into_boxed_str());
-    let before = cx.debug_bounds(following).unwrap();
     for block_id in structured_ids {
         let frame = Box::leak(format!("markdown-block-frame-{}", block_id.0).into_boxed_str());
-        let frame_before = cx.debug_bounds(frame).unwrap();
         editor.update_in(&mut cx, |editor, window, cx| {
             assert!(editor.activate_block(block_id, window, cx));
         });
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
-        assert_eq!(
-            before.origin.y,
-            cx.debug_bounds(following).unwrap().origin.y
-        );
-        assert_eq!(frame_before, cx.debug_bounds(frame).unwrap());
+        let active = cx.debug_bounds(frame).unwrap();
+        let next = cx.debug_bounds(following).unwrap();
+        assert!(active.size.height >= px(24.));
+        assert!(next.top() >= active.bottom());
+        assert!(cx.debug_bounds("editor-scrollbar").is_none());
     }
     let list_id = document.blocks[0].id;
     assert!(
@@ -1121,13 +1129,12 @@ fn ordered_and_task_lists_keep_visual_markers_while_editing(cx: &mut TestAppCont
 
     for block in &document.blocks[..2] {
         let frame = Box::leak(format!("markdown-block-frame-{}", block.id.0).into_boxed_str());
-        let before = cx.debug_bounds(frame).unwrap();
         editor.update_in(&mut cx, |editor, window, cx| {
             assert!(editor.activate_block(block.id, window, cx));
         });
         cx.update(|window, _| window.refresh());
         cx.run_until_parked();
-        assert_eq!(before, cx.debug_bounds(frame).unwrap());
+        assert!(cx.debug_bounds(frame).unwrap().size.height >= px(48.));
         assert!(
             cx.debug_bounds(Box::leak(
                 format!("markdown-active-list-markers-{}", block.id.0).into_boxed_str(),
@@ -1137,7 +1144,7 @@ fn ordered_and_task_lists_keep_visual_markers_while_editing(cx: &mut TestAppCont
     }
 
     assert_eq!(
-        "Todo\nDone\n",
+        "Todo\nDone",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
 }
@@ -1314,7 +1321,7 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
         cx.debug_bounds(Box::leak(
             format!("markdown-active-placeholder-{}", block_id.0).into_boxed_str(),
         ))
-        .is_some()
+        .is_none()
     );
     assert!(
         cx.debug_bounds(Box::leak(
@@ -1346,7 +1353,7 @@ fn math_and_mermaid_provider_dispatch_uses_the_background_executor(cx: &mut Test
 fn pending_mermaid_render_does_not_block_edits_or_overwrite_new_output(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "```mermaid\ngraph TD\nA --> B\n```";
-    let updated_source = "```mermaid\ngraph TD\nX --> Y\n```";
+    let updated_source = "Intro\n\n```mermaid\ngraph TD\nX --> Y\n```";
     let (release_old, old_result) = futures::channel::oneshot::channel::<
         Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
     >();
@@ -1388,7 +1395,7 @@ fn pending_mermaid_render_does_not_block_edits_or_overwrite_new_output(cx: &mut 
     );
     let block_id = markdown_source::SourceMarkdownDocument::parse(updated_source)
         .unwrap()
-        .blocks[0]
+        .blocks[1]
         .id;
     let selector = Box::leak(format!("markdown-rendered-block-{}", block_id.0).into_boxed_str());
     let replacement_height = cx
@@ -1414,9 +1421,7 @@ fn pending_mermaid_render_does_not_block_edits_or_overwrite_new_output(cx: &mut 
 }
 
 #[gpui::test]
-fn inline_math_uses_svg_preview_and_overlays_source_markers_when_activated(
-    cx: &mut TestAppContext,
-) {
+fn inline_math_uses_svg_preview_and_real_source_markers_when_activated(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "Euler: $e^{i\\pi} + 1 = 0$.";
     let (window, editor) = open_editor(source, cx);
@@ -1443,7 +1448,7 @@ fn inline_math_uses_svg_preview_and_overlays_source_markers_when_activated(
     });
     cx.run_until_parked();
     assert_eq!(
-        "Euler: e^{i\\pi} + 1 = 0.",
+        "Euler: $e^{i\\pi} + 1 = 0$.",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
     let math_id = markdown_source::SourceMarkdownDocument::parse(source)
@@ -1455,7 +1460,7 @@ fn inline_math_uses_svg_preview_and_overlays_source_markers_when_activated(
         cx.debug_bounds(Box::leak(
             format!("markdown-active-inline-markers-{}", math_id.0).into_boxed_str(),
         ))
-        .is_some()
+        .is_none()
     );
 }
 
@@ -1490,7 +1495,7 @@ fn active_paragraph_keeps_other_inline_math_rendered(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(
-        "First one and second two.",
+        "First $one$ and second two.",
         editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
     );
     assert_eq!(

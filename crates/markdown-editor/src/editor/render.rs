@@ -16,7 +16,6 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 
 mod action_handlers;
 mod active_block;
-mod active_inline_markers;
 mod active_inline_math;
 mod active_list_markers;
 mod block_renderer;

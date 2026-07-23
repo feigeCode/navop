@@ -16,14 +16,15 @@ mod activation;
 mod history_operations;
 mod media_operations;
 mod operations;
+mod projection_styles;
 mod render;
 mod setup;
 mod sync;
 mod table_operations;
 mod text_diff;
 mod types;
+use projection_styles::projection_highlights;
 use setup::{apply_projection_styles, create_input, create_property_input, subscribe_to_input};
-use sync::projection_highlights;
 use text_diff::{common_prefix, common_suffix};
 pub use types::{MarkdownEditorError, MarkdownEditorEvent};
 

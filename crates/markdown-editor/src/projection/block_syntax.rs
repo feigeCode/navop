@@ -2,7 +2,7 @@ use markdown_source::{SourceBlock, SourceBlockKind};
 use std::ops::Range;
 
 pub(super) fn block_hidden_ranges(source: &str, block: &SourceBlock) -> Vec<Range<usize>> {
-    match &block.kind {
+    let mut ranges = match &block.kind {
         SourceBlockKind::Heading { marker_range, .. } => {
             let end = block
                 .content_range
@@ -40,7 +40,23 @@ pub(super) fn block_hidden_ranges(source: &str, block: &SourceBlock) -> Vec<Rang
                 ..closing_marker.end,
         ],
         _ => Vec::new(),
+    };
+    if let Some(separator) = trailing_line_ending(source, block) {
+        ranges.push(separator);
     }
+    ranges
+}
+
+fn trailing_line_ending(source: &str, block: &SourceBlock) -> Option<Range<usize>> {
+    let block_source = source.get(block.source_range.clone())?;
+    let length = if block_source.ends_with("\r\n") {
+        2
+    } else if block_source.ends_with('\n') {
+        1
+    } else {
+        0
+    };
+    (length > 0).then(|| block.source_range.end - length..block.source_range.end)
 }
 
 fn list_marker_ranges(source: &str, block: &SourceBlock) -> Vec<Range<usize>> {

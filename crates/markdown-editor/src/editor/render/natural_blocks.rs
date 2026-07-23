@@ -19,27 +19,7 @@ impl MarkdownEditor {
                 .into_any_element();
         }
         frame
-            .relative()
-            .child(self.render_active_placeholder(block))
-            .child(
-                gpui::div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .child(self.render_active_block(block, None)),
-            )
-            .into_any_element()
-    }
-
-    fn render_active_placeholder(&self, block: &SourceBlock) -> gpui::AnyElement {
-        gpui::div()
-            .id(("markdown-active-placeholder", block.id.0))
-            .debug_selector(|| format!("markdown-active-placeholder-{}", block.id.0))
-            .w_full()
-            .opacity(0.)
-            .child(self.render_preview_content(block))
+            .child(self.render_active_block(block, cx))
             .into_any_element()
     }
 
@@ -55,10 +35,5 @@ impl MarkdownEditor {
             return self.render_artifact_preview(block, rendered, cx);
         }
         self.render_preview_block(block, cx)
-    }
-
-    pub(super) fn render_preview_content(&self, block: &SourceBlock) -> gpui::AnyElement {
-        self.render_block_output(block)
-            .unwrap_or_else(|| self.preview_content(block))
     }
 }

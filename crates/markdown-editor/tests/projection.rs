@@ -26,6 +26,25 @@ fn active_inline_node_reveals_only_its_original_source() {
 }
 
 #[test]
+fn active_inline_markers_are_real_text_with_muted_style_spans() {
+    let source = "Before **bold** and $x$";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let node = document
+        .inline_node_at(source.find("bold").unwrap())
+        .unwrap();
+    let projection = MarkdownProjection::build(&document, Some(node.id));
+    assert_eq!("Before **bold** and x", projection.text);
+    let markers = projection
+        .styles
+        .iter()
+        .filter(|span| span.style == ProjectionStyle::Marker)
+        .collect::<Vec<_>>();
+    assert_eq!(2, markers.len());
+    assert_eq!("**", &projection.text[markers[0].range.clone()]);
+    assert_eq!("**", &projection.text[markers[1].range.clone()]);
+}
+
+#[test]
 fn nested_inline_source_reveals_only_the_exact_active_node() {
     let source = "Before **bold _nested_ text** after";
     let document = SourceMarkdownDocument::parse(source).unwrap();
@@ -76,7 +95,7 @@ fn structural_block_syntax_is_projected_as_content() {
         .collect::<Vec<_>>();
 
     assert_eq!("quoted text", projections[0]);
-    assert_eq!("first\nsecond\n", projections[1]);
+    assert_eq!("first\nsecond", projections[1]);
     assert_eq!("let value = 1;", projections[2]);
 }
 

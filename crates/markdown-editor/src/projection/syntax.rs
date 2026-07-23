@@ -1,5 +1,8 @@
-use super::{SourceBlockKind, SourceInlineKind, SourceInlineNode, block_hidden_ranges};
-use markdown_source::{SourceBlock, SourceMarkdownDocument, SourceNodeId};
+use super::block_hidden_ranges;
+use markdown_source::{
+    SourceBlock, SourceBlockKind, SourceInlineKind, SourceInlineNode, SourceMarkdownDocument,
+    SourceNodeId,
+};
 use std::ops::Range;
 
 pub(super) fn hidden_syntax_ranges(
