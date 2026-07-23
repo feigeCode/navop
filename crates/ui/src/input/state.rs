@@ -466,6 +466,7 @@ pub struct InputState {
     pub(super) editor_scrollbar_paddings: Cell<Edges<Pixels>>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
     pub(super) text_align: TextAlign,
+    pub(super) text_layout_margin: bool,
 
     /// The mask pattern for formatting the input text
     pub(crate) mask_pattern: MaskPattern,
@@ -599,6 +600,7 @@ impl InputState {
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
             text_align: TextAlign::Left,
+            text_layout_margin: true,
             lsp: Lsp::default(),
             diagnostic_popover: None,
             context_menu_content: None,
@@ -662,6 +664,37 @@ impl InputState {
         self.searchable = true;
         self.auto_pair = true;
         self
+    }
+
+    /// Switch an existing input to the lightweight code editor mode.
+    pub fn set_code_editor_mode(
+        &mut self,
+        language: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut mode = InputMode::code_editor(language);
+        if let InputMode::CodeEditor {
+            line_number,
+            folding,
+            ..
+        } = &mut mode
+        {
+            *line_number = false;
+            *folding = false;
+        }
+        self.mode = mode;
+        self.searchable = true;
+        self.auto_pair = true;
+        self.set_soft_wrap(false, window, cx);
+    }
+
+    /// Switch an existing input back to the multi-line rich text mode.
+    pub fn set_rich_text_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = InputMode::plain_text().multi_line(true);
+        self.searchable = false;
+        self.auto_pair = false;
+        self.set_soft_wrap(true, window, cx);
     }
 
     /// Set this input to read-only while preserving focus, selection, search,
@@ -1843,7 +1876,8 @@ impl InputState {
         // For Right alignment use 0 margin: the cursor indicator is clamped inside bounds
         // in layout_cursor, so shifting the text here would cause a first-click visual jump.
         let safety_margin = match last_layout.text_align {
-            TextAlign::Left => RIGHT_MARGIN,
+            TextAlign::Left if self.text_layout_margin => RIGHT_MARGIN,
+            TextAlign::Left => px(0.),
             TextAlign::Right => px(0.),
             TextAlign::Center => CURSOR_WIDTH,
         };
@@ -2029,6 +2063,15 @@ impl InputState {
     /// in the underlying rope's byte units.
     pub fn selected_range(&self) -> std::ops::Range<usize> {
         self.selected_range.into()
+    }
+
+    /// Return the closest UTF-8 byte offset for an absolute window position.
+    ///
+    /// Returns `None` before the input has completed its first layout.
+    pub fn offset_for_position(&self, position: Point<Pixels>) -> Option<usize> {
+        self.last_bounds.as_ref()?;
+        self.last_layout.as_ref()?;
+        Some(self.index_for_mouse_position(position))
     }
 
     pub(crate) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {

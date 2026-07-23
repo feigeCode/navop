@@ -8,6 +8,13 @@ use gpui_component::input::Position;
 use markdown_source::{SourceInlineKind, SourceNodeId, SourceSelection, TableCellAddress};
 
 impl MarkdownEditor {
+    pub(super) fn refresh_projection_highlights(&self, cx: &mut Context<Self>) {
+        let highlights =
+            projection_highlights(&self.projection, &self.theme, &self.inline_math_artifacts);
+        self.input
+            .update(cx, |input, cx| input.set_text_highlights(highlights, cx));
+    }
+
     pub(super) fn input_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.syncing_input {
             return;
@@ -20,6 +27,7 @@ impl MarkdownEditor {
             .projection
             .display_to_source(self.input.read(cx).selected_range().end);
         if let Some(edit) = self.projection.edit_for_value(&value)
+            && !self.active_block_is_source_code()
             && edit.source_range.is_empty()
             && edit.replacement == "\n"
         {
@@ -40,6 +48,17 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_block_is_source_code() {
+            let value = self.input.read(cx).value().to_string();
+            let cursor = self
+                .projection
+                .display_end_to_source(self.input.read(cx).selected_range().end);
+            let edited = self.edit_projected_value(&value, window, cx);
+            if !matches!(edited, Ok(true)) {
+                self.resync_active(cursor, window, cx);
+            }
+            return;
+        }
         let Some(source_offset) = self.pending_newline.take() else {
             return;
         };
@@ -121,8 +140,15 @@ impl MarkdownEditor {
         self.active_table_cell = None;
         self.projection = active_block.map_or_else(
             || MarkdownProjection::build(document, active),
-            |block| MarkdownProjection::build_range(document, active, block.source_range.clone()),
+            |block| {
+                MarkdownProjection::build_range_preserving_layout(
+                    document,
+                    active,
+                    block.source_range.clone(),
+                )
+            },
         );
+        self.sync_input_mode(window, cx);
         self.sync_image_property_inputs(window, cx);
         self.sync_input(source_cursor, window, cx);
     }
@@ -145,8 +171,12 @@ impl MarkdownEditor {
             .map(|node| node.id);
         self.active_block = Some(address.block_id);
         self.active_table_cell = Some(address);
-        self.projection =
-            MarkdownProjection::build_range(document, active, cell.content_range.clone());
+        self.projection = MarkdownProjection::build_range_preserving_layout(
+            document,
+            active,
+            cell.content_range.clone(),
+        );
+        self.sync_input_mode(window, cx);
         self.sync_image_property_inputs(window, cx);
         self.sync_input(source_cursor, window, cx);
     }
@@ -167,13 +197,58 @@ impl MarkdownEditor {
             if input.value() != self.projection.text {
                 input.set_value(self.projection.text.clone(), window, cx);
             }
-            input.set_text_highlights(projection_highlights(&self.projection, &self.theme), cx);
+            input.set_text_highlights(
+                projection_highlights(&self.projection, &self.theme, &self.inline_math_artifacts),
+                cx,
+            );
             if input.selected_range() != (display_cursor..display_cursor) {
                 input.set_cursor_position(position, window, cx);
             }
         });
         self.syncing_input = false;
         cx.notify();
+    }
+
+    fn active_block_is_source_code(&self) -> bool {
+        self.active_block
+            .and_then(|id| self.history.document().block_by_id(id))
+            .is_some_and(|block| {
+                matches!(
+                    block.kind,
+                    markdown_source::SourceBlockKind::CodeFence { .. }
+                        | markdown_source::SourceBlockKind::MathBlock { .. }
+                )
+            })
+    }
+
+    fn sync_input_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = self.active_block.and_then(|id| {
+            let block = self.history.document().block_by_id(id)?;
+            match &block.kind {
+                markdown_source::SourceBlockKind::CodeFence { language_range, .. } => {
+                    language_range
+                        .as_ref()
+                        .map(|range| self.history.document().source[range.clone()].to_owned())
+                        .map(|language| {
+                            if language.eq_ignore_ascii_case("mermaid") {
+                                "text".to_owned()
+                            } else {
+                                language
+                            }
+                        })
+                        .or_else(|| Some("text".to_owned()))
+                }
+                markdown_source::SourceBlockKind::MathBlock { .. } => Some("latex".to_owned()),
+                _ => None,
+            }
+        });
+        self.input.update(cx, |input, cx| {
+            if let Some(language) = language {
+                input.set_code_editor_mode(language, window, cx);
+            } else {
+                input.set_rich_text_mode(window, cx);
+            }
+        });
     }
 
     fn sync_image_property_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -218,11 +293,22 @@ impl MarkdownEditor {
 pub(super) fn projection_highlights(
     projection: &MarkdownProjection,
     theme: &crate::MarkdownEditorTheme,
+    inline_math_artifacts: &std::collections::HashMap<String, crate::MarkdownBlockRenderArtifact>,
 ) -> Vec<gpui_component::input::InputTextHighlight> {
     projection
         .styles
         .iter()
-        .map(|span| (span.range.clone(), projection_style(span.style, theme)))
+        .map(|span| {
+            let mut style = projection_style(span.style, theme);
+            if span.style == ProjectionStyle::InlineMath
+                && projection.active_inline != Some(span.node_id)
+                && inline_math_artifacts.contains_key(&projection.text[span.range.clone()])
+            {
+                style.color = Some(theme.foreground.opacity(0.));
+                style.background_color = None;
+            }
+            (span.range.clone(), style)
+        })
         .collect()
 }
 
@@ -236,7 +322,7 @@ fn projection_style(style: ProjectionStyle, theme: &crate::MarkdownEditorTheme) 
             font_weight: Some(FontWeight::BOLD),
             ..Default::default()
         },
-        ProjectionStyle::InlineCode => HighlightStyle {
+        ProjectionStyle::InlineCode | ProjectionStyle::InlineMath => HighlightStyle {
             color: theme
                 .highlight_theme
                 .style

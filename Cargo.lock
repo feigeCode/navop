@@ -6829,8 +6829,10 @@ dependencies = [
 name = "markdown-editor"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gpui",
  "gpui-component",
+ "gpui_platform",
  "markdown-source",
  "thiserror 2.0.18",
 ]
@@ -7495,6 +7497,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "dunce",
+ "extension-runtime",
  "futures",
  "gpui",
  "gpui-component",

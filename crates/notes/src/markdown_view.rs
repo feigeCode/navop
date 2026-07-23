@@ -1,5 +1,6 @@
 use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_mode::{switch_to_source, switch_to_wysiwyg};
+use crate::markdown_renderer::{block_render_provider, markdown_editor_theme};
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
 use crate::notes_notifications::notify_operation_error;
@@ -69,8 +70,10 @@ impl NotesView {
             )?));
             let theme = markdown_editor_theme(self.resolved_editor_theme(cx));
             let preview = cx.new(|cx| {
-                MarkdownEditor::new(snapshot.source.clone(), theme, window, cx)
-                    .expect("prevalidated Markdown must initialize the editor")
+                let mut editor = MarkdownEditor::new(snapshot.source.clone(), theme, window, cx)
+                    .expect("prevalidated Markdown must initialize the editor");
+                editor.set_block_render_provider(block_render_provider(cx), cx);
+                editor
             });
             let preview_subscription = subscribe_markdown_changes(
                 &preview,
@@ -289,17 +292,4 @@ fn subscribe_markdown_changes(
             view.markdown_source_changed(&document_id, source.clone(), window, cx);
         },
     )
-}
-
-fn markdown_editor_theme(
-    theme: crate::theme_provider::MarkdownEditorTheme,
-) -> markdown_editor::MarkdownEditorTheme {
-    markdown_editor::MarkdownEditorTheme {
-        background: theme.background,
-        foreground: theme.foreground,
-        muted_foreground: theme.muted_foreground,
-        border: theme.border,
-        primary: theme.primary,
-        highlight_theme: theme.highlight_theme,
-    }
 }

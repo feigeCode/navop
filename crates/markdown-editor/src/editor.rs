@@ -1,4 +1,7 @@
-use crate::{MarkdownEditorTheme, MarkdownProjection};
+use crate::{
+    MarkdownBlockRenderArtifact, MarkdownBlockRenderProvider, MarkdownEditorTheme,
+    MarkdownProjection,
+};
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
 };
@@ -7,12 +10,16 @@ use markdown_source::{
     PatchError, SourceEdit, SourceEditOrigin, SourceHistory, SourceMarkdownDocument,
     SourceSelection, SourceTransaction,
 };
+use std::collections::{HashMap, HashSet};
 
+mod activation;
+mod history_operations;
 mod media_operations;
 mod operations;
 mod render;
 mod setup;
 mod sync;
+mod table_operations;
 mod text_diff;
 mod types;
 use setup::{apply_projection_styles, create_input, create_property_input, subscribe_to_input};
@@ -35,6 +42,16 @@ pub struct MarkdownEditor {
     pending_newline: Option<usize>,
     block_scroll: VirtualListScrollHandle,
     document_scroll: ScrollHandle,
+    block_render_provider: Option<MarkdownBlockRenderProvider>,
+    block_render_artifacts: HashMap<markdown_source::SourceNodeId, MarkdownBlockRenderArtifact>,
+    block_render_sources: HashMap<markdown_source::SourceNodeId, String>,
+    pending_block_renders: HashMap<markdown_source::SourceNodeId, String>,
+    block_render_errors: HashMap<markdown_source::SourceNodeId, String>,
+    block_render_generation: u64,
+    inline_math_artifacts: HashMap<String, MarkdownBlockRenderArtifact>,
+    pending_inline_math_renders: HashSet<String>,
+    failed_inline_math_renders: HashSet<String>,
+    measured_block_heights: HashMap<markdown_source::SourceNodeId, gpui::Pixels>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,6 +84,16 @@ impl MarkdownEditor {
             pending_newline: None,
             block_scroll: VirtualListScrollHandle::new(),
             document_scroll: ScrollHandle::new(),
+            block_render_provider: None,
+            block_render_artifacts: HashMap::new(),
+            block_render_sources: HashMap::new(),
+            pending_block_renders: HashMap::new(),
+            block_render_errors: HashMap::new(),
+            block_render_generation: 0,
+            inline_math_artifacts: HashMap::new(),
+            pending_inline_math_renders: HashSet::new(),
+            failed_inline_math_renders: HashSet::new(),
+            measured_block_heights: HashMap::new(),
             _subscriptions: subscriptions,
         })
     }
@@ -87,8 +114,57 @@ impl MarkdownEditor {
         self.input.clone()
     }
 
+    pub fn uses_virtual_layout(&self) -> bool {
+        render::layout_metrics::should_virtualize(&self.history.document().blocks)
+    }
+
+    pub fn vertical_scroll_range(&self) -> gpui::Pixels {
+        if self.uses_virtual_layout() {
+            self.block_scroll.max_offset().y
+        } else {
+            self.document_scroll.max_offset().y
+        }
+    }
+
+    pub fn vertical_scroll_offset(&self) -> gpui::Pixels {
+        if self.uses_virtual_layout() {
+            self.block_scroll.offset().y
+        } else {
+            self.document_scroll.offset().y
+        }
+    }
+
+    pub fn set_block_render_provider(
+        &mut self,
+        provider: Option<MarkdownBlockRenderProvider>,
+        cx: &mut Context<Self>,
+    ) {
+        self.block_render_provider = provider;
+        self.reset_block_renders();
+        cx.notify();
+    }
+
     pub fn projected_text(&self) -> &str {
         &self.projection.text
+    }
+
+    pub fn active_inline_math_preview_count(&self) -> usize {
+        self.history
+            .document()
+            .blocks
+            .iter()
+            .flat_map(|block| block.inline_nodes.iter())
+            .filter(|node| {
+                matches!(
+                    node.kind,
+                    markdown_source::SourceInlineKind::InlineMath { .. }
+                ) && self.projection.active_inline != Some(node.id)
+                    && node.content_range.as_ref().is_some_and(|range| {
+                        self.inline_math_artifacts
+                            .contains_key(&self.history.document().source[range.clone()])
+                    })
+            })
+            .count()
     }
 
     pub fn edit_projected_value(
@@ -165,6 +241,7 @@ impl MarkdownEditor {
     ) -> Result<(), MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
         self.history = SourceHistory::new(document);
+        self.reset_block_renders();
         self.active_block = None;
         self.active_table_cell = None;
         self.dirty = false;
@@ -179,41 +256,10 @@ impl MarkdownEditor {
     pub fn set_theme(&mut self, theme: MarkdownEditorTheme, cx: &mut Context<Self>) {
         if self.theme != theme {
             self.theme = theme;
+            self.reset_block_renders();
             apply_projection_styles(&self.input, &self.projection, &self.theme, cx);
             cx.notify();
         }
-    }
-
-    pub fn undo(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<bool, PatchError> {
-        self.apply_history_change(true, window, cx)
-    }
-
-    pub fn redo(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<bool, PatchError> {
-        self.apply_history_change(false, window, cx)
-    }
-
-    pub fn undo_source_mode(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<Option<SourceSelection>, PatchError> {
-        self.apply_source_history_change(true, window, cx)
-    }
-
-    pub fn redo_source_mode(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<Option<SourceSelection>, PatchError> {
-        self.apply_source_history_change(false, window, cx)
     }
 
     fn apply_projection_edit(
@@ -237,45 +283,16 @@ impl MarkdownEditor {
         })
     }
 
-    fn apply_history_change(
-        &mut self,
-        undo: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<bool, PatchError> {
-        let selection = if undo {
-            self.history.undo()?
-        } else {
-            self.history.redo()?
-        };
-        if let Some(selection) = selection {
-            self.dirty = true;
-            self.sync_selection(selection, window, cx);
-            self.emit_changed(cx);
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    fn apply_source_history_change(
-        &mut self,
-        undo: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<Option<SourceSelection>, PatchError> {
-        let selection = if undo {
-            self.history.undo()?
-        } else {
-            self.history.redo()?
-        };
-        if let Some(selection) = selection {
-            self.source_mode_selection = selection;
-            self.dirty = true;
-            self.sync_projection(selection.head, window, cx);
-            self.emit_changed(cx);
-            return Ok(Some(selection));
-        }
-        Ok(None)
+    fn reset_block_renders(&mut self) {
+        self.block_render_generation = self.block_render_generation.wrapping_add(1);
+        self.block_render_artifacts.clear();
+        self.block_render_sources.clear();
+        self.pending_block_renders.clear();
+        self.block_render_errors.clear();
+        self.inline_math_artifacts.clear();
+        self.pending_inline_math_renders.clear();
+        self.failed_inline_math_renders.clear();
+        self.measured_block_heights.clear();
     }
 }
 

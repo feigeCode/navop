@@ -45,7 +45,7 @@ impl MarkdownEditor {
         self.active_block = Some(block_id);
         self.active_table_cell = None;
         self.sync_projection(cursor, window, cx);
-        if self.history.document().blocks.len() >= super::render::VIRTUALIZATION_THRESHOLD {
+        if self.uses_virtual_layout() {
             self.block_scroll
                 .scroll_to_item(block_index, ScrollStrategy::Center);
         }

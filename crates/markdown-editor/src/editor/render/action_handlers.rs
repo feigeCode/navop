@@ -1,7 +1,7 @@
 use super::MarkdownEditor;
 use crate::actions::*;
 use gpui::{
-    Context, InteractiveElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder,
+    Context, InteractiveElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder, px,
 };
 use gpui_component::v_flex;
 
@@ -12,6 +12,8 @@ impl Render for MarkdownEditor {
             .size_full()
             .min_h_0()
             .min_w_0()
+            .text_size(px(16.))
+            .line_height(px(24.))
             .bg(self.theme.background)
             .child(
                 v_flex()
@@ -32,6 +34,7 @@ impl MarkdownEditor {
         let element = Self::bind_inline_actions(element, cx);
         let element = Self::bind_heading_actions(element, cx);
         let element = Self::bind_block_actions(element, cx);
+        let element = Self::bind_table_actions(element, cx);
         Self::bind_image_actions(element, cx)
     }
 
@@ -154,5 +157,116 @@ impl MarkdownEditor {
                     }
                 }),
             )
+    }
+
+    fn bind_table_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        let element = Self::bind_table_row_actions(element, cx);
+        let element = Self::bind_table_column_actions(element, cx);
+        Self::bind_table_alignment_actions(element, cx)
+    }
+
+    fn bind_table_row_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        element
+            .on_action(cx.listener(|editor, _: &InsertTableRowAbove, window, cx| {
+                propagate_missing_table(
+                    editor.insert_active_table_row(
+                        markdown_source::TableInsertPosition::Before,
+                        window,
+                        cx,
+                    ),
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|editor, _: &InsertTableRowBelow, window, cx| {
+                propagate_missing_table(
+                    editor.insert_active_table_row(
+                        markdown_source::TableInsertPosition::After,
+                        window,
+                        cx,
+                    ),
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|editor, _: &DeleteTableRow, window, cx| {
+                propagate_missing_table(editor.delete_active_table_row(window, cx), cx);
+            }))
+    }
+
+    fn bind_table_column_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        element
+            .on_action(
+                cx.listener(|editor, _: &InsertTableColumnLeft, window, cx| {
+                    propagate_missing_table(
+                        editor.insert_active_table_column(
+                            markdown_source::TableInsertPosition::Before,
+                            window,
+                            cx,
+                        ),
+                        cx,
+                    );
+                }),
+            )
+            .on_action(
+                cx.listener(|editor, _: &InsertTableColumnRight, window, cx| {
+                    propagate_missing_table(
+                        editor.insert_active_table_column(
+                            markdown_source::TableInsertPosition::After,
+                            window,
+                            cx,
+                        ),
+                        cx,
+                    );
+                }),
+            )
+            .on_action(cx.listener(|editor, _: &DeleteTableColumn, window, cx| {
+                propagate_missing_table(editor.delete_active_table_column(window, cx), cx);
+            }))
+    }
+
+    fn bind_table_alignment_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        element
+            .on_action(cx.listener(|editor, _: &AlignTableColumnLeft, window, cx| {
+                propagate_missing_table(
+                    editor.align_active_table_column(
+                        markdown_source::TableAlignment::Left,
+                        window,
+                        cx,
+                    ),
+                    cx,
+                );
+            }))
+            .on_action(
+                cx.listener(|editor, _: &AlignTableColumnCenter, window, cx| {
+                    propagate_missing_table(
+                        editor.align_active_table_column(
+                            markdown_source::TableAlignment::Center,
+                            window,
+                            cx,
+                        ),
+                        cx,
+                    );
+                }),
+            )
+            .on_action(
+                cx.listener(|editor, _: &AlignTableColumnRight, window, cx| {
+                    propagate_missing_table(
+                        editor.align_active_table_column(
+                            markdown_source::TableAlignment::Right,
+                            window,
+                            cx,
+                        ),
+                        cx,
+                    );
+                }),
+            )
+    }
+}
+
+fn propagate_missing_table(
+    result: Result<bool, crate::MarkdownEditorError>,
+    cx: &mut Context<MarkdownEditor>,
+) {
+    if matches!(result, Ok(false)) {
+        cx.propagate();
     }
 }

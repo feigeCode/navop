@@ -1,12 +1,22 @@
-use super::{MarkdownEditor, VIRTUALIZATION_THRESHOLD};
+use super::{
+    MarkdownEditor,
+    active_block::active_block_height,
+    layout_metrics::{
+        DOCUMENT_BOTTOM_PADDING, DOCUMENT_MAX_WIDTH, DOCUMENT_SIDE_PADDING, DOCUMENT_TOP_PADDING,
+        block_size, should_virtualize, virtual_item_sizes,
+    },
+};
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, px,
+    Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
+    ElementExt,
     scroll::{Scrollbar, ScrollbarShow},
     v_flex, v_virtual_list,
 };
 use markdown_source::{SourceBlock, SourceBlockKind};
+use std::cell::Cell;
 use std::rc::Rc;
 
 impl MarkdownEditor {
@@ -14,67 +24,63 @@ impl MarkdownEditor {
         self.render_blocks(cx)
     }
 
-    fn render_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_blocks(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.history.document().blocks.is_empty() {
             return v_flex()
                 .size_full()
                 .min_h_0()
                 .min_w_0()
-                .px_4()
-                .py_3()
-                .child(self.render_empty_document())
+                .child(document_column().child(self.render_empty_document()))
                 .into_any_element();
         }
-        if self.history.document().blocks.len() < VIRTUALIZATION_THRESHOLD {
-            return self.render_standard_blocks(cx);
+        if should_virtualize(&self.history.document().blocks) {
+            return self.render_virtual_blocks(cx);
         }
-        self.render_virtual_blocks(cx)
+        self.render_standard_blocks(cx)
     }
 
     fn render_virtual_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let active_block = self.active_block;
-        let item_sizes = Rc::new(
-            self.history
-                .document()
-                .blocks
-                .iter()
-                .map(block_size)
-                .collect::<Vec<_>>(),
-        );
+        let item_sizes = Rc::new(virtual_item_sizes(
+            &self.history.document().blocks,
+            &self.measured_block_heights,
+        ));
         let blocks = v_virtual_list(
             cx.entity(),
             "markdown-block-list",
             item_sizes.clone(),
             move |editor, visible_range, _, cx| {
+                editor.request_block_renders(visible_range.clone(), cx);
+                editor.request_inline_math_renders(visible_range.clone(), cx);
                 visible_range
                     .map(|index| editor.render_block(index, &item_sizes, active_block, cx))
                     .collect()
             },
         )
         .size_full()
-        .px_4()
-        .py_3()
         .track_scroll(&self.block_scroll);
         self.render_viewport(
             blocks.into_any_element(),
             Scrollbar::vertical(&self.block_scroll)
                 .scrollbar_show(ScrollbarShow::Always)
+                .colors(
+                    self.theme.muted_foreground.opacity(0.46),
+                    self.theme.foreground.opacity(0.68),
+                    self.theme.border.opacity(0.1),
+                )
                 .into_any_element(),
         )
     }
 
-    fn render_standard_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let content = v_flex().w_full().min_w_0().px_4().py_3().children(
-            self.history
-                .document()
-                .blocks
-                .clone()
+    fn render_standard_blocks(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let block_count = self.history.document().blocks.len();
+        self.request_block_renders(0..block_count, cx);
+        self.request_inline_math_renders(0..block_count, cx);
+        let blocks = self.history.document().blocks.clone();
+        let content = document_column().children(
+            blocks
                 .into_iter()
-                .map(|block| match &block.kind {
-                    SourceBlockKind::Table(table) => self.render_table(&block, table, cx),
-                    _ if self.active_block == Some(block.id) => self.render_active_block(&block),
-                    _ => self.render_preview_block(&block, cx),
-                }),
+                .map(|block| self.render_standard_block(&block, cx)),
         );
         let blocks = gpui::div()
             .id("markdown-standard-block-list")
@@ -86,6 +92,11 @@ impl MarkdownEditor {
             blocks.into_any_element(),
             Scrollbar::vertical(&self.document_scroll)
                 .scrollbar_show(ScrollbarShow::Always)
+                .colors(
+                    self.theme.muted_foreground.opacity(0.46),
+                    self.theme.foreground.opacity(0.68),
+                    self.theme.border.opacity(0.1),
+                )
                 .into_any_element(),
         )
     }
@@ -108,17 +119,18 @@ impl MarkdownEditor {
                     .id("markdown-editor-scrollbar")
                     .debug_selector(|| "markdown-editor-scrollbar".to_owned())
                     .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
+                    .top(px(8.))
+                    .right(px(4.))
+                    .bottom(px(8.))
                     .w(px(16.))
+                    .rounded_full()
                     .child(scrollbar),
             )
             .into_any_element()
     }
 
     fn render_block(
-        &mut self,
+        &self,
         index: usize,
         item_sizes: &[gpui::Size<gpui::Pixels>],
         active_block: Option<markdown_source::SourceNodeId>,
@@ -127,38 +139,130 @@ impl MarkdownEditor {
         let Some(block) = self.history.document().blocks.get(index).cloned() else {
             return gpui::div().into_any_element();
         };
+        let block_count = self.history.document().blocks.len();
+        let content_height = self.rendered_block_height(&block, block_size(&block).height);
         gpui::div()
+            .id(("markdown-block-frame", block.id.0))
+            .debug_selector(move || format!("markdown-block-frame-{}", block.id.0))
             .w_full()
-            .h(item_sizes.get(index).map_or(px(40.), |size| size.height))
-            .child(match &block.kind {
-                SourceBlockKind::Table(table) => self.render_table(&block, table, cx),
-                _ if active_block == Some(block.id) => self.render_active_block(&block),
-                _ => self.render_preview_block(&block, cx),
-            })
+            .h(self.rendered_block_height(
+                &block,
+                item_sizes.get(index).map_or(px(40.), |size| size.height),
+            ))
+            .child(
+                document_column()
+                    .py_0()
+                    .when(index == 0, |this| this.pt(px(DOCUMENT_TOP_PADDING)))
+                    .when(index + 1 == block_count, |this| {
+                        this.pb(px(DOCUMENT_BOTTOM_PADDING))
+                    })
+                    .child(self.render_block_content(&block, active_block, content_height, cx)),
+            )
             .into_any_element()
+    }
+
+    fn rendered_block_height(
+        &self,
+        block: &SourceBlock,
+        preview_height: gpui::Pixels,
+    ) -> gpui::Pixels {
+        if self.active_block != Some(block.id) {
+            return preview_height;
+        }
+        let rows = self.projection.text.lines().count().max(1) as f32;
+        let heading = match block.kind {
+            SourceBlockKind::Heading { level, .. } => Some(level),
+            _ => None,
+        };
+        let source_code = matches!(
+            block.kind,
+            SourceBlockKind::CodeFence { .. } | SourceBlockKind::MathBlock { .. }
+        );
+        let active = px(active_block_height(rows, heading, source_code) * 16.);
+        preview_height.max(active)
+    }
+
+    fn render_block_content(
+        &self,
+        block: &SourceBlock,
+        active_block: Option<markdown_source::SourceNodeId>,
+        reserved_height: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if active_block != Some(block.id)
+            && let Some(rendered) = self.render_block_output(block)
+        {
+            return self.render_artifact_preview(block, rendered, cx);
+        }
+        match &block.kind {
+            SourceBlockKind::Table(table) => self.render_table(block, table, cx),
+            _ if active_block == Some(block.id) => {
+                self.render_active_block(block, Some(reserved_height))
+            }
+            _ => self.render_preview_block(block, cx),
+        }
+    }
+
+    pub(super) fn render_artifact_preview(
+        &self,
+        block: &SourceBlock,
+        rendered: gpui::AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let editor = cx.entity();
+        let block_id = block.id;
+        let bounds = Rc::new(Cell::new(gpui::Bounds::default()));
+        let click_bounds = bounds.clone();
+        gpui::div()
+            .id(("markdown-preview-block", block.id.0))
+            .debug_selector(|| format!("markdown-preview-block-{}", block.id.0))
+            .w_full()
+            .min_w_0()
+            .cursor_text()
+            .on_prepaint(move |value, _, _| bounds.set(value))
+            .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                let line = ((event.position.y - click_bounds.get().top())
+                    .as_f32()
+                    .max(0.)
+                    / 24.)
+                    .floor() as usize;
+                editor.update(cx, |editor, cx| {
+                    editor.activate_block_line(block_id, line, window, cx);
+                });
+            })
+            .child(rendered)
+            .into_any_element()
+    }
+
+    pub(super) fn record_measured_block_height(
+        &mut self,
+        block_id: markdown_source::SourceNodeId,
+        height: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.uses_virtual_layout() || self.history.document().block_by_id(block_id).is_none() {
+            return;
+        }
+        let content = height.max(px(1.));
+        if self
+            .measured_block_heights
+            .get(&block_id)
+            .is_none_or(|old| (*old - content).abs() > px(1.))
+        {
+            self.measured_block_heights.insert(block_id, content);
+            cx.notify();
+        }
     }
 }
 
-fn block_size(block: &SourceBlock) -> gpui::Size<gpui::Pixels> {
-    let lines = block.original_source.lines().count().max(1) as f32;
-    let height = match &block.kind {
-        SourceBlockKind::Heading { level, .. } => match level {
-            1 => 52.,
-            2 => 46.,
-            3 => 40.,
-            _ => 36.,
-        },
-        SourceBlockKind::Table(table) => {
-            table.rows.len().saturating_sub(1).max(1) as f32 * 42. + 16.
-        }
-        SourceBlockKind::CodeFence { .. }
-        | SourceBlockKind::FrontMatter
-        | SourceBlockKind::Html
-        | SourceBlockKind::RawMarkdown => lines.mul_add(24., 20.),
-        SourceBlockKind::OrderedList { .. }
-        | SourceBlockKind::UnorderedList
-        | SourceBlockKind::BlockQuote => lines.mul_add(30., 8.),
-        _ => lines.mul_add(30., 8.),
-    };
-    gpui::size(px(0.), px(height))
+fn document_column() -> gpui::Div {
+    v_flex()
+        .debug_selector(|| "markdown-document-column".to_owned())
+        .w_full()
+        .min_w_0()
+        .max_w(px(DOCUMENT_MAX_WIDTH))
+        .mx_auto()
+        .px(px(DOCUMENT_SIDE_PADDING))
+        .pt(px(DOCUMENT_TOP_PADDING))
+        .pb(px(DOCUMENT_BOTTOM_PADDING))
 }

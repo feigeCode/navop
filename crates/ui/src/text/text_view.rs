@@ -17,6 +17,7 @@ use crate::{global_state::GlobalState, text::TextViewStyle};
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
     dyn Fn(&CodeBlock, CodeBlockRenderOptions, &mut Window, &mut App) -> AnyElement + Send + Sync;
+pub type InlineMathRenderer = dyn Fn(&str, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
 /// A text view that can render Markdown or HTML.
 ///
@@ -46,6 +47,7 @@ pub struct TextView {
     scrollable: bool,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     code_block_renderer: Option<Arc<CodeBlockRenderer>>,
+    inline_math_renderer: Option<Arc<InlineMathRenderer>>,
 }
 
 impl Styled for TextView {
@@ -68,6 +70,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             code_block_renderer: None,
+            inline_math_renderer: None,
         }
     }
 
@@ -84,6 +87,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             code_block_renderer: None,
+            inline_math_renderer: None,
         }
     }
 
@@ -100,6 +104,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             code_block_renderer: None,
+            inline_math_renderer: None,
         }
     }
 
@@ -171,6 +176,18 @@ impl TextView {
             }));
         self
     }
+
+    /// Set a renderer for inline math nodes.
+    pub fn inline_math_renderer<F, E>(mut self, f: F) -> Self
+    where
+        F: Fn(&str, &mut Window, &mut App) -> E + Send + Sync + 'static,
+        E: IntoElement,
+    {
+        self.inline_math_renderer = Some(Arc::new(move |source, window, cx| {
+            f(source, window, cx).into_any_element()
+        }));
+        self
+    }
 }
 
 impl IntoElement for TextView {
@@ -229,6 +246,7 @@ impl Element for TextView {
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
             state.code_block_renderer = self.code_block_renderer.clone();
+            state.inline_math_renderer = self.inline_math_renderer.clone();
             state.selectable = self.selectable;
             state.scrollable = self.scrollable;
             state.text_view_style = self.text_view_style.clone();

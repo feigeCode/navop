@@ -14,7 +14,7 @@ use crate::{
     highlighter::HighlightTheme,
     input::{self, Copy},
     text::{
-        CodeBlockActionsFn, TextViewStyle,
+        CodeBlockActionsFn, InlineMathRenderer, TextViewStyle,
         document::ParsedDocument,
         format,
         node::{self, CodeBlockRenderer, NodeContext},
@@ -54,6 +54,7 @@ pub struct TextViewState {
     pub(super) text_view_style: TextViewStyle,
     pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
     pub(super) code_block_renderer: Option<std::sync::Arc<CodeBlockRenderer>>,
+    pub(super) inline_math_renderer: Option<std::sync::Arc<InlineMathRenderer>>,
 
     pub(super) is_selecting: bool,
     /// The local (in TextView) position of the selection.
@@ -116,6 +117,7 @@ impl TextViewState {
             text_view_style: TextViewStyle::default(),
             code_block_actions: None,
             code_block_renderer: None,
+            inline_math_renderer: None,
             is_selecting: false,
             parsed_content: Default::default(),
             parsed_error: None,
@@ -279,6 +281,7 @@ impl Render for TextViewState {
 
         node_cx.code_block_actions = self.code_block_actions.clone();
         node_cx.code_block_renderer = self.code_block_renderer.clone();
+        node_cx.inline_math_renderer = self.inline_math_renderer.clone();
         node_cx.style = self.text_view_style.clone();
 
         v_flex()

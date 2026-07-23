@@ -6,6 +6,7 @@ mod markdown_conflict;
 mod markdown_file_store;
 mod markdown_mode;
 mod markdown_render;
+mod markdown_renderer;
 mod markdown_session;
 mod markdown_source;
 mod markdown_view;

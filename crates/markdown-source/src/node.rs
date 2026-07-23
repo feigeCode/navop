@@ -33,6 +33,10 @@ pub enum SourceBlockKind {
         closing_fence: Option<Range<usize>>,
         language_range: Option<Range<usize>>,
     },
+    MathBlock {
+        opening_marker: Range<usize>,
+        closing_marker: Range<usize>,
+    },
     Table(SourceTableMap),
     FrontMatter,
     Html,
@@ -61,6 +65,10 @@ pub enum SourceInlineKind {
         closing_marker: Range<usize>,
     },
     InlineCode {
+        opening_marker: Range<usize>,
+        closing_marker: Range<usize>,
+    },
+    InlineMath {
         opening_marker: Range<usize>,
         closing_marker: Range<usize>,
     },

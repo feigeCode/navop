@@ -26,6 +26,24 @@ fn active_inline_node_reveals_only_its_original_source() {
 }
 
 #[test]
+fn nested_inline_source_reveals_only_the_exact_active_node() {
+    let source = "Before **bold _nested_ text** after";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let nested = document
+        .inline_node_at(source.find("nested").unwrap())
+        .filter(|node| {
+            matches!(
+                node.kind,
+                markdown_source::SourceInlineKind::Emphasis { .. }
+            )
+        })
+        .unwrap();
+    let projection = MarkdownProjection::build(&document, Some(nested.id));
+
+    assert_eq!("Before bold _nested_ text after", projection.text);
+}
+
+#[test]
 fn block_markers_stay_hidden_while_inline_markers_follow_the_cursor() {
     let source = "## Before _italic_ after";
     let document = SourceMarkdownDocument::parse(source).unwrap();
@@ -60,6 +78,23 @@ fn structural_block_syntax_is_projected_as_content() {
     assert_eq!("quoted text", projections[0]);
     assert_eq!("first\nsecond\n", projections[1]);
     assert_eq!("let value = 1;", projections[2]);
+}
+
+#[test]
+fn math_syntax_is_projected_like_typora_source_blocks() {
+    let slash = char::from(92);
+    let source = format!("Euler: $e^{{i{slash}pi}} + 1 = 0$\n\n$$\n{slash}frac{{a}}{{b}}\n$$");
+    let document = SourceMarkdownDocument::parse(&source).unwrap();
+    assert!(matches!(
+        document.blocks[1].kind,
+        markdown_source::SourceBlockKind::MathBlock { .. }
+    ));
+    let paragraph =
+        MarkdownProjection::build_range(&document, None, document.blocks[0].source_range.clone());
+    let math =
+        MarkdownProjection::build_range(&document, None, document.blocks[1].source_range.clone());
+    assert_eq!(format!("Euler: e^{{i{slash}pi}} + 1 = 0"), paragraph.text);
+    assert_eq!(format!("{slash}frac{{a}}{{b}}"), math.text);
 }
 
 #[test]
@@ -160,6 +195,20 @@ fn inactive_projection_exposes_semantic_style_spans() {
             "missing style {style:?}"
         );
     }
+}
+
+#[test]
+fn projection_style_spans_keep_their_source_node_identity() {
+    let source = "$one$ and $two$";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let projection = MarkdownProjection::build(&document, None);
+    let math = projection
+        .styles
+        .iter()
+        .filter(|span| span.style == ProjectionStyle::InlineMath)
+        .collect::<Vec<_>>();
+    assert_eq!(2, math.len());
+    assert_ne!(math[0].node_id, math[1].node_id);
 }
 
 #[test]

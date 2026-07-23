@@ -91,6 +91,8 @@ pub struct Input {
     tab_index: isize,
     selected: bool,
     bare: bool,
+    editor_scrollbar: bool,
+    text_layout_margin: bool,
 
     /// An optional context menu builder to allow a custom context menu on the input.
     ///
@@ -141,6 +143,8 @@ impl Input {
             tab_index: 0,
             selected: false,
             bare: false,
+            editor_scrollbar: true,
+            text_layout_margin: true,
             context_menu_builder: None,
         }
     }
@@ -206,6 +210,18 @@ impl Input {
     /// Override the indent-guide color for an embedded code editor.
     pub fn indent_guide_color(mut self, color: Hsla) -> Self {
         self.indent_guide_color = Some(color);
+        self
+    }
+
+    /// Set whether to show the scrollbar embedded in a multi-line editor.
+    pub fn editor_scrollbar(mut self, visible: bool) -> Self {
+        self.editor_scrollbar = visible;
+        self
+    }
+
+    /// Set whether the text layout reserves the editor's trailing safety margin.
+    pub fn text_layout_margin(mut self, enabled: bool) -> Self {
+        self.text_layout_margin = enabled;
         self
     }
 
@@ -280,6 +296,7 @@ impl Input {
         paddings: EdgesRefinement<DefiniteLength>,
         input_state: &Entity<InputState>,
         state: &InputState,
+        editor_scrollbar: bool,
         window: &Window,
     ) -> impl IntoElement {
         let base_size = window.text_style().font_size;
@@ -315,7 +332,9 @@ impl Input {
                     .relative()
                     .flex_1()
                     .child(input_state.clone())
-                    .child(EditorScrollbar::new(input_state.clone())),
+                    .when(editor_scrollbar, |this| {
+                        this.child(EditorScrollbar::new(input_state.clone()))
+                    }),
             )
     }
 }
@@ -341,11 +360,9 @@ impl RenderOnce for Input {
             state.background_color = self.local_style.map(|style| style.background);
             state.highlight_theme = self.highlight_theme.clone();
             state.indent_guide_color = self.indent_guide_color;
+            state.text_layout_margin = self.text_layout_margin;
 
-            // Only for single line mode
-            if state.mode.is_single_line() {
-                state.text_align = text_align;
-            }
+            state.text_align = text_align;
         });
 
         let state = self.state.read(cx);
@@ -499,7 +516,13 @@ impl RenderOnce for Input {
             .children(prefix)
             .when(state.mode.is_multi_line(), |mut this| {
                 let paddings = this.style().padding.clone();
-                this.child(Self::render_editor(paddings, &self.state, &state, window))
+                this.child(Self::render_editor(
+                    paddings,
+                    &self.state,
+                    &state,
+                    self.editor_scrollbar,
+                    window,
+                ))
             })
             .when(!state.mode.is_multi_line(), |this| {
                 this.child(self.state.clone())

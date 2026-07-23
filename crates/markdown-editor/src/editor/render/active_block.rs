@@ -27,6 +27,7 @@ impl MarkdownEditor {
             })
             .relative()
             .child(self.active_input(heading))
+            .children(self.active_inline_marker_overlay())
             .children(self.active_inline_math_overlays())
             .when_some(list_gutter, |this, gutter| {
                 this.pl(px(gutter))

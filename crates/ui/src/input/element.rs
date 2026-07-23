@@ -57,6 +57,7 @@ impl EditorScrollbarSnapshot {
                 last_layout.line_number_width,
                 scroll_size,
                 state.editor_scrollbar_paddings.get(),
+                state.text_layout_margin,
             ),
             cursor_scroll_offset,
             soft_wrap: state.soft_wrap,
@@ -70,6 +71,7 @@ impl EditorScrollbarLayout {
         line_number_width: Pixels,
         scroll_size: Size<Pixels>,
         paddings: Edges<Pixels>,
+        text_layout_margin: bool,
     ) -> Self {
         let left = if line_number_width == px(0.) {
             px(0.)
@@ -89,7 +91,11 @@ impl EditorScrollbarLayout {
                 ),
             ),
             scroll_size: size(
-                scroll_size.width - left + paddings.right + RIGHT_MARGIN,
+                scroll_size.width - left
+                    + paddings.right
+                    + text_layout_margin
+                        .then_some(RIGHT_MARGIN)
+                        .unwrap_or_default(),
                 scroll_size.height,
             ),
         }
@@ -391,7 +397,8 @@ impl TextElement {
                 // For Right alignment use 0 margin: cursor is clamped to bounds separately,
                 // so we never scroll the text for cursor-at-edge, avoiding a first-click jump.
                 let safety_margin = match last_layout.text_align {
-                    TextAlign::Left => RIGHT_MARGIN,
+                    TextAlign::Left if state.text_layout_margin => RIGHT_MARGIN,
+                    TextAlign::Left => px(0.),
                     TextAlign::Right => px(0.),
                     TextAlign::Center => CURSOR_WIDTH,
                 };
@@ -1566,7 +1573,11 @@ impl Element for TextElement {
 
         let mut bounds = bounds;
         let wrap_width = if multi_line && state.soft_wrap {
-            Some(bounds.size.width - line_number_width - RIGHT_MARGIN)
+            let margin = state
+                .text_layout_margin
+                .then_some(RIGHT_MARGIN)
+                .unwrap_or_default();
+            Some(bounds.size.width - line_number_width - margin)
         } else {
             None
         };
@@ -1741,9 +1752,13 @@ impl Element for TextElement {
             px(0.)
         };
 
+        let margin = state
+            .text_layout_margin
+            .then_some(RIGHT_MARGIN)
+            .unwrap_or_default();
         let mut scroll_size = size(
-            if longest_line_width + line_number_width + RIGHT_MARGIN > bounds.size.width {
-                longest_line_width + line_number_width + RIGHT_MARGIN
+            if longest_line_width + line_number_width + margin > bounds.size.width {
+                longest_line_width + line_number_width + margin
             } else {
                 longest_line_width
             },

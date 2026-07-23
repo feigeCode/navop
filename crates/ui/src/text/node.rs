@@ -7,7 +7,7 @@ use std::{
 use gpui::{
     AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half, HighlightStyle,
     Hsla, InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement, SharedString,
-    SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div, img,
+    SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, TextAlign, Window, div, img,
     prelude::FluentBuilder as _, px, relative, rems,
 };
 use markdown::mdast;
@@ -17,7 +17,7 @@ use crate::{
     ActiveTheme as _, Icon, IconName, StyledExt, h_flex,
     highlighter::{HighlightTheme, SyntaxHighlighter},
     text::{
-        CodeBlockActionsFn,
+        CodeBlockActionsFn, InlineMathRenderer,
         document::NodeRenderOptions,
         inline::{Inline, InlineState},
     },
@@ -333,6 +333,7 @@ pub(crate) struct InlineNode {
     /// The text content.
     pub(crate) text: SharedString,
     pub(crate) image: Option<ImageNode>,
+    pub(crate) math: bool,
     /// The text styles, each tuple contains the range of the text and the style.
     pub(crate) marks: Vec<(Range<usize>, TextMark)>,
 
@@ -341,7 +342,10 @@ pub(crate) struct InlineNode {
 
 impl PartialEq for InlineNode {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.image == other.image && self.marks == other.marks
+        self.text == other.text
+            && self.image == other.image
+            && self.math == other.math
+            && self.marks == other.marks
     }
 }
 
@@ -350,6 +354,7 @@ impl InlineNode {
         Self {
             text: text.into(),
             image: None,
+            math: false,
             marks: vec![],
             state: Arc::new(Mutex::new(InlineState::default())),
         }
@@ -363,6 +368,11 @@ impl InlineNode {
 
     pub(crate) fn marks(mut self, marks: Vec<(Range<usize>, TextMark)>) -> Self {
         self.marks = marks;
+        self
+    }
+
+    pub(crate) fn math(mut self) -> Self {
+        self.math = true;
         self
     }
 }
@@ -651,6 +661,7 @@ pub(crate) struct NodeContext {
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     pub(crate) code_block_renderer: Option<Arc<CodeBlockRenderer>>,
+    pub(crate) inline_math_renderer: Option<Arc<InlineMathRenderer>>,
 }
 
 impl NodeContext {
@@ -667,12 +678,7 @@ impl PartialEq for NodeContext {
 }
 
 impl Paragraph {
-    fn render(
-        &self,
-        node_cx: &NodeContext,
-        _window: &mut Window,
-        cx: &mut App,
-    ) -> impl IntoElement {
+    fn render(&self, node_cx: &NodeContext, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let span = self.span;
         let children = &self.children;
 
@@ -685,6 +691,20 @@ impl Paragraph {
 
         let mut ix = 0;
         for inline_node in children {
+            if inline_node.math {
+                flush_inline_text(
+                    &mut child_nodes,
+                    &mut text,
+                    &mut links,
+                    &mut highlights,
+                    &inline_node.state,
+                    ix,
+                );
+                child_nodes.push(render_inline_math(inline_node, node_cx, window, cx));
+                offset = 0;
+                ix += 1;
+                continue;
+            }
             let text_len = inline_node.text.len();
             text.push_str(&inline_node.text);
 
@@ -787,6 +807,49 @@ impl Paragraph {
 
         div().id(span.unwrap_or_default()).children(child_nodes)
     }
+}
+
+fn flush_inline_text(
+    children: &mut Vec<AnyElement>,
+    text: &mut String,
+    links: &mut Vec<(Range<usize>, LinkMark)>,
+    highlights: &mut Vec<(Range<usize>, HighlightStyle)>,
+    state: &Arc<Mutex<InlineState>>,
+    id: usize,
+) {
+    if text.is_empty() {
+        return;
+    }
+    state.lock().unwrap().set_text(text.clone().into());
+    children.push(
+        Inline::new(
+            id,
+            state.clone(),
+            std::mem::take(links),
+            std::mem::take(highlights),
+        )
+        .into_any_element(),
+    );
+    text.clear();
+}
+
+fn render_inline_math(
+    node: &InlineNode,
+    node_cx: &NodeContext,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    if let Some(renderer) = node_cx.inline_math_renderer.as_ref() {
+        return renderer(node.text.as_str(), window, cx);
+    }
+    div()
+        .px_1()
+        .rounded_sm()
+        .bg(code_background(&node_cx.style, cx))
+        .text_color(code_foreground(&node_cx.style, cx))
+        .font_family(cx.theme().mono_font_family.clone())
+        .child(node.text.clone())
+        .into_any_element()
 }
 
 impl Paragraph {
@@ -1040,11 +1103,21 @@ impl BlockNode {
                                         .items_start()
                                         .content_start()
                                         .when(!options.todo && checked.is_none(), |this| {
-                                            this.child(list_item_prefix(
-                                                ix,
-                                                options.ordered,
-                                                options.depth,
-                                            ))
+                                            this.child(
+                                                div()
+                                                    .flex_none()
+                                                    .min_w(if options.ordered {
+                                                        rems(1.375)
+                                                    } else {
+                                                        rems(1.25)
+                                                    })
+                                                    .text_align(TextAlign::Right)
+                                                    .child(list_item_prefix(
+                                                        ix,
+                                                        options.ordered,
+                                                        options.depth,
+                                                    )),
+                                            )
                                         })
                                         .when_some(*checked, |this, checked| {
                                             // Todo list checkbox

@@ -136,6 +136,13 @@ fn shift_kind(kind: &mut SourceBlockKind, delta: isize) -> Result<(), SourcePars
             shift_optional(closing_fence, delta)?;
             shift_optional(language_range, delta)
         }
+        SourceBlockKind::MathBlock {
+            opening_marker,
+            closing_marker,
+        } => {
+            shift_range(opening_marker, delta)?;
+            shift_range(closing_marker, delta)
+        }
         SourceBlockKind::Table(table) => {
             shift_range(&mut table.table_range, delta)?;
             shift_range(&mut table.delimiter_row, delta)?;
@@ -168,6 +175,10 @@ fn shift_inline_kind(kind: &mut SourceInlineKind, delta: isize) -> Result<(), So
             closing_marker,
         }
         | SourceInlineKind::InlineCode {
+            opening_marker,
+            closing_marker,
+        }
+        | SourceInlineKind::InlineMath {
             opening_marker,
             closing_marker,
         }
@@ -223,11 +234,12 @@ fn kind_tag(kind: &SourceBlockKind) -> u8 {
         SourceBlockKind::OrderedList { .. } => 3,
         SourceBlockKind::UnorderedList => 4,
         SourceBlockKind::CodeFence { .. } => 5,
-        SourceBlockKind::Table(_) => 6,
-        SourceBlockKind::FrontMatter => 7,
-        SourceBlockKind::Html => 8,
-        SourceBlockKind::ThematicBreak => 9,
-        SourceBlockKind::RawMarkdown => 10,
+        SourceBlockKind::MathBlock { .. } => 6,
+        SourceBlockKind::Table(_) => 7,
+        SourceBlockKind::FrontMatter => 8,
+        SourceBlockKind::Html => 9,
+        SourceBlockKind::ThematicBreak => 10,
+        SourceBlockKind::RawMarkdown => 11,
     }
 }
 

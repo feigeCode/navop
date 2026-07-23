@@ -1,5 +1,6 @@
 use markdown_source::{
-    SourceBlockKind, SourceInlineKind, SourceMarkdownDocument, TableCellAddress,
+    SourceBlockKind, SourceInlineKind, SourceMarkdownDocument, TableAlignment, TableCellAddress,
+    TableInsertPosition,
 };
 
 #[test]
@@ -106,4 +107,81 @@ fn editing_image_properties_is_one_source_transaction() {
     assert_eq!(2, transaction.edits.len());
     let edited = document.apply_transaction(&transaction).unwrap().document;
     assert_eq!("Before [![New](new.png)](old.png) after", edited.source);
+}
+
+#[test]
+fn table_structure_operations_update_rows_columns_and_alignment() {
+    let source = "| Name | Value |\n| --- | ---: |\n| A | 1 |";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let address = TableCellAddress {
+        block_id: document.blocks[0].id,
+        row: 2,
+        column: 1,
+    };
+    let inserted_row = apply(
+        &document,
+        document
+            .insert_table_row(address, TableInsertPosition::After)
+            .unwrap(),
+    );
+    assert_eq!(
+        "| Name | Value |\n| --- | ---: |\n| A | 1 |\n|  |  |",
+        inserted_row.source
+    );
+
+    let inserted_column = apply(
+        &document,
+        document
+            .insert_table_column(address, TableInsertPosition::Before)
+            .unwrap(),
+    );
+    assert_eq!(
+        "| Name |  | Value |\n| --- | --- | ---: |\n| A |  | 1 |",
+        inserted_column.source
+    );
+
+    let aligned = apply(
+        &document,
+        document
+            .set_table_column_alignment(address, TableAlignment::Center)
+            .unwrap(),
+    );
+    assert_eq!(
+        "| Name | Value |\n| --- | :---: |\n| A | 1 |",
+        aligned.source
+    );
+}
+
+#[test]
+fn table_resize_and_deletion_keep_a_valid_markdown_table() {
+    let source = "| Name | Value |\n| --- | --- |\n| A | 1 |";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let block_id = document.blocks[0].id;
+    let resized = apply(&document, document.resize_table(block_id, 3, 3).unwrap());
+    assert_eq!(
+        concat!(
+            "| Name | Value |  |\n",
+            "| --- | --- | --- |\n",
+            "| A | 1 |  |\n",
+            "|  |  |  |"
+        ),
+        resized.source
+    );
+
+    let address = TableCellAddress {
+        block_id,
+        row: 2,
+        column: 1,
+    };
+    let deleted_row = apply(&document, document.delete_table_row(address).unwrap());
+    assert_eq!("| Name | Value |\n| --- | --- |", deleted_row.source);
+    let deleted_column = apply(&document, document.delete_table_column(address).unwrap());
+    assert_eq!("| Name |\n| --- |\n| A |", deleted_column.source);
+}
+
+fn apply(
+    document: &SourceMarkdownDocument,
+    transaction: markdown_source::SourceTransaction,
+) -> SourceMarkdownDocument {
+    document.apply_transaction(&transaction).unwrap().document
 }

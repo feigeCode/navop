@@ -6,8 +6,10 @@ use std::ops::Range;
 
 mod block_operations;
 mod format_operations;
+mod table_operations;
 pub use block_operations::BlockMoveDirection;
 pub use format_operations::{InlineFormat, ListFormat};
+pub use table_operations::{TableAlignment, TableInsertPosition};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableCellAddress {
@@ -24,6 +26,10 @@ pub enum SourceOperationError {
     NotTable,
     #[error("Markdown table cell was not found")]
     CellNotFound,
+    #[error("Markdown table operation would remove the last column")]
+    CannotDeleteLastTableColumn,
+    #[error("Markdown table size must contain at least one row and one column")]
+    InvalidTableSize,
     #[error("Markdown source node is not an image")]
     NotImage,
     #[error("Markdown block cannot move in that direction")]

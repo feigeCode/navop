@@ -21,6 +21,8 @@ mod types;
 pub use catalog::ExtensionRuntimeCatalog;
 pub use extension::{init, manifest::set_current_host_version};
 pub use extension_view_host::MainExtensionViewHost;
+#[cfg(feature = "wasm-components")]
+pub use extension_wasm::{DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme};
 pub use global::{GlobalExtensionRuntimeCatalog, refresh_global_runtime_catalog};
 pub use types::{
     RegisteredDocumentExporter, RegisteredRemoteFileEditorCommand,

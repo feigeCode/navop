@@ -10,6 +10,7 @@ chrono.workspace = true
 dirs.workspace = true
 dunce = "1"
 futures.workspace = true
+extension-runtime = { workspace = true, features = ["wasm-components"] }
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-html", "tree-sitter-markdown"] }
 markdown-editor.workspace = true

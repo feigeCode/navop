@@ -30,6 +30,15 @@ actions!(
         MoveBlockDown,
         DuplicateBlock,
         DeleteBlock,
+        InsertTableRowAbove,
+        InsertTableRowBelow,
+        DeleteTableRow,
+        InsertTableColumnLeft,
+        InsertTableColumnRight,
+        DeleteTableColumn,
+        AlignTableColumnLeft,
+        AlignTableColumnCenter,
+        AlignTableColumnRight,
         DeleteActiveImageBackward,
         DeleteActiveImageForward
     ]
@@ -68,6 +77,43 @@ fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new(
             "secondary-shift-backspace",
             DeleteBlock,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new("secondary-alt-up", InsertTableRowAbove, Some(INPUT_CONTEXT)),
+        KeyBinding::new(
+            "secondary-alt-down",
+            InsertTableRowBelow,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-alt-shift-up",
+            DeleteTableRow,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-alt-left",
+            InsertTableColumnLeft,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-alt-right",
+            InsertTableColumnRight,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-alt-shift-left",
+            DeleteTableColumn,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new("secondary-alt-l", AlignTableColumnLeft, Some(INPUT_CONTEXT)),
+        KeyBinding::new(
+            "secondary-alt-e",
+            AlignTableColumnCenter,
+            Some(INPUT_CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-alt-r",
+            AlignTableColumnRight,
             Some(INPUT_CONTEXT),
         ),
         KeyBinding::new("backspace", DeleteActiveImageBackward, Some(INPUT_CONTEXT)),

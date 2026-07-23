@@ -5,6 +5,7 @@ publish.workspace = true
 edition.workspace = true
 
 [dependencies]
+futures.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
 markdown-source.workspace = true
@@ -12,6 +13,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

@@ -30,6 +30,7 @@ impl ParserContext<'_> {
             ),
             Node::List(_) => editable(SourceBlockKind::UnorderedList, None),
             Node::Code(_) => code_details(self.source, range),
+            Node::Math(_) => math_details(self.source, range),
             Node::Table(_) => editable(
                 SourceBlockKind::Table(build_table_map(self.source, range, &mut self.next_id)),
                 None,
@@ -48,6 +49,25 @@ impl ParserContext<'_> {
 
 fn editable(kind: SourceBlockKind, content: Option<Range<usize>>) -> BlockDetails {
     (kind, content, SourceNodeCompatibility::Editable)
+}
+
+fn math_details(source: &str, range: Range<usize>) -> BlockDetails {
+    let raw = &source[range.clone()];
+    let opening_len = raw.bytes().take_while(|byte| *byte == b'$').count();
+    let closing_start = raw.rfind("$$").unwrap_or(raw.len());
+    let content_start = raw
+        .find(char::from(10))
+        .map_or(opening_len, |index| index + 1);
+    let content_end = raw[..closing_start]
+        .strip_suffix(char::from(10))
+        .map_or(closing_start, str::len);
+    editable(
+        SourceBlockKind::MathBlock {
+            opening_marker: range.start..range.start + opening_len,
+            closing_marker: range.start + closing_start..range.end,
+        },
+        Some(range.start + content_start..range.start + content_end),
+    )
 }
 
 fn source_editable(kind: SourceBlockKind, range: Range<usize>) -> BlockDetails {

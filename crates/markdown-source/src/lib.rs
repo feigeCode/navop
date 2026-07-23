@@ -23,7 +23,8 @@ pub use node::{
     SourceLinkMap, SourceNodeId,
 };
 pub use operations::{
-    BlockMoveDirection, InlineFormat, ListFormat, SourceOperationError, TableCellAddress,
+    BlockMoveDirection, InlineFormat, ListFormat, SourceOperationError, TableAlignment,
+    TableCellAddress, TableInsertPosition,
 };
 pub use parser::SourceParseError;
 pub use patch::{PatchError, apply_edits, validate_expected_changes};

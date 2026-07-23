@@ -1,5 +1,5 @@
 use super::{MarkdownEditor, MarkdownEditorError};
-use gpui::{Context, Window};
+use gpui::{Context, Pixels, Point, Window};
 use markdown_source::{SourceSelection, TableCellAddress};
 
 impl MarkdownEditor {
@@ -12,8 +12,34 @@ impl MarkdownEditor {
         let Ok(cell) = self.history.document().table_cell(address) else {
             return false;
         };
-        self.sync_table_cell(address, cell.content_range.start, window, cx);
+        self.sync_table_cell(address, cell.content_range.end, window, cx);
         self.input.update(cx, |input, cx| input.focus(window, cx));
+        true
+    }
+
+    pub fn activate_table_cell_at(
+        &mut self,
+        address: TableCellAddress,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.activate_table_cell(address, window, cx) {
+            return false;
+        }
+        cx.defer_in(window, move |editor, window, cx| {
+            if editor.active_table_cell != Some(address) {
+                return;
+            }
+            let offset = editor
+                .input
+                .read(cx)
+                .offset_for_position(position)
+                .unwrap_or_else(|| editor.input.read(cx).value().len());
+            editor.input.update(cx, |input, cx| {
+                input.set_selected_range(offset..offset, false, window, cx);
+            });
+        });
         true
     }
 

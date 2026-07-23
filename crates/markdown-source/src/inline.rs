@@ -36,7 +36,8 @@ impl<'a> InlineMapper<'a> {
             return;
         };
         let kind = self.inline_kind(node, range.clone(), outer_link.clone());
-        let content_range = content_range(node, &range, self.offset_shift);
+        let content_range = content_range(node, &range, self.offset_shift)
+            .or_else(|| delimited_content_range(&kind));
         let nested_outer = match &kind {
             SourceInlineKind::Link(link) => Some(link.clone()),
             _ => outer_link,
@@ -66,6 +67,7 @@ impl<'a> InlineMapper<'a> {
             Node::Emphasis(_) => delimiter_kind(node, range, 1, true, self.offset_shift),
             Node::Strong(_) => delimiter_kind(node, range, 2, false, self.offset_shift),
             Node::InlineCode(_) => code_kind(self.source, range),
+            Node::InlineMath(_) => math_kind(self.source, range),
             Node::Link(_) => link_map(self.source, range)
                 .map_or(SourceInlineKind::RawMarkdown, SourceInlineKind::Link),
             Node::Image(_) => image_map(self.source, range, outer_link)
@@ -81,6 +83,20 @@ impl<'a> InlineMapper<'a> {
         let id = SourceNodeId(*self.next_id);
         *self.next_id = self.next_id.saturating_add(1);
         id
+    }
+}
+
+fn delimited_content_range(kind: &SourceInlineKind) -> Option<Range<usize>> {
+    match kind {
+        SourceInlineKind::InlineCode {
+            opening_marker,
+            closing_marker,
+        }
+        | SourceInlineKind::InlineMath {
+            opening_marker,
+            closing_marker,
+        } => Some(opening_marker.end..closing_marker.start),
+        _ => None,
     }
 }
 
@@ -133,6 +149,15 @@ fn code_kind(source: &str, range: Range<usize>) -> SourceInlineKind {
     let raw = &source[range.clone()];
     let marker_len = raw.bytes().take_while(|byte| *byte == b'`').count();
     SourceInlineKind::InlineCode {
+        opening_marker: range.start..range.start + marker_len,
+        closing_marker: range.end - marker_len..range.end,
+    }
+}
+
+fn math_kind(source: &str, range: Range<usize>) -> SourceInlineKind {
+    let raw = &source[range.clone()];
+    let marker_len = raw.bytes().take_while(|byte| *byte == b'$').count();
+    SourceInlineKind::InlineMath {
         opening_marker: range.start..range.start + marker_len,
         closing_marker: range.end - marker_len..range.end,
     }

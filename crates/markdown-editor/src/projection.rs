@@ -6,7 +6,7 @@ use std::ops::Range;
 mod block_syntax;
 use block_syntax::block_hidden_ranges;
 mod syntax;
-use syntax::{block_inline_nodes, hidden_syntax_ranges, inline_range};
+use syntax::{block_inline_nodes, hidden_syntax_ranges};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionSegment {
@@ -19,6 +19,7 @@ pub enum ProjectionStyle {
     Emphasis,
     Strong,
     InlineCode,
+    InlineMath,
     Link,
     Image,
     Delete,
@@ -28,6 +29,7 @@ pub enum ProjectionStyle {
 pub struct ProjectionStyleSpan {
     pub range: Range<usize>,
     pub style: ProjectionStyle,
+    pub node_id: SourceNodeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +59,26 @@ impl MarkdownProjection {
         active_inline: Option<SourceNodeId>,
         source_range: Range<usize>,
     ) -> Self {
-        let revealed = active_inline.and_then(|id| inline_range(document, id));
-        let hidden = hidden_syntax_ranges(document, revealed, &source_range);
+        Self::build_range_with_reveal(document, active_inline, source_range, true)
+    }
+
+    /// Build the editor projection without changing text metrics when an inline node is active.
+    /// The active node is still recorded for source mapping and marker overlays.
+    pub fn build_range_preserving_layout(
+        document: &SourceMarkdownDocument,
+        active_inline: Option<SourceNodeId>,
+        source_range: Range<usize>,
+    ) -> Self {
+        Self::build_range_with_reveal(document, active_inline, source_range, false)
+    }
+
+    fn build_range_with_reveal(
+        document: &SourceMarkdownDocument,
+        active_inline: Option<SourceNodeId>,
+        source_range: Range<usize>,
+        reveal_active: bool,
+    ) -> Self {
+        let hidden = hidden_syntax_ranges(document, active_inline, &source_range, reveal_active);
         let mut builder =
             ProjectionBuilder::new(document.source.len(), active_inline, source_range.clone());
         builder.append_source(&document.source, source_range, &hidden);
@@ -96,7 +116,13 @@ impl MarkdownProjection {
         let suffix = common_suffix(&self.text[prefix..], &value[prefix..]);
         let old_end = self.text.len().saturating_sub(suffix);
         let new_end = value.len().saturating_sub(suffix);
-        let source_range = self.display_to_source(prefix)..self.display_end_to_source(old_end);
+        let source_start = self.display_to_source(prefix);
+        let source_end = if old_end == prefix {
+            source_start
+        } else {
+            self.display_end_to_source(old_end)
+        };
+        let source_range = source_start..source_end;
         if source_range.len() != old_end.saturating_sub(prefix) {
             return None;
         }
@@ -201,7 +227,11 @@ fn node_style_span(
     let (source_range, style) = node_style_source_range(node)?;
     let range = projection.source_to_display(source_range.start)
         ..projection.source_to_display(source_range.end);
-    (!range.is_empty()).then_some(ProjectionStyleSpan { range, style })
+    (!range.is_empty()).then_some(ProjectionStyleSpan {
+        range,
+        style,
+        node_id: node.id,
+    })
 }
 
 fn node_style_source_range(node: &SourceInlineNode) -> Option<(Range<usize>, ProjectionStyle)> {
@@ -218,6 +248,13 @@ fn node_style_source_range(node: &SourceInlineNode) -> Option<(Range<usize>, Pro
         } => Some((
             opening_marker.end..closing_marker.start,
             ProjectionStyle::InlineCode,
+        )),
+        SourceInlineKind::InlineMath {
+            opening_marker,
+            closing_marker,
+        } => Some((
+            opening_marker.end..closing_marker.start,
+            ProjectionStyle::InlineMath,
         )),
         SourceInlineKind::Link(link) => Some((link.label_range.clone(), ProjectionStyle::Link)),
         SourceInlineKind::Image(image) => Some((image.alt_range.clone(), ProjectionStyle::Image)),

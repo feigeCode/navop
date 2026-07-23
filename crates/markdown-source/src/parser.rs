@@ -26,6 +26,8 @@ pub enum SourceParseError {
 pub(crate) fn parse_options() -> ParseOptions {
     let mut options = ParseOptions::gfm();
     options.constructs.frontmatter = true;
+    options.constructs.math_flow = true;
+    options.constructs.math_text = true;
     options
 }
 

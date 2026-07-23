@@ -4,20 +4,28 @@ use std::ops::Range;
 
 pub(super) fn hidden_syntax_ranges(
     document: &SourceMarkdownDocument,
-    revealed: Option<Range<usize>>,
+    active_inline: Option<SourceNodeId>,
     source_range: &Range<usize>,
+    reveal_active: bool,
 ) -> Vec<Range<usize>> {
+    let active_inline = reveal_active.then_some(active_inline).flatten();
+    let active_range = active_inline.and_then(|id| active_inline_range(document, id));
+    let active_image = active_inline.and_then(|id| active_image_range(document, id));
     let mut ranges = document
         .blocks
         .iter()
         .flat_map(block_inline_nodes)
         .filter(|node| range_contains(source_range, &node.source_range))
-        .flat_map(node_hidden_ranges)
-        .filter(|range| {
-            revealed
-                .as_ref()
-                .is_none_or(|active| !ranges_overlap(active, range))
+        .filter(|node| {
+            active_inline != Some(node.id)
+                && active_range
+                    .as_ref()
+                    .is_none_or(|range| range != &node.source_range)
+                && active_image
+                    .as_ref()
+                    .is_none_or(|range| !range_contains(range, &node.source_range))
         })
+        .flat_map(node_hidden_ranges)
         .collect::<Vec<_>>();
     ranges.extend(
         document
@@ -44,7 +52,7 @@ pub(super) fn block_inline_nodes(block: &SourceBlock) -> Vec<&SourceInlineNode> 
     nodes
 }
 
-pub(super) fn inline_range(
+fn active_inline_range(
     document: &SourceMarkdownDocument,
     id: SourceNodeId,
 ) -> Option<Range<usize>> {
@@ -53,9 +61,18 @@ pub(super) fn inline_range(
         .iter()
         .flat_map(block_inline_nodes)
         .find(|node| node.id == id)
-        .map(|node| match &node.kind {
-            SourceInlineKind::Image(image) => image.full_range.clone(),
-            _ => node.source_range.clone(),
+        .map(|node| node.source_range.clone())
+}
+
+fn active_image_range(document: &SourceMarkdownDocument, id: SourceNodeId) -> Option<Range<usize>> {
+    document
+        .blocks
+        .iter()
+        .flat_map(block_inline_nodes)
+        .find(|node| node.id == id)
+        .and_then(|node| match &node.kind {
+            SourceInlineKind::Image(image) => Some(image.full_range.clone()),
+            _ => None,
         })
 }
 
@@ -73,6 +90,10 @@ fn node_hidden_ranges(node: &SourceInlineNode) -> Vec<Range<usize>> {
             opening_marker,
             closing_marker,
         }
+        | SourceInlineKind::InlineMath {
+            opening_marker,
+            closing_marker,
+        }
         | SourceInlineKind::Delete {
             opening_marker,
             closing_marker,
@@ -87,10 +108,6 @@ fn node_hidden_ranges(node: &SourceInlineNode) -> Vec<Range<usize>> {
         ],
         _ => Vec::new(),
     }
-}
-
-fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
-    left.start < right.end && right.start < left.end
 }
 
 fn range_contains(outer: &Range<usize>, inner: &Range<usize>) -> bool {

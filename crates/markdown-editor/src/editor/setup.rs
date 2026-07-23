@@ -30,7 +30,10 @@ pub(super) fn apply_projection_styles(
     cx: &mut Context<MarkdownEditor>,
 ) {
     input.update(cx, |input, cx| {
-        input.set_text_highlights(super::projection_highlights(projection, theme), cx);
+        input.set_text_highlights(
+            super::projection_highlights(projection, theme, &Default::default()),
+            cx,
+        );
     });
 }
 

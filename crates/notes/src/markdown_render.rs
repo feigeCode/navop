@@ -58,7 +58,9 @@ impl NotesView {
         v_flex()
             .size_full()
             .min_h_0()
-            .child(self.render_markdown_toolbar(document_id, mode, cx))
+            .when(mode == MarkdownViewMode::Source, |this| {
+                this.child(self.render_markdown_toolbar(document_id, mode, cx))
+            })
             .when(
                 matches!(session.state.sync_state, MarkdownSyncState::Conflict),
                 |this| this.child(self.render_conflict_banner(document_id, cx)),

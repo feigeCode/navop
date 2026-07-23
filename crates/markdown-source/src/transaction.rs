@@ -31,6 +31,7 @@ pub enum SourceEditOrigin {
     DeleteBlock,
     MoveBlock,
     TableCellEdit,
+    TableStructureEdit,
     ImageEdit,
     Paste,
     Undo,
