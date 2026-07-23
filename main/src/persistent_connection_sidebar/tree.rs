@@ -166,10 +166,10 @@ impl PersistentConnectionSidebar {
             .h(px(40.0))
             .flex_shrink_0()
             .pr_2()
-            // On macOS the traffic-light cluster (~64px from the window edge)
-            // extends past the narrow navigation rail; pad the header so its
-            // content clears the window buttons.
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(28.0)))
+            // Leave a full control-sized gap after the macOS traffic lights;
+            // the narrower padding made the title look attached to the green
+            // window button even though the bounds did not overlap.
+            .when(cfg!(target_os = "macos"), |this| this.pl(px(36.0)))
             .when(!cfg!(target_os = "macos"), |this| this.pl_2())
             .items_center()
             .justify_between()
@@ -260,5 +260,14 @@ impl PersistentConnectionSidebar {
             .collect();
         self.unassigned_collapsed = true;
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn macos_connection_header_clears_the_traffic_lights() {
+        let source = include_str!("tree.rs");
+        assert!(source.contains("cfg!(target_os = \"macos\"), |this| this.pl(px(36.0))"));
     }
 }

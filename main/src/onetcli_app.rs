@@ -1,7 +1,9 @@
 use crate::home_tab::{
     HomePage, NewConnectionShortcut, OpenConnectionQuickOpen, OpenLocalTerminalShortcut,
 };
-use crate::persistent_connection_sidebar::PersistentConnectionSidebar;
+use crate::persistent_connection_sidebar::{
+    PersistentConnectionSidebar, PersistentConnectionSidebarEvent,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, Keystroke,
@@ -1097,6 +1099,15 @@ impl OnetCliApp {
                 cx,
             )
         });
+        cx.subscribe(
+            &connection_sidebar,
+            |this, _, event: &PersistentConnectionSidebarEvent, cx| match event {
+                PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded } => {
+                    this.persist_connection_sidebar_expanded(*expanded, cx)
+                }
+            },
+        )
+        .detach();
 
         // Initialize fixed tabs before the scrollable workspace tabs.
         {
@@ -1201,6 +1212,12 @@ impl OnetCliApp {
         expanded: bool,
         cx: &mut Context<Self>,
     ) {
+        self.connection_sidebar
+            .update(cx, |sidebar, cx| sidebar.set_tree_expanded(expanded, cx));
+        self.persist_connection_sidebar_expanded(expanded, cx);
+    }
+
+    fn persist_connection_sidebar_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
         AppSettings::update_and_save(cx, |settings| {
             settings.connection_sidebar_expanded = expanded;
         });
@@ -1212,8 +1229,6 @@ impl OnetCliApp {
                 home.set_persistent_sidebar_expanded(expanded, cx)
             });
         }
-        self.connection_sidebar
-            .update(cx, |sidebar, cx| sidebar.set_tree_expanded(expanded, cx));
         self.tab_container.update(cx, |tabs, cx| {
             tabs.set_navigation_sidebar_expanded(expanded, cx)
         });
@@ -1383,13 +1398,14 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_connection_sidebar_hides_the_entire_sidebar() {
+    fn collapsed_connection_sidebar_keeps_the_navigation_rail_visible() {
         let source = include_str!("onetcli_app.rs");
         let sidebar_source = include_str!("persistent_connection_sidebar/mod.rs");
 
-        assert!(source.contains("when(connection_sidebar_expanded"));
+        assert!(source.contains("when(show_persistent_sidebar"));
+        assert!(source.contains("layout.child(self.connection_sidebar.clone())"));
         assert!(sidebar_source.contains("fn is_expanded"));
-        assert!(!sidebar_source.contains(".when(self.tree_expanded"));
+        assert!(sidebar_source.contains(".when(self.tree_expanded"));
     }
 
     #[test]
@@ -1688,9 +1704,7 @@ impl Render for OnetCliApp {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
-        let connection_sidebar_expanded = self.home_page_style.uses_persistent_sidebar()
-            && self.connection_sidebar.read(cx).is_expanded();
-
+        let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
         div()
             .size_full()
             .relative()
@@ -1708,7 +1722,7 @@ impl Render for OnetCliApp {
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .when(connection_sidebar_expanded, |layout| {
+                    .when(show_persistent_sidebar, |layout| {
                         layout.child(self.connection_sidebar.clone())
                     })
                     .child(

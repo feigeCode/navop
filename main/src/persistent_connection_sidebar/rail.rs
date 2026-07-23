@@ -12,7 +12,7 @@ use one_core::settings::{AppSettings, GlobalCurrentUser, StartupDefaultPage};
 use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
-use super::SidebarPalette;
+use super::{PersistentConnectionSidebar, PersistentConnectionSidebarEvent, SidebarPalette};
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
@@ -22,6 +22,7 @@ const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
 
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
+    sidebar: Entity<PersistentConnectionSidebar>,
     palette: SidebarPalette,
     cx: &gpui::App,
 ) -> AnyElement {
@@ -67,7 +68,12 @@ pub(super) fn render_navigation_rail(
                 .min_h_0()
                 .items_center()
                 .bg(palette.rail_background)
-                .child(render_filter_buttons(home_page, selected_filter, palette))
+                .child(render_filter_buttons(
+                    home_page,
+                    sidebar,
+                    selected_filter,
+                    palette,
+                ))
                 .child(
                     v_flex()
                         .w_full()
@@ -141,12 +147,14 @@ pub(super) fn render_navigation_rail(
 
 fn render_filter_buttons(
     home_page: &Entity<HomePage>,
+    sidebar: Entity<PersistentConnectionSidebar>,
     selected_filter: ConnectionType,
     palette: SidebarPalette,
 ) -> AnyElement {
     let mut filters = v_flex().flex_1().w_full().items_center().gap_1().p_1();
     for filter in ConnectionType::all() {
         let home = home_page.clone();
+        let sidebar = sidebar.clone();
         let selected = selected_filter == filter;
         filters = filters.child(
             Button::new(format!("persistent-filter-{}", filter.label()))
@@ -166,11 +174,25 @@ fn render_filter_buttons(
                 .when(selected, |button| button.bg(palette.accent))
                 .tooltip(filter.label())
                 .on_click(move |_, _, cx| {
-                    home.update(cx, |home, cx| home.set_selected_filter(filter, cx));
+                    if !selected {
+                        home.update(cx, |home, cx| home.set_selected_filter(filter, cx));
+                    }
+                    sidebar.update(cx, |sidebar, cx| {
+                        let expanded =
+                            next_tree_expanded_after_filter_click(selected, sidebar.tree_expanded);
+                        sidebar.set_tree_expanded(expanded, cx);
+                        cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged {
+                            expanded,
+                        });
+                    });
                 }),
         );
     }
     filters.into_any_element()
+}
+
+fn next_tree_expanded_after_filter_click(selected: bool, tree_expanded: bool) -> bool {
+    if selected { !tree_expanded } else { true }
 }
 
 /// Unified line-style icon for each connection filter, replacing the previous
@@ -224,4 +246,21 @@ fn rail_button(
         .on_click(move |_, window, cx| {
             home.update(cx, |home, cx| on_click(home, window, cx));
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_tree_expanded_after_filter_click;
+
+    #[test]
+    fn selected_filter_button_toggles_the_connection_tree() {
+        assert!(!next_tree_expanded_after_filter_click(true, true));
+        assert!(next_tree_expanded_after_filter_click(true, false));
+    }
+
+    #[test]
+    fn switching_filters_always_reveals_the_connection_tree() {
+        assert!(next_tree_expanded_after_filter_click(false, true));
+        assert!(next_tree_expanded_after_filter_click(false, false));
+    }
 }

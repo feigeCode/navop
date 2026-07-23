@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Pixels, Render, Styled,
-    UniformListScrollHandle, Window,
+    AppContext, Context, Entity, EventEmitter, Hsla, IntoElement, ParentElement, Pixels, Render,
+    Styled, UniformListScrollHandle, Window,
 };
 use gpui_component::{
     h_flex,
@@ -95,6 +96,12 @@ pub(crate) struct PersistentConnectionSidebar {
     pub(super) tree_scroll_handle: UniformListScrollHandle,
 }
 
+pub(crate) enum PersistentConnectionSidebarEvent {
+    TreeVisibilityChanged { expanded: bool },
+}
+
+impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSidebar {}
+
 impl PersistentConnectionSidebar {
     pub(crate) fn new(
         home_page: Entity<HomePage>,
@@ -160,7 +167,14 @@ impl Render for PersistentConnectionSidebar {
         h_flex()
             .h_full()
             .flex_shrink_0()
-            .child(rail::render_navigation_rail(&self.home_page, palette, cx))
-            .child(self.render_connection_tree(palette, window, cx))
+            .child(rail::render_navigation_rail(
+                &self.home_page,
+                cx.entity(),
+                palette,
+                cx,
+            ))
+            .when(self.tree_expanded, |this| {
+                this.child(self.render_connection_tree(palette, window, cx))
+            })
     }
 }

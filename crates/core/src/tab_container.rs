@@ -2912,7 +2912,7 @@ impl TabContainer {
         // When the application navigation sidebar is fully hidden on macOS,
         // reserve the title-bar area occupied by the traffic-light controls.
         if cfg!(target_os = "macos") && navigation_sidebar_expanded == Some(false) {
-            left_padding = px(80.0);
+            left_padding = px(36.0);
         }
 
         // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
@@ -3848,7 +3848,7 @@ mod tests {
     fn collapsed_navigation_sidebar_reserves_macos_titlebar_controls() {
         let source = include_str!("tab_container.rs");
         assert!(source.contains("navigation_sidebar_expanded == Some(false)"));
-        assert!(source.contains("left_padding = px(80.0)"));
+        assert!(source.contains("left_padding = px(36.0)"));
     }
 
     #[test]
