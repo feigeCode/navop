@@ -1,9 +1,9 @@
 //! 探测本机 X11 运行环境，构造连接级 [`X11Proxy`]。
 //!
 //! 探测顺序：DISPLAY（macOS 下 GUI 进程通常没有该环境变量，回退到
-//! `launchctl getenv DISPLAY`；XQuartz 注册的是 launchd 套接字，首个
-//! 连接会自动拉起服务）→ 解析出本机端点 → 读取 Xauthority 文件并
-//! 挑出匹配 DISPLAY 的 MIT-MAGIC-COOKIE-1。
+//! `launchctl getenv DISPLAY`；部分 XQuartz 版本不会把 DISPLAY 写入
+//! launchd 环境，此时再扫描 `/tmp/.X11-unix/X*`）→ 解析出本机端点
+//! → 读取 Xauthority 文件并挑出匹配 DISPLAY 的 MIT-MAGIC-COOKIE-1。
 
 use std::path::PathBuf;
 
@@ -35,7 +35,9 @@ pub fn detect_local_server() -> X11Result<X11Proxy> {
 }
 
 fn discover_display_string() -> Option<String> {
-    env_non_empty("DISPLAY").or_else(launchd_display)
+    env_non_empty("DISPLAY")
+        .or_else(launchd_display)
+        .or_else(local_xquartz_display)
 }
 
 #[cfg(target_os = "macos")]
@@ -46,6 +48,33 @@ fn launchd_display() -> Option<String> {
 #[cfg(not(target_os = "macos"))]
 fn launchd_display() -> Option<String> {
     None
+}
+
+#[cfg(target_os = "macos")]
+fn local_xquartz_display() -> Option<String> {
+    use std::os::unix::fs::FileTypeExt as _;
+
+    let entries = std::fs::read_dir("/tmp/.X11-unix").ok()?;
+    let display = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|file_type| file_type.is_socket())
+                .unwrap_or(false)
+        })
+        .filter_map(|entry| display_number_from_socket_name(&entry.file_name()))
+        .min()?;
+    Some(format!(":{display}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn local_xquartz_display() -> Option<String> {
+    None
+}
+
+fn display_number_from_socket_name(name: &std::ffi::OsStr) -> Option<u16> {
+    name.to_str()?.strip_prefix('X')?.parse().ok()
 }
 
 fn authority_file() -> Option<PathBuf> {
@@ -76,4 +105,18 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if text.is_empty() { None } else { Some(text) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_number_from_socket_name;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn parses_x11_unix_socket_names() {
+        assert_eq!(display_number_from_socket_name(OsStr::new("X0")), Some(0));
+        assert_eq!(display_number_from_socket_name(OsStr::new("X12")), Some(12));
+        assert_eq!(display_number_from_socket_name(OsStr::new("X")), None);
+        assert_eq!(display_number_from_socket_name(OsStr::new("not-x11")), None);
+    }
 }

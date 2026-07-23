@@ -2,8 +2,9 @@
 //!
 //! 基于 X.Org 公开的 X11 协议规范实现，覆盖转发所需的四个环节：
 //!
-//! 1. 本机环境探测（[`detect_local_server`]）：DISPLAY（macOS 下回退
-//!    `launchctl getenv DISPLAY`）与 Xauthority 中的 MIT-MAGIC-COOKIE-1；
+//! 1. 本机环境探测（[`detect_local_server`]）：DISPLAY（macOS 下依次回退
+//!    `launchctl getenv DISPLAY` 和 XQuartz Unix socket）与 Xauthority 中的
+//!    MIT-MAGIC-COOKIE-1；
 //! 2. 按 SSH 会话签发 fake cookie（[`X11Proxy::issue_request`]），真实
 //!    cookie 不离开本机；
 //! 3. sshd 回连通道的 setup 报文校验：fake cookie 匹配后，把认证数据

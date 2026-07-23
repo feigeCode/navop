@@ -1326,16 +1326,18 @@ impl SshFormWindow {
 
     fn render_form_row(&self, label: &str, child: impl IntoElement) -> impl IntoElement {
         h_flex()
+            .w_full()
             .gap_3()
             .items_center()
             .child(
                 div()
                     .w(px(100.0))
+                    .flex_shrink_0()
                     .text_sm()
                     .text_right()
                     .child(label.to_string()),
             )
-            .child(div().flex_1().child(child))
+            .child(div().flex_1().min_w_0().child(child))
     }
 
     /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
@@ -1567,18 +1569,24 @@ impl SshFormWindow {
                 self.render_form_row(
                     &t!("SSH.disable_shell_integration"),
                     h_flex()
+                        .w_full()
                         .gap_2()
+                        .items_start()
                         .child(
-                            Checkbox::new("disable-shell-integration")
-                                .checked(self.disable_shell_integration)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.disable_shell_integration =
-                                        !this.disable_shell_integration;
-                                    cx.notify();
-                                })),
+                            div().flex_shrink_0().child(
+                                Checkbox::new("disable-shell-integration")
+                                    .checked(self.disable_shell_integration)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.disable_shell_integration =
+                                            !this.disable_shell_integration;
+                                        cx.notify();
+                                    })),
+                            ),
                         )
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("SSH.disable_shell_integration_desc").to_string()),
@@ -1589,17 +1597,23 @@ impl SshFormWindow {
                 self.render_form_row(
                     &t!("SSH.x11_forwarding"),
                     h_flex()
+                        .w_full()
                         .gap_2()
+                        .items_start()
                         .child(
-                            Checkbox::new("x11-forwarding")
-                                .checked(self.x11_forwarding)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.x11_forwarding = !this.x11_forwarding;
-                                    cx.notify();
-                                })),
+                            div().flex_shrink_0().child(
+                                Checkbox::new("x11-forwarding")
+                                    .checked(self.x11_forwarding)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.x11_forwarding = !this.x11_forwarding;
+                                        cx.notify();
+                                    })),
+                            ),
                         )
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("SSH.x11_forwarding_desc").to_string()),
