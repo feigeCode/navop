@@ -77,6 +77,9 @@ fn connection_menu_item(
 ) -> PopupMenuItem {
     match action {
         ConnectionMenuAction::OpenInBackground => background_connection_item(connection, home),
+        ConnectionMenuAction::OpenFullscreenWindow => {
+            fullscreen_window_connection_item(connection, home)
+        }
         ConnectionMenuAction::OpenSftp => open_sftp_item(connection, home),
         ConnectionMenuAction::CopyInfo => copy_info_item(connection),
         ConnectionMenuAction::CopyName => copy_text_item(
@@ -90,6 +93,21 @@ fn connection_menu_item(
         ConnectionMenuAction::Duplicate => duplicate_connection_item(connection, home),
         ConnectionMenuAction::Delete => delete_connection_item(connection, home),
     }
+}
+
+fn fullscreen_window_connection_item(
+    connection: &StoredConnection,
+    home: &Entity<crate::home_tab::HomePage>,
+) -> PopupMenuItem {
+    let connection = connection.clone();
+    let home = home.clone();
+    PopupMenuItem::new(t!("Connection.open_in_fullscreen_window").to_string())
+        .icon(IconName::Maximize)
+        .on_click(move |_, window, cx| {
+            home.update(cx, |home, cx| {
+                home.open_remote_desktop_fullscreen_window(&connection, window, cx);
+            });
+        })
 }
 
 fn copy_command_item(connection: &StoredConnection) -> PopupMenuItem {

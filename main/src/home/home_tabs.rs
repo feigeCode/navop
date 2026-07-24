@@ -992,7 +992,7 @@ impl HomePage {
     }
 }
 
-fn remote_desktop_options(
+pub(crate) fn remote_desktop_options(
     conn: &StoredConnection,
     protocol: RemoteDesktopProtocol,
 ) -> Option<RemoteDesktopConnectionOptions> {

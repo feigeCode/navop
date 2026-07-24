@@ -108,6 +108,50 @@ impl HomePage {
         cx.notify();
     }
 
+    pub(crate) fn open_remote_desktop_fullscreen_window(
+        &mut self,
+        connection: &StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
+            return;
+        }
+
+        let protocol = match connection.connection_type {
+            ConnectionType::Rdp => remote_desktop::RemoteDesktopProtocol::Rdp,
+            ConnectionType::Vnc => remote_desktop::RemoteDesktopProtocol::Vnc,
+            _ => return,
+        };
+        let connection = connection.clone();
+        self.selected_connection_id = connection.id;
+        self.touch_connection_last_used(connection.id, cx);
+        extension_runtime::remote_desktop_provider_install::run_with_remote_desktop_provider_guard(
+            self,
+            connection.clone(),
+            protocol,
+            window,
+            cx,
+            move |_, _, cx| {
+                let Some(options) =
+                    crate::home::home_tabs::remote_desktop_options(&connection, protocol)
+                else {
+                    tracing::warn!(
+                        connection_id = ?connection.id,
+                        "无法解析远程桌面连接参数"
+                    );
+                    return;
+                };
+                crate::home::remote_desktop_window::open_remote_desktop_fullscreen_window(
+                    options,
+                    connection.name.clone(),
+                    cx,
+                );
+            },
+        );
+        cx.notify();
+    }
+
     pub(super) fn touch_connection_last_used(
         &mut self,
         connection_id: Option<i64>,

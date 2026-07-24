@@ -16,3 +16,4 @@ pub(crate) mod home_tabs;
 pub(crate) mod home_workspace_filter;
 #[cfg(test)]
 mod port_forwarding_contract_tests;
+pub(crate) mod remote_desktop_window;

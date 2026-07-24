@@ -71,36 +71,45 @@ pub fn open_remote_desktop_connection_with_provider_guard<T>(
 ) where
     T: RemoteDesktopConnectionOpener,
 {
-    if remote_desktop::RemoteDesktopProviderRegistry::load_default()
-        .find(protocol)
-        .is_some()
-    {
-        home.open_remote_desktop_connection(&connection, protocol, mode, window, cx);
-        return;
-    }
-    prompt_install_provider(connection, protocol, mode, window, cx);
-}
-
-fn prompt_install_provider<T>(
-    connection: StoredConnection,
-    protocol: RemoteDesktopProtocol,
-    mode: TabOpenMode,
-    window: &mut Window,
-    cx: &mut Context<T>,
-) where
-    T: RemoteDesktopConnectionOpener,
-{
-    let provider_id = required_provider_for_protocol(protocol).to_string();
-    let connection_name = connection.name.clone();
-    prompt_install_provider_with_completion(
-        provider_id.clone(),
+    run_with_remote_desktop_provider_guard(
+        home,
+        connection.clone(),
         protocol,
-        connection_name,
         window,
         cx,
         move |home, window, cx| {
             home.open_remote_desktop_connection(&connection, protocol, mode, window, cx);
         },
+    );
+}
+
+pub fn run_with_remote_desktop_provider_guard<T, F>(
+    target: &mut T,
+    connection: StoredConnection,
+    protocol: RemoteDesktopProtocol,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    on_ready: F,
+) where
+    T: 'static,
+    F: FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
+{
+    if remote_desktop::RemoteDesktopProviderRegistry::load_default()
+        .find(protocol)
+        .is_some()
+    {
+        on_ready(target, window, cx);
+        return;
+    }
+    let provider_id = required_provider_for_protocol(protocol).to_string();
+    let connection_name = connection.name.clone();
+    prompt_install_provider_with_completion(
+        provider_id,
+        protocol,
+        connection_name,
+        window,
+        cx,
+        on_ready,
     );
 }
 

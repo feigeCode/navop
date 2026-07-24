@@ -1,6 +1,7 @@
 use gpui::{
     AnyView, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, SharedString,
-    Size, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    Size, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, prelude::FluentBuilder, px,
+    size,
 };
 use gpui_component::{ActiveTheme, Root, TitleBar, v_flex};
 
@@ -11,6 +12,8 @@ pub struct PopupWindowOptions {
     pub height: f32,
     pub min_width: f32,
     pub min_height: f32,
+    pub fullscreen: bool,
+    pub hide_titlebar_when_fullscreen: bool,
 }
 
 impl Default for PopupWindowOptions {
@@ -21,6 +24,8 @@ impl Default for PopupWindowOptions {
             height: 550.0,
             min_width: 400.0,
             min_height: 300.0,
+            fullscreen: false,
+            hide_titlebar_when_fullscreen: false,
         }
     }
 }
@@ -56,6 +61,16 @@ impl PopupWindowOptions {
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.width = width;
         self.height = height;
+        self
+    }
+
+    pub fn fullscreen(mut self, fullscreen: bool) -> Self {
+        self.fullscreen = fullscreen;
+        self
+    }
+
+    pub fn hide_titlebar_when_fullscreen(mut self, hide: bool) -> Self {
+        self.hide_titlebar_when_fullscreen = hide;
         self
     }
 }
@@ -95,8 +110,13 @@ where
     let title = options.title.clone();
 
     cx.spawn(async move |cx| {
+        let window_bounds = if options.fullscreen {
+            WindowBounds::Fullscreen(window_bounds)
+        } else {
+            WindowBounds::Windowed(window_bounds)
+        };
         let window_opts = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+            window_bounds: Some(window_bounds),
             titlebar: Some(TitleBar::title_bar_options()),
             window_min_size: Some(Size {
                 width: px(options.min_width),
@@ -115,6 +135,7 @@ where
             let content = cx.new(|_| PopupWindowContent {
                 view: view.into(),
                 title,
+                hide_titlebar_when_fullscreen: options.hide_titlebar_when_fullscreen,
             });
             cx.new(|cx| Root::new(content, window, cx))
         })?;
@@ -132,6 +153,7 @@ where
 struct PopupWindowContent {
     view: AnyView,
     title: String,
+    hide_titlebar_when_fullscreen: bool,
 }
 
 impl Render for PopupWindowContent {
@@ -145,17 +167,22 @@ impl Render for PopupWindowContent {
             .size_full()
             .bg(cx.theme().background)
             .opacity(crate::settings::AppSettings::global(cx).window_opacity)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
+            .when(
+                !self.hide_titlebar_when_fullscreen || !window.is_fullscreen(),
+                |this| {
+                    this.child(
+                        TitleBar::new().child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .flex_1()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(self.title.clone()),
+                        ),
+                    )
+                },
             )
             .child(self.view.clone())
             .children(sheet_layer)

@@ -3,6 +3,7 @@ use one_core::storage::ConnectionType;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConnectionMenuAction {
     OpenInBackground,
+    OpenFullscreenWindow,
     OpenSftp,
     CopyInfo,
     CopyName,
@@ -19,6 +20,9 @@ pub(super) fn connection_menu_actions(
     can_edit: bool,
 ) -> Vec<ConnectionMenuAction> {
     let mut actions = vec![ConnectionMenuAction::OpenInBackground];
+    if matches!(connection_type, ConnectionType::Rdp | ConnectionType::Vnc) {
+        actions.push(ConnectionMenuAction::OpenFullscreenWindow);
+    }
     if connection_type == ConnectionType::SshSftp {
         actions.push(ConnectionMenuAction::OpenSftp);
     }
@@ -86,6 +90,7 @@ mod tests {
             connection_menu_actions(ConnectionType::Rdp, false),
             vec![
                 ConnectionMenuAction::OpenInBackground,
+                ConnectionMenuAction::OpenFullscreenWindow,
                 ConnectionMenuAction::CopyInfo,
                 ConnectionMenuAction::CopyName,
                 ConnectionMenuAction::CopyTargets,
@@ -97,7 +102,24 @@ mod tests {
     fn unsupported_types_do_not_offer_a_cli_command() {
         let actions = connection_menu_actions(ConnectionType::Rdp, true);
         assert!(!actions.contains(&ConnectionMenuAction::CopyCommand));
+        assert!(actions.contains(&ConnectionMenuAction::OpenFullscreenWindow));
         assert!(actions.contains(&ConnectionMenuAction::MoveToGroup));
+    }
+
+    #[test]
+    fn only_remote_desktop_connections_offer_fullscreen_window() {
+        assert!(
+            connection_menu_actions(ConnectionType::Rdp, true)
+                .contains(&ConnectionMenuAction::OpenFullscreenWindow)
+        );
+        assert!(
+            connection_menu_actions(ConnectionType::Vnc, true)
+                .contains(&ConnectionMenuAction::OpenFullscreenWindow)
+        );
+        assert!(
+            !connection_menu_actions(ConnectionType::SshSftp, true)
+                .contains(&ConnectionMenuAction::OpenFullscreenWindow)
+        );
     }
 
     #[test]
