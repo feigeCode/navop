@@ -70,6 +70,7 @@ impl PersistentConnectionSidebar {
 
     fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
+        let query = self.search_input.read(cx).value().trim().to_lowercase();
         let mut workspaces = home
             .workspaces
             .iter()
@@ -81,20 +82,26 @@ impl PersistentConnectionSidebar {
                 })
             })
             .collect::<Vec<_>>();
+        let mut matching_connection_ids = std::collections::HashSet::new();
         let mut connections = home
             .connections
             .iter()
             .filter(|connection| home.match_connection_type(connection))
             .filter_map(|connection| {
+                let id = connection.id?;
+                if home.match_connection(connection, &query) {
+                    matching_connection_ids.insert(id);
+                }
                 Some(ConnectionNodeInput {
-                    id: connection.id?,
+                    id,
                     workspace_id: connection.workspace_id,
                     name: connection.name.clone(),
                 })
             })
             .collect::<Vec<_>>();
-        let query = self.search_input.read(cx).value().trim().to_lowercase();
-        filter_connection_tree_inputs(&mut workspaces, &mut connections, &query);
+        filter_connection_tree_inputs(&mut workspaces, &mut connections, &query, |connection| {
+            matching_connection_ids.contains(&connection.id)
+        });
         let searching = !query.is_empty();
         let expanded_workspaces = std::collections::HashSet::new();
         build_connection_tree_rows(

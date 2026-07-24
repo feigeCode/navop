@@ -13,7 +13,7 @@ impl HomePage {
         }
     }
 
-    pub(super) fn match_connection(&self, conn: &StoredConnection, query: &str) -> bool {
+    pub(crate) fn match_connection(&self, conn: &StoredConnection, query: &str) -> bool {
         if query.is_empty() {
             return true;
         }

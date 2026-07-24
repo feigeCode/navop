@@ -75,6 +75,7 @@ pub(crate) fn filter_connection_tree_inputs(
     workspaces: &mut Vec<WorkspaceNodeInput>,
     connections: &mut Vec<ConnectionNodeInput>,
     query: &str,
+    connection_matches: impl Fn(&ConnectionNodeInput) -> bool,
 ) {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
@@ -91,7 +92,7 @@ pub(crate) fn filter_connection_tree_inputs(
         .collect::<HashSet<_>>();
     let mut visible_workspace_ids = matched_workspace_ids.clone();
     connections.retain(|connection| {
-        connection.name.to_lowercase().contains(&query)
+        connection_matches(connection)
             || connection
                 .workspace_id
                 .is_some_and(|workspace_id| matched_workspace_ids.contains(&workspace_id))
@@ -313,7 +314,9 @@ mod tests {
             connection(20, Some(3), "Local Redis"),
         ];
 
-        filter_connection_tree_inputs(&mut workspaces, &mut connections, "mysql");
+        filter_connection_tree_inputs(&mut workspaces, &mut connections, "mysql", |connection| {
+            connection.name.to_lowercase().contains("mysql")
+        });
 
         assert_eq!(
             vec![1, 2],
@@ -330,7 +333,37 @@ mod tests {
         let mut workspaces = vec![workspace(1, None, "Production")];
         let mut connections = vec![connection(10, Some(1), "Primary MySQL")];
 
-        filter_connection_tree_inputs(&mut workspaces, &mut connections, "production");
+        filter_connection_tree_inputs(
+            &mut workspaces,
+            &mut connections,
+            "production",
+            |connection| connection.name.to_lowercase().contains("production"),
+        );
+
+        assert_eq!(
+            vec![1],
+            workspaces.iter().map(|item| item.id).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![10],
+            connections.iter().map(|item| item.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_keeps_connection_matched_by_non_name_field() {
+        let mut workspaces = vec![workspace(1, None, "Production")];
+        let mut connections = vec![
+            connection(10, Some(1), "Primary database"),
+            connection(20, Some(1), "Replica database"),
+        ];
+
+        filter_connection_tree_inputs(
+            &mut workspaces,
+            &mut connections,
+            "192.168.10.24",
+            |connection| connection.id == 10,
+        );
 
         assert_eq!(
             vec![1],
