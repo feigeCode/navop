@@ -9,7 +9,9 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onetcli-icon.XXXXXX")"
 ICONSET_DIR="${WORK_DIR}/Navop.iconset"
 SWIFT_SCRIPT="${WORK_DIR}/generate-iconset.swift"
 TARGET_MASTER_SIZE=1024
-TARGET_PADDING=16
+# Keep the rounded-square artwork visually aligned with standard macOS app
+# icons instead of letting it fill almost the entire 1024px canvas.
+TARGET_PADDING=80
 
 cleanup() {
     rm -rf "$WORK_DIR"
