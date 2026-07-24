@@ -116,9 +116,9 @@ The Notes workspace supports local Markdown documents, Markdown bundles for whit
 
 Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments; choose a profile when opening a terminal instead of changing the global default first. The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The SFTP workspace can switch either side between local storage and searchable remote endpoints, copy files directly between servers, upload by drag-and-drop or paste, and jump through path favorites. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
 
-### Workspace Explorer, Git & Agent Workflows
+### Agent Hub
 
-Keep a project tree beside local or SSH terminals, follow the terminal working directory, and review file changes without leaving the active session. The integrated source-control view supports branch search, fetch, push, branch creation and switching, plus side-by-side Git diffs. This makes terminal-based Agent workflows easier to verify because generated changes, repository state, and the files being discussed remain visible together.
+Agent Hub combines the terminal Agent, workspace explorer, Git changes, branch controls, and side-by-side diffs in one integrated coding workspace. Its composite layout follows interaction patterns familiar from established Agent coding tools while keeping Navop's local and SSH terminals, connection context, and operational resources close at hand. Follow the terminal working directory, inspect generated files, search or switch branches, fetch and push, and verify every Agent edit before committing.
 
 ### Port Forwarding
 
@@ -240,13 +240,13 @@ Sync connections and settings across devices with encrypted key storage based on
 |:-:|:-:|
 | [![Recent Connections Dashboard](app1.png)](app1.png) | [![Persistent Connection Sidebar](app.png)](app.png) |
 
-| Agent Terminal & Workspace Explorer | Git Branch Management |
-|:-:|:-:|
-| [![Agent Terminal and Workspace Explorer](agent_hub.png)](agent_hub.png) | [![Git Branch Management](git_branch.png)](git_branch.png) |
+| Agent Hub Workspace | Agent Hub Branch Management | Agent Hub Diff Review |
+|:-:|:-:|:-:|
+| [![Agent Hub Workspace](agent_hub.png)](agent_hub.png) | [![Agent Hub Branch Management](git_branch.png)](git_branch.png) | [![Agent Hub Diff Review](git_diff.png)](git_diff.png) |
 
-| Side-by-side Git Diff | Unified Themes |
-|:-:|:-:|
-| [![Side-by-side Git Diff](git_diff.png)](git_diff.png) | [![Unified Themes](theme.png)](theme.png) |
+| Unified Themes |
+|:-:|
+| [![Unified Themes](theme.png)](theme.png) |
 
 | Database | SSH |
 |:-:|:-:|

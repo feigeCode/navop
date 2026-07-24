@@ -10,17 +10,19 @@ Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a cu
 
 The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. Verify the shell, operating system, host, and current directory before running generated commands; local PowerShell, custom programs, and remote Linux shells are not interchangeable.
 
-![Agent terminal and workspace explorer](/images/agent_hub.png)
+## Agent Hub: code, resources, and Git
 
-## Use the workspace explorer and Git
+Agent Hub is not just the terminal shown in one screenshot. It is the combined experience formed by the terminal Agent, workspace explorer, Git change list, branch controls, and side-by-side diff. The layout uses patterns familiar from established Agent coding tools while keeping code execution, file navigation, and review beside Navop's local terminals, SSH sessions, connections, and operational resources.
+
+![Agent Hub workspace](/images/agent_hub.png)
 
 Open the workspace explorer beside a terminal to keep the project tree, current changes, and active session visible together. Select a workspace directory explicitly or follow the terminal working directory. Hidden files and Git-ignored files have separate visibility controls. Before moving, deleting, or editing files, confirm whether the explorer represents a local directory or a remote session.
 
-![Git branch management](/images/git_branch.png)
+![Agent Hub branch management](/images/git_branch.png)
 
 The branch panel supports search, refresh, fetching remote branches, pushing, creating branches, and switching between local or remote branches. Save or stage current work before switching, verify the target and its tracking relationship, and do not assume fetching resolves conflicts.
 
-![Side-by-side Git diff](/images/git_diff.png)
+![Agent Hub side-by-side diff](/images/git_diff.png)
 
 Open a changed file to compare HEAD with the working copy side by side, then use search, reload, and change navigation to review each edit. After an Agent or script changes the project, read the diff, run checks, and only then commit. A read-only diff does not replace formatting, type checking, or tests.
 

@@ -116,9 +116,9 @@ Notes 工作区支持本地 Markdown 文档、白板 Markdown bundle、语法高
 
 集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，并可在原生可拖拽分屏工作区中排列终端。本地终端可选择系统默认、PowerShell、CMD、WSL、Git Bash，或配置自定义程序与安全解析的启动参数；打开终端时即可选择 Profile，无需先修改全局默认值。终端 AI 侧边栏同时支持 SSH 与本地会话，并以当前终端作为默认资源上下文。终端还支持快捷命令分组、命令历史、广播输入、有界 `terminal.read` 诊断和远程 shell integration 管理。SFTP 工作区可将左右两侧切换为本地存储或可搜索的远程端点，在服务器之间直接复制文件，也支持拖拽/粘贴上传和路径收藏。终端会话还支持粘贴剪贴板图片，并将图片传递给兼容的服务器端 TUI 应用。
 
-### 工作区资源管理器、Git 与 Agent 工作流
+### Agent Hub
 
-可在本地或 SSH 终端旁常驻项目文件树，并让工作区目录跟随终端当前路径；无需离开当前会话即可查看文件变化。集成的版本控制视图支持搜索分支、拉取、推送、新建与切换分支，以及并排查看 Git 差异。终端型 Agent 生成修改后，可以把仓库状态、差异内容和正在讨论的文件放在同一界面中核对。
+Agent Hub 将终端 Agent、工作区资源管理器、Git 更改列表、分支操作和并排 Diff 组合成一套完整的编码工作区。整体交互采用市面上成熟 Agent 编程工具中用户熟悉的布局，同时保留 Navop 的本地/SSH 终端、连接上下文和运维资源。工作区可跟随终端目录，并支持检查生成文件、搜索或切换分支、拉取与推送，以及在提交前逐项复核 Agent 修改。
 
 ### 端口转发
 
@@ -199,13 +199,13 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 |:-:|:-:|
 | [![最近连接仪表盘](app1.png)](app1.png) | [![常驻连接侧边栏](app.png)](app.png) |
 
-| Agent 终端与工作区资源管理器 | Git 分支管理 |
-|:-:|:-:|
-| [![Agent 终端与工作区资源管理器](agent_hub.png)](agent_hub.png) | [![Git 分支管理](git_branch.png)](git_branch.png) |
+| Agent Hub 工作区 | Agent Hub 分支管理 | Agent Hub 差异审核 |
+|:-:|:-:|:-:|
+| [![Agent Hub 工作区](agent_hub.png)](agent_hub.png) | [![Agent Hub 分支管理](git_branch.png)](git_branch.png) | [![Agent Hub 差异审核](git_diff.png)](git_diff.png) |
 
-| Git 并排差异 | 统一主题 |
-|:-:|:-:|
-| [![Git 并排差异](git_diff.png)](git_diff.png) | [![统一主题](theme.png)](theme.png) |
+| 统一主题 |
+|:-:|
+| [![统一主题](theme.png)](theme.png) |
 
 | 数据库 | SSH |
 |:-:|:-:|
