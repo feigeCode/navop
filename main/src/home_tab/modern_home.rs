@@ -3,7 +3,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt,
+    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -212,6 +212,8 @@ impl HomePage {
         let icon = self.connection_icon(&conn, px(20.0));
         let name = conn.name.clone();
         let type_label = conn.connection_type.label().to_string();
+        let connection_id = conn.id;
+        let open_connection = conn.clone();
         h_flex()
             .id(SharedString::from(format!(
                 "recent-conn-{}",
@@ -228,11 +230,15 @@ impl HomePage {
             .bg(cx.theme().background)
             .cursor_pointer()
             .hover(|style| style.bg(cx.theme().muted))
-            .on_click(
+            .on_double_click(
                 window.listener_for(&cx.entity(), move |home, _, window, cx| {
-                    home.open_connection_from_quick(&conn, window, cx);
+                    home.open_connection_from_quick(&open_connection, window, cx);
                 }),
             )
+            .on_click(window.listener_for(&cx.entity(), move |home, _, _, cx| {
+                home.selected_connection_id = connection_id;
+                cx.notify();
+            }))
             .child(icon)
             .child(
                 v_flex()

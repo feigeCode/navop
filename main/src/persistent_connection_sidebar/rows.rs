@@ -176,6 +176,9 @@ impl PersistentConnectionSidebar {
             .iter()
             .find(|item| item.id == Some(id))
             .cloned();
+        let open_connection = connection.clone();
+        let home_for_open = home.clone();
+        let home_for_select = home.clone();
         let selected = home.read(cx).selected_connection_id == Some(id);
         let can_drag = home.read(cx).can_move_connection(id);
         let team_indicator = connection.as_ref().and_then(|connection| {
@@ -216,12 +219,18 @@ impl PersistentConnectionSidebar {
                     cx.new(|_| drag.clone())
                 })
             })
-            .on_click(move |_, window, cx| {
-                if let Some(connection) = connection.as_ref() {
-                    home.update(cx, |home, cx| {
+            .on_double_click(move |_, window, cx| {
+                if let Some(connection) = open_connection.as_ref() {
+                    home_for_open.update(cx, |home, cx| {
                         home.open_connection_from_quick(connection, window, cx)
                     });
                 }
+            })
+            .on_click(move |_, _, cx| {
+                home_for_select.update(cx, |home, cx| {
+                    home.selected_connection_id = Some(id);
+                    cx.notify();
+                });
             })
             .context_menu(move |menu, window, cx| {
                 Self::build_connection_context_menu(menu, &view_for_menu, id, window, cx)
