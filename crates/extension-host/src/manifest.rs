@@ -128,7 +128,11 @@ impl NativeDriverRegistry {
             return Ok(None);
         };
         let content = std::fs::read_to_string(&manifest_path).map_err(HostError::Io)?;
-        let mut manifest: NativeDriverManifest = serde_json::from_str(&content)?;
+        let value: Value = serde_json::from_str(&content)?;
+        if is_sql_driver_manifest(&value) {
+            return Ok(None);
+        }
+        let mut manifest: NativeDriverManifest = serde_json::from_value(value)?;
         manifest.manifest_dir = manifest_path.parent().unwrap_or(dir).to_path_buf();
         manifest.validate()?;
         Ok(Some(manifest))
@@ -327,6 +331,22 @@ fn current_platform_key() -> &'static str {
     }
 }
 
+fn is_sql_driver_manifest(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    match object.get("api").and_then(Value::as_str) {
+        Some("database") => true,
+        Some(_) => false,
+        None => {
+            object.contains_key("dialect")
+                || object.contains_key("connection")
+                || object.contains_key("ui")
+                || object.get("capabilities").is_some_and(Value::is_object)
+        }
+    }
+}
+
 fn is_allowed_method(method: &str) -> bool {
     // 业务 namespace 的正式 method 会逐步加入 extension_protocol::method；
     // `x/` 保留给尚未进入公共协议的 sidecar 私有能力。
@@ -377,6 +397,32 @@ mod tests {
         assert_eq!("1.0", manifest.protocol_version);
         assert_eq!(NativeDriverProcessScope::Connection, manifest.process.scope);
         manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn identifies_legacy_sql_manifests_without_parsing_native_capabilities() {
+        assert!(is_sql_driver_manifest(&serde_json::json!({
+            "id": "duckdb",
+            "name": "DuckDB",
+            "entry": {"command": "duckdb-driver"},
+            "transport": {"name": "duckdb.sock"},
+            "capabilities": {"supports_schema": true}
+        })));
+        assert!(is_sql_driver_manifest(&serde_json::json!({
+            "id": "postgres",
+            "name": "PostgreSQL",
+            "api": "database",
+            "entry": {"command": "postgres-driver"},
+            "transport": {"name": "postgres.sock"}
+        })));
+        assert!(!is_sql_driver_manifest(&serde_json::json!({
+            "id": "redis",
+            "name": "Redis",
+            "api": "redis",
+            "entry": {"command": "redis-driver"},
+            "transport": {"name": "redis.sock"},
+            "capabilities": ["pipeline"]
+        })));
     }
 
     #[test]

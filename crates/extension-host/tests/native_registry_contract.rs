@@ -38,6 +38,27 @@ fn native_registry_skips_incompatible_sibling_manifests() {
 }
 
 #[test]
+fn native_registry_treats_legacy_sql_manifest_as_unrelated() {
+    let root = tempfile::TempDir::new().unwrap();
+    let sql_dir = root.path().join("duckdb");
+    write_manifest(
+        &sql_dir,
+        serde_json::json!({
+            "id": "duckdb",
+            "name": "DuckDB",
+            "entry": { "command": "duckdb-driver" },
+            "transport": { "name": "duckdb.sock" },
+            "dialect": { "identifier_quote_left": "\"" },
+            "capabilities": { "supports_schema": true }
+        }),
+    );
+
+    let driver = NativeDriverRegistry::load_driver_from_dir(&sql_dir).unwrap();
+
+    assert!(driver.is_none());
+}
+
+#[test]
 fn native_registry_skips_backup_dirs_with_multiple_manifests() {
     let root = tempfile::TempDir::new().unwrap();
     write_driver(root.path(), "mongodb-modern", "mongodb");
