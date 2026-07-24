@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, bail};
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use one_core::settings::{
     AppSettings, LocalTerminalCustomProfile, LocalTerminalProfileKind, LocalTerminalProfileSettings,
 };
