@@ -39,7 +39,6 @@ pub(super) struct SidebarPalette {
     pub muted_foreground: Hsla,
     pub border: Hsla,
     pub accent: Hsla,
-    pub accent_foreground: Hsla,
 }
 
 impl SidebarPalette {
@@ -50,12 +49,11 @@ impl SidebarPalette {
         Self {
             background,
             rail_background: shade(background, cx.theme().is_dark()),
-            foreground: cx.theme().foreground,
+            foreground: cx.theme().sidebar_foreground,
             muted: cx.theme().sidebar_accent,
             muted_foreground: cx.theme().muted_foreground,
-            border: cx.theme().border,
-            accent: cx.theme().accent,
-            accent_foreground: cx.theme().accent_foreground,
+            border: cx.theme().sidebar_border,
+            accent: cx.theme().sidebar_primary,
         }
     }
 }
@@ -70,15 +68,15 @@ impl From<&TerminalColors> for SidebarPalette {
             muted_foreground: colors.muted_foreground,
             border: colors.border,
             accent: colors.accent,
-            accent_foreground: colors.accent_foreground,
         }
     }
 }
 
 /// Slightly darken a background color so the navigation rail stays visually
-/// distinct from the connection panel next to it.
+/// distinct from the connection panel without turning nearly black in dark
+/// terminal themes.
 fn shade(color: Hsla, dark_mode: bool) -> Hsla {
-    let amount = if dark_mode { -0.04 } else { -0.03 };
+    let amount = if dark_mode { -0.02 } else { -0.015 };
     Hsla {
         l: (color.l + amount).clamp(0.0, 1.0),
         ..color

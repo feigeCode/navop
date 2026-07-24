@@ -173,9 +173,14 @@ impl PersistentConnectionSidebar {
             .when(!cfg!(target_os = "macos"), |this| this.pl_2())
             .items_center()
             .justify_between()
-            // Match the navigation rail so the whole top title-bar strip
-            // (traffic lights + header) reads as one uniform color.
-            .bg(palette.rail_background)
+            // On macOS the header continues the traffic-light strip. On
+            // Windows/Linux it belongs to the connection panel and should not
+            // create a dark title band across the top.
+            .bg(if cfg!(target_os = "macos") {
+                palette.rail_background
+            } else {
+                palette.background
+            })
             .text_color(palette.foreground)
             .border_r_1()
             .border_color(palette.border)

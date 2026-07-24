@@ -16,7 +16,10 @@ use super::{PersistentConnectionSidebar, PersistentConnectionSidebarEvent, Sideb
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
 
+#[cfg(target_os = "macos")]
 const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(44.0);
+#[cfg(not(target_os = "macos"))]
+const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(48.0);
 #[cfg(target_os = "macos")]
 const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
 
@@ -45,6 +48,8 @@ pub(super) fn render_navigation_rail(
         .items_center()
         .bg(palette.rail_background)
         .text_color(palette.foreground)
+        .border_r_1()
+        .border_color(palette.border)
         .when(cfg!(target_os = "macos"), |this| {
             #[cfg(target_os = "macos")]
             {
@@ -166,12 +171,11 @@ fn render_filter_buttons(
                 .ghost()
                 .large()
                 .selected(selected)
-                .text_color(if selected {
-                    palette.accent_foreground
-                } else {
-                    palette.foreground
-                })
-                .when(selected, |button| button.bg(palette.accent))
+                .text_color(palette.foreground)
+                // Keep the protocol identity color visible. A full primary
+                // fill made the blue database icon disappear on Windows and
+                // looked disproportionately bright in dark themes.
+                .when(selected, |button| button.bg(palette.muted))
                 .tooltip(filter.label())
                 .on_click(move |_, _, cx| {
                     if !selected {
@@ -226,7 +230,7 @@ fn filter_icon_color(filter: ConnectionType, selected: bool) -> Hsla {
         ConnectionType::Vnc => 0x10B981,
     };
     let color: Hsla = rgb(base).into();
-    if selected { color } else { color.opacity(0.65) }
+    if selected { color } else { color.opacity(0.72) }
 }
 
 fn rail_button(
