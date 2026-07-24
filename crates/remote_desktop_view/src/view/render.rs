@@ -45,6 +45,7 @@ impl Render for RemoteDesktopView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.drain_output(cx);
         self.sync_local_clipboard(window, cx);
+        self.flush_pending_start();
         self.flush_pending_resize();
         if let Some(latest_frame) = self.latest_frame.clone()
             && let Some(retired) = self.rendered_frames.promote(latest_frame)

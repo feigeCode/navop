@@ -31,6 +31,7 @@ mod resize;
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
+const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(800);
 const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 
@@ -73,6 +74,7 @@ pub struct RemoteDesktopView {
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
+    initial_size: resize::InitialSize,
     last_resize_size: Option<(u16, u16)>,
     pending_resize_size: Option<(u16, u16)>,
     pending_resize_updated_at: Option<Instant>,
@@ -132,6 +134,7 @@ impl RemoteDesktopView {
             rendered_frames: RenderedFrameLifecycle::default(),
             remote_size: None,
             content_bounds: None,
+            initial_size: resize::InitialSize::default(),
             last_resize_size: None,
             pending_resize_size: None,
             pending_resize_updated_at: None,

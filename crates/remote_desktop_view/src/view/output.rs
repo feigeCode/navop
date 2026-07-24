@@ -204,6 +204,11 @@ impl RemoteDesktopView {
         let Some(size) = resize::resize_dimensions(bounds, display_scale_factor) else {
             return;
         };
+        if self.input_tx.is_none() && self.options.protocol == RemoteDesktopProtocol::Rdp {
+            self.initial_size
+                .observe(size, self.display_scale_factor, Instant::now());
+            return;
+        }
         self.start_runtime(size);
         if !resize::is_meaningful_delta(self.last_resize_size, size)
             || self.pending_resize_size == Some(size)
@@ -212,6 +217,20 @@ impl RemoteDesktopView {
         }
         self.pending_resize_size = Some(size);
         self.pending_resize_updated_at = Some(Instant::now());
+    }
+
+    pub(super) fn flush_pending_start(&mut self) {
+        if self.input_tx.is_some() {
+            return;
+        }
+        let Some((size, scale_factor)) = self
+            .initial_size
+            .take_ready(Instant::now(), RDP_INITIAL_LAYOUT_DEBOUNCE)
+        else {
+            return;
+        };
+        self.display_scale_factor = scale_factor;
+        self.start_runtime(size);
     }
 
     pub(super) fn flush_pending_resize(&mut self) {
