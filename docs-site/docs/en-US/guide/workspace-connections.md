@@ -10,7 +10,7 @@ The home dashboard keeps recent connections beside New Connection, Terminal, Qui
 
 ![Connection cards and workspace groups](/images/app.png)
 
-The persistent connection sidebar stays available while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
+The persistent connection sidebar stays available while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. A single click selects or focuses a home card or sidebar row; a double-click opens the connection directly. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
 
 Before deleting a workspace, review what happens to its saved entries. A workspace is an organizational layer, but removing or moving entries can still affect local navigation and sync state.
 
@@ -22,7 +22,7 @@ Existing connections can be edited, copied, or deleted. A copy is useful for a r
 
 ## Search and maintain connections
 
-Search changes only what is displayed. Closing a database or terminal tab does not delete the saved connection. Periodically remove obsolete entries, normalize names, and confirm workspace membership. Never put a password or token in a connection name; hostnames and internal addresses may also require redaction in screenshots.
+Search changes only what is displayed. Cards work well for a smaller set of recognizable resources, while list views make dense browsing and ordering easier; double-click the reviewed target to open it. Closing a database or terminal tab does not delete the saved connection. Periodically remove obsolete entries, normalize names, and confirm workspace membership. Never put a password or token in a connection name; hostnames and internal addresses may also require redaction in screenshots.
 
 Deleting a saved entry normally does not delete a remote database or server. Operations performed inside the opened workspace, however, can change real remote data.
 

@@ -2,26 +2,27 @@
 
 Navop 將資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、Notes、AI 和團隊同步放在同一個原生工作區。
 
-## 目前版本：v0.9.2
+## 目前版本：v0.9.3
 
-[下載 Navop v0.9.2](https://github.com/feigeCode/navop/releases/tag/v0.9.2)
+[下載 Navop v0.9.3](https://github.com/feigeCode/navop/releases/tag/v0.9.3)
 
-- 修正應用程式版本中繼資料，升級到 v0.9.2 後不會再重複提示安裝同一個可用更新。
-- 首頁的兩種版面配置分別命名為「全域導覽」與「分類卡片」，清楚呈現兩種持續支援的工作方式。
-- 完善 Windows 可攜版的解壓縮、資料目錄、手動升級、備份、檔案關聯與進階參數說明。
-- 更新 Agent Hub 截圖與說明，並改善原生擴充探索對非擴充 SQL manifest 的相容性。
+- 按兩下首頁連線卡片或常駐連線側邊欄中的連線列，即可直接開啟連線。
+- 改善連線側邊欄的互動、層級和樣式，並移除 macOS 上多餘的標題分隔線。
+- 調整資料庫、Redis、MongoDB 與終端工具側邊欄，修正樹狀區域縮放和面板拖曳跳動。
+- 修正 macOS 下 RDP 視窗標題列問題，並改善 Intel Mac 對舊版 XQuartz 的相容性。
 
 ## 從這裡開始
 
 - [快速開始](./guide/quick-start)
 - [安裝與更新](./guide/install-update)
-- [連線工作區](./guide/workspace-connections)
+- [首頁、工作區與連線管理](./guide/workspace-connections)
 
 ## 按任務查找
 
-- [資料庫連線與 SSH 隧道](./guide/database-connections)
-- [SQL 編輯器與查詢結果](./guide/sql-editor)
-- [SSH 終端與 SFTP](./guide/ssh-terminal)
+- [資料庫連線、SQL、匯入匯出與 Schema 工具](./guide/database-connections)
+- [SQL 編輯器、交易與查詢結果](./guide/sql-editor)
+- [SSH、SFTP、連接埠轉送與 Agent Hub](./guide/ssh-terminal)
+- [遠端桌面、串口與伺服器監控](./guide/remote-access)
 - [Notes 本機知識庫](./guide/notes)
 - [AI 工作台、Navop Skill 與 Public MCP](./guide/ai-workbench)
 - [團隊同步與安全](./guide/teams-sync-security)

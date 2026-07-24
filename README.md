@@ -58,13 +58,13 @@
   </p>
 </div>
 
-## What's New in v0.9.2
+## What's New in v0.9.3
 
-- **Correct update detection** — release binaries now report v0.9.2 correctly, preventing the same available-update prompt from appearing again after users have upgraded.
-- **Clearer home layouts** — the two home experiences are now named **Global Navigation** and **Category Cards**, without treating either option as an old or deprecated view.
-- **Improved portable guidance** — the documentation now covers the Windows ZIP package, portable data directories, manual upgrades, backups, file associations, and advanced portable-mode options.
-- **Agent Hub showcase** — refreshed screenshots and documentation present the terminal Agent, workspace explorer, Git branches, changes, and side-by-side diffs as one integrated coding workspace.
-- **Extension registry reliability** — native extension discovery now ignores SQL manifest files that do not describe loadable native extensions.
+- **Faster connection opening** — double-click a home card or a row in the persistent connection sidebar to open the selected connection directly.
+- **Cleaner connection navigation** — refined sidebar interaction, hierarchy, and styling, including removal of an unnecessary title divider on macOS.
+- **More stable tool layouts** — improved the database, Redis, MongoDB, and terminal sidebars while fixing tree resizing and panel-drag jumps.
+- **Better remote desktop behavior** — fixed macOS RDP title-bar handling and unstable panel dragging.
+- **Intel Mac SSH compatibility** — improved X11/XQuartz detection for Intel Macs running older XQuartz releases.
 
 
 ## Why Navop?
@@ -96,13 +96,13 @@
 
 ### Database Workspace
 
-Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Network database connections can route through per-connection SOCKS5 or HTTP CONNECT proxies, including authenticated proxies and SSH tunnels reached through a proxy. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
+Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Network database connections can route through per-connection SOCKS5 or HTTP CONNECT proxies, including authenticated proxies and SSH tunnels reached through a proxy. Browse schemas, tables, views, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported, then inspect relationships in ER diagrams.
 
 Beyond the built-in drivers, Navop ships an extension marketplace that adds database drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver that runs without Oracle Instant Client. Install the ones you need and they appear alongside the built-in connections.
 
 ### SQL Editor & Schema Tools
 
-Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams. Database object rows expose context actions, and result tabs keep their scrollbars pinned to the viewport for large or multi-statement result sets. Database compare tools support schema/data comparison, target selection, sync planning, and multi-table synchronization workflows.
+Write and run SQL with syntax tooling, schema-aware completion, transaction controls, execution plans, and reusable query tabs. Inspect or edit result sets, import and export data, design table structures, and use database comparison tools to review schema/data differences, prepare sync plans, and synchronize multiple tables. The AI assistant can generate, explain, and optimize SQL while keeping the active database in context.
 
 ### Redis & MongoDB
 
@@ -114,11 +114,11 @@ The Notes workspace supports local Markdown documents, Markdown bundles for whit
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments; choose a profile when opening a terminal instead of changing the global default first. The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The SFTP workspace can switch either side between local storage and searchable remote endpoints, copy files directly between servers, upload by drag-and-drop or paste, and jump through path favorites. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
+Open SSH or local terminal sessions in tabs and native draggable splits, then reuse grouped quick commands, command history, broadcast input, shell integration, and the terminal AI sidebar. Local profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. SFTP supports uploads, downloads, remote editing, drag-and-drop or paste, searchable endpoints, path favorites, and direct server-to-server copies. Reusable port forwarding, server monitoring, serial connections, and RDP/VNC remote desktop keep common remote workflows in the same app. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
 
 ### Agent Hub
 
-Agent Hub combines the terminal Agent, workspace explorer, Git changes, branch controls, and side-by-side diffs in one integrated coding workspace. Its composite layout follows interaction patterns familiar from established Agent coding tools while keeping Navop's local and SSH terminals, connection context, and operational resources close at hand. Follow the terminal working directory, inspect generated files, search or switch branches, fetch and push, and verify every Agent edit before committing.
+Agent Hub brings the terminal Agent, project file tree, Git branches, change list, and side-by-side diff into one workspace, keeping coding, resource navigation, and version control in context. Select a workspace directory or follow the terminal path, control whether hidden and Git-ignored files are shown, manage local and remote branches, and review every Agent edit against HEAD before committing.
 
 ### Port Forwarding
 
@@ -236,13 +236,13 @@ Sync connections and settings across devices with encrypted key storage based on
 
 ## Screenshots
 
-| Recent Connections Dashboard | Persistent Connection Sidebar |
+| Global Navigation | Category Cards |
 |:-:|:-:|
-| [![Recent Connections Dashboard](app1.png)](app1.png) | [![Persistent Connection Sidebar](app.png)](app.png) |
+| [![Global Navigation](app1.png)](app1.png) | [![Category Cards](app.png)](app.png) |
 
-| Agent Hub Workspace | Agent Hub Branch Management | Agent Hub Diff Review |
-|:-:|:-:|:-:|
-| [![Agent Hub Workspace](agent_hub.png)](agent_hub.png) | [![Agent Hub Branch Management](git_branch.png)](git_branch.png) | [![Agent Hub Diff Review](git_diff.png)](git_diff.png) |
+| Agent Hub Workspace |
+|:-:|
+| [![Agent Hub Workspace](agent_hub.png)](agent_hub.png) |
 
 | Unified Themes |
 |:-:|

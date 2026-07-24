@@ -12,19 +12,21 @@ The terminal AI sidebar works with both SSH and local sessions and uses the acti
 
 ## Agent Hub: code, resources, and Git
 
-Agent Hub is not just the terminal shown in one screenshot. It is the combined experience formed by the terminal Agent, workspace explorer, Git change list, branch controls, and side-by-side diff. The layout uses patterns familiar from established Agent coding tools while keeping code execution, file navigation, and review beside Navop's local terminals, SSH sessions, connections, and operational resources.
+Agent Hub brings the terminal Agent, project file tree, Git branches, change list, and side-by-side diff into one workspace, keeping coding, resource navigation, and version control in context beside Navop's local terminals, SSH sessions, and connections.
 
 ![Agent Hub workspace](/images/agent_hub.png)
 
-Open the workspace explorer beside a terminal to keep the project tree, current changes, and active session visible together. Select a workspace directory explicitly or follow the terminal working directory. Hidden files and Git-ignored files have separate visibility controls. Before moving, deleting, or editing files, confirm whether the explorer represents a local directory or a remote session.
+- Select a workspace directory explicitly or follow the terminal working directory, with separate controls for hidden and Git-ignored files.
+- Search, create, fetch, push, and switch local or remote branches without leaving the workspace.
+- After an Agent edits the project, jump to changed files and compare the working copy with HEAD before committing.
 
-![Agent Hub branch management](/images/git_branch.png)
+Save or stage work before switching branches, and verify the target and its tracking relationship. Before moving, deleting, or editing files, confirm whether the explorer represents a local directory or a remote session. Agent-generated changes still require diff review, formatting, checks, and tests.
 
-The branch panel supports search, refresh, fetching remote branches, pushing, creating branches, and switching between local or remote branches. Save or stage current work before switching, verify the target and its tracking relationship, and do not assume fetching resolves conflicts.
+## X11 forwarding and XQuartz on macOS
 
-![Agent Hub side-by-side diff](/images/git_diff.png)
+An SSH connection can enable X11 forwarding so remote X11 applications render through a local X server; the setting applies to newly opened terminal sessions. macOS users must install and start XQuartz, and the remote SSH server must allow X11 forwarding.
 
-Open a changed file to compare HEAD with the working copy side by side, then use search, reload, and change navigation to review each edit. After an Agent or script changes the project, read the diff, run checks, and only then commit. A read-only diff does not replace formatting, type checking, or tests.
+v0.9.3 improves detection of older XQuartz environments, sockets, and authentication data on Intel Macs. If forwarding still fails, verify that XQuartz is running, reopen Navop and the SSH session, and then check the remote `sshd` configuration and account permissions. When no usable X11 environment is available, Navop disables forwarding without blocking the regular SSH terminal.
 
 ## Arrange tabs and splits
 
