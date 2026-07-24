@@ -1,10 +1,9 @@
 # Notes local knowledge workspace
 
-Notes manages Markdown, rich-text, and whiteboard material in a local folder, keeping query records, operational procedures, and project knowledge beside active connections. Files remain in the directory you choose; Navop is not a replacement for backup or version control.
+Notes manages Markdown and whiteboard material in a local folder, keeping query records, operational procedures, and project knowledge beside active connections. Files remain in the directory you choose; Navop is not a replacement for backup or version control.
 
 <div class="notes-screenshot-grid">
-  <figure><img src="/images/markdown.png" alt="Markdown Notes workspace"><figcaption>Markdown syntax, restricted HTML, and table images</figcaption></figure>
-  <figure><img src="/images/richtext.png" alt="Rich-text Notes workspace"><figcaption>Rich-text blocks and embedded content</figcaption></figure>
+  <figure><img src="/images/markdown.png" alt="Markdown source editor"><figcaption>Preview is read-only by default; switch to source mode for exact edits</figcaption></figure>
   <figure><img src="/images/whiteboard.png" alt="Notes whiteboard workspace"><figcaption>Whiteboard canvas and freeform layout</figcaption></figure>
 </div>
 
@@ -14,17 +13,17 @@ Select a readable and writable folder on first use, or change the Notes path in 
 
 Do not store database passwords, SSH private keys, master keys, or tokens in notes. Review the folder's own access controls before sharing it across devices.
 
-## Create Markdown, rich text, and whiteboards
+## Create Markdown and whiteboards
 
-Markdown works well for technical text and portable code samples; rich text favors quick visual formatting; whiteboards organize free-form diagrams and ideas. The Markdown document view renders standard syntax, safely restricted HTML, and images inside Markdown tables; it is not an unrestricted browser rendering environment. Choose a durable format for long-lived content because advanced features can vary across renderers.
+Markdown works well for technical text and portable code samples, while whiteboards organize free-form diagrams and ideas. Markdown opens in a read-only preview by default and switches to source mode for exact editing. The document view renders standard syntax, safely restricted HTML, and images inside Markdown tables; it is not an unrestricted browser rendering environment. Choose a durable format for long-lived content because advanced features can vary across renderers.
 
-Opening a `.md` file through the operating system sends it to the Notes Markdown editor. Relative images and media resolve from the directory containing that Markdown file. When a rich-text document with a whiteboard is converted to Markdown, Navop exports a preview image rather than editable whiteboard source data. Keep the original document and complete resource directory if the whiteboard must remain editable.
+Opening a `.md` file through the operating system sends it to the Notes Markdown view. Relative images and media resolve from the directory containing that Markdown file. Whiteboards keep separate editable data and resources; when exporting or sharing a preview, retain the original whiteboard file so the content remains editable.
 
 ## Edit and use shortcuts
 
 Common editing, selection, search, and save shortcuts are listed under Settings → Shortcuts → Notes. Observe unsaved-change prompts when closing. Auto-save behavior depends on current settings and format; actively save important work and keep revisions elsewhere.
 
-After pasting rich content, inspect structure and external resources. Use stable relative paths for links, images, and code-related assets.
+After pasting external content, inspect the resulting Markdown, HTML, and external resources. Use stable relative paths for links, images, and code-related assets.
 
 ## Export HTML, PDF, and Word
 
@@ -38,6 +37,6 @@ If another editor changes a file, compare it with local unsaved content before r
 
 ## Back up and share safely
 
-Back up the entire Notes directory, including hidden metadata and resources. Markdown is broadly portable, while extension syntax, rich text, and whiteboards may depend on Navop or a document-renderer extension. Preview in the target environment before distribution.
+Back up the entire Notes directory, including hidden metadata and resources. Markdown is broadly portable, while extension syntax and whiteboards may depend on Navop or a document-renderer extension. Preview in the target environment before distribution.
 
 Redact connection names, internal addresses, query results, logs, screenshot metadata, and personal information before sharing.

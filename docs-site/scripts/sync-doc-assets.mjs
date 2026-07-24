@@ -7,7 +7,11 @@ const repositoryRoot = dirname(docsSiteRoot);
 const outputDir = join(docsSiteRoot, "docs", "public", "images");
 const screenshots = [
   "app.png",
+  "app1.png",
+  "agent_hub.png",
   "database.png",
+  "git_branch.png",
+  "git_diff.png",
   "ssh.png",
   "sftp.png",
   "sftp_sidebar.png",
@@ -19,7 +23,7 @@ const screenshots = [
   "er.png",
   "extension.png",
   "markdown.png",
-  "richtext.png",
+  "theme.png",
   "whiteboard.png"
 ];
 

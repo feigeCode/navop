@@ -4,7 +4,11 @@ Settings controls appearance, databases, terminals, remote editing, Notes, LLMs,
 
 ## Set language and appearance
 
-Choose language, start page, light/dark theme, or system-following behavior. Configure application, SQL, table-preview, and terminal fonts separately. Custom font files support `.ttf`, `.otf`, `.ttc`, and `.otc`; verify licensing and integrity.
+Choose language, start page, light/dark theme, or system-following behavior. Appearance settings also include window opacity, theme palettes, a custom accent color, and theme importing. Application and terminal themes provide consistent colors for inputs, popovers, scrollbars, selections, and terminals. Import themes only from trusted sources and verify text, focus, and selection contrast in the workspaces you use.
+
+![Unified themes and appearance settings](/images/theme.png)
+
+Configure application, SQL, table-preview, and terminal fonts separately. Custom font files support `.ttf`, `.otf`, `.ttc`, and `.otc`; verify licensing and integrity.
 
 Missing glyphs trigger fallback or unreadable output. Prefer monospaced fonts for SQL and terminals and recheck charts and highlighting after theme changes.
 

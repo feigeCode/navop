@@ -14,7 +14,7 @@ Download the correct build from [GitHub Releases](https://github.com/feigeCode/n
 
 The home screen organizes saved resources into workspaces. Database views cover SQL, table data, table design, ER diagrams, import/export, and schema or data comparison. Redis and MongoDB have dedicated data browsers and diagnostics. SSH workspaces combine terminal splits, command history, quick commands, SFTP, remote editing, and server monitoring. RDP, VNC, Serial, and Port Forwarding are also created from New Connection.
 
-Notes manages local Markdown, rich-text, and whiteboard material. The AI workbench supports configurable providers and Ask, Plan, or Auto modes. Terminal-capable AI Agents such as Codex can install the Navop Skill and operate resources through `navop` on demand, avoiding the need to carry the complete MCP tool catalog in every turn and reducing repeated context and Token overhead. The CLI still requires Public MCP and follows Tool Exposure, permissions, and approvals. Extensions add database drivers, ACP Agents, importers, remote desktop providers, language packs, and document renderers.
+Notes manages local Markdown and whiteboard material. The AI workbench supports configurable providers and Ask, Plan, or Auto modes. Terminal-capable AI Agents such as Codex can install the Navop Skill and operate resources through `navop` on demand, avoiding the need to carry the complete MCP tool catalog in every turn and reducing repeated context and Token overhead. The CLI still requires Public MCP and follows Tool Exposure, permissions, and approvals. Extensions add database drivers, ACP Agents, importers, remote desktop providers, language packs, and document renderers.
 
 ## Follow a safe learning path
 

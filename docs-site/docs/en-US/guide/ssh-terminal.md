@@ -10,6 +10,20 @@ Local profiles include the system shell, PowerShell, CMD, WSL, Git Bash, or a cu
 
 The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. Verify the shell, operating system, host, and current directory before running generated commands; local PowerShell, custom programs, and remote Linux shells are not interchangeable.
 
+![Agent terminal and workspace explorer](/images/agent_hub.png)
+
+## Use the workspace explorer and Git
+
+Open the workspace explorer beside a terminal to keep the project tree, current changes, and active session visible together. Select a workspace directory explicitly or follow the terminal working directory. Hidden files and Git-ignored files have separate visibility controls. Before moving, deleting, or editing files, confirm whether the explorer represents a local directory or a remote session.
+
+![Git branch management](/images/git_branch.png)
+
+The branch panel supports search, refresh, fetching remote branches, pushing, creating branches, and switching between local or remote branches. Save or stage current work before switching, verify the target and its tracking relationship, and do not assume fetching resolves conflicts.
+
+![Side-by-side Git diff](/images/git_diff.png)
+
+Open a changed file to compare HEAD with the working copy side by side, then use search, reload, and change navigation to review each edit. After an Agent or script changes the project, read the diff, run checks, and only then commit. A read-only diff does not replace formatting, type checking, or tests.
+
 ## Arrange tabs and splits
 
 Split a terminal Left, Right, Top, or Bottom, drag tabs between panes, and resize the layout. Splits are useful for logs, commands, and environment comparisons. Before closing a pane, check for foreground jobs, editors, or unfinished processes.

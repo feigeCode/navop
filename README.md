@@ -110,11 +110,15 @@ Use the dedicated Redis viewer for multi-database key browsing, server-side pagi
 
 ### Notes
 
-The Notes workspace supports local Markdown documents, rich-text/Markdown round trips, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Its Markdown view handles standard syntax, safely restricted HTML blocks, relative media, and images inside Markdown tables while keeping source editing available; rendering remains bounded for safety and portability rather than acting as a full browser page. Document locations, editor shortcuts, and AI Providers are configurable. Extension-provided renderers can add or update document formats independently, and a sandboxed WASM exporter can produce self-contained HTML, PDF, and Word DOCX files.
+The Notes workspace supports local Markdown documents, Markdown bundles for whiteboards, syntax highlighting, Mermaid diagrams, and math rendering. Its Markdown view handles standard syntax, safely restricted HTML blocks, relative media, and images inside Markdown tables while keeping source editing available; rendering remains bounded for safety and portability rather than acting as a full browser page. Document locations, editor shortcuts, and AI Providers are configurable. Extension-provided renderers can add or update document formats independently, and a sandboxed WASM exporter can produce self-contained HTML, PDF, and Word DOCX files.
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
 Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and arrange terminals in native draggable split workspaces. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments; choose a profile when opening a terminal instead of changing the global default first. The terminal AI sidebar works with both SSH and local sessions and uses the active terminal as its default resource context. The terminal also includes grouped quick commands, command history, broadcast input, bounded `terminal.read` diagnostics, and remote shell integration management. The SFTP workspace can switch either side between local storage and searchable remote endpoints, copy files directly between servers, upload by drag-and-drop or paste, and jump through path favorites. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
+
+### Workspace Explorer, Git & Agent Workflows
+
+Keep a project tree beside local or SSH terminals, follow the terminal working directory, and review file changes without leaving the active session. The integrated source-control view supports branch search, fetch, push, branch creation and switching, plus side-by-side Git diffs. This makes terminal-based Agent workflows easier to verify because generated changes, repository state, and the files being discussed remain visible together.
 
 ### Port Forwarding
 
@@ -228,9 +232,21 @@ Navop uses native GPUI rendering and continues to tune heavy UI paths. Recent re
 
 ### Sync, Security & i18n
 
-Sync connections and settings across devices with encrypted key storage based on AES-GCM and Ed25519. Navop supports light and dark themes, English, Simplified Chinese, and Traditional Chinese.
+Sync connections and settings across devices with encrypted key storage based on AES-GCM and Ed25519. Navop supports light, dark, and system-following modes, importable application and terminal themes, configurable accent colors and window opacity, plus English, Simplified Chinese, and Traditional Chinese.
 
 ## Screenshots
+
+| Recent Connections Dashboard | Persistent Connection Sidebar |
+|:-:|:-:|
+| [![Recent Connections Dashboard](app1.png)](app1.png) | [![Persistent Connection Sidebar](app.png)](app.png) |
+
+| Agent Terminal & Workspace Explorer | Git Branch Management |
+|:-:|:-:|
+| [![Agent Terminal and Workspace Explorer](agent_hub.png)](agent_hub.png) | [![Git Branch Management](git_branch.png)](git_branch.png) |
+
+| Side-by-side Git Diff | Unified Themes |
+|:-:|:-:|
+| [![Side-by-side Git Diff](git_diff.png)](git_diff.png) | [![Unified Themes](theme.png)](theme.png) |
 
 | Database | SSH |
 |:-:|:-:|
@@ -255,12 +271,6 @@ Sync connections and settings across devices with encrypted key storage based on
 | Extensions |
 |:-:|
 | [![Extensions](extension.png)](extension.png) |
-
-| Markdown Notes | Rich-text Notes |
-|:-:|:-:|
-| [![Markdown Notes](markdown.png)](markdown.png) | [![Rich-text Notes](richtext.png)](richtext.png) |
-
-The Markdown workspace renders standard Markdown syntax, safely restricted HTML blocks, and images inside Markdown tables, while keeping source editing available.
 
 | Whiteboard Notes |
 |:-:|

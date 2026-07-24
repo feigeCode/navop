@@ -110,11 +110,15 @@
 
 ### Notes 笔记
 
-Notes 工作区支持本地 Markdown 文档、富文本与 Markdown 双向转换、白板 Markdown bundle、语法高亮、Mermaid 和数学公式渲染。Markdown 文档视图支持标准语法、受限 HTML 安全渲染、相对媒体资源和 Markdown 表格内图片展示，并保留源码编辑入口；渲染以安全与可移植性为边界，不等同于完整浏览器页面。文档位置、编辑器快捷键和 AI Provider 均可配置；渲染能力还可以通过扩展提供和更新，沙箱化 WASM 导出器还可生成自包含 HTML、PDF 和 Word DOCX 文件。
+Notes 工作区支持本地 Markdown 文档、白板 Markdown bundle、语法高亮、Mermaid 和数学公式渲染。Markdown 文档视图支持标准语法、受限 HTML 安全渲染、相对媒体资源和 Markdown 表格内图片展示，并保留源码编辑入口；渲染以安全与可移植性为边界，不等同于完整浏览器页面。文档位置、编辑器快捷键和 AI Provider 均可配置；渲染能力还可以通过扩展提供和更新，沙箱化 WASM 导出器还可生成自包含 HTML、PDF 和 Word DOCX 文件。
 
 ### SSH、SFTP、端口转发、串口与终端
 
 集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，并可在原生可拖拽分屏工作区中排列终端。本地终端可选择系统默认、PowerShell、CMD、WSL、Git Bash，或配置自定义程序与安全解析的启动参数；打开终端时即可选择 Profile，无需先修改全局默认值。终端 AI 侧边栏同时支持 SSH 与本地会话，并以当前终端作为默认资源上下文。终端还支持快捷命令分组、命令历史、广播输入、有界 `terminal.read` 诊断和远程 shell integration 管理。SFTP 工作区可将左右两侧切换为本地存储或可搜索的远程端点，在服务器之间直接复制文件，也支持拖拽/粘贴上传和路径收藏。终端会话还支持粘贴剪贴板图片，并将图片传递给兼容的服务器端 TUI 应用。
+
+### 工作区资源管理器、Git 与 Agent 工作流
+
+可在本地或 SSH 终端旁常驻项目文件树，并让工作区目录跟随终端当前路径；无需离开当前会话即可查看文件变化。集成的版本控制视图支持搜索分支、拉取、推送、新建与切换分支，以及并排查看 Git 差异。终端型 Agent 生成修改后，可以把仓库状态、差异内容和正在讨论的文件放在同一界面中核对。
 
 ### 端口转发
 
@@ -187,9 +191,21 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 
 ### 同步、安全与国际化
 
-支持跨设备同步连接和设置，密钥使用 AES-GCM 与 Ed25519 加密存储。支持亮色 / 暗色主题，以及 English、简体中文、繁体中文。
+支持跨设备同步连接和设置，密钥使用 AES-GCM 与 Ed25519 加密存储。支持亮色、深色与跟随系统模式，可导入应用和终端主题，并配置强调色与窗口透明度；界面语言包括 English、简体中文、繁体中文。
 
 ## 应用截图
+
+| 最近连接仪表盘 | 常驻连接侧边栏 |
+|:-:|:-:|
+| [![最近连接仪表盘](app1.png)](app1.png) | [![常驻连接侧边栏](app.png)](app.png) |
+
+| Agent 终端与工作区资源管理器 | Git 分支管理 |
+|:-:|:-:|
+| [![Agent 终端与工作区资源管理器](agent_hub.png)](agent_hub.png) | [![Git 分支管理](git_branch.png)](git_branch.png) |
+
+| Git 并排差异 | 统一主题 |
+|:-:|:-:|
+| [![Git 并排差异](git_diff.png)](git_diff.png) | [![统一主题](theme.png)](theme.png) |
 
 | 数据库 | SSH |
 |:-:|:-:|
@@ -214,12 +230,6 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 | 扩展市场 |
 |:-:|
 | [![扩展市场](extension.png)](extension.png) |
-
-| Markdown 笔记 | 富文本笔记 |
-|:-:|:-:|
-| [![Markdown 笔记](markdown.png)](markdown.png) | [![富文本笔记](richtext.png)](richtext.png) |
-
-Markdown 工作区支持标准 Markdown 语法、受限 HTML 安全渲染和 Markdown 表格内图片展示，并保留源码编辑入口。
 
 | 白板笔记 |
 |:-:|

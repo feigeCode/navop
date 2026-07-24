@@ -2,9 +2,15 @@
 
 The home screen is the entry point for every saved resource. Workspaces group connections, while card and list views, search, and ordering make large sets easier to navigate. Organizing a connection does not change the remote service itself.
 
+![Recent connections dashboard](/images/app1.png)
+
 ## Organize the home screen
 
-Search by connection name and switch between card and list layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, reorder them, and filter the visible connections. Use unmistakable names and visual cues for production resources.
+The home dashboard keeps recent connections beside New Connection, Terminal, Quick Open, sync, import, Notes, AI workbench, and extension shortcuts. Search by connection name and switch between card and list layouts. Create workspaces for production, staging, local development, customers, or projects; edit their names, reorder them, and filter the visible connections. Use unmistakable names and visual cues for production resources.
+
+![Connection cards and workspace groups](/images/app.png)
+
+The persistent connection sidebar stays available while other tabs are open. Use it to search, expand or collapse workspace groups, resize the navigation area, and move quickly between resources. Before sharing a screen, review any visible hostnames, accounts, team labels, and internal addresses.
 
 Before deleting a workspace, review what happens to its saved entries. A workspace is an organizational layer, but removing or moving entries can still affect local navigation and sync state.
 
