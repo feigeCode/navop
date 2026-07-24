@@ -2,14 +2,14 @@
 
 Navop 将数据库、Redis、MongoDB、SSH、SFTP、终端、远程桌面、Notes、AI 和团队同步放在同一个原生工作区。
 
-## 当前版本：v0.9.1
+## 当前版本：v0.9.2
 
-[下载 Navop v0.9.1](https://github.com/feigeCode/navop/releases/tag/v0.9.1)
+[下载 Navop v0.9.2](https://github.com/feigeCode/navop/releases/tag/v0.9.2)
 
-- Markdown 默认以只读预览打开，可切换到源码模式安全编辑；应用、终端与 Markdown 现使用统一主题系统。
-- 首页升级为最近连接仪表盘，常驻连接侧栏支持虚拟化列表、显示切换、拖拽、分组、复制分享和灵活调整宽度。
-- 新增便携运行模式、SSH X11 转发、远端操作系统图标识别，以及独立远程桌面窗口全屏。
-- 修复 MongoDB 受限账号、PostgreSQL 数值精度与 SQLSTATE、终端命令栏、RDP 重连、页签宽度和跨平台布局等问题。
+- 修正应用版本元数据，升级到 v0.9.2 后不会再反复提示同一个可用更新。
+- 首页的两种布局分别命名为“全局导航”和“分类卡片”，可按工作方式自由切换。
+- 完善 Windows 便携版的解压、数据目录、手动升级、备份、文件关联和高级参数说明。
+- 更新 Agent Hub 截图与说明，并提升原生扩展注册表对非扩展 SQL manifest 的兼容性。
 
 ## 从这里开始
 

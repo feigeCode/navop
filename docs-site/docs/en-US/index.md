@@ -2,14 +2,14 @@
 
 Navop brings databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
 
-## Current release: v0.9.1
+## Current release: v0.9.2
 
-[Download Navop v0.9.1](https://github.com/feigeCode/navop/releases/tag/v0.9.1)
+[Download Navop v0.9.2](https://github.com/feigeCode/navop/releases/tag/v0.9.2)
 
-- Markdown now opens in read-only preview by default and can switch to Source mode for safe editing; application, terminal, and Markdown views now share a unified theme system.
-- The home screen is now a recent-connections dashboard, and the persistent sidebar adds virtualized lists, visibility controls, drag and drop, grouping, copy/share actions, and flexible resizing.
-- Added portable mode, SSH X11 forwarding, remote operating-system icons, and fullscreen for remote desktops opened in standalone windows.
-- Fixed restricted MongoDB accounts, PostgreSQL numeric precision and SQLSTATE errors, terminal command-bar behavior, RDP reconnects, adaptive tab widths, and cross-platform layouts.
+- Corrected application version metadata so v0.9.2 no longer keeps prompting users to install the same available update.
+- Renamed the two home layouts to **Global Navigation** and **Category Cards**, making both supported workflows clear.
+- Expanded the Windows portable guide with extraction, data directories, manual upgrades, backups, file associations, and advanced options.
+- Refreshed the Agent Hub showcase and improved native extension discovery around non-extension SQL manifests.
 
 ## Start here
 

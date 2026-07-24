@@ -62,6 +62,30 @@ jobs:
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "platform=$RELEASE_PLATFORM" >> "$GITHUB_OUTPUT"
 
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Verify application version matches release tag
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          expected_version="${RELEASE_TAG#v}"
+          manifest_version="$(
+            awk -F'"' '
+              /^\[package\]$/ { in_package = 1; next }
+              /^\[/ { in_package = 0 }
+              in_package && /^version = "/ { print $2; exit }
+            ' main/Cargo.toml
+          )"
+          if [ "$manifest_version" != "$expected_version" ]; then
+            echo "::error::main/Cargo.toml version ${manifest_version:-<missing>} does not match release tag ${RELEASE_TAG}"
+            exit 1
+          fi
+          echo "Verified Navop application version: $manifest_version"
+
       - name: Resolve platform matrix
         id: matrix
         env:

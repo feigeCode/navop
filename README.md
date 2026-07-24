@@ -58,13 +58,13 @@
   </p>
 </div>
 
-## What's New in v0.9.1
+## What's New in v0.9.2
 
-- **Safer Markdown workflow** — Markdown opens in read-only preview by default and switches to source mode for exact editing without unintended rewrites.
-- **Unified themes** — application and terminal themes now share broader color coverage, appearance settings, and theme importing across inputs, popovers, scrollbars, terminals, and Markdown.
-- **Faster connection navigation** — the home screen is now a recent-connections dashboard, while the persistent sidebar adds virtualized lists, visibility controls, drag and drop, grouping, copy/share actions, and flexible resizing.
-- **Portable and remote workflows** — portable mode, SSH X11 forwarding with operating-system icons, and fullscreen standalone remote desktops are now supported.
-- **Database and UI reliability** — fixes improve restricted MongoDB accounts, PostgreSQL numeric precision and SQLSTATE errors, connection-scoped query tabs, adaptive tab widths, terminal command-bar behavior, RDP reconnects, and cross-platform layouts.
+- **Correct update detection** — release binaries now report v0.9.2 correctly, preventing the same available-update prompt from appearing again after users have upgraded.
+- **Clearer home layouts** — the two home experiences are now named **Global Navigation** and **Category Cards**, without treating either option as an old or deprecated view.
+- **Improved portable guidance** — the documentation now covers the Windows ZIP package, portable data directories, manual upgrades, backups, file associations, and advanced portable-mode options.
+- **Agent Hub showcase** — refreshed screenshots and documentation present the terminal Agent, workspace explorer, Git branches, changes, and side-by-side diffs as one integrated coding workspace.
+- **Extension registry reliability** — native extension discovery now ignores SQL manifest files that do not describe loadable native extensions.
 
 
 ## Why Navop?
