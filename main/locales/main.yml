@@ -1565,21 +1565,21 @@ Settings:
         zh-CN: 连接显示
         zh-HK: 連線顯示
       home_style:
-        en: Home Style
-        zh-CN: 主页样式
-        zh-HK: 主頁樣式
+        en: Home Layout
+        zh-CN: 首页布局
+        zh-HK: 首頁佈局
       home_style_desc:
-        en: Switch between the classic Home with its built-in sidebar and the modern Home with the global connection tree
-        zh-CN: 在内置侧边栏的旧版主页与使用全局连接树的新版主页之间切换
-        zh-HK: 在內建側邊欄的舊版主頁與使用全域連線樹的新版主頁之間切換
+        en: Choose category cards for a focused overview, or global navigation to keep the connection tree available across workspaces
+        zh-CN: 选择分类卡片集中浏览连接，或使用全局导航在各工作区持续访问连接树
+        zh-HK: 選擇分類卡片集中瀏覽連線，或使用全域導覽在各工作區持續存取連線樹
       home_style_legacy:
-        en: Classic Home
-        zh-CN: 旧版主页
-        zh-HK: 舊版主頁
+        en: Category Cards
+        zh-CN: 分类卡片
+        zh-HK: 分類卡片
       home_style_modern:
-        en: Modern Home
-        zh-CN: 新版主页
-        zh-HK: 新版主頁
+        en: Global Navigation
+        zh-CN: 全局导航
+        zh-HK: 全域導覽
       home_layout:
         en: Home Connection Layout
         zh-CN: 主页连接布局
