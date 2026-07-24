@@ -24,8 +24,8 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt as _, Sizable, Size, h_flex,
-    v_flex,
+    ActiveTheme, Disableable, ElementExt as _, Icon, IconName, InteractiveElementExt as _, Sizable,
+    Size, h_flex, v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -2778,7 +2778,15 @@ impl TabContainer {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .overflow_hidden();
+            .overflow_hidden()
+            .on_prepaint({
+                let container = cx.entity();
+                move |bounds, _, cx| {
+                    container.update(cx, |container, _| {
+                        container.sidebar_bounds = bounds;
+                    });
+                }
+            });
         if !left.is_empty() {
             root = root.child(
                 div()
@@ -3684,16 +3692,9 @@ impl Element for SidebarResizeEventHandler {
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
+        _: &mut Window,
+        _: &mut App,
     ) -> Self::PrepaintState {
-        let bounds = window.bounds();
-        self.container.update(cx, |container, _| {
-            container.sidebar_bounds = Bounds {
-                origin: Point::default(),
-                size: bounds.size,
-            };
-        });
     }
 
     fn paint(

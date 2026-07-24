@@ -43,3 +43,26 @@ fn window_controls_follow_the_active_theme_for_contrast() {
     assert!(!always_on_top.contains("gpui::rgb(0xffffff)"));
     assert!(!always_on_top.contains("gpui::rgb(0x2a2a2a)"));
 }
+
+#[test]
+fn sidebar_resize_uses_tab_container_bounds_instead_of_window_bounds() {
+    let source = include_str!("tab_container.rs");
+    let renderer_start = source
+        .find("fn render_content_with_sidebars")
+        .expect("sidebar content renderer");
+    let renderer_end = source[renderer_start..]
+        .find("pub fn render_tab_content")
+        .map(|offset| renderer_start + offset)
+        .expect("tab content renderer");
+    let renderer = &source[renderer_start..renderer_end];
+
+    assert!(renderer.contains(".id(\"tab-sidebar-root\")"));
+    assert!(renderer.contains(".on_prepaint({"));
+    assert!(renderer.contains("container.sidebar_bounds = bounds;"));
+
+    let handler_start = source
+        .find("impl Element for SidebarResizeEventHandler")
+        .expect("sidebar resize event handler");
+    let handler = &source[handler_start..];
+    assert!(!handler.contains("let bounds = window.bounds();"));
+}
