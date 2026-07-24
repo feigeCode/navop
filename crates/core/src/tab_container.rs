@@ -3460,11 +3460,11 @@ impl TabContainer {
             )
             .when(
                 cfg!(not(target_os = "macos")) && self.show_window_controls,
-                |el| el.child(self.render_window_controls(window)),
+                |el| el.child(self.render_window_controls(window, cx)),
             )
     }
 
-    fn render_window_controls(&self, window: &mut Window) -> impl IntoElement {
+    fn render_window_controls(&self, window: &mut Window, cx: &App) -> impl IntoElement {
         let is_linux = cfg!(target_os = "linux");
         let is_windows = cfg!(target_os = "windows");
         let is_maximized = window.is_maximized();
@@ -3480,7 +3480,7 @@ impl TabContainer {
                     .as_ref()
                     .map(|probe| probe())
                     .unwrap_or(false);
-                el.child(self.render_always_on_top_button(on_toggle, is_active))
+                el.child(self.render_always_on_top_button(on_toggle, is_active, cx))
             })
             .child(self.render_control_button(
                 "minimize",
@@ -3490,6 +3490,7 @@ impl TabContainer {
                 is_windows,
                 false,
                 None,
+                cx,
             ))
             .child(self.render_control_button(
                 if is_maximized { "restore" } else { "maximize" },
@@ -3503,6 +3504,7 @@ impl TabContainer {
                 is_windows,
                 false,
                 None,
+                cx,
             ))
             .child(self.render_control_button(
                 "close",
@@ -3512,6 +3514,7 @@ impl TabContainer {
                 is_windows,
                 true,
                 self.on_close_window.clone(),
+                cx,
             ))
     }
 
@@ -3524,7 +3527,25 @@ impl TabContainer {
         is_windows: bool,
         is_close: bool,
         on_close_window: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
+        cx: &App,
     ) -> impl IntoElement {
+        let foreground = cx.theme().foreground;
+        let hover_background = if is_close {
+            cx.theme().danger
+        } else {
+            cx.theme().secondary_hover
+        };
+        let active_background = if is_close {
+            cx.theme().danger_active
+        } else {
+            cx.theme().secondary_active
+        };
+        let hover_foreground = if is_close {
+            cx.theme().danger_foreground
+        } else {
+            foreground
+        };
+
         div()
             .id(id)
             .flex()
@@ -3534,21 +3555,9 @@ impl TabContainer {
             .justify_center()
             .content_center()
             .items_center()
-            .text_color(gpui::white())
-            .hover(move |style| {
-                if is_close {
-                    style.bg(gpui::rgb(0xe81123)).text_color(gpui::white())
-                } else {
-                    style.bg(gpui::rgb(0x3a3a3a)).text_color(gpui::white())
-                }
-            })
-            .active(move |style| {
-                if is_close {
-                    style.bg(gpui::rgb(0xc50f1f)).text_color(gpui::white())
-                } else {
-                    style.bg(gpui::rgb(0x2a2a2a)).text_color(gpui::white())
-                }
-            })
+            .text_color(foreground)
+            .hover(move |style| style.bg(hover_background).text_color(hover_foreground))
+            .active(move |style| style.bg(active_background).text_color(hover_foreground))
             .when(is_windows, move |this| {
                 // Windows 依赖系统原生标题栏控件行为：
                 // 仅声明 control area，避免手动 on_click 干扰最大化/还原切换。
@@ -3584,13 +3593,16 @@ impl TabContainer {
         &self,
         on_toggle: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
         is_active: bool,
+        cx: &App,
     ) -> impl IntoElement {
         // 置顶激活时用琥珀色高亮，提示当前窗口已置顶
-        let icon_color = if is_active {
-            gpui::rgb(0xfbbf24)
+        let icon_color: gpui::Hsla = if is_active {
+            gpui::rgb(0xfbbf24).into()
         } else {
-            gpui::rgb(0xffffff)
+            cx.theme().foreground
         };
+        let hover_background = cx.theme().secondary_hover;
+        let active_background = cx.theme().secondary_active;
 
         div()
             .id("always-on-top")
@@ -3602,8 +3614,8 @@ impl TabContainer {
             .content_center()
             .items_center()
             .text_color(icon_color)
-            .hover(move |style| style.bg(gpui::rgb(0x3a3a3a)).text_color(icon_color))
-            .active(move |style| style.bg(gpui::rgb(0x2a2a2a)).text_color(icon_color))
+            .hover(move |style| style.bg(hover_background).text_color(icon_color))
+            .active(move |style| style.bg(active_background).text_color(icon_color))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.prevent_default();
                 cx.stop_propagation();
