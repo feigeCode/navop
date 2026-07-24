@@ -1340,6 +1340,10 @@ impl SshFormWindow {
             .child(div().flex_1().min_w_0().child(child))
     }
 
+    fn render_form_input(&self, input: &Entity<InputState>) -> Input {
+        Input::new(input).w_full()
+    }
+
     /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
     fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
@@ -1404,11 +1408,14 @@ impl SshFormWindow {
 
         v_flex()
             .gap_2()
-            .child(self.render_form_row(&t!("SSH.name"), Input::new(&self.name_input)))
+            .child(self.render_form_row(&t!("SSH.name"), self.render_form_input(&self.name_input)))
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
-            .child(self.render_form_row(&t!("SSH.host"), Input::new(&self.host_input)))
-            .child(self.render_form_row(&t!("SSH.port"), Input::new(&self.port_input)))
-            .child(self.render_form_row(&t!("SSH.username"), Input::new(&self.username_input)))
+            .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
+            .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
+            .child(self.render_form_row(
+                &t!("SSH.username"),
+                self.render_form_input(&self.username_input),
+            ))
             .child(
                 self.render_form_row(
                     &t!("SSH.auth_method"),
@@ -1465,16 +1472,17 @@ impl SshFormWindow {
             .when(auth_method == AuthMethodSelection::Password, |this| {
                 this.child(self.render_form_row(
                     &t!("SSH.password"),
-                    Input::new(&self.password_input).mask_toggle(),
+                    self.render_form_input(&self.password_input).mask_toggle(),
                 ))
             })
             .when(auth_method == AuthMethodSelection::PrivateKey, |this| {
-                this.child(
-                    self.render_form_row(&t!("SSH.key_path"), Input::new(&self.key_path_input)),
-                )
+                this.child(self.render_form_row(
+                    &t!("SSH.key_path"),
+                    self.render_form_input(&self.key_path_input),
+                ))
                 .child(self.render_form_row(
                     &t!("SSH.passphrase"),
-                    Input::new(&self.passphrase_input).mask_toggle(),
+                    self.render_form_input(&self.passphrase_input).mask_toggle(),
                 ))
             })
             .when(
@@ -1482,11 +1490,11 @@ impl SshFormWindow {
                 |this| {
                     this.child(self.render_form_row(
                         &t!("SSH.private_key_content"),
-                        Input::new(&self.private_key_content_input),
+                        self.render_form_input(&self.private_key_content_input),
                     ))
                     .child(self.render_form_row(
                         &t!("SSH.passphrase"),
-                        Input::new(&self.passphrase_input).mask_toggle(),
+                        self.render_form_input(&self.passphrase_input).mask_toggle(),
                     ))
                     .child(
                         h_flex().justify_center().child(
@@ -1560,11 +1568,12 @@ impl SshFormWindow {
             .gap_2()
             .child(self.render_form_row(
                 &t!("SSH.default_directory"),
-                Input::new(&self.default_directory_input),
+                self.render_form_input(&self.default_directory_input),
             ))
-            .child(
-                self.render_form_row(&t!("SSH.init_script"), Input::new(&self.init_script_input)),
-            )
+            .child(self.render_form_row(
+                &t!("SSH.init_script"),
+                self.render_form_input(&self.init_script_input),
+            ))
             .child(
                 self.render_form_row(
                     &t!("SSH.disable_shell_integration"),
@@ -1676,15 +1685,17 @@ impl SshFormWindow {
                 ),
             )
             .when(enable_jump, |this| {
-                this.child(
-                    self.render_form_row(&t!("SSH.jump_host"), Input::new(&self.jump_host_input)),
-                )
-                .child(
-                    self.render_form_row(&t!("SSH.jump_port"), Input::new(&self.jump_port_input)),
-                )
+                this.child(self.render_form_row(
+                    &t!("SSH.jump_host"),
+                    self.render_form_input(&self.jump_host_input),
+                ))
+                .child(self.render_form_row(
+                    &t!("SSH.jump_port"),
+                    self.render_form_input(&self.jump_port_input),
+                ))
                 .child(self.render_form_row(
                     &t!("SSH.jump_username"),
-                    Input::new(&self.jump_username_input),
+                    self.render_form_input(&self.jump_username_input),
                 ))
                 .child(
                     self.render_form_row(
@@ -1743,22 +1754,28 @@ impl SshFormWindow {
                     ),
                 )
                 .when(jump_auth_method == AuthMethodSelection::Password, |this| {
-                    this.child(self.render_form_row(
-                        &t!("SSH.jump_password"),
-                        Input::new(&self.jump_password_input).mask_toggle(),
-                    ))
+                    this.child(
+                        self.render_form_row(
+                            &t!("SSH.jump_password"),
+                            self.render_form_input(&self.jump_password_input)
+                                .mask_toggle(),
+                        ),
+                    )
                 })
                 .when(
                     jump_auth_method == AuthMethodSelection::PrivateKey,
                     |this| {
                         this.child(self.render_form_row(
                             &t!("SSH.jump_key_path"),
-                            Input::new(&self.jump_key_path_input),
+                            self.render_form_input(&self.jump_key_path_input),
                         ))
-                        .child(self.render_form_row(
-                            &t!("SSH.jump_passphrase"),
-                            Input::new(&self.jump_passphrase_input).mask_toggle(),
-                        ))
+                        .child(
+                            self.render_form_row(
+                                &t!("SSH.jump_passphrase"),
+                                self.render_form_input(&self.jump_passphrase_input)
+                                    .mask_toggle(),
+                            ),
+                        )
                     },
                 )
                 .when(
@@ -1766,12 +1783,15 @@ impl SshFormWindow {
                     |this| {
                         this.child(self.render_form_row(
                             &t!("SSH.private_key_content"),
-                            Input::new(&self.jump_private_key_content_input),
+                            self.render_form_input(&self.jump_private_key_content_input),
                         ))
-                        .child(self.render_form_row(
-                            &t!("SSH.jump_passphrase"),
-                            Input::new(&self.jump_passphrase_input).mask_toggle(),
-                        ))
+                        .child(
+                            self.render_form_row(
+                                &t!("SSH.jump_passphrase"),
+                                self.render_form_input(&self.jump_passphrase_input)
+                                    .mask_toggle(),
+                            ),
+                        )
                         .child(
                             h_flex().justify_center().child(
                                 div()
@@ -1883,20 +1903,25 @@ impl SshFormWindow {
                             ),
                     ),
                 )
-                .child(
-                    self.render_form_row(&t!("SSH.proxy_host"), Input::new(&self.proxy_host_input)),
-                )
-                .child(
-                    self.render_form_row(&t!("SSH.proxy_port"), Input::new(&self.proxy_port_input)),
-                )
+                .child(self.render_form_row(
+                    &t!("SSH.proxy_host"),
+                    self.render_form_input(&self.proxy_host_input),
+                ))
+                .child(self.render_form_row(
+                    &t!("SSH.proxy_port"),
+                    self.render_form_input(&self.proxy_port_input),
+                ))
                 .child(self.render_form_row(
                     &t!("SSH.proxy_username"),
-                    Input::new(&self.proxy_username_input),
+                    self.render_form_input(&self.proxy_username_input),
                 ))
-                .child(self.render_form_row(
-                    &t!("SSH.proxy_password"),
-                    Input::new(&self.proxy_password_input).mask_toggle(),
-                ))
+                .child(
+                    self.render_form_row(
+                        &t!("SSH.proxy_password"),
+                        self.render_form_input(&self.proxy_password_input)
+                            .mask_toggle(),
+                    ),
+                )
             })
     }
 
@@ -1906,23 +1931,24 @@ impl SshFormWindow {
             .gap_2()
             .child(self.render_form_row(
                 &t!("SSH.connect_timeout"),
-                Input::new(&self.connect_timeout_input),
+                self.render_form_input(&self.connect_timeout_input),
             ))
             .child(self.render_form_row(
                 &t!("SSH.keepalive_interval"),
-                Input::new(&self.keepalive_interval_input),
+                self.render_form_input(&self.keepalive_interval_input),
             ))
             .child(self.render_form_row(
                 &t!("SSH.keepalive_max"),
-                Input::new(&self.keepalive_max_input),
+                self.render_form_input(&self.keepalive_max_input),
             ))
     }
 
     /// 渲染其他设置标签页
     fn render_other_tab(&self) -> impl IntoElement {
-        v_flex()
-            .gap_2()
-            .child(self.render_form_row(&t!("SSH.remark"), Input::new(&self.remark_input)))
+        v_flex().gap_2().child(self.render_form_row(
+            &t!("SSH.remark"),
+            self.render_form_input(&self.remark_input),
+        ))
     }
 }
 
