@@ -1337,7 +1337,7 @@ impl SshFormWindow {
                     .text_right()
                     .child(label.to_string()),
             )
-            .child(div().flex_1().min_w_0().child(child))
+            .child(div().w_full().flex_1().min_w_0().child(child))
     }
 
     fn render_form_input(&self, input: &Entity<InputState>) -> Input {
@@ -1407,6 +1407,7 @@ impl SshFormWindow {
         let auth_method = self.auth_method;
 
         v_flex()
+            .w_full()
             .gap_2()
             .child(self.render_form_row(&t!("SSH.name"), self.render_form_input(&self.name_input)))
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
@@ -1565,6 +1566,7 @@ impl SshFormWindow {
     /// 渲染初始化标签页
     fn render_init_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .w_full()
             .gap_2()
             .child(self.render_form_row(
                 &t!("SSH.default_directory"),
@@ -1669,6 +1671,7 @@ impl SshFormWindow {
         let jump_auth_method = self.jump_auth_method;
 
         v_flex()
+            .w_full()
             .gap_2()
             .child(
                 self.render_form_row(
@@ -1865,6 +1868,7 @@ impl SshFormWindow {
         let proxy_type = self.proxy_type;
 
         v_flex()
+            .w_full()
             .gap_2()
             .child(
                 self.render_form_row(
@@ -1928,6 +1932,7 @@ impl SshFormWindow {
     /// 渲染高级设置标签页
     fn render_advanced_tab(&self) -> impl IntoElement {
         v_flex()
+            .w_full()
             .gap_2()
             .child(self.render_form_row(
                 &t!("SSH.connect_timeout"),
@@ -1945,7 +1950,7 @@ impl SshFormWindow {
 
     /// 渲染其他设置标签页
     fn render_other_tab(&self) -> impl IntoElement {
-        v_flex().gap_2().child(self.render_form_row(
+        v_flex().w_full().gap_2().child(self.render_form_row(
             &t!("SSH.remark"),
             self.render_form_input(&self.remark_input),
         ))
@@ -2044,6 +2049,8 @@ impl Render for SshFormWindow {
             .child(
                 div()
                     .id("ssh-form-content")
+                    .w_full()
+                    .min_w_0()
                     .flex_1()
                     .p_3()
                     .overflow_y_scroll()
