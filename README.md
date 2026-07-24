@@ -54,7 +54,7 @@
   </p>
 
   <p>
-    <img src="app.png" alt="Navop overview" width="820" />
+    <img src="app1.png" alt="Navop overview" width="820" />
   </p>
 </div>
 
