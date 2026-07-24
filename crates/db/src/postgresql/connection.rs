@@ -13,7 +13,11 @@ use rustls::{
     Error as RustlsError, RootCertStore, SignatureScheme,
 };
 use tokio::sync::Mutex;
-use tokio_postgres::{Client, Config, NoTls, Row, Statement, config::SslMode, types::Type};
+use tokio_postgres::{
+    Client, Config, NoTls, Row, Statement,
+    config::SslMode,
+    types::{FromSql, Type},
+};
 use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::{debug, error, info, warn};
 
@@ -27,6 +31,95 @@ use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
 use connection_tunnel::TunnelGuard;
 use tokio::sync::mpsc;
+
+const NUMERIC_POSITIVE: u16 = 0x0000;
+const NUMERIC_NEGATIVE: u16 = 0x4000;
+const NUMERIC_NAN: u16 = 0xC000;
+const NUMERIC_POSITIVE_INFINITY: u16 = 0xD000;
+const NUMERIC_NEGATIVE_INFINITY: u16 = 0xF000;
+
+#[derive(Debug)]
+struct PostgresNumeric(String);
+
+impl<'a> FromSql<'a> for PostgresNumeric {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> std::result::Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        decode_numeric(raw)
+            .map(Self)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message).into())
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        *ty == Type::NUMERIC
+    }
+}
+
+fn decode_numeric(raw: &[u8]) -> std::result::Result<String, String> {
+    if raw.len() < 8 {
+        return Err("PostgreSQL NUMERIC value is shorter than its header".to_string());
+    }
+    let ndigits = i16::from_be_bytes([raw[0], raw[1]]);
+    let weight = i16::from_be_bytes([raw[2], raw[3]]);
+    let sign = u16::from_be_bytes([raw[4], raw[5]]);
+    let scale = u16::from_be_bytes([raw[6], raw[7]]);
+    if ndigits < 0 || raw.len() != 8 + ndigits as usize * 2 {
+        return Err("PostgreSQL NUMERIC value has an invalid digit count".to_string());
+    }
+    let digits = raw[8..]
+        .chunks_exact(2)
+        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+        .collect::<Vec<_>>();
+    if digits.iter().any(|digit| *digit > 9999) {
+        return Err("PostgreSQL NUMERIC value contains an invalid base-10000 digit".to_string());
+    }
+    match sign {
+        NUMERIC_POSITIVE => Ok(format_finite_numeric(weight, scale, &digits, false)),
+        NUMERIC_NEGATIVE => Ok(format_finite_numeric(weight, scale, &digits, true)),
+        NUMERIC_NAN => Ok("NaN".to_string()),
+        NUMERIC_POSITIVE_INFINITY => Ok("Infinity".to_string()),
+        NUMERIC_NEGATIVE_INFINITY => Ok("-Infinity".to_string()),
+        _ => Err(format!(
+            "PostgreSQL NUMERIC value has unknown sign {sign:#06x}"
+        )),
+    }
+}
+
+fn format_finite_numeric(weight: i16, scale: u16, digits: &[u16], negative: bool) -> String {
+    let mut value = String::new();
+    if negative {
+        value.push('-');
+    }
+    let integer_groups = (i32::from(weight) + 1).max(0) as usize;
+    if integer_groups == 0 {
+        value.push('0');
+    } else {
+        for group in 0..integer_groups {
+            let digit = digits.get(group).copied().unwrap_or(0);
+            if group == 0 {
+                value.push_str(&digit.to_string());
+            } else {
+                value.push_str(&format!("{digit:04}"));
+            }
+        }
+    }
+    if scale > 0 {
+        value.push('.');
+        let fraction_groups = usize::from(scale).div_ceil(4);
+        for group in 1..=fraction_groups {
+            let index = i32::from(weight) + group as i32;
+            let digit = usize::try_from(index)
+                .ok()
+                .and_then(|index| digits.get(index))
+                .copied()
+                .unwrap_or(0);
+            value.push_str(&format!("{digit:04}"));
+        }
+        value.truncate(value.len() - (fraction_groups * 4 - usize::from(scale)));
+    }
+    value
+}
 
 #[derive(Debug)]
 struct PostgresServerCertVerifier {
@@ -325,12 +418,12 @@ impl PostgresDbConnection {
                 .flatten()
                 .map(|v| v.to_string()),
 
-            // Numeric/Decimal - try as f64
+            // NUMERIC is arbitrary precision and must not be coerced through f64.
             &Type::NUMERIC => row
-                .try_get::<_, Option<f64>>(index)
+                .try_get::<_, Option<PostgresNumeric>>(index)
                 .ok()
                 .flatten()
-                .map(|v| v.to_string()),
+                .map(|v| v.0),
 
             // Text types
             &Type::TEXT | &Type::VARCHAR | &Type::BPCHAR | &Type::NAME => {
@@ -1594,6 +1687,48 @@ mod tests {
     use one_core::storage::DatabaseType;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn numeric_bytes(ndigits: i16, weight: i16, sign: u16, scale: u16, digits: &[u16]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ndigits.to_be_bytes());
+        bytes.extend_from_slice(&weight.to_be_bytes());
+        bytes.extend_from_slice(&sign.to_be_bytes());
+        bytes.extend_from_slice(&scale.to_be_bytes());
+        for digit in digits {
+            bytes.extend_from_slice(&digit.to_be_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn decode_numeric_preserves_precision_and_scale() {
+        let raw = numeric_bytes(3, 1, 0x0000, 3, &[1, 2345, 6780]);
+
+        assert_eq!(decode_numeric(&raw).unwrap(), "12345.678");
+    }
+
+    #[test]
+    fn decode_numeric_preserves_negative_fraction_trailing_zeroes() {
+        let raw = numeric_bytes(1, -1, 0x4000, 6, &[1200]);
+
+        assert_eq!(decode_numeric(&raw).unwrap(), "-0.120000");
+    }
+
+    #[test]
+    fn decode_numeric_preserves_zero_scale() {
+        let raw = numeric_bytes(0, 0, 0x0000, 2, &[]);
+
+        assert_eq!(decode_numeric(&raw).unwrap(), "0.00");
+    }
+
+    #[test]
+    fn decode_numeric_preserves_implicit_base_10000_groups() {
+        let large_integer = numeric_bytes(1, 2, 0x0000, 0, &[1]);
+        let small_fraction = numeric_bytes(1, -2, 0x0000, 8, &[1234]);
+
+        assert_eq!(decode_numeric(&large_integer).unwrap(), "100000000");
+        assert_eq!(decode_numeric(&small_fraction).unwrap(), "0.00001234");
+    }
 
     #[derive(Debug)]
     struct DummyVerifier;

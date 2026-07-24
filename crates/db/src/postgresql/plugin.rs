@@ -2371,7 +2371,11 @@ ORDER BY rolname;"#
                 if self.column_changed(orig_col, col) {
                     let col_name = self.quote_identifier(&col.name);
 
-                    if orig_col.data_type != col.data_type || orig_col.length != col.length {
+                    if orig_col.data_type != col.data_type
+                        || orig_col.length != col.length
+                        || orig_col.precision != col.precision
+                        || orig_col.scale != col.scale
+                    {
                         let type_str = self.build_type_string(col);
                         statements.push(format!(
                             "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
@@ -2552,6 +2556,42 @@ mod tests {
 
     fn create_plugin() -> PostgresPlugin {
         PostgresPlugin::new()
+    }
+
+    fn numeric_column(scale: u32) -> ColumnDefinition {
+        let mut column = ColumnDefinition::new("amount").data_type("NUMERIC");
+        column.length = Some(32);
+        column.scale = Some(scale);
+        column
+    }
+
+    #[test]
+    fn numeric_type_string_preserves_scale() {
+        let plugin = create_plugin();
+
+        assert_eq!(
+            plugin.build_type_string(&numeric_column(11)),
+            "NUMERIC(32,11)"
+        );
+    }
+
+    #[test]
+    fn alter_numeric_scale_emits_type_change() {
+        let plugin = create_plugin();
+        let original = TableDesign {
+            database_name: "postgres".to_string(),
+            table_name: "orders".to_string(),
+            columns: vec![numeric_column(11)],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let mut changed = original.clone();
+        changed.columns[0].scale = Some(12);
+
+        let sql = plugin.build_alter_table_sql(&original, &changed);
+
+        assert!(sql.contains(r#"ALTER COLUMN "amount" TYPE NUMERIC(32,12)"#));
     }
 
     fn user_request(

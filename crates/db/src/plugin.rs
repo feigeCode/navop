@@ -2611,7 +2611,11 @@ pub trait DatabasePlugin: Send + Sync {
                 type_str = format!("{}({})", type_str, precision);
             }
         } else if let Some(len) = col.length {
-            type_str = format!("{}({})", type_str, len);
+            if let Some(scale) = col.scale {
+                type_str = format!("{}({},{})", type_str, len, scale);
+            } else {
+                type_str = format!("{}({})", type_str, len);
+            }
         }
         type_str
     }
