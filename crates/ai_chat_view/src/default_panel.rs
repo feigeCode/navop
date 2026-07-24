@@ -649,10 +649,6 @@ impl TabContent for DefaultAgentChatPanel {
         self.tab_closeable
     }
 
-    fn width_size(&self, _cx: &App) -> Option<Size> {
-        Some(Size::Medium)
-    }
-
     fn dump(&self, _cx: &App) -> serde_json::Value {
         serde_json::json!({
             "version": 1,

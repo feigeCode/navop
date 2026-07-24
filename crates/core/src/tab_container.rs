@@ -1920,7 +1920,7 @@ impl TabContainer {
         self.add_and_activate_tab_with_focus(tab, window, cx);
     }
 
-    fn get_tab_width(&self, tab: &TabItem, cx: &App) -> gpui::Pixels {
+    fn get_tab_max_width(&self, tab: &TabItem, cx: &App) -> gpui::Pixels {
         let size = tab.content().width_size(cx).unwrap_or(self.size);
         self.size_to_pixels(size)
     }
@@ -3150,7 +3150,7 @@ impl TabContainer {
                         let is_active = self.active_pinned_index.is_none() && idx == active_index;
                         let view_clone = view.clone();
                         let title_clone = title.clone();
-                        let tab_width = self.get_tab_width(tab, cx);
+                        let tab_max_width = self.get_tab_max_width(tab, cx);
                         let tab_id = tab.id();
                         let has_activity =
                             !is_active && self.activity_tabs.contains(tab_id.as_ref());
@@ -3174,7 +3174,8 @@ impl TabContainer {
                             .gap_2()
                             .h(px(32.0))
                             .text_ellipsis()
-                            .w(tab_width)
+                            .min_w(px(60.0))
+                            .max_w(tab_max_width)
                             .px_3()
                             .rounded(px(6.0))
                             .when(is_active, |el| el.bg(active_tab_color))
@@ -3856,6 +3857,15 @@ mod tests {
         let source = include_str!("tab_container.rs");
         let tooltip_builder = ["Tool", "tip::new(tool", "tip_title.clone())"].concat();
         assert!(source.matches(&tooltip_builder).count() >= 2);
+    }
+
+    #[test]
+    fn regular_tab_width_adapts_to_its_title() {
+        let source = include_str!("tab_container.rs");
+        let fixed_width = [".w(", "tab_width", ")"].concat();
+        assert!(source.contains(".min_w(px(60.0))"));
+        assert!(source.contains(".max_w(tab_max_width)"));
+        assert!(!source.contains(&fixed_width));
     }
 
     #[gpui::test]

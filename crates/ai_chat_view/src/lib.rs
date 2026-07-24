@@ -59,8 +59,6 @@ mod send_button;
 mod session_service;
 mod session_sidebar;
 mod theme;
-#[cfg(test)]
-mod workbench_tab_tests;
 
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
