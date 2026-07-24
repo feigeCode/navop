@@ -48,8 +48,12 @@ pub(super) fn render_navigation_rail(
         .items_center()
         .bg(palette.rail_background)
         .text_color(palette.foreground)
-        .border_r_1()
-        .border_color(palette.border)
+        // The divider helps the narrower Windows/Linux title treatment, but
+        // on macOS it cuts through the traffic-light strip and looks like a
+        // stray window-frame line.
+        .when(!cfg!(target_os = "macos"), |this| {
+            this.border_r_1().border_color(palette.border)
+        })
         .when(cfg!(target_os = "macos"), |this| {
             #[cfg(target_os = "macos")]
             {
