@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::xauthority::{self, HostHints};
-use crate::{DisplayAddress, MagicCookie, ServerEndpoint, X11Error, X11Proxy, X11Result};
+#[cfg(target_os = "macos")]
+use crate::ServerEndpoint;
+use crate::{DisplayAddress, MagicCookie, X11Error, X11Proxy, X11Result};
 
 pub fn detect_local_server() -> X11Result<X11Proxy> {
     let display_text = discover_display_string().ok_or(X11Error::DisplayNotFound)?;
@@ -181,6 +183,7 @@ fn local_xquartz_display() -> Option<String> {
     None
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn display_number_from_socket_name(name: &std::ffi::OsStr) -> Option<u16> {
     name.to_str()?.strip_prefix('X')?.parse().ok()
 }
