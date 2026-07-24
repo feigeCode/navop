@@ -36,6 +36,7 @@ pub struct MarkdownEditor {
     projection: MarkdownProjection,
     active_block: Option<markdown_source::SourceNodeId>,
     active_table_cell: Option<markdown_source::TableCellAddress>,
+    table_grid_hover: Option<(usize, usize)>,
     theme: MarkdownEditorTheme,
     dirty: bool,
     syncing_input: bool,
@@ -48,6 +49,10 @@ pub struct MarkdownEditor {
     block_render_sources: HashMap<markdown_source::SourceNodeId, String>,
     pending_block_renders: HashMap<markdown_source::SourceNodeId, String>,
     block_render_errors: HashMap<markdown_source::SourceNodeId, String>,
+    block_render_cache:
+        HashMap<render::block_renderer::RenderCacheKey, render::block_renderer::CachedRender>,
+    pending_shared_renders:
+        HashMap<render::block_renderer::RenderCacheKey, Vec<render::block_renderer::RenderWaiter>>,
     block_render_generation: u64,
     inline_math_artifacts: HashMap<String, MarkdownBlockRenderArtifact>,
     pending_inline_math_renders: HashSet<String>,
@@ -78,6 +83,7 @@ impl MarkdownEditor {
             projection,
             active_block: None,
             active_table_cell: None,
+            table_grid_hover: None,
             theme,
             dirty: false,
             syncing_input: false,
@@ -90,6 +96,8 @@ impl MarkdownEditor {
             block_render_sources: HashMap::new(),
             pending_block_renders: HashMap::new(),
             block_render_errors: HashMap::new(),
+            block_render_cache: HashMap::new(),
+            pending_shared_renders: HashMap::new(),
             block_render_generation: 0,
             inline_math_artifacts: HashMap::new(),
             pending_inline_math_renders: HashSet::new(),
@@ -135,6 +143,10 @@ impl MarkdownEditor {
         }
     }
 
+    pub fn table_grid_hover(&self) -> Option<(usize, usize)> {
+        self.table_grid_hover
+    }
+
     pub fn set_block_render_provider(
         &mut self,
         provider: Option<MarkdownBlockRenderProvider>,
@@ -143,6 +155,30 @@ impl MarkdownEditor {
         self.block_render_provider = provider;
         self.reset_block_renders();
         cx.notify();
+    }
+
+    /// Retry a failed math or Mermaid block render without disturbing editor
+    /// selection, layout or scroll position.
+    pub fn retry_block_render(
+        &mut self,
+        block_id: markdown_source::SourceNodeId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(block) = self.history.document().block_by_id(block_id) else {
+            return false;
+        };
+        let Some((_, source, request)) = self.block_render_request(block) else {
+            return false;
+        };
+        let key = render::block_renderer::RenderCacheKey::from_request(&request);
+        self.block_render_cache.remove(&key);
+        self.block_render_sources.remove(&block_id);
+        self.block_render_artifacts.remove(&block_id);
+        self.block_render_errors.remove(&block_id);
+        self.pending_block_renders.remove(&block_id);
+        self.enqueue_block_render(block_id, source, request, cx);
+        cx.notify();
+        true
     }
 
     pub fn projected_text(&self) -> &str {
@@ -290,6 +326,8 @@ impl MarkdownEditor {
         self.block_render_sources.clear();
         self.pending_block_renders.clear();
         self.block_render_errors.clear();
+        self.block_render_cache.clear();
+        self.pending_shared_renders.clear();
         self.inline_math_artifacts.clear();
         self.pending_inline_math_renders.clear();
         self.failed_inline_math_renders.clear();

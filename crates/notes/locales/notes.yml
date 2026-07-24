@@ -9,6 +9,18 @@ Notes:
     en: Source
     zh-CN: 源码
     zh-HK: 原始碼
+  markdown_preview:
+    en: Preview
+    zh-CN: 预览
+    zh-HK: 預覽
+  markdown_source_tooltip:
+    en: Edit the complete Markdown source
+    zh-CN: 编辑完整 Markdown 源码
+    zh-HK: 編輯完整 Markdown 原始碼
+  markdown_preview_tooltip:
+    en: Return to live preview editing
+    zh-CN: 返回实时预览编辑
+    zh-HK: 返回即時預覽編輯
   markdown_readonly_preview:
     en: Read-only preview · edit in Source
     zh-CN: 只读预览 · 请在源码模式编辑

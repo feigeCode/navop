@@ -35,6 +35,8 @@
 - [x] Markdown 源码始终是唯一权威数据；未编辑节点、未知语法、HTML、
   frontmatter 和自定义 directive 必须原样保留。
 - [x] Source 与所见即所得模式共用同一份源码事务和 Undo/Redo 历史。
+- [x] 预览态和源码态常驻同高模式工具栏；预览态始终提供带图标、中文 Tooltip
+  的“源码”入口，源码态原位替换为“预览”入口，切换模式不再因工具栏增删推动正文。
 - [x] 原 Notes Markdown 快捷键保留，并绑定到原生 Markdown action。
 
 ### B. Typora 式原位编辑稳定性
@@ -44,6 +46,8 @@
   Heading 仍按层级字号渲染，需要继续做全类型视觉验收。
 - [x] 鼠标激活当前可见块时不得自动将块滚动到文档中央；程序化跳转到远端块
   仍可显式滚动。
+- [x] 虚拟列表活动块实测高度只允许扩大预留项，不能用首帧偏小测量值缩小
+  item 后再回涨；已增加回归避免该高度反馈造成额外滚动抖动。
 - [x] Markdown 内嵌 Input 不显示自己的滚动条，也不保留会改变换行点的
   末尾布局安全边距。
 - [~] 正文、Heading、引用、无序列表、有序列表和任务列表必须共用一致的
@@ -130,9 +134,9 @@
 - [x] 活动块使用 auto-grow Input 进入正常文档流；标准布局不再使用透明
   placeholder 与 absolute 覆盖层，虚拟布局回灌活动块实测高度。
 - [ ] 完成表格尺寸 Popover 展开态、真实按钮点击和工具条视觉回归。
-- [~] `cargo test -p markdown-editor`（76 通过、1 忽略）和
-  `cargo test -p markdown-source`（30 通过）已通过；`cargo test -p notes`
-  被工作区并行中的 X11 forwarding 未完成导出阻塞。
+- [x] `cargo test -p markdown-editor`（77 通过、1 忽略）、
+  `cargo test -p markdown-source`（30 通过）和 `cargo test -p notes`（38 通过）
+  已通过；源码入口真实点击与模式工具栏同高已有 GPUI 回归。
 - [~] Markdown editor/source Clippy、定向 rustfmt、`git diff --check` 和
   `cargo check -p markdown-editor` 已通过；全仓 fmt/main 检查被工作区并行中的
   `x11_forwarding::detect` 缺失及未完成导出阻塞。

@@ -284,7 +284,7 @@ impl MarkdownEditor {
 }
 
 fn position_for_offset(value: &str, offset: usize) -> Position {
-    let prefix = &value[..offset.min(value.len())];
+    let prefix = &value[..crate::projection::floor_char_boundary(value, offset)];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
     let line_start = prefix.rfind('\n').map_or(0, |index| index + 1);
     Position::new(line as u32, prefix[line_start..].chars().count() as u32)
@@ -296,4 +296,27 @@ fn previous_char_offset(value: &str, offset: usize) -> Option<usize> {
         .char_indices()
         .next_back()
         .map(|(index, _)| index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn position_for_offset_snaps_offsets_inside_multibyte_characters() {
+        // '新' occupies bytes 3..6; an offset inside it must not panic and
+        // resolves to the character start.
+        assert_eq!(position_for_offset("新新新", 4), Position::new(0, 1));
+        assert_eq!(position_for_offset("新新新", 5), Position::new(0, 1));
+        assert_eq!(position_for_offset("新新新", 6), Position::new(0, 2));
+        assert_eq!(
+            position_for_offset("第一行\n新段落", 11),
+            Position::new(1, 0)
+        );
+        assert_eq!(
+            position_for_offset("第一行\n新段落", 13),
+            Position::new(1, 1)
+        );
+        assert_eq!(position_for_offset("abc", usize::MAX), Position::new(0, 3));
+    }
 }

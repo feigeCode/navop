@@ -6,7 +6,7 @@ use gpui::{
 };
 use gpui_component::{
     Disableable, Icon, IconName, Sizable,
-    button::{Button, ButtonVariants},
+    button::Button,
     h_flex,
     input::{Input, LocalInputStyle},
     v_flex,
@@ -58,9 +58,7 @@ impl NotesView {
         v_flex()
             .size_full()
             .min_h_0()
-            .when(mode == MarkdownViewMode::Source, |this| {
-                this.child(self.render_markdown_toolbar(document_id, mode, cx))
-            })
+            .child(self.render_markdown_toolbar(document_id, mode, cx))
             .when(
                 matches!(session.state.sync_state, MarkdownSyncState::Conflict),
                 |this| this.child(self.render_conflict_banner(document_id, cx)),
@@ -124,6 +122,8 @@ impl NotesView {
         let session = self.markdown_sessions.get(document_id);
         let status = markdown_status(session, mode);
         h_flex()
+            .id("markdown-mode-toolbar")
+            .debug_selector(|| "markdown-mode-toolbar".to_owned())
             .h_9()
             .px_2()
             .gap_2()
@@ -156,10 +156,24 @@ impl NotesView {
                 )
             });
         Button::new("markdown-source-mode")
-            .label(t!("Notes.markdown_source").to_string())
+            .debug_selector(|| "markdown-source-mode".to_owned())
+            .icon(if mode == MarkdownViewMode::Source {
+                IconName::Eye
+            } else {
+                IconName::Edit
+            })
+            .label(if mode == MarkdownViewMode::Source {
+                t!("Notes.markdown_preview").to_string()
+            } else {
+                t!("Notes.markdown_source").to_string()
+            })
+            .tooltip(if mode == MarkdownViewMode::Source {
+                t!("Notes.markdown_preview_tooltip").to_string()
+            } else {
+                t!("Notes.markdown_source_tooltip").to_string()
+            })
             .small()
             .disabled(disabled)
-            .when(mode == MarkdownViewMode::Source, |button| button.primary())
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.toggle_markdown_mode(id.clone(), window, cx)
             }))

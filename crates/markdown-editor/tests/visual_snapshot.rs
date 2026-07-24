@@ -11,6 +11,7 @@ fn capture_markdown_editor_snapshot() {
     capture_sample(SAMPLE, "markdown-editor");
     capture_sample(WRAPPED_LIST, "markdown-editor-wrapped-list");
     capture_table_sample();
+    capture_sample(COMBINED_SAMPLE, "markdown-editor-combined");
 }
 
 fn capture_sample(source: &'static str, name: &str) {
@@ -65,6 +66,9 @@ fn save_snapshot(cx: &mut HeadlessAppContext, window: gpui::AnyWindowHandle, nam
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
     image.save(path).unwrap();
 }
 
@@ -161,4 +165,36 @@ const TABLE_SAMPLE: &str = r#"# 接口整理
 ## 2.2 现有 Swagger 与接口文档不一致项
 
 下面的内容不应该与上面的表格重叠。
+"#;
+
+const COMBINED_SAMPLE: &str = r#"# 组合回归
+
+正文包含 **粗体**、_强调_、`inline code` 与 $e^{i\pi}+1=0$。
+
+> 引用块与后续内容的基线、换行和高度必须稳定。
+
+- [ ] 未完成任务
+- [x] 已完成任务
+
+```mermaid
+graph LR
+  A[输入] --> B[渲染]
+```
+
+$$
+\frac{a+b}{c}
+$$
+
+![示例图片](missing-combination-regression.png)
+
+```rust
+fn main() {
+    println!("markdown");
+}
+```
+
+| 名称 | 状态 | 说明 |
+| :--- | :---: | ---: |
+| 数学公式 | 完成 | 保持高度 |
+| Mermaid | 完成 | 共享缓存 |
 "#;

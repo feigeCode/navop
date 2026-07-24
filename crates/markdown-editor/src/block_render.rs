@@ -8,6 +8,12 @@ pub enum MarkdownBlockRenderKind {
     Mermaid,
 }
 
+impl std::hash::Hash for MarkdownBlockRenderKind {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (*self as u8).hash(state);
+    }
+}
+
 #[derive(Clone)]
 pub struct MarkdownBlockRenderRequest {
     pub kind: MarkdownBlockRenderKind,

@@ -85,6 +85,8 @@ impl MarkdownEditor {
         gpui::div()
             .id(table_cell_id(address))
             .debug_selector(|| table_cell_selector(address))
+            .flex()
+            .flex_col()
             .flex_1()
             .min_w_0()
             .min_h(rems(2.5))
@@ -120,6 +122,9 @@ impl MarkdownEditor {
         alignment: TextAlign,
     ) -> gpui::AnyElement {
         gpui::div()
+            .debug_selector(|| "markdown-active-table-input-slot".to_owned())
+            .flex()
+            .flex_col()
             .w_full()
             .min_w_0()
             .relative()
@@ -173,7 +178,7 @@ fn table_alignments(table: &SourceTableMap) -> Vec<TextAlign> {
         .unwrap_or_default()
 }
 
-fn delimiter_alignment(delimiter: &str) -> TextAlign {
+pub(super) fn delimiter_alignment(delimiter: &str) -> TextAlign {
     match (delimiter.starts_with(':'), delimiter.ends_with(':')) {
         (true, true) => TextAlign::Center,
         (false, true) => TextAlign::Right,

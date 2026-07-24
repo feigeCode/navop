@@ -383,6 +383,76 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
+    fn source_toggle_is_visible_in_preview_and_returns_to_preview(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source-toggle.md");
+        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let toolbar_height = cx
+            .debug_bounds("markdown-mode-toolbar")
+            .expect("mode toolbar must be visible in preview")
+            .size
+            .height;
+        let source_toggle = cx
+            .debug_bounds("markdown-source-mode")
+            .expect("source toggle must be visible in preview");
+        cx.simulate_click(source_toggle.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(
+            crate::MarkdownViewMode::Source,
+            view.read_with(&cx, |view, _| view
+                .markdown_sessions
+                .values()
+                .next()
+                .unwrap()
+                .state
+                .mode)
+        );
+        assert_eq!(
+            toolbar_height,
+            cx.debug_bounds("markdown-mode-toolbar")
+                .expect("mode toolbar must remain visible in source mode")
+                .size
+                .height
+        );
+        let preview_toggle = cx
+            .debug_bounds("markdown-source-mode")
+            .expect("preview toggle must replace the source toggle");
+        cx.simulate_click(preview_toggle.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        assert_eq!(
+            crate::MarkdownViewMode::Wysiwyg,
+            view.read_with(&cx, |view, _| view
+                .markdown_sessions
+                .values()
+                .next()
+                .unwrap()
+                .state
+                .mode)
+        );
+    }
+
+    #[gpui::test]
     fn standalone_lossless_markdown_preview_is_editable(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);

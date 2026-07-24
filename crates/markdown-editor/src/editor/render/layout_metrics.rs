@@ -27,11 +27,12 @@ pub(super) fn virtual_item_sizes(
         .iter()
         .enumerate()
         .map(|(index, block)| {
+            let estimated = block_size(block);
             let mut size = measured
                 .get(&block.id)
                 .copied()
-                .map(|height| gpui::size(px(0.), height))
-                .unwrap_or_else(|| block_size(block));
+                .map(|height| gpui::size(px(0.), height.max(estimated.height)))
+                .unwrap_or(estimated);
             if index == 0 {
                 size.height += px(DOCUMENT_TOP_PADDING);
             }
@@ -203,5 +204,20 @@ mod tests {
         let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
         let height = block_size(&document.blocks[0]).height;
         assert!(height > px(100.));
+    }
+
+    #[test]
+    fn measured_active_height_cannot_shrink_the_reserved_virtual_item() {
+        let document = markdown_source::SourceMarkdownDocument::parse("# Heading").unwrap();
+        let block = &document.blocks[0];
+        let estimated = block_size(block).height;
+        let measured = std::collections::HashMap::from([(block.id, px(12.))]);
+
+        let sizes = virtual_item_sizes(&document.blocks, &measured);
+
+        assert_eq!(
+            estimated + px(DOCUMENT_TOP_PADDING + DOCUMENT_BOTTOM_PADDING),
+            sizes[0].height
+        );
     }
 }

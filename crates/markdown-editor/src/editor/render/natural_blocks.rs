@@ -31,7 +31,7 @@ impl MarkdownEditor {
         if let SourceBlockKind::Table(table) = &block.kind {
             return self.render_table(block, table, cx);
         }
-        if let Some(rendered) = self.render_block_output(block) {
+        if let Some(rendered) = self.render_block_output(block, cx) {
             return self.render_artifact_preview(block, rendered, cx);
         }
         self.render_preview_block(block, cx)

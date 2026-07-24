@@ -13,7 +13,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+gpui-component-assets.workspace = true
 gpui_platform = { workspace = true, features = ["test-support"] }
+rust-embed = { version = "8.7.2", features = ["include-exclude"] }
 
 [lints]
 workspace = true

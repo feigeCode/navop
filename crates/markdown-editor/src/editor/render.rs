@@ -18,7 +18,7 @@ mod action_handlers;
 mod active_block;
 mod active_inline_math;
 mod active_list_markers;
-mod block_renderer;
+pub(super) mod block_renderer;
 mod blocks;
 pub(super) mod layout_metrics;
 mod list_marker_source;

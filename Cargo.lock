@@ -6832,8 +6832,10 @@ dependencies = [
  "futures",
  "gpui",
  "gpui-component",
+ "gpui-component-assets",
  "gpui_platform",
  "markdown-source",
+ "rust-embed",
  "thiserror 2.0.18",
 ]
 

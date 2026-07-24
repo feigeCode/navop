@@ -92,6 +92,7 @@ impl MarkdownProjection {
     }
 
     pub fn display_to_source(&self, display_offset: usize) -> usize {
+        let display_offset = floor_char_boundary(&self.text, display_offset);
         self.display_to_source
             .get(display_offset)
             .copied()
@@ -99,13 +100,20 @@ impl MarkdownProjection {
     }
 
     pub fn source_to_display(&self, source_offset: usize) -> usize {
-        self.source_to_display
+        let display_offset = self
+            .source_to_display
             .get(source_offset)
             .copied()
-            .unwrap_or(self.text.len())
+            .unwrap_or(self.text.len());
+        // `source_to_display` is indexed per byte, so a caller that hands us an
+        // offset inside a multi-byte character (for example a stale cursor after
+        // a deferred newline flush) would otherwise receive a display offset
+        // that splits a UTF-8 character and panics on the next string slice.
+        floor_char_boundary(&self.text, display_offset)
     }
 
     pub fn display_end_to_source(&self, display_offset: usize) -> usize {
+        let display_offset = floor_char_boundary(&self.text, display_offset);
         self.display_end_to_source
             .get(display_offset)
             .copied()
@@ -238,4 +246,72 @@ fn common_suffix(left: &str, right: &str) -> usize {
         .take_while(|((_, left), right)| left == right)
         .map(|((_, ch), _)| ch.len_utf8())
         .sum()
+}
+
+/// Snaps `offset` down to the nearest UTF-8 character boundary of `text`.
+pub(crate) fn floor_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document(source: &str) -> SourceMarkdownDocument {
+        SourceMarkdownDocument::parse(source).unwrap()
+    }
+
+    #[test]
+    fn display_mappings_stay_on_char_boundaries_for_every_byte_offset() {
+        let source = "新段落包含 **加粗新** 与 `code新`。\n\n第二行新内容";
+        let document = document(source);
+        let projection = MarkdownProjection::build(&document, None);
+        assert!(projection.text.is_char_boundary(projection.text.len()));
+
+        for source_offset in 0..=source.len() {
+            let display = projection.source_to_display(source_offset);
+            assert!(
+                projection.text.is_char_boundary(display),
+                "source offset {source_offset} mapped to non-boundary display offset {display}"
+            );
+        }
+        for display_offset in 0..=projection.text.len() {
+            let start = projection.display_to_source(display_offset);
+            let end = projection.display_end_to_source(display_offset);
+            assert!(
+                source.is_char_boundary(start),
+                "display offset {display_offset} mapped to non-boundary source offset {start}"
+            );
+            assert!(
+                source.is_char_boundary(end),
+                "display offset {display_offset} mapped to non-boundary source end {end}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_offset_inside_a_multibyte_char_snaps_to_the_character_start() {
+        let source = "新段落";
+        let document = document(source);
+        let projection = MarkdownProjection::build(&document, None);
+        // '新' occupies bytes 0..3; offsets inside it must snap to its start.
+        assert_eq!(projection.source_to_display(1), 0);
+        assert_eq!(projection.source_to_display(2), 0);
+        assert_eq!(projection.source_to_display(3), 3);
+    }
+
+    #[test]
+    fn floor_char_boundary_snaps_into_multibyte_characters() {
+        let text = "新x";
+        assert_eq!(floor_char_boundary(text, 0), 0);
+        assert_eq!(floor_char_boundary(text, 1), 0);
+        assert_eq!(floor_char_boundary(text, 2), 0);
+        assert_eq!(floor_char_boundary(text, 3), 3);
+        assert_eq!(floor_char_boundary(text, 4), 4);
+        assert_eq!(floor_char_boundary(text, usize::MAX), 4);
+    }
 }

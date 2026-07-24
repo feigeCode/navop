@@ -18,6 +18,8 @@ impl MarkdownEditor {
         let source_code = is_source_code(block);
         let list_gutter = super::list_marker_source::list_gutter_width(block);
         let content = gpui::div()
+            .flex()
+            .flex_col()
             .w_full()
             .min_w_0()
             .when(source_code, |this| self.style_source_editor(this))
@@ -28,7 +30,14 @@ impl MarkdownEditor {
                     .text_color(self.theme.muted_foreground)
             })
             .relative()
-            .child(self.active_input(heading))
+            .child(
+                gpui::div()
+                    .debug_selector(|| "markdown-active-input-slot".to_owned())
+                    .flex()
+                    .w_full()
+                    .min_w_0()
+                    .child(self.active_input(heading)),
+            )
             .children(self.active_inline_math_overlays())
             .when_some(list_gutter, |this, gutter| {
                 this.pl(px(gutter))

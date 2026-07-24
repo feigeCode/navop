@@ -1280,6 +1280,19 @@ impl InputState {
         &self.text
     }
 
+    /// Returns the bounds assigned to the text element during its latest paint.
+    ///
+    /// This is useful for embedding components that need to verify that the editor received the
+    /// same horizontal constraint as its container. It is `None` until the input has been painted.
+    pub fn laid_out_text_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.last_bounds
+    }
+
+    /// Returns the latest visible input bounds, excluding line-number and editor padding gutters.
+    pub fn laid_out_input_bounds(&self) -> Bounds<Pixels> {
+        self.input_bounds
+    }
+
     /// Return the (0-based) [`Position`] of the cursor.
     pub fn cursor_position(&self) -> Position {
         let offset = self.cursor();

@@ -326,12 +326,23 @@ impl Input {
 
         v_flex()
             .size_full()
+            .min_w_0()
             .children(state.search_panel.clone())
             .child(
                 div()
                     .relative()
+                    .flex()
                     .flex_1()
-                    .child(input_state.clone())
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .w_full()
+                            .min_w_0()
+                            .child(input_state.clone()),
+                    )
                     .when(editor_scrollbar, |this| {
                         this.child(EditorScrollbar::new(input_state.clone()))
                     }),
@@ -483,6 +494,7 @@ impl RenderOnce for Input {
             .on_mouse_move(window.listener_for(&self.state, InputState::on_mouse_move))
             .on_scroll_wheel(window.listener_for(&self.state, InputState::on_scroll_wheel))
             .size_full()
+            .min_w_0()
             .when(!self.bare, |this| this.line_height(LINE_HEIGHT))
             .when(!self.bare, |this| this.input_px(self.size))
             .when(!self.bare, |this| this.input_py(self.size))

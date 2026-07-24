@@ -4,7 +4,9 @@ use gpui::{
 };
 use gpui_component::{Root, highlighter::HighlightTheme, input::Position};
 use markdown_editor::{MarkdownEditor, MarkdownEditorTheme};
-use markdown_source::{BlockMoveDirection, SourceBlockKind, TableCellAddress, TableInsertPosition};
+use markdown_source::{
+    BlockMoveDirection, SourceBlockKind, SourceSelection, TableCellAddress, TableInsertPosition,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -250,6 +252,40 @@ fn unsafe_edit_across_hidden_markers_is_rejected(cx: &mut TestAppContext) {
     assert_eq!(
         "_one_ and [two](target)",
         editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+}
+
+#[gpui::test]
+fn stale_source_selection_inside_a_multibyte_char_does_not_panic(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (window, editor) = open_editor("第一段新内容\n\n第二段", cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        // '新' occupies bytes 9..12; a stale source-mode cursor at byte 10 lands
+        // inside the character and must snap to a boundary instead of panicking
+        // while the active block is synced.
+        let value = "第一段新内容\n\n第二段v2";
+        assert!(value.get(10..11).is_none());
+        let selection = SourceSelection {
+            anchor: 10,
+            head: 10,
+        };
+        assert!(
+            editor
+                .apply_source_value(value, selection, window, cx)
+                .unwrap()
+        );
+    });
+    cx.run_until_parked();
+    let (cursor, text) = editor.read_with(&cx, |editor, cx| {
+        (
+            editor.input_state().read(cx).selected_range().end,
+            editor.projected_text().to_owned(),
+        )
+    });
+    assert!(
+        text.is_char_boundary(cursor),
+        "synced cursor {cursor} must stay on a char boundary of {text:?}"
     );
 }
 
@@ -534,6 +570,15 @@ fn active_table_cell_keeps_row_height_and_has_no_clear_overlay(cx: &mut TestAppC
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
 
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let text_bounds = input
+        .read_with(&cx, |input, _| input.laid_out_text_bounds())
+        .expect("active table input must be laid out");
+    assert!(
+        text_bounds.size.width >= px(240.),
+        "active table input width collapsed to {:?}",
+        text_bounds.size.width
+    );
     assert_eq!(
         before.size.height,
         cx.debug_bounds(selector).unwrap().size.height
@@ -653,6 +698,107 @@ fn active_table_toolbar_is_an_overlay_and_structure_edits_are_undoable(cx: &mut 
         source,
         editor.read_with(&cx, |editor, _| editor.source().to_owned())
     );
+}
+
+#[gpui::test]
+fn table_grid_picker_highlights_rectangle_and_click_resizes_real_table(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "| A | B |\n| :--- | ---: |\n| one | two |";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let table_id = document.blocks[0].id;
+    let address = TableCellAddress {
+        block_id: table_id,
+        row: 2,
+        column: 0,
+    };
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(520.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_table_cell(address, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let trigger = cx
+        .debug_bounds("markdown-table-grid-trigger")
+        .expect("table size trigger must be visible");
+    cx.simulate_click(trigger.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("markdown-table-grid-label-empty").is_some(),
+        "picker must show the placeholder label before any hover"
+    );
+    let target = cx
+        .debug_bounds("markdown-table-size-4-5")
+        .expect("6×6 picker must expose the 5×4 cell");
+    cx.simulate_mouse_move(target.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        Some((4, 5)),
+        editor.read_with(&cx, |editor, _| editor.table_grid_hover())
+    );
+    assert!(
+        cx.debug_bounds("markdown-table-grid-label-5x4").is_some(),
+        "hover must show the `5 × 4` size label"
+    );
+    assert!(cx.debug_bounds("markdown-table-grid-label-empty").is_none());
+    for (rows, columns) in [(1, 1), (4, 5)] {
+        assert!(
+            cx.debug_bounds(Box::leak(
+                format!("markdown-table-size-{rows}-{columns}").into_boxed_str(),
+            ))
+            .is_some()
+        );
+    }
+    cx.simulate_click(target.center(), Modifiers::none());
+    cx.run_until_parked();
+
+    let resized = editor.read_with(&cx, |editor, _| editor.source().to_owned());
+    let table = match &markdown_source::SourceMarkdownDocument::parse(resized)
+        .unwrap()
+        .blocks[0]
+        .kind
+    {
+        SourceBlockKind::Table(table) => table.clone(),
+        _ => panic!("resized block must remain a table"),
+    };
+    assert_eq!(5, table.rows[0].cells.len());
+    assert_eq!(5, table.rows.len(), "header + delimiter + 3 body rows");
+    assert_eq!(
+        None,
+        editor.read_with(&cx, |editor, _| editor.table_grid_hover())
+    );
+}
+
+#[gpui::test]
+fn active_table_alignment_button_reflects_current_column(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "| A | B |\n| :--- | ---: |\n| one | two |";
+    let table_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_table_cell(
+            TableCellAddress {
+                block_id: table_id,
+                row: 2,
+                column: 1,
+            },
+            window,
+            cx,
+        ));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("table-align-right").is_some());
+    let right = cx.debug_bounds("table-align-right").unwrap();
+    cx.simulate_click(right.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(editor.read_with(&cx, |editor, _| editor.source().contains("---:")));
 }
 
 #[gpui::test]
@@ -848,6 +994,7 @@ fn clicking_a_visible_virtual_list_keeps_the_document_scroll_offset(cx: &mut Tes
     let document = markdown_source::SourceMarkdownDocument::parse(&*source).unwrap();
     let centered_id = document.blocks[100].id;
     let list_id = document.blocks[101].id;
+    let following_id = document.blocks[102].id;
     let (window, editor) = open_editor_with_size(source, size(px(600.), px(260.)), cx);
     let mut cx = VisualTestContext::from_window(window, cx);
 
@@ -872,12 +1019,38 @@ fn clicking_a_visible_virtual_list_keeps_the_document_scroll_offset(cx: &mut Tes
     );
     cx.run_until_parked();
     let after = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    let active_frame = cx
+        .debug_bounds(Box::leak(
+            format!("markdown-block-frame-{}", list_id.0).into_boxed_str(),
+        ))
+        .expect("active list frame must remain visible");
+    let following_frame = cx
+        .debug_bounds(Box::leak(
+            format!("markdown-block-frame-{}", following_id.0).into_boxed_str(),
+        ))
+        .expect("the block after the active list must remain visible");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let settled_offset = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    let settled_active_frame = cx
+        .debug_bounds(Box::leak(
+            format!("markdown-block-frame-{}", list_id.0).into_boxed_str(),
+        ))
+        .expect("active list frame must remain visible after settling");
+    let settled_following_frame = cx
+        .debug_bounds(Box::leak(
+            format!("markdown-block-frame-{}", following_id.0).into_boxed_str(),
+        ))
+        .expect("following block must remain visible after settling");
 
     assert_eq!(
         Some(list_id),
         editor.read_with(&cx, |editor, _| editor.active_block())
     );
     assert_eq!(before, after);
+    assert_eq!(after, settled_offset);
+    assert_eq!(active_frame.size.height, settled_active_frame.size.height);
+    assert_eq!(following_frame.top(), settled_following_frame.top());
 }
 
 #[gpui::test]
@@ -985,6 +1158,99 @@ fn very_tall_documents_virtualize_before_the_block_count_threshold(cx: &mut Test
     assert_ne!(
         px(0.),
         editor.read_with(&cx, |editor, _| editor.vertical_scroll_range())
+    );
+}
+
+#[gpui::test]
+fn marker_reveal_shifts_following_blocks_only_by_content_height(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    // 84 ASCII chars put the hidden text exactly at the wrap boundary of a
+    // 560px window, so revealing the four `**` marker chars adds one line.
+    let source = format!("{} **strong node**\n\nFollowing block", "x".repeat(84));
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let first_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
+    let (window, editor) = open_editor_with_size(source, size(px(560.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let first_selector = Box::leak(format!("markdown-block-frame-{}", first_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+
+    // Preview baseline: fonts, wrapping and block offsets before any editing.
+    let preview_first = cx.debug_bounds(first_selector).unwrap();
+    let preview_following = cx.debug_bounds(following_selector).unwrap();
+    let preview_scroll = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+
+    // Activate with the cursor outside the strong node: markers stay hidden and
+    // the layout must match the preview exactly.
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(first_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let hidden_first = cx.debug_bounds(first_selector).unwrap();
+    let hidden_following = cx.debug_bounds(following_selector).unwrap();
+    assert_eq!(preview_first.size.height, hidden_first.size.height);
+    assert_eq!(preview_following.origin.y, hidden_following.origin.y);
+    assert_eq!(
+        preview_scroll,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+    assert!(
+        !editor
+            .read_with(&cx, |editor, _| editor.projected_text().to_owned())
+            .contains("**")
+    );
+
+    // Reveal the strong markers: the following block may only shift by the
+    // exact content-height delta of the active input.
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let strong_display = editor.read_with(&cx, |editor, _| {
+        editor.projected_text().find("strong").unwrap() + 2
+    });
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_cursor_position(Position::new(0, strong_display as u32), window, cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        editor
+            .read_with(&cx, |editor, _| editor.projected_text().to_owned())
+            .contains("**strong node**")
+    );
+    let revealed_first = cx.debug_bounds(first_selector).unwrap();
+    let revealed_following = cx.debug_bounds(following_selector).unwrap();
+    assert_eq!(
+        revealed_following.origin.y - hidden_following.origin.y,
+        revealed_first.size.height - hidden_first.size.height,
+        "marker reveal must shift following blocks by exactly the input height delta"
+    );
+    assert_eq!(
+        px(24.),
+        revealed_first.size.height - hidden_first.size.height,
+        "revealing four marker chars must add exactly one 24px line"
+    );
+    assert_eq!(
+        preview_scroll,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+
+    // Hide the markers again: the layout returns to the pre-reveal baseline.
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_cursor_position(Position::new(0, 0), window, cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let rehidden_first = cx.debug_bounds(first_selector).unwrap();
+    let rehidden_following = cx.debug_bounds(following_selector).unwrap();
+    assert_eq!(hidden_first.size.height, rehidden_first.size.height);
+    assert_eq!(hidden_following.origin.y, rehidden_following.origin.y);
+    assert_eq!(
+        preview_scroll,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
     );
 }
 
@@ -1163,6 +1429,14 @@ fn active_task_list_lays_out_every_marker_anchor(cx: &mut TestAppContext) {
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let text_bounds = input
+        .read_with(&cx, |input, _| input.laid_out_text_bounds())
+        .expect("active list input must be laid out");
+    assert!(
+        text_bounds.size.width >= px(640.),
+        "active list input width collapsed to {:?}",
+        text_bounds.size.width
+    );
     let overlay = cx
         .debug_bounds(Box::leak(
             format!("markdown-active-list-markers-{}", list_id.0).into_boxed_str(),
@@ -1332,20 +1606,167 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
 }
 
 #[gpui::test]
+fn combined_document_keeps_every_preview_capability(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "# 组合回归\n\n正文包含 **粗体** 与 $e^{i\\pi}+1=0$ 行内公式。\n\n```mermaid\ngraph LR\n  A[输入] --> B[渲染]\n```\n\n$$\n\\frac{a+b}{c}\n$$\n\n![示例图片](missing-combination-regression.png)\n\n```rust\nfn main() {\n    println!(\"markdown\");\n}\n```\n\n| 名称 | 状态 |\n| :--- | ---: |\n| 数学公式 | 完成 |\n";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let paragraph_id = document.blocks[1].id;
+    let mermaid_id = document.blocks[2].id;
+    let math_id = document.blocks[3].id;
+    let image_id = document.blocks[4].id;
+    let code_id = document.blocks[5].id;
+    let table_id = document.blocks[6].id;
+    assert!(document.blocks[4]
+        .inline_nodes
+        .iter()
+        .any(|node| matches!(
+            node.kind,
+            markdown_source::SourceInlineKind::Image { .. }
+        )));
+    let (window, editor) = open_editor_with_size(source, size(px(960.), px(720.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(svg_render_provider()), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let selector = |prefix: &str, id: markdown_source::SourceNodeId| {
+        Box::leak(format!("{prefix}-{}", id.0).into_boxed_str())
+    };
+    // Block math and Mermaid both render asynchronous SVG previews.
+    assert!(cx.debug_bounds(selector("markdown-rendered-block", mermaid_id)).is_some());
+    assert!(cx.debug_bounds(selector("markdown-rendered-block", math_id)).is_some());
+    assert!(cx.debug_bounds(selector("markdown-render-error", mermaid_id)).is_none());
+    assert!(cx.debug_bounds(selector("markdown-render-error", math_id)).is_none());
+    // The inline formula keeps its rendered preview alongside plain text.
+    assert_eq!(
+        1,
+        editor.read_with(&cx, |editor, _| editor.active_inline_math_preview_count())
+    );
+    assert!(cx.debug_bounds(selector("markdown-block-frame", paragraph_id)).is_some());
+    // The image paragraph, fenced code and table all keep their rich previews.
+    assert!(cx.debug_bounds(selector("markdown-preview-block", image_id)).is_some());
+    assert!(cx.debug_bounds(selector("markdown-preview-block", code_id)).is_some());
+    assert!(cx.debug_bounds(selector("markdown-table", table_id)).is_some());
+    // Every block stays in document order without overlap.
+    let mut previous_bottom = None;
+    for id in [paragraph_id, mermaid_id, math_id, image_id, code_id, table_id] {
+        let frame = cx.debug_bounds(selector("markdown-block-frame", id)).unwrap();
+        if let Some(bottom) = previous_bottom {
+            assert!(frame.top() >= bottom, "block {id:?} overlaps a previous block");
+        }
+        previous_bottom = Some(frame.bottom());
+    }
+}
+
+#[gpui::test]
 fn math_and_mermaid_provider_dispatch_uses_the_background_executor(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = include_str!("../src/editor/render/block_renderer.rs");
 
     assert_eq!(
-        2,
+        1,
         source
             .matches("cx.background_spawn(async move { provider(request).await })")
             .count(),
-        "block and inline math providers must both run on the background executor"
+        "all shared math and Mermaid renders must run on the background executor"
     );
     assert!(
         !source.contains("let result = provider(request).await;"),
         "render providers must not be polled from a foreground GPUI task"
+    );
+}
+
+#[gpui::test]
+fn identical_math_blocks_share_one_render_task_and_cached_artifact(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "$$\nx + y\n$$\n\nBetween\n\n$$\nx + y\n$$";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let first_id = document.blocks[0].id;
+    let second_id = document.blocks[2].id;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = calls.clone();
+    let provider = Arc::new(move |_| {
+        provider_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(Some(svg_artifact(64.))) })
+            as futures::future::BoxFuture<
+                'static,
+                Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+            >
+    });
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(provider), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(1, calls.load(Ordering::SeqCst));
+    for block_id in [first_id, second_id] {
+        assert!(
+            cx.debug_bounds(Box::leak(
+                format!("markdown-rendered-block-{}", block_id.0).into_boxed_str(),
+            ))
+            .is_some(),
+            "both blocks must consume the shared artifact"
+        );
+    }
+}
+
+#[gpui::test]
+fn failed_block_shows_source_fallback_and_retry_button_recovers(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "```mermaid\ngraph TD\nA --> B\n```";
+    let block_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = calls.clone();
+    let provider = Arc::new(move |_| {
+        let call = provider_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            if call == 0 {
+                Err("Mermaid 语法错误".to_owned())
+            } else {
+                Ok(Some(svg_artifact(64.)))
+            }
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+            >
+    });
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(provider), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let error_selector =
+        Box::leak(format!("markdown-render-error-{}", block_id.0).into_boxed_str());
+    let retry_selector =
+        Box::leak(format!("markdown-render-retry-{}", block_id.0).into_boxed_str());
+    assert!(cx.debug_bounds(error_selector).is_some());
+    let retry = cx
+        .debug_bounds(retry_selector)
+        .expect("failed render must expose a retry entry");
+    cx.simulate_click(retry.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(2, calls.load(Ordering::SeqCst));
+    assert!(cx.debug_bounds(error_selector).is_none());
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-rendered-block-{}", block_id.0).into_boxed_str(),
+        ))
+        .is_some()
     );
 }
 

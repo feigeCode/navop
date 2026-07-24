@@ -37,6 +37,9 @@ pub enum IconColorMode {
 #[derive(IntoElement, Clone)]
 pub enum IconName {
     ALargeSmall,
+    AlignCenter,
+    AlignLeft,
+    AlignRight,
     ArrowDown,
     ArrowLeft,
     ArrowRight,
@@ -273,6 +276,9 @@ impl IconNamed for IconName {
     fn path(self) -> SharedString {
         match self {
             Self::ALargeSmall => "icons/a-large-small.svg",
+            Self::AlignCenter => "icons/align-center.svg",
+            Self::AlignLeft => "icons/align-left.svg",
+            Self::AlignRight => "icons/align-right.svg",
             Self::ArrowDown => "icons/arrow-down.svg",
             Self::ArrowLeft => "icons/arrow-left.svg",
             Self::ArrowRight => "icons/arrow-right.svg",

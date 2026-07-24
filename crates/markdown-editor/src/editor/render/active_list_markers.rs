@@ -1,8 +1,8 @@
 use super::MarkdownEditor;
 use super::list_marker_source::list_markers;
 use gpui::{
-    App, Bounds, Corners, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, TextAlign, TextRun, Window, canvas, point, px,
+    App, Bounds, Corners, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    Pixels, SharedString, Styled, TextAlign, TextRun, Window, canvas, point, px,
 };
 use markdown_source::SourceBlock;
 
@@ -93,7 +93,7 @@ fn paint_markers(
                 paint_text_marker(&text, layout.caret, foreground, window, cx)
             }
             MarkerKind::Task(checked) => {
-                paint_task_marker(checked, layout.caret, primary, check, window, cx)
+                paint_task_marker(checked, layout.caret, foreground, primary, check, window)
             }
         }
     }
@@ -129,18 +129,12 @@ fn paint_text_marker(
 fn paint_task_marker(
     checked: bool,
     caret: Bounds<Pixels>,
+    foreground: Hsla,
     primary: Hsla,
     check: Hsla,
     window: &mut Window,
-    cx: &mut App,
 ) {
-    let bounds = Bounds::new(
-        point(
-            caret.origin.x - px(MARKER_GAP + 14.),
-            caret.origin.y + px(5.),
-        ),
-        gpui::size(px(14.), px(14.)),
-    );
+    let bounds = task_marker_bounds(caret);
     window.paint_quad(gpui::PaintQuad {
         bounds,
         corner_radii: Corners::all(px(3.)),
@@ -149,18 +143,55 @@ fn paint_task_marker(
             .unwrap_or_else(gpui::transparent_black)
             .into(),
         border_widths: gpui::Edges::all(px(1.)),
-        border_color: primary,
+        border_color: checked
+            .then_some(primary)
+            .unwrap_or(foreground.opacity(0.55)),
         border_style: gpui::BorderStyle::Solid,
     });
     if checked {
-        paint_check(bounds, check, window, cx);
+        paint_check(bounds, check, window);
     }
 }
 
-fn paint_check(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window, cx: &mut App) {
-    let caret = Bounds::new(
-        point(bounds.right() + px(MARKER_GAP), bounds.origin.y - px(5.)),
-        bounds.size,
-    );
-    paint_text_marker("✓", caret, color, window, cx);
+fn task_marker_bounds(caret: Bounds<Pixels>) -> Bounds<Pixels> {
+    let size = px(14.);
+    let line_height = caret.size.height.max(px(LINE_HEIGHT));
+    Bounds::new(
+        point(
+            caret.origin.x - px(MARKER_GAP) - size,
+            caret.origin.y + (line_height - size) / 2.,
+        ),
+        gpui::size(size, size),
+    )
+}
+
+fn paint_check(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+    // Paint a geometry check mark instead of relying on a font glyph. This keeps
+    // the task marker crisp and stable across fonts, fallback chains and scale
+    // factors, and matches the compact checkbox used by Typora.
+    let mut path = PathBuilder::stroke(px(1.75));
+    path.move_to(point(bounds.left() + px(3.5), bounds.top() + px(7.)));
+    path.line_to(point(bounds.left() + px(6.), bounds.top() + px(9.5)));
+    path.line_to(point(bounds.left() + px(10.75), bounds.top() + px(4.5)));
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_marker_is_centered_in_the_input_line_and_stays_left_of_text() {
+        let caret = Bounds::new(point(px(100.), px(40.)), gpui::size(px(1.), px(24.)));
+        let marker = task_marker_bounds(caret);
+
+        assert_eq!(
+            marker,
+            Bounds::new(point(px(80.), px(45.)), gpui::size(px(14.), px(14.)))
+        );
+        assert_eq!(caret.left() - marker.right(), px(MARKER_GAP));
+        assert_eq!(marker.center().y, caret.top() + px(12.));
+    }
 }

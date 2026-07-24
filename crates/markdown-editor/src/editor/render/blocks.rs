@@ -169,7 +169,7 @@ impl MarkdownEditor {
             return preview_height;
         }
         if let Some(measured) = self.measured_block_heights.get(&block.id) {
-            return *measured;
+            return preview_height.max(*measured);
         }
         let rows = estimated_visual_lines(&self.projection.text) as f32;
         let heading = match block.kind {
@@ -191,7 +191,7 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if active_block != Some(block.id)
-            && let Some(rendered) = self.render_block_output(block)
+            && let Some(rendered) = self.render_block_output(block, cx)
         {
             return self.render_artifact_preview(block, rendered, cx);
         }
