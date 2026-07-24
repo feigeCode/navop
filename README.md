@@ -58,13 +58,13 @@
   </p>
 </div>
 
-## What's New in v0.9.0
+## What's New in v0.9.1
 
-- **Terminal command bar and quick commands** — use command suggestions, persistent shortcuts, pinned commands, and fast access from the terminal or sidebar.
-- **Workspace Explorer and Git tools** — browse and manage workspace files, open tabbed editors, review diffs, switch and push branches, and roll back changes without leaving the terminal workspace.
-- **Source-safe Markdown editing** — File Explorer and Notes use Navop's native source-preserving Markdown editor. Markdown stays authoritative, rich previews remain editable, and unsupported syntax is preserved for exact source editing.
-- **Persistent connection navigation** — filter and open database, SSH, and other resources from the home navigation rail, with quick access to Notes, extensions, settings, and team management.
-- **Cross-platform reliability** — Redis binary values are preserved correctly, image-only Markdown table cells can be cleared, and release packaging now covers macOS, Windows, x86_64 Linux, and ARM64 Linux.
+- **Safer Markdown workflow** — Markdown opens in read-only preview by default and switches to source mode for exact editing without unintended rewrites.
+- **Unified themes** — application and terminal themes now share broader color coverage, appearance settings, and theme importing across inputs, popovers, scrollbars, terminals, and Markdown.
+- **Faster connection navigation** — the home screen is now a recent-connections dashboard, while the persistent sidebar adds virtualized lists, visibility controls, drag and drop, grouping, copy/share actions, and flexible resizing.
+- **Portable and remote workflows** — portable mode, SSH X11 forwarding with operating-system icons, and fullscreen standalone remote desktops are now supported.
+- **Database and UI reliability** — fixes improve restricted MongoDB accounts, PostgreSQL numeric precision and SQLSTATE errors, connection-scoped query tabs, adaptive tab widths, terminal command-bar behavior, RDP reconnects, and cross-platform layouts.
 
 
 ## Why Navop?
