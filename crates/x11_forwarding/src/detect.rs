@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-use crate::xauthority::{self, HostHints};
 #[cfg(target_os = "macos")]
 use crate::ServerEndpoint;
+use crate::xauthority::{self, HostHints};
 use crate::{DisplayAddress, MagicCookie, X11Error, X11Proxy, X11Result};
 
 pub fn detect_local_server() -> X11Result<X11Proxy> {
@@ -91,8 +91,7 @@ fn retry_xquartz_authority(
     let ServerEndpoint::Unix(endpoint) = address.endpoint() else {
         return Err(X11Error::AuthorityNoMatch);
     };
-    let endpoint_text = endpoint.to_string_lossy();
-    if !endpoint_text.contains("org.xquartz") && !endpoint_text.contains(".X11-unix/X") {
+    if !is_x_server_endpoint(endpoint) {
         return Err(X11Error::AuthorityNoMatch);
     }
 
@@ -142,6 +141,20 @@ fn retry_xquartz_authority(
     _hints: &HostHints,
 ) -> X11Result<MagicCookie> {
     Err(X11Error::AuthorityNoMatch)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_x_server_endpoint(endpoint: &Path) -> bool {
+    let endpoint = endpoint.to_string_lossy();
+    endpoint.contains("/.X11-unix/X")
+        // XQuartz 2.8.x and later.
+        || endpoint.contains("/org.xquartz:")
+        // XQuartz 2.7.x and earlier, still commonly used on Intel Macs.
+        || endpoint.contains("/org.macosforge.xquartz:")
+        // Apple X11.app and older compatible installations.
+        || endpoint.contains("/org.x.X11:")
+        // MacPorts X11.app.
+        || endpoint.contains("/org.macports.X11:")
 }
 
 fn discover_display_string() -> Option<String> {
@@ -256,10 +269,11 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::display_number_from_socket_name;
     #[cfg(target_os = "macos")]
     use super::{detect_local_server, xquartz_server_authority_files};
+    use super::{display_number_from_socket_name, is_x_server_endpoint};
     use std::ffi::OsStr;
+    use std::path::Path;
 
     #[test]
     fn parses_x11_unix_socket_names() {
@@ -267,6 +281,26 @@ mod tests {
         assert_eq!(display_number_from_socket_name(OsStr::new("X12")), Some(12));
         assert_eq!(display_number_from_socket_name(OsStr::new("X")), None);
         assert_eq!(display_number_from_socket_name(OsStr::new("not-x11")), None);
+    }
+
+    #[test]
+    fn recognizes_current_and_legacy_macos_x_server_endpoints() {
+        for endpoint in [
+            "/var/run/com.apple.launchd.current/org.xquartz:0",
+            "/private/tmp/com.apple.launchd.legacy/org.macosforge.xquartz:0",
+            "/private/tmp/com.apple.launchd.apple/org.x.X11:0",
+            "/private/tmp/com.apple.launchd.macports/org.macports.X11:0",
+            "/tmp/.X11-unix/X0",
+        ] {
+            assert!(
+                is_x_server_endpoint(Path::new(endpoint)),
+                "expected X server endpoint: {endpoint}"
+            );
+        }
+
+        assert!(!is_x_server_endpoint(Path::new(
+            "/private/tmp/com.apple.launchd.other/unrelated:0"
+        )));
     }
 
     #[cfg(target_os = "macos")]
