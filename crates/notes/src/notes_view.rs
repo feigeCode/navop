@@ -453,7 +453,7 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
-    fn standalone_lossless_markdown_preview_is_editable(cx: &mut TestAppContext) {
+    fn standalone_markdown_preview_is_read_only(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -473,7 +473,14 @@ mod external_markdown_tests {
                 .unwrap();
             (window, view.unwrap())
         });
-        let cx = VisualTestContext::from_window(window.into(), cx);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let preview = cx
+            .debug_bounds("markdown-readonly-preview")
+            .expect("read-only Markdown preview must be rendered");
+        cx.simulate_click(preview.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
 
         view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.as_ref().unwrap();
@@ -483,6 +490,7 @@ mod external_markdown_tests {
                 session.source_document.lock().unwrap().source.as_str()
             );
             assert!(!session.preview.read(cx).is_dirty());
+            assert_eq!(None, session.preview.read(cx).active_block());
         });
     }
 

@@ -4,11 +4,11 @@ use gpui::{Context, Window};
 
 pub(crate) fn switch_to_wysiwyg(
     session: &mut MarkdownSession,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> anyhow::Result<Option<String>> {
     session.state.switch_to_wysiwyg();
-    focus_preview(session, window, cx);
+    cx.notify();
     Ok(None)
 }
 
@@ -34,12 +34,5 @@ fn focus_source_editor(
     let input = session.source_editor.clone();
     window.defer(cx, move |window, cx| {
         input.update(cx, |input, cx| input.focus(window, cx))
-    });
-}
-
-fn focus_preview(session: &MarkdownSession, window: &mut Window, cx: &mut Context<NotesView>) {
-    let preview = session.preview.clone();
-    window.defer(cx, move |window, cx| {
-        preview.update(cx, |editor, cx| editor.focus(window, cx))
     });
 }

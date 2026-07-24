@@ -1,5 +1,9 @@
 use gpui::{App, Hsla};
-use gpui_component::{ActiveTheme, highlighter::HighlightTheme};
+use gpui_component::{
+    ActiveTheme,
+    highlighter::HighlightTheme,
+    text::{MarkdownPalette, TextViewStyle},
+};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -30,5 +34,21 @@ impl MarkdownEditorTheme {
             warning: cx.theme().warning,
             highlight_theme: cx.theme().highlight_theme.clone(),
         }
+    }
+
+    pub(crate) fn preview_style(&self, is_dark: bool) -> TextViewStyle {
+        TextViewStyle::default().markdown_palette(MarkdownPalette {
+            is_dark,
+            foreground: self.foreground,
+            muted_foreground: self.muted_foreground,
+            border: self.border,
+            code_background: self.muted,
+            code_foreground: self.foreground,
+            table_header: self.muted,
+            table_row: self.background,
+            table_row_alt: self.muted.opacity(0.35),
+            quote_border: self.border,
+            link: self.primary,
+        })
     }
 }
