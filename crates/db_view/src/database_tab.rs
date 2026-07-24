@@ -29,9 +29,7 @@ use gpui_component::{
     ActiveTheme, ElementExt as _, Icon, IconName, Sizable, Size, h_flex,
     notification::Notification, v_flex,
 };
-use one_core::layout::{
-    SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
-};
+use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
     SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
@@ -48,6 +46,7 @@ use uuid::Uuid;
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 const CHAT_SIDEBAR_MIN_WIDTH: Pixels = px(360.0);
+const DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 
 fn resized_tree_panel_size(
     mouse_x: Pixels,
@@ -230,7 +229,9 @@ impl DatabaseTabView {
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.set_database_scope(&connection_id, database, schema, cx);
                     });
-                    this.sidebar_panel_size = this.sidebar_panel_size.max(SIDEBAR_DEFAULT_WIDTH);
+                    this.sidebar_panel_size = this
+                        .sidebar_panel_size
+                        .max(DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH);
                 }
             }
         }));
@@ -265,7 +266,7 @@ impl DatabaseTabView {
             sidebar,
             _subscriptions: subscriptions,
             tree_panel_size: TREE_PANEL_DEFAULT_SIZE,
-            sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_panel_size: DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH,
             sidebar_render_mode: DatabaseSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
@@ -1065,16 +1066,20 @@ mod tests {
 
     #[test]
     fn database_tools_sidebar_uses_toolbar_width_until_panel_opens() {
-        let collapsed = database_tools_sidebar_size(false, SIDEBAR_DEFAULT_WIDTH);
-        let expanded = database_tools_sidebar_size(true, SIDEBAR_DEFAULT_WIDTH);
+        let collapsed = database_tools_sidebar_size(false, DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH);
+        let expanded = database_tools_sidebar_size(true, DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH);
 
         assert_eq!(Some(TOOLBAR_WIDTH), collapsed.side_width);
         assert_eq!(Some(TOOLBAR_WIDTH), collapsed.bottom_height);
         assert_eq!(
-            Some(SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
+            Some(DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
             expanded.side_width
         );
-        assert_eq!(Some(SIDEBAR_DEFAULT_WIDTH), expanded.bottom_height);
+        assert_eq!(
+            Some(DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH),
+            expanded.bottom_height
+        );
+        assert_eq!(px(400.0), DATABASE_TOOLS_SIDEBAR_DEFAULT_WIDTH);
     }
 
     #[test]

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use gpui::{App, AppContext as _, Context, Entity, Subscription, Window};
-use one_core::layout::SIDEBAR_DEFAULT_WIDTH;
 use one_core::storage::models::StoredConnection;
 use terminal::LocalConfig;
 use terminal::terminal::TerminalConnectionKind;
@@ -9,7 +8,7 @@ use terminal::terminal::TerminalConnectionKind;
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::resize::WorkspaceSidebarResize;
 use super::{TerminalPaneId, TerminalSplitTree};
-use crate::view::TerminalView;
+use crate::view::{TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalView};
 
 pub struct TerminalWorkspace {
     pub(super) active_pane_id: TerminalPaneId,
@@ -97,7 +96,7 @@ impl TerminalWorkspace {
             next_pane_id: 2,
             panes,
             split_tree: TerminalSplitTree::new(initial_pane_id),
-            sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_panel_size: TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH,
             sidebar_resizing: None,
             workspace_bounds: gpui::Bounds::default(),
             pane_tab_metadata,

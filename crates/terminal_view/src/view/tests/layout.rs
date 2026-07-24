@@ -1,6 +1,11 @@
 use super::*;
 
 #[test]
+fn terminal_tools_sidebar_defaults_to_a_roomier_width() {
+    assert_eq!(px(400.0), TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH);
+}
+
+#[test]
 fn command_history_changed_refreshes_history_command_panel() {
     assert!(should_refresh_history_commands_for_terminal_event(
         &TerminalModelEvent::CommandHistoryChanged

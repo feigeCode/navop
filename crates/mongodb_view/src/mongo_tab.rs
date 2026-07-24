@@ -8,7 +8,7 @@ use gpui::{
     InteractiveElement, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex};
+use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconName, Sizable, Size, h_flex};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
@@ -30,6 +30,16 @@ use one_core::layout::{
 
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
+
+fn resized_tree_panel_size(
+    mouse_x: Pixels,
+    view_bounds: Bounds<Pixels>,
+    sidebar_width: Pixels,
+) -> Pixels {
+    let new_size = mouse_x - view_bounds.left();
+    let max_size = (view_bounds.size.width - PANEL_MIN_SIZE - sidebar_width).max(PANEL_MIN_SIZE);
+    new_size.clamp(PANEL_MIN_SIZE, max_size)
+}
 
 fn mongo_tools_sidebar_policy() -> SidebarPanelPolicy {
     SidebarPanelPolicy {
@@ -230,16 +240,14 @@ impl MongoTabView {
 
         match resizing {
             ResizingPanel::TreePanel => {
-                let new_size = mouse_position.x - self.bounds.left();
                 let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
                 let sidebar_width = if sidebar_visible {
                     self.sidebar_panel_size
                 } else {
                     TOOLBAR_WIDTH
                 };
-                let max_size =
-                    (available_width - PANEL_MIN_SIZE - sidebar_width).max(PANEL_MIN_SIZE);
-                self.tree_panel_size = new_size.clamp(PANEL_MIN_SIZE, max_size);
+                self.tree_panel_size =
+                    resized_tree_panel_size(mouse_position.x, self.bounds, sidebar_width);
             }
             ResizingPanel::Sidebar => {
                 let new_size = self.bounds.right() - mouse_position.x;
@@ -432,6 +440,35 @@ mod tests {
             mongo_tools_sidebar_chrome()
         );
     }
+
+    #[test]
+    fn tree_panel_resize_uses_mongo_tab_origin_in_nested_layouts() {
+        let view_bounds = Bounds {
+            origin: Point::new(px(340.0), px(80.0)),
+            size: gpui::Size {
+                width: px(1000.0),
+                height: px(700.0),
+            },
+        };
+
+        assert_eq!(
+            px(250.0),
+            resized_tree_panel_size(px(590.0), view_bounds, px(360.0))
+        );
+    }
+
+    #[test]
+    fn mongo_tab_captures_rendered_bounds_instead_of_window_bounds() {
+        let source = include_str!("mongo_tab.rs");
+        let render_implementation = source
+            .rsplit_once("impl Render for MongoTabView")
+            .expect("mongo tab render implementation")
+            .1;
+
+        assert!(render_implementation.contains(".on_prepaint(move |bounds, _, cx|"));
+        assert!(render_implementation.contains("view.bounds = bounds"));
+        assert!(!render_implementation.contains("window.bounds()"));
+    }
 }
 
 impl Render for MongoTabView {
@@ -450,6 +487,8 @@ impl Render for MongoTabView {
                 .child(self.tab_container.clone());
         }
 
+        let bounds_view = view.clone();
+
         div()
             .id("mongodb-tab-view")
             .track_focus(&self.focus_handle)
@@ -457,6 +496,11 @@ impl Render for MongoTabView {
             .child(
                 h_flex()
                     .size_full()
+                    .on_prepaint(move |bounds, _, cx| {
+                        bounds_view.update(cx, |view, _| {
+                            view.bounds = bounds;
+                        });
+                    })
                     .child(
                         div()
                             .relative()
@@ -532,16 +576,9 @@ impl Element for ResizeEventHandler {
         _: Option<&gpui::InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        let bounds = window.bounds();
-        self.view.update(_cx, |view, _| {
-            view.bounds = Bounds {
-                origin: Point::default(),
-                size: bounds.size,
-            };
-        });
     }
 
     fn paint(

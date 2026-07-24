@@ -83,9 +83,7 @@ use mouse_input::{
     should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
     take_whole_scroll_lines,
 };
-use one_core::layout::{
-    SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
-};
+use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{SidebarContribution, SidebarPlacement};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
@@ -174,6 +172,8 @@ pub use keybindings::{init, refresh_keybindings};
 use resize_event_handler::ResizeEventHandler;
 pub(crate) use state::TerminalDuplicateSource;
 use state::*;
+
+pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 
 /// Terminal view component - supports both Local and SSH backends.
 pub struct TerminalView {

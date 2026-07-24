@@ -208,7 +208,7 @@ impl TerminalView {
             paste_image_upload: true,
             vim_scroll_to_arrow_keys: true,
             broadcast_client_id: None,
-            sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_panel_size: TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH,
             resizing: None,
             view_bounds: Bounds::default(),
             scrollbar_metrics,
