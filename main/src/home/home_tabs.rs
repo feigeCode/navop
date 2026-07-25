@@ -122,12 +122,28 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_uses_large_icons_with_compact_spacing() {
+    fn persistent_sidebar_enlarges_windows_rail_buttons_and_icons() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
 
         assert!(source.contains("items_center().gap_1().p_1()"));
-        assert!(source.matches(".large()").count() >= 2);
-        assert!(!source.contains(".ghost()\n                .small()"));
+        assert!(source.contains("#[cfg(target_os = \"windows\")]\nconst NAVIGATION_RAIL_WIDTH"));
+        assert!(source.contains("px(56.0)"));
+        assert!(source.contains("fn navigation_rail_button_size()"));
+        assert!(source.contains("Size::Size(px(40.0))"));
+        assert!(source.contains("fn navigation_rail_icon_size()"));
+        assert!(source.contains("Size::Size(px(28.0))"));
+        assert!(
+            source
+                .matches(".with_size(navigation_rail_button_size())")
+                .count()
+                >= 2
+        );
+        assert!(
+            source
+                .matches(".with_size(navigation_rail_icon_size())")
+                .count()
+                >= 2
+        );
     }
 
     #[test]

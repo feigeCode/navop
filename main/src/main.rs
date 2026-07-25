@@ -29,6 +29,8 @@ mod sync_conflict_dialog;
 mod team_management;
 mod update;
 mod user_avatar;
+#[cfg(any(target_os = "windows", test))]
+mod windows_single_instance;
 
 use crate::onetcli_app::OnetCliApp;
 use gpui::*;
@@ -36,6 +38,7 @@ use gpui::*;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
 use one_core::settings::{AppSettings, MainWindowSize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -47,6 +50,11 @@ struct AppAssets {
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
 const MAIN_WINDOW_DISPLAY_RATIO: f32 = 0.9;
+
+enum AppOpenRequest {
+    ActivateAndOpenPaths(Vec<PathBuf>),
+    Open(file_open::FileOpenInput),
+}
 
 fn initial_main_window_size(
     saved: Option<MainWindowSize>,
@@ -162,6 +170,46 @@ fn main() {
             return;
         }
     };
+    let startup_paths = startup_arguments
+        .remaining
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let (startup_request_tx, startup_request_rx) = smol::channel::unbounded();
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows_single_instance::{SingleInstanceOutcome, StartupRequest};
+
+        let forwarded_request_tx = startup_request_tx.clone();
+        match windows_single_instance::claim_or_forward(
+            resolved_paths.config_dir(),
+            StartupRequest::new(startup_paths.clone()),
+            move |request| {
+                if let Err(error) = forwarded_request_tx
+                    .try_send(AppOpenRequest::ActivateAndOpenPaths(request.into_paths()))
+                {
+                    tracing::warn!(%error, "failed to enqueue forwarded startup request");
+                }
+            },
+        ) {
+            Ok(SingleInstanceOutcome::Primary) => {}
+            Ok(SingleInstanceOutcome::Forwarded) => return,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "failed to establish Windows single-instance listener; continuing startup"
+                );
+            }
+        }
+    }
+
+    if let Err(error) =
+        startup_request_tx.try_send(AppOpenRequest::ActivateAndOpenPaths(startup_paths))
+    {
+        tracing::warn!(%error, "failed to enqueue initial startup request");
+    }
+
     if !resolved_paths.is_portable()
         && let Err(error) = one_core::app_dirs::migrate_legacy_directories()
     {
@@ -174,19 +222,16 @@ fn main() {
         return;
     }
 
-    let (file_open_tx, file_open_rx) = smol::channel::unbounded();
-    for argument in startup_arguments.remaining {
-        let _ = file_open_tx.try_send(file_open::FileOpenInput::Path(argument.into()));
-    }
-
     let app = gpui_platform::application()
         .with_assets(AppAssets::new())
         .with_quit_mode(QuitMode::LastWindowClosed);
     app.on_open_urls({
-        let file_open_tx = file_open_tx.clone();
+        let startup_request_tx = startup_request_tx.clone();
         move |urls| {
             for url in urls {
-                if let Err(error) = file_open_tx.try_send(file_open::FileOpenInput::Url(url)) {
+                if let Err(error) = startup_request_tx
+                    .try_send(AppOpenRequest::Open(file_open::FileOpenInput::Url(url)))
+                {
                     tracing::warn!(%error, "failed to enqueue platform file-open event");
                 }
             }
@@ -234,10 +279,21 @@ fn main() {
             })?;
             let main_window = main_window.into();
 
-            while let Ok(input) = file_open_rx.recv().await {
+            while let Ok(request) = startup_request_rx.recv().await {
                 if cx
                     .update_window(main_window, |_, window, cx| {
-                        file_open::open_input(input, window, cx);
+                        window.activate_window();
+                        match request {
+                            AppOpenRequest::ActivateAndOpenPaths(paths) => {
+                                for path in paths {
+                                    let input = file_open::FileOpenInput::Path(path);
+                                    file_open::open_input(input, window, cx);
+                                }
+                            }
+                            AppOpenRequest::Open(input) => {
+                                file_open::open_input(input, window, cx);
+                            }
+                        }
                     })
                     .is_err()
                 {
@@ -271,8 +327,38 @@ mod embedded_cli_removal_tests {
 
         assert!(source.contains("startup_arguments.remaining"));
         assert!(source.contains("app.on_open_urls"));
-        assert!(source.contains("file_open_rx.recv().await"));
+        assert!(source.contains("startup_request_rx.recv().await"));
         assert!(source.contains("file_open::open_input(input, window, cx)"));
+    }
+
+    #[test]
+    fn windows_single_instance_gate_precedes_application_creation() {
+        let source = include_str!("main.rs");
+        let gate = source
+            .find("windows_single_instance::claim_or_forward")
+            .expect("Windows single-instance gate");
+        let application = source
+            .find("gpui_platform::application()")
+            .expect("GPUI application creation");
+
+        assert!(gate < application);
+        assert!(source.contains("SingleInstanceOutcome::Forwarded => return"));
+    }
+
+    #[test]
+    fn forwarded_startup_request_activates_existing_window_before_opening_files() {
+        let source = include_str!("main.rs");
+        let receiver = source
+            .find("startup_request_rx.recv().await")
+            .expect("forwarded startup request receiver");
+        let activation = source[receiver..]
+            .find("window.activate_window()")
+            .expect("existing window activation");
+        let open = source[receiver..]
+            .find("file_open::open_input(input, window, cx)")
+            .expect("forwarded file open");
+
+        assert!(activation < open);
     }
 
     #[test]

@@ -2913,6 +2913,8 @@ impl TabContainer {
         let close_btn_color = self
             .tab_close_button_color
             .unwrap_or(theme.muted_foreground);
+        let inactive_tab_border_color = border_color.opacity(0.65);
+        let active_tab_border_color = theme.primary.opacity(0.85);
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
         let mut left_padding = self.left_padding.unwrap_or(px(8.0));
@@ -3048,7 +3050,12 @@ impl TabContainer {
                             .when(pinned_index + 1 < pinned_tab_count, |el| el.mr_1())
                             .when_some(top_padding, |el, padding| el.mt(padding))
                             .rounded(px(6.0))
-                            .when(is_pinned_active, |el| el.bg(active_tab_color))
+                            .border_1()
+                            .border_color(inactive_tab_border_color)
+                            .when(is_pinned_active, |el| {
+                                el.bg(active_tab_color)
+                                    .border_color(active_tab_border_color)
+                            })
                             .when(!is_pinned_active, |el| {
                                 el.hover(move |style| style.bg(hover_tab_color))
                                     .bg(inactive_tab_color)
@@ -3188,7 +3195,12 @@ impl TabContainer {
                             .max_w(tab_max_width)
                             .px_3()
                             .rounded(px(6.0))
-                            .when(is_active, |el| el.bg(active_tab_color))
+                            .border_1()
+                            .border_color(inactive_tab_border_color)
+                            .when(is_active, |el| {
+                                el.bg(active_tab_color)
+                                    .border_color(active_tab_border_color)
+                            })
                             .when(!is_active, |el| {
                                 el.hover(move |style| style.bg(hover_tab_color))
                                     .bg(inactive_tab_color)

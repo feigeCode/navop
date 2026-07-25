@@ -6743,6 +6743,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "interprocess",
  "mongodb-runtime",
  "mongodb_view",
  "notes",

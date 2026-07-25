@@ -18,10 +18,28 @@ use crate::license::is_feature_enabled;
 
 #[cfg(target_os = "macos")]
 const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(44.0);
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(56.0);
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(48.0);
 #[cfg(target_os = "macos")]
 const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
+
+fn navigation_rail_button_size() -> Size {
+    if cfg!(target_os = "windows") {
+        Size::Size(px(40.0))
+    } else {
+        Size::Large
+    }
+}
+
+fn navigation_rail_icon_size() -> Size {
+    if cfg!(target_os = "windows") {
+        Size::Size(px(28.0))
+    } else {
+        Size::Large
+    }
+}
 
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
@@ -170,10 +188,10 @@ fn render_filter_buttons(
                 .icon(
                     Icon::new(filter_line_icon(filter))
                         .text_color(filter_icon_color(filter, selected))
-                        .with_size(Size::Large),
+                        .with_size(navigation_rail_icon_size()),
                 )
                 .ghost()
-                .large()
+                .with_size(navigation_rail_button_size())
                 .selected(selected)
                 .text_color(palette.foreground)
                 // Keep the protocol identity color visible. A full primary
@@ -247,9 +265,13 @@ fn rail_button(
 ) -> impl IntoElement {
     let home = home_page.clone();
     Button::new(id)
-        .icon(Icon::new(icon).text_color(palette.muted_foreground))
+        .icon(
+            Icon::new(icon)
+                .text_color(palette.muted_foreground)
+                .with_size(navigation_rail_icon_size()),
+        )
         .ghost()
-        .large()
+        .with_size(navigation_rail_button_size())
         .tooltip(tooltip)
         .on_click(move |_, window, cx| {
             home.update(cx, |home, cx| on_click(home, window, cx));
