@@ -1,7 +1,7 @@
 use crate::{Icon, IconName, Sizable, Size};
 use gpui::{
-    Animation, AnimationExt as _, App, Hsla, IntoElement, ParentElement, RenderOnce, Styled as _,
-    Transformation, Window, div, ease_in_out, percentage, prelude::FluentBuilder as _,
+    Animation, AnimationExt as _, App, Hsla, IntoElement, ParentElement, RenderOnce, SharedString,
+    Styled as _, Transformation, Window, div, ease_in_out, percentage, prelude::FluentBuilder as _,
 };
 use instant::Duration;
 
@@ -12,6 +12,7 @@ pub struct Spinner {
     icon: Icon,
     speed: Duration,
     color: Option<Hsla>,
+    animation_id: SharedString,
 }
 
 impl Spinner {
@@ -22,6 +23,7 @@ impl Spinner {
             speed: Duration::from_secs_f64(0.8),
             icon: Icon::new(IconName::Loader),
             color: None,
+            animation_id: "circle".into(),
         }
     }
 
@@ -38,6 +40,15 @@ impl Spinner {
     /// Set the icon color.
     pub fn color(mut self, color: Hsla) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Set the animation identifier.
+    ///
+    /// Use a unique identifier when rendering multiple spinners in the same
+    /// element tree so each instance keeps an independent animation state.
+    pub fn animation_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.animation_id = id.into();
         self
     }
 }
@@ -57,11 +68,24 @@ impl RenderOnce for Spinner {
                     .with_size(self.size)
                     .when_some(self.color, |this, color| this.text_color(color))
                     .with_animation(
-                        "circle",
+                        self.animation_id,
                         Animation::new(self.speed).repeat().with_easing(ease_in_out),
                         |this, delta| this.transform(Transformation::rotate(percentage(delta))),
                     ),
             )
             .into_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_supports_instance_specific_animation_ids() {
+        let first = Spinner::new().animation_id("session-a");
+        let second = Spinner::new().animation_id("session-b");
+
+        assert_ne!(first.animation_id, second.animation_id);
     }
 }

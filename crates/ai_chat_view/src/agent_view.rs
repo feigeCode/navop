@@ -286,6 +286,10 @@ fn running_session_indicator_color(selected: bool, style: SessionRowStyle) -> gp
     }
 }
 
+fn running_session_animation_id(uid: &str) -> SharedString {
+    SharedString::from(format!("agent-session-running-animation-{uid}"))
+}
+
 impl RuntimeBinding {
     fn new(
         runtime: Arc<Runtime>,
@@ -2212,6 +2216,7 @@ impl AgentChatView {
         let row_style = themed_session_row_style(&theme);
         let running_color = running_session_indicator_color(selected, row_style);
         let running_indicator_id = format!("agent-session-running-spinner-{uid}");
+        let running_animation_id = running_session_animation_id(&uid);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
         let label = session_sidebar::session_row_with_style(session, selected, row_style).when(
@@ -2227,7 +2232,12 @@ impl AgentChatView {
                         .flex_shrink_0()
                         .text_xs()
                         .text_color(running_color)
-                        .child(Spinner::new().small().color(running_color))
+                        .child(
+                            Spinner::new()
+                                .small()
+                                .color(running_color)
+                                .animation_id(running_animation_id),
+                        )
                         .child(t!("AgentUi.running").to_string()),
                 )
             },
@@ -5647,6 +5657,14 @@ mod tests {
             selected_foreground,
             running_session_indicator_color(true, style),
             "the selected running task should use the selected row foreground"
+        );
+    }
+
+    #[test]
+    fn parallel_running_sessions_use_independent_animation_ids() {
+        assert_ne!(
+            running_session_animation_id("session-a"),
+            running_session_animation_id("session-b")
         );
     }
 
