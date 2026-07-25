@@ -2731,7 +2731,8 @@ impl Render for AgentChatView {
             .debug_selector(|| "agent-input-area".to_string())
             .w_full()
             .min_w_0()
-            .flex_shrink_0()
+            .when(self.sidebar_mode, |this| this.min_h_0().flex_shrink(1.0))
+            .when(!self.sidebar_mode, |this| this.flex_shrink_0())
             .overflow_hidden()
             .border_t_1()
             .border_color(chat_theme.border)
@@ -2740,6 +2741,9 @@ impl Render for AgentChatView {
                 v_flex()
                     .w_full()
                     .min_w_0()
+                    .when(self.sidebar_mode, |this| {
+                        this.h_full().min_h_0().overflow_hidden()
+                    })
                     .when(!self.sidebar_mode, |this| this.p_3())
                     .child(self.input.clone()),
             );
