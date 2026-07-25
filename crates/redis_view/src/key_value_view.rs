@@ -3,13 +3,15 @@
 use crate::{
     GlobalRedisState, HashField, KeyInfo, KeyValueContent, KeyValueDetail, RedisKeyType, ZSetMember,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use gpui::{
     App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder, px, relative,
+    Focusable, InteractiveElement, IntoElement, ParentElement, PathPromptOptions, Render,
+    SharedString, StatefulInteractiveElement, Styled, Task, Window, div, prelude::FluentBuilder,
+    px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt as _,
+    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt as _,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
@@ -136,6 +138,44 @@ fn is_binary_redis_string(value: &[u8]) -> bool {
 
 fn redis_bytes_text(value: &[u8]) -> Option<String> {
     std::str::from_utf8(value).ok().map(str::to_string)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RedisBytesDisplay {
+    Text(String),
+    Binary { byte_len: usize },
+}
+
+fn redis_bytes_display(value: &[u8]) -> RedisBytesDisplay {
+    match redis_bytes_text(value) {
+        Some(text) => RedisBytesDisplay::Text(text),
+        None => RedisBytesDisplay::Binary {
+            byte_len: value.len(),
+        },
+    }
+}
+
+fn redis_bytes_copy_text(value: &[u8]) -> String {
+    redis_bytes_text(value).unwrap_or_else(|| BASE64.encode(value))
+}
+
+fn redis_bytes_pair_copy_text(left: &[u8], right: &[u8]) -> String {
+    format!(
+        "{}: {}",
+        redis_bytes_copy_text(left),
+        redis_bytes_copy_text(right)
+    )
+}
+
+fn zset_member_copy_text(score: f64, member: &[u8]) -> String {
+    match redis_bytes_text(member) {
+        Some(member) => format!("{score}: {member}"),
+        None => redis_bytes_copy_text(member),
+    }
+}
+
+fn binary_download_file_name(kind: &str, zero_based_index: usize) -> String {
+    format!("redis-{kind}-{}.bin", zero_based_index + 1)
 }
 
 fn display_redis_bytes(value: &[u8]) -> String {
@@ -485,6 +525,54 @@ impl KeyValueView {
                 .overlay(false)
                 .content_center()
         });
+    }
+
+    fn download_binary_value(&self, bytes: Vec<u8>, file_name: String, cx: &mut Context<Self>) {
+        let window_id = cx.active_window();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: false,
+            directories: true,
+            prompt: Some(t!("KeyValueView.select_binary_download_directory").into()),
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let output_dir = match future.await {
+                Ok(Ok(Some(paths))) => match paths.into_iter().next() {
+                    Some(path) => path,
+                    None => return,
+                },
+                _ => return,
+            };
+            let output_path = output_dir.join(file_name);
+            let path_for_write = output_path.clone();
+            let write_result = cx
+                .background_spawn(async move { std::fs::write(path_for_write, bytes) })
+                .await;
+
+            let _ = cx.update(|cx| {
+                if let Some(window_id) = window_id {
+                    let _ = cx.update_window(window_id, |_entity, window, cx| match write_result {
+                        Ok(()) => window.push_notification(
+                            t!(
+                                "KeyValueView.binary_download_complete",
+                                path = output_path.display()
+                            )
+                            .to_string(),
+                            cx,
+                        ),
+                        Err(error) => window.push_notification(
+                            Notification::error(
+                                t!("KeyValueView.binary_download_failed", error = error)
+                                    .to_string(),
+                            ),
+                            cx,
+                        ),
+                    });
+                }
+            });
+        })
+        .detach();
     }
 
     /// 更新编辑器内容（根据格式转换）
@@ -2562,13 +2650,24 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let display_value = display_redis_bytes(&item);
+                    let item_display = redis_bytes_display(&item);
+                    let binary_item = match &item_display {
+                        RedisBytesDisplay::Binary { .. } => Some(item.clone()),
+                        RedisBytesDisplay::Text(_) => None,
+                    };
+                    let display_value = match &item_display {
+                        RedisBytesDisplay::Text(value) => value.clone(),
+                        RedisBytesDisplay::Binary { byte_len } => {
+                            t!("KeyValueView.binary_value", size = byte_len).to_string()
+                        }
+                    };
                     let editable_value = redis_bytes_text(&item);
-                    let value_for_copy = display_value.clone();
+                    let value_for_copy = redis_bytes_copy_text(&item);
                     let value_for_edit = editable_value.clone().unwrap_or_default();
-                    let value_for_preview = display_value.clone();
+                    let value_for_preview = display_redis_bytes(&item);
                     let preview_title =
                         large_text_preview_title("List item", Some(&format!("#{}", idx + 1)));
+                    let binary_file_name = binary_download_file_name("list-item", idx);
 
                     h_flex()
                         .id(("list-row", idx))
@@ -2594,28 +2693,30 @@ impl KeyValueView {
                                 .gap_1()
                                 .items_center()
                                 .child(div().flex_1().text_base().truncate().child(display_value))
-                                .child(
-                                    Button::new(("preview-list", idx))
-                                        .icon(IconName::Maximize)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .tooltip(t!("RedisTool.view_full_value").to_string())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let title = preview_title.clone();
-                                            let value = value_for_preview.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_large_text_preview_dialog(
-                                                        title.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when(binary_item.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("preview-list", idx))
+                                            .icon(IconName::Maximize)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("RedisTool.view_full_value").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let title = preview_title.clone();
+                                                let value = value_for_preview.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_large_text_preview_dialog(
+                                                            title.clone(),
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
@@ -2629,6 +2730,11 @@ impl KeyValueView {
                                         .icon(IconName::Copy)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .tooltip(if binary_item.is_some() {
+                                            t!("KeyValueView.copy_binary_base64").to_string()
+                                        } else {
+                                            t!("Common.copy").to_string()
+                                        })
                                         .on_click({
                                             let value = value_for_copy.clone();
                                             move |_, _, cx| {
@@ -2638,27 +2744,50 @@ impl KeyValueView {
                                             }
                                         }),
                                 )
-                                .child(
-                                    Button::new(("edit-list", idx))
-                                        .icon(IconName::Edit)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_value.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let value = value_for_edit.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_list_edit_dialog(
-                                                        idx,
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                )
+                                .when_some(binary_item.clone(), |this, bytes| {
+                                    this.child(
+                                        Button::new(("download-list", idx))
+                                            .icon(IconName::ArrowDown)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let file_name = binary_file_name.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.download_binary_value(
+                                                            bytes.clone(),
+                                                            file_name.clone(),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when(binary_item.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("edit-list", idx))
+                                            .icon(IconName::Edit)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let value = value_for_edit.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_list_edit_dialog(
+                                                            idx,
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
                                 .child(
                                     Button::new(("delete-list", idx))
                                         .icon(IconName::Remove)
@@ -2699,13 +2828,24 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let display_value = display_redis_bytes(&item);
+                    let member_display = redis_bytes_display(&item);
+                    let binary_member = match &member_display {
+                        RedisBytesDisplay::Binary { .. } => Some(item.clone()),
+                        RedisBytesDisplay::Text(_) => None,
+                    };
+                    let display_value = match &member_display {
+                        RedisBytesDisplay::Text(value) => value.clone(),
+                        RedisBytesDisplay::Binary { byte_len } => {
+                            t!("KeyValueView.binary_value", size = byte_len).to_string()
+                        }
+                    };
                     let editable_member = redis_bytes_text(&item);
-                    let value_for_copy = display_value.clone();
+                    let value_for_copy = redis_bytes_copy_text(&item);
                     let value_for_delete = editable_member.clone().unwrap_or_default();
                     let value_for_edit = editable_member.clone().unwrap_or_default();
-                    let value_for_preview = display_value.clone();
+                    let value_for_preview = display_redis_bytes(&item);
                     let preview_title = large_text_preview_title("Set member", None);
+                    let binary_file_name = binary_download_file_name("set-member", idx);
 
                     h_flex()
                         .id(("set-row", idx))
@@ -2729,28 +2869,30 @@ impl KeyValueView {
                                         .text_color(cx.theme().muted_foreground),
                                 )
                                 .child(div().flex_1().text_base().truncate().child(display_value))
-                                .child(
-                                    Button::new(("preview-set", idx))
-                                        .icon(IconName::Maximize)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .tooltip(t!("RedisTool.view_full_value").to_string())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let title = preview_title.clone();
-                                            let value = value_for_preview.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_large_text_preview_dialog(
-                                                        title.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when(binary_member.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("preview-set", idx))
+                                            .icon(IconName::Maximize)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("RedisTool.view_full_value").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let title = preview_title.clone();
+                                                let value = value_for_preview.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_large_text_preview_dialog(
+                                                            title.clone(),
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
@@ -2764,6 +2906,11 @@ impl KeyValueView {
                                         .icon(IconName::Copy)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .tooltip(if binary_member.is_some() {
+                                            t!("KeyValueView.copy_binary_base64").to_string()
+                                        } else {
+                                            t!("Common.copy").to_string()
+                                        })
                                         .on_click({
                                             let value = value_for_copy.clone();
                                             move |_, _, cx| {
@@ -2773,42 +2920,64 @@ impl KeyValueView {
                                             }
                                         }),
                                 )
-                                .child(
-                                    Button::new(("edit-set", idx))
-                                        .icon(IconName::Edit)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_member.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let member = value_for_edit.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_set_edit_dialog(
-                                                        member.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    Button::new(("delete-set", idx))
-                                        .icon(IconName::Remove)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_member.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let member = value_for_delete.clone();
-                                            move |_, _, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.delete_set_element(member.clone(), cx);
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when_some(binary_member.clone(), |this, bytes| {
+                                    this.child(
+                                        Button::new(("download-set", idx))
+                                            .icon(IconName::ArrowDown)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let file_name = binary_file_name.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.download_binary_value(
+                                                            bytes.clone(),
+                                                            file_name.clone(),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when(binary_member.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("edit-set", idx))
+                                            .icon(IconName::Edit)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let member = value_for_edit.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_set_edit_dialog(
+                                                            member.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new(("delete-set", idx))
+                                            .icon(IconName::Remove)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let member = value_for_delete.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.delete_set_element(member.clone(), cx);
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                 }
             }))
@@ -2856,17 +3025,28 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(display_idx, (original_idx, item))| {
                     let view = view.clone();
-                    let display_member = display_redis_bytes(&item.member);
+                    let member_display = redis_bytes_display(&item.member);
+                    let binary_member = match &member_display {
+                        RedisBytesDisplay::Binary { .. } => Some(item.member.clone()),
+                        RedisBytesDisplay::Text(_) => None,
+                    };
+                    let display_member = match &member_display {
+                        RedisBytesDisplay::Text(value) => value.clone(),
+                        RedisBytesDisplay::Binary { byte_len } => {
+                            t!("KeyValueView.binary_value", size = byte_len).to_string()
+                        }
+                    };
                     let editable_member = redis_bytes_text(&item.member);
-                    let value_for_copy = format!("{}: {}", item.score, display_member);
+                    let value_for_copy = zset_member_copy_text(item.score, &item.member);
                     let member_for_edit = editable_member.clone().unwrap_or_default();
                     let score_for_edit = item.score;
                     let member_for_delete = editable_member.clone().unwrap_or_default();
-                    let member_for_preview = display_member.clone();
+                    let member_for_preview = display_redis_bytes(&item.member);
                     let preview_title = large_text_preview_title(
                         "ZSet member",
                         Some(&format!("score {:.2}", item.score)),
                     );
+                    let binary_file_name = binary_download_file_name("zset-member", original_idx);
 
                     // 计算分数百分比用于可视化柱状图 (0.0-1.0)
                     let score_ratio = if (max_score - min_score).abs() < f64::EPSILON {
@@ -2944,28 +3124,30 @@ impl KeyValueView {
                                 .gap_1()
                                 .items_center()
                                 .child(div().flex_1().text_base().truncate().child(display_member))
-                                .child(
-                                    Button::new(("preview-zset", original_idx))
-                                        .icon(IconName::Maximize)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .tooltip(t!("RedisTool.view_full_value").to_string())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let title = preview_title.clone();
-                                            let value = member_for_preview.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_large_text_preview_dialog(
-                                                        title.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when(binary_member.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("preview-zset", original_idx))
+                                            .icon(IconName::Maximize)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("RedisTool.view_full_value").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let title = preview_title.clone();
+                                                let value = member_for_preview.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_large_text_preview_dialog(
+                                                            title.clone(),
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
@@ -2979,6 +3161,11 @@ impl KeyValueView {
                                         .icon(IconName::Copy)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .tooltip(if binary_member.is_some() {
+                                            t!("KeyValueView.copy_binary_base64").to_string()
+                                        } else {
+                                            t!("Common.copy").to_string()
+                                        })
                                         .on_click({
                                             let value = value_for_copy.clone();
                                             move |_, _, cx| {
@@ -2988,44 +3175,66 @@ impl KeyValueView {
                                             }
                                         }),
                                 )
-                                .child(
-                                    Button::new(("edit-zset", original_idx))
-                                        .icon(IconName::Edit)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_member.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let member = member_for_edit.clone();
-                                            let score = score_for_edit;
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_zset_edit_dialog(
-                                                        member.clone(),
-                                                        score,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    Button::new(("delete-zset", original_idx))
-                                        .icon(IconName::Remove)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_member.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let member = member_for_delete.clone();
-                                            move |_, _, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.delete_zset_element(member.clone(), cx);
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when_some(binary_member.clone(), |this, bytes| {
+                                    this.child(
+                                        Button::new(("download-zset", original_idx))
+                                            .icon(IconName::ArrowDown)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let file_name = binary_file_name.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.download_binary_value(
+                                                            bytes.clone(),
+                                                            file_name.clone(),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when(binary_member.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("edit-zset", original_idx))
+                                            .icon(IconName::Edit)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let member = member_for_edit.clone();
+                                                let score = score_for_edit;
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_zset_edit_dialog(
+                                                            member.clone(),
+                                                            score,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new(("delete-zset", original_idx))
+                                            .icon(IconName::Remove)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let member = member_for_delete.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.delete_zset_element(member.clone(), cx);
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                 }
             }))
@@ -3053,17 +3262,39 @@ impl KeyValueView {
                 let view = view.clone();
                 move |(idx, item)| {
                     let view = view.clone();
-                    let field_display = display_redis_bytes(&item.field);
-                    let value_display = display_redis_bytes(&item.value);
+                    let field_presentation = redis_bytes_display(&item.field);
+                    let value_presentation = redis_bytes_display(&item.value);
+                    let binary_field = match &field_presentation {
+                        RedisBytesDisplay::Binary { .. } => Some(item.field.clone()),
+                        RedisBytesDisplay::Text(_) => None,
+                    };
+                    let binary_value = match &value_presentation {
+                        RedisBytesDisplay::Binary { .. } => Some(item.value.clone()),
+                        RedisBytesDisplay::Text(_) => None,
+                    };
+                    let field_display = match &field_presentation {
+                        RedisBytesDisplay::Text(value) => value.clone(),
+                        RedisBytesDisplay::Binary { byte_len } => {
+                            t!("KeyValueView.binary_value", size = byte_len).to_string()
+                        }
+                    };
+                    let value_display = match &value_presentation {
+                        RedisBytesDisplay::Text(value) => value.clone(),
+                        RedisBytesDisplay::Binary { byte_len } => {
+                            t!("KeyValueView.binary_value", size = byte_len).to_string()
+                        }
+                    };
                     let editable_field = redis_bytes_text(&item.field);
                     let editable_value = redis_bytes_text(&item.value);
-                    let field_for_copy = format!("{}: {}", field_display, value_display);
+                    let field_for_copy = redis_bytes_pair_copy_text(&item.field, &item.value);
                     let field_for_edit = editable_field.clone().unwrap_or_default();
                     let value_for_edit = editable_value.clone().unwrap_or_default();
                     let field_for_delete = editable_field.clone().unwrap_or_default();
-                    let value_for_preview = value_display.clone();
+                    let value_for_preview = display_redis_bytes(&item.value);
                     let preview_title =
                         large_text_preview_title("Hash value", Some(&field_display));
+                    let binary_field_file_name = binary_download_file_name("hash-field", idx);
+                    let binary_value_file_name = binary_download_file_name("hash-value", idx);
 
                     h_flex()
                         .id(("hash-row", idx))
@@ -3090,28 +3321,30 @@ impl KeyValueView {
                                 .gap_1()
                                 .items_center()
                                 .child(div().flex_1().text_base().truncate().child(value_display))
-                                .child(
-                                    Button::new(("preview-hash", idx))
-                                        .icon(IconName::Maximize)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .tooltip(t!("RedisTool.view_full_value").to_string())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let title = preview_title.clone();
-                                            let value = value_for_preview.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_large_text_preview_dialog(
-                                                        title.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when(binary_value.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("preview-hash", idx))
+                                            .icon(IconName::Maximize)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("RedisTool.view_full_value").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let title = preview_title.clone();
+                                                let value = value_for_preview.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_large_text_preview_dialog(
+                                                            title.clone(),
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                         .child(
                             h_flex()
@@ -3125,6 +3358,13 @@ impl KeyValueView {
                                         .icon(IconName::Copy)
                                         .ghost()
                                         .with_size(Size::Medium)
+                                        .tooltip(
+                                            if binary_field.is_some() || binary_value.is_some() {
+                                                t!("KeyValueView.copy_binary_base64").to_string()
+                                            } else {
+                                                t!("Common.copy").to_string()
+                                            },
+                                        )
                                         .on_click({
                                             let value = field_for_copy.clone();
                                             move |_, _, cx| {
@@ -3134,46 +3374,90 @@ impl KeyValueView {
                                             }
                                         }),
                                 )
-                                .child(
-                                    Button::new(("edit-hash", idx))
-                                        .icon(IconName::Edit)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(
-                                            editable_field.is_none() || editable_value.is_none(),
-                                        )
-                                        .on_click({
-                                            let view = view.clone();
-                                            let field = field_for_edit.clone();
-                                            let value = value_for_edit.clone();
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_hash_edit_dialog(
-                                                        field.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }),
-                                )
-                                .child(
-                                    Button::new(("delete-hash", idx))
-                                        .icon(IconName::Remove)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .disabled(editable_field.is_none())
-                                        .on_click({
-                                            let view = view.clone();
-                                            let field = field_for_delete.clone();
-                                            move |_, _, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.delete_hash_field(field.clone(), cx);
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .when_some(binary_field.clone(), |this, bytes| {
+                                    this.child(
+                                        Button::new(("download-hash-field", idx))
+                                            .icon(IconName::ArrowDown)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let file_name = binary_field_file_name.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.download_binary_value(
+                                                            bytes.clone(),
+                                                            file_name.clone(),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when_some(binary_value.clone(), |this, bytes| {
+                                    this.child(
+                                        Button::new(("download-hash-value", idx))
+                                            .icon(IconName::ArrowDown)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click({
+                                                let view = view.clone();
+                                                let file_name = binary_value_file_name.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.download_binary_value(
+                                                            bytes.clone(),
+                                                            file_name.clone(),
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when(binary_field.is_none() && binary_value.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("edit-hash", idx))
+                                            .icon(IconName::Edit)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let field = field_for_edit.clone();
+                                                let value = value_for_edit.clone();
+                                                move |_, window, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.show_hash_edit_dialog(
+                                                            field.clone(),
+                                                            value.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                })
+                                .when(binary_field.is_none(), |this| {
+                                    this.child(
+                                        Button::new(("delete-hash", idx))
+                                            .icon(IconName::Remove)
+                                            .ghost()
+                                            .with_size(Size::Medium)
+                                            .on_click({
+                                                let view = view.clone();
+                                                let field = field_for_delete.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.delete_hash_field(field.clone(), cx);
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                }),
                         )
                 }
             }))
@@ -3252,13 +3536,44 @@ impl KeyValueView {
                             let view = view.clone();
                             let entry_id = entry.id.clone();
                             move |(field_idx, field)| {
-                                let field_display = display_redis_bytes(&field.field);
-                                let value_display = display_redis_bytes(&field.value);
+                                let field_presentation = redis_bytes_display(&field.field);
+                                let value_presentation = redis_bytes_display(&field.value);
+                                let binary_field = match &field_presentation {
+                                    RedisBytesDisplay::Binary { .. } => Some(field.field.clone()),
+                                    RedisBytesDisplay::Text(_) => None,
+                                };
+                                let binary_value = match &value_presentation {
+                                    RedisBytesDisplay::Binary { .. } => Some(field.value.clone()),
+                                    RedisBytesDisplay::Text(_) => None,
+                                };
+                                let field_display = match &field_presentation {
+                                    RedisBytesDisplay::Text(value) => value.clone(),
+                                    RedisBytesDisplay::Binary { byte_len } => {
+                                        t!("KeyValueView.binary_value", size = byte_len).to_string()
+                                    }
+                                };
+                                let value_display = match &value_presentation {
+                                    RedisBytesDisplay::Text(value) => value.clone(),
+                                    RedisBytesDisplay::Binary { byte_len } => {
+                                        t!("KeyValueView.binary_value", size = byte_len).to_string()
+                                    }
+                                };
                                 let title = large_text_preview_title(
                                     "Stream value",
                                     Some(&format!("{} @ {}", field_display, entry_id)),
                                 );
-                                let value = value_display.clone();
+                                let value = display_redis_bytes(&field.value);
+                                let value_for_copy =
+                                    redis_bytes_pair_copy_text(&field.field, &field.value);
+                                let field_file_name = binary_download_file_name(
+                                    &format!("stream-field-{}", entry_idx + 1),
+                                    field_idx,
+                                );
+                                let value_file_name = binary_download_file_name(
+                                    &format!("stream-value-{}", entry_idx + 1),
+                                    field_idx,
+                                );
+                                let row_id = ((entry_idx as u64) << 32) | field_idx as u64;
                                 let view = view.clone();
 
                                 h_flex()
@@ -3279,28 +3594,103 @@ impl KeyValueView {
                                             .truncate()
                                             .child(value_display),
                                     )
-                                    .child(
-                                        Button::new((
-                                            "preview-stream",
-                                            ((entry_idx as u64) << 32) | field_idx as u64,
-                                        ))
-                                        .icon(IconName::Maximize)
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .tooltip(t!("RedisTool.view_full_value").to_string())
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                view.update(cx, |v, cx| {
-                                                    v.show_large_text_preview_dialog(
-                                                        title.clone(),
-                                                        value.clone(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                });
-                                            },
-                                        ),
+                                    .when(binary_value.is_none(), |this| {
+                                        this.child(
+                                            Button::new(("preview-stream", row_id))
+                                                .icon(IconName::Maximize)
+                                                .ghost()
+                                                .with_size(Size::Medium)
+                                                .tooltip(
+                                                    t!("RedisTool.view_full_value").to_string(),
+                                                )
+                                                .on_click({
+                                                    let view = view.clone();
+                                                    move |_, window, cx| {
+                                                        view.update(cx, |v, cx| {
+                                                            v.show_large_text_preview_dialog(
+                                                                title.clone(),
+                                                                value.clone(),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                    })
+                                    .when(
+                                        binary_field.is_some() || binary_value.is_some(),
+                                        |this| {
+                                            this.child(
+                                                Button::new(("copy-stream", row_id))
+                                                    .icon(IconName::Copy)
+                                                    .ghost()
+                                                    .with_size(Size::Medium)
+                                                    .tooltip(
+                                                        t!("KeyValueView.copy_binary_base64")
+                                                            .to_string(),
+                                                    )
+                                                    .on_click({
+                                                        let value = value_for_copy.clone();
+                                                        move |_, _, cx| {
+                                                            cx.write_to_clipboard(
+                                                                ClipboardItem::new_string(
+                                                                    value.clone(),
+                                                                ),
+                                                            );
+                                                        }
+                                                    }),
+                                            )
+                                        },
                                     )
+                                    .when_some(binary_field.clone(), |this, bytes| {
+                                        this.child(
+                                            Button::new(("download-stream-field", row_id))
+                                                .icon(IconName::ArrowDown)
+                                                .ghost()
+                                                .with_size(Size::Medium)
+                                                .tooltip(
+                                                    t!("KeyValueView.download_binary").to_string(),
+                                                )
+                                                .on_click({
+                                                    let view = view.clone();
+                                                    let file_name = field_file_name.clone();
+                                                    move |_, _, cx| {
+                                                        view.update(cx, |v, cx| {
+                                                            v.download_binary_value(
+                                                                bytes.clone(),
+                                                                file_name.clone(),
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                    })
+                                    .when_some(binary_value.clone(), |this, bytes| {
+                                        this.child(
+                                            Button::new(("download-stream-value", row_id))
+                                                .icon(IconName::ArrowDown)
+                                                .ghost()
+                                                .with_size(Size::Medium)
+                                                .tooltip(
+                                                    t!("KeyValueView.download_binary").to_string(),
+                                                )
+                                                .on_click({
+                                                    let view = view.clone();
+                                                    let file_name = value_file_name.clone();
+                                                    move |_, _, cx| {
+                                                        view.update(cx, |v, cx| {
+                                                            v.download_binary_value(
+                                                                bytes.clone(),
+                                                                file_name.clone(),
+                                                                cx,
+                                                            );
+                                                        });
+                                                    }
+                                                }),
+                                        )
+                                    })
                             }
                         }))
                 }
@@ -3409,9 +3799,11 @@ impl EventEmitter<TabContentEvent> for KeyValueView {}
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyValueContent, KeyValueView, LoadState, ViewFormat, display_redis_bytes,
-        format_redis_string_value, is_binary_redis_string, large_text_preview_title,
-        redis_bytes_text, should_replace_set_member,
+        KeyValueContent, KeyValueView, LoadState, RedisBytesDisplay, ViewFormat,
+        binary_download_file_name, display_redis_bytes, format_redis_string_value,
+        is_binary_redis_string, large_text_preview_title, redis_bytes_copy_text,
+        redis_bytes_display, redis_bytes_pair_copy_text, redis_bytes_text,
+        should_replace_set_member, zset_member_copy_text,
     };
     use crate::{KeyInfo, RedisKeyType};
     use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
@@ -3532,6 +3924,78 @@ mod tests {
             Some("普通 member".into()),
             redis_bytes_text("普通 member".as_bytes())
         );
+    }
+
+    #[test]
+    fn binary_zset_member_uses_compact_display_and_base64_copy() {
+        let value = [0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00];
+
+        assert_eq!(
+            RedisBytesDisplay::Binary { byte_len: 6 },
+            redis_bytes_display(&value)
+        );
+        assert_eq!("C8/b3gEA", redis_bytes_copy_text(&value));
+        assert_eq!("C8/b3gEA", zset_member_copy_text(1.25, &value));
+    }
+
+    #[test]
+    fn text_zset_member_keeps_plain_text_display_and_copy() {
+        let value = "普通 member".as_bytes();
+
+        assert_eq!(
+            RedisBytesDisplay::Text("普通 member".into()),
+            redis_bytes_display(value)
+        );
+        assert_eq!("普通 member", redis_bytes_copy_text(value));
+        assert_eq!("1.25: 普通 member", zset_member_copy_text(1.25, value));
+    }
+
+    #[test]
+    fn binary_download_file_name_is_stable_and_one_based() {
+        assert_eq!(
+            "redis-zset-member-1.bin",
+            binary_download_file_name("zset-member", 0)
+        );
+        assert_eq!(
+            "redis-list-item-3.bin",
+            binary_download_file_name("list-item", 2)
+        );
+    }
+
+    #[test]
+    fn hash_and_stream_pairs_copy_binary_parts_as_base64() {
+        assert_eq!(
+            "field: C8/b3gEA",
+            redis_bytes_pair_copy_text(b"field", &[0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00])
+        );
+        assert_eq!(
+            "AP8=: value",
+            redis_bytes_pair_copy_text(&[0x00, 0xff], b"value")
+        );
+        assert_eq!(
+            "ZmllbGT/: AP8=",
+            redis_bytes_pair_copy_text(&[0x66, 0x69, 0x65, 0x6c, 0x64, 0xff], &[0x00, 0xff])
+        );
+    }
+
+    #[test]
+    fn all_collection_views_wire_binary_download_actions() {
+        let source = include_str!("key_value_view.rs");
+
+        for action in [
+            "download-list",
+            "download-set",
+            "download-zset",
+            "download-hash-field",
+            "download-hash-value",
+            "download-stream-field",
+            "download-stream-value",
+        ] {
+            assert!(
+                source.contains(action),
+                "missing binary download action: {action}"
+            );
+        }
     }
 
     #[test]
