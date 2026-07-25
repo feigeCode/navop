@@ -8,6 +8,7 @@ mod skill;
 
 pub use agent_input::{AgentInput, AgentInputEvent};
 pub use attachment::ImageAttachment;
+pub(crate) use attachment::prepare_input_images;
 pub use context::{
     AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModel,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,

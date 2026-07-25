@@ -6,18 +6,26 @@ use crate::history::{HistoryItem, RuntimeHistory};
 use crate::tools::{ToolCall, ToolObservation};
 use llm_connector::types::{Message, MessageBlock, Role};
 
+/// 历史图片回灌模型时允许占用的 base64 总量。
+///
+/// 只保留最新图片直到预算耗尽，给完整请求中的 system prompt、工具定义、文本和
+/// JSON 包装预留空间，避免多轮图片历史不断累积并撑破 provider 请求体上限。
+const MODEL_HISTORY_IMAGES_BASE64_BUDGET: usize = 10 * 1024 * 1024;
+
 /// 将历史转换为消息序列(不含 system 提示,由调用方在最前面拼接)。
 pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     let max = history.max_observation_bytes();
     let mut messages = Vec::with_capacity(history.len());
     let mut pending_assistant: Option<(String, String)> = None;
     let items = history.items();
+    let budgeted_images = budgeted_history_images(items);
     let mut index = 0;
     while index < items.len() {
         let item = &items[index];
         match item {
-            HistoryItem::User { text, images } => {
+            HistoryItem::User { text, .. } => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
+                let images = budgeted_images[index].as_deref().unwrap_or_default();
                 if images.is_empty() {
                     messages.push(Message::user(text.clone()));
                 } else {
@@ -75,6 +83,31 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     }
     flush_pending_assistant(&mut messages, &mut pending_assistant);
     messages
+}
+
+fn budgeted_history_images(items: &[HistoryItem]) -> Vec<Option<Vec<crate::runtime::InputImage>>> {
+    let mut remaining = MODEL_HISTORY_IMAGES_BASE64_BUDGET;
+    let mut selected = vec![None; items.len()];
+
+    for (item_index, item) in items.iter().enumerate().rev() {
+        let HistoryItem::User { images, .. } = item else {
+            continue;
+        };
+        let mut kept = Vec::new();
+        for image in images.iter().rev() {
+            let encoded_len = image.data_base64.len();
+            if encoded_len <= remaining {
+                remaining -= encoded_len;
+                kept.push(image.clone());
+            }
+        }
+        if !kept.is_empty() {
+            kept.reverse();
+            selected[item_index] = Some(kept);
+        }
+    }
+
+    selected
 }
 
 fn collect_tool_exchange(
@@ -277,6 +310,36 @@ mod tests {
         assert_eq!(msg.content.len(), 2);
         assert!(msg.content[0].is_text());
         assert!(!msg.content[1].is_text(), "第二块应为图片块");
+    }
+
+    #[test]
+    fn historical_images_are_bounded_by_request_budget() {
+        let mut history = RuntimeHistory::new();
+        history.record_user_with_images(
+            "旧图片",
+            vec![InputImage::new(
+                "image/png",
+                "A".repeat(MODEL_HISTORY_IMAGES_BASE64_BUDGET - 16),
+            )],
+        );
+        history.record_assistant("已查看");
+        history.record_user_with_images(
+            "新图片",
+            vec![InputImage::new("image/jpeg", "B".repeat(32))],
+        );
+
+        let messages = history_to_messages(&history);
+
+        assert_eq!(
+            messages[0].content,
+            vec![MessageBlock::text("旧图片")],
+            "older images should be removed before the newest image when the request budget is full"
+        );
+        assert_eq!(
+            messages[2].content.len(),
+            2,
+            "the newest image should remain available to the model"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! [`AgentComposerContext`],注入模型 / 工具 / 任务模式的下拉选项,并处理输入框
 //! emit 的选择事件(目标轮换、模型 / 模式切换)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -207,6 +207,61 @@ fn agent_history_title(show_archived: bool) -> String {
 
 fn current_agent_task_title() -> String {
     t!("AgentUi.current_agent_task").to_string()
+}
+
+fn persistence_title_from_input(text: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 40;
+
+    let first_line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let first_line = first_line.trim();
+    if first_line.is_empty() {
+        return current_agent_task_title();
+    }
+    if first_line.chars().count() <= MAX_TITLE_CHARS {
+        first_line.to_string()
+    } else {
+        let truncated: String = first_line.chars().take(MAX_TITLE_CHARS).collect();
+        format!("{truncated}…")
+    }
+}
+
+fn should_stop_task_before_session_switch(backend: Backend) -> bool {
+    backend == Backend::Acp
+}
+
+fn merge_live_session_summaries(
+    persisted: Vec<SessionSummary>,
+    live: &[SessionSummary],
+    current_session: &str,
+    running_sessions: &HashSet<String>,
+    show_archived: bool,
+) -> Vec<SessionSummary> {
+    if show_archived {
+        return persisted;
+    }
+
+    let mut merged: HashMap<String, SessionSummary> = persisted
+        .into_iter()
+        .map(|summary| (summary.id.clone(), summary))
+        .collect();
+    for summary in live {
+        if summary.id == current_session || running_sessions.contains(&summary.id) {
+            merged.insert(summary.id.clone(), summary.clone());
+        }
+    }
+
+    let mut summaries: Vec<_> = merged.into_values().collect();
+    summaries.sort_by(|left, right| {
+        let left_current = left.id == current_session;
+        let right_current = right.id == current_session;
+        right_current
+            .cmp(&left_current)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+    });
+    summaries
 }
 
 fn themed_session_row_style(theme: &AgentChatTheme) -> SessionRowStyle {
@@ -482,6 +537,12 @@ pub struct AgentChatView {
     transcript: AgentTranscript,
     input: Entity<AgentInput>,
     sessions: Vec<SessionSummary>,
+    /// 尚未完全由持久化历史覆盖的实时会话摘要（当前会话和后台运行会话）。
+    live_sessions: Vec<SessionSummary>,
+    /// 非当前会话的实时转录，切换回来时可继续看到流式进度。
+    session_transcripts: HashMap<String, AgentTranscript>,
+    /// 当前 Runtime 中仍在执行的会话集合。
+    running_sessions: HashSet<String>,
     current_session: String,
     sidebar_collapsed: bool,
     /// 侧边栏是否显示「已归档」会话(否则显示活跃会话)。
@@ -694,13 +755,25 @@ impl AgentChatView {
         });
 
         let subscriptions = vec![cx.subscribe_in(&input, window, Self::on_input_event)];
-        let event_task = Self::spawn_event_pump(runtime.subscribe(), session_id.clone(), cx);
+        let event_task = Self::spawn_event_pump(runtime.subscribe(), None, cx);
         let current_session = session_id.to_string();
         let mut transcript = AgentTranscript::new();
         transcript.set_resource_context(&resources);
 
-        // 载入已持久化的会话列表。空的实时会话不作为历史占位展示。
-        let sessions = persistence::list_summaries(cx);
+        // 活跃列表立即展示当前实时会话；持久化历史和后台任务随后统一合并。
+        let live_sessions = vec![SessionSummary::new(
+            current_session.clone(),
+            current_agent_task_title(),
+            now_secs(),
+        )];
+        let running_sessions = HashSet::new();
+        let sessions = merge_live_session_summaries(
+            persistence::list_summaries(cx),
+            &live_sessions,
+            &current_session,
+            &running_sessions,
+            false,
+        );
 
         Self {
             runtime,
@@ -710,6 +783,9 @@ impl AgentChatView {
             transcript,
             input,
             sessions,
+            live_sessions,
+            session_transcripts: HashMap::new(),
+            running_sessions,
             current_session,
             sidebar_collapsed: false,
             show_archived: false,
@@ -1020,13 +1096,17 @@ impl AgentChatView {
 
     fn spawn_event_pump(
         mut rx: RuntimeEventReceiver,
-        session_id: SessionId,
+        session_filter: Option<SessionId>,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 match rx.recv().await {
-                    Ok(event) if event.session_id() == &session_id => {
+                    Ok(event)
+                        if session_filter
+                            .as_ref()
+                            .map_or(true, |session_id| event.session_id() == session_id) =>
+                    {
                         if this
                             .update(cx, |this, cx| this.apply_runtime_event(event, cx))
                             .is_err()
@@ -1138,13 +1218,28 @@ impl AgentChatView {
         }
         self.apply_mentions_to_resources(&mentions);
         self.transcript.push_user(&text, images.len());
+        self.upsert_live_summary(
+            self.current_session.clone(),
+            persistence_title_from_input(&text),
+            now_secs(),
+        );
+        self.reload_sessions(cx);
         self.request_scroll_to_bottom();
-        let input =
-            UserInput::new(text).with_images(images.iter().map(|i| i.to_input_image()).collect());
+        let input_images = match crate::input::prepare_input_images(&images) {
+            Ok(images) => images,
+            Err(error) => {
+                self.transcript
+                    .push_system(t!("AgentUi.task_failed", error = error).to_string());
+                cx.notify();
+                return;
+            }
+        };
+        let input = UserInput::new(text).with_images(input_images);
         self.set_running(true, cx);
 
         let runtime = self.runtime.clone();
         let session_id = self.session_id.clone();
+        let session_uid = session_id.to_string();
         let task_kind = self.task_kind;
         let tool_mode = tool_execution_mode_from_label(&self.selected_tool);
         cx.spawn(async move |this, cx| {
@@ -1164,9 +1259,11 @@ impl AgentChatView {
                     Ok(result) => result,
                     Err(err) => {
                         let _ = this.update(cx, |this, cx| {
-                            this.transcript
-                                .push_system(t!("AgentUi.task_failed", error = err).to_string());
-                            this.set_running(false, cx);
+                            this.push_system_to_session(
+                                &session_uid,
+                                t!("AgentUi.task_failed", error = err).to_string(),
+                            );
+                            this.set_session_running(&session_uid, false, cx);
                         });
                         return;
                     }
@@ -1175,9 +1272,11 @@ impl AgentChatView {
 
             if let Err(err) = result {
                 let _ = this.update(cx, |this, cx| {
-                    this.transcript
-                        .push_system(t!("AgentUi.run_failed", error = err).to_string());
-                    this.set_running(false, cx);
+                    this.push_system_to_session(
+                        &session_uid,
+                        t!("AgentUi.run_failed", error = err).to_string(),
+                    );
+                    this.set_session_running(&session_uid, false, cx);
                 });
             }
         })
@@ -1234,6 +1333,7 @@ impl AgentChatView {
 
         let runtime = self.runtime.clone();
         let session_id = self.session_id.clone();
+        let session_uid = session_id.to_string();
         let call_id = ToolCallId::from_string(call_id);
         cx.spawn(async move |this, cx| {
             #[cfg(test)]
@@ -1256,10 +1356,11 @@ impl AgentChatView {
                     Ok(result) => result,
                     Err(err) => {
                         let _ = this.update(cx, |this, cx| {
-                            this.transcript.push_system(
+                            this.push_system_to_session(
+                                &session_uid,
                                 t!("AgentUi.approval_failed", error = err).to_string(),
                             );
-                            this.set_running(false, cx);
+                            this.set_session_running(&session_uid, false, cx);
                         });
                         return;
                     }
@@ -1268,9 +1369,11 @@ impl AgentChatView {
 
             if let Err(err) = result {
                 let _ = this.update(cx, |this, cx| {
-                    this.transcript
-                        .push_system(t!("AgentUi.approval_failed", error = err).to_string());
-                    this.set_running(false, cx);
+                    this.push_system_to_session(
+                        &session_uid,
+                        t!("AgentUi.approval_failed", error = err).to_string(),
+                    );
+                    this.set_session_running(&session_uid, false, cx);
                 });
             }
         })
@@ -1279,6 +1382,13 @@ impl AgentChatView {
     }
 
     fn apply_runtime_event(&mut self, event: RuntimeEvent, cx: &mut Context<Self>) {
+        let backend = self.backend;
+        let session_uid = if backend == Backend::Acp {
+            self.current_session.clone()
+        } else {
+            event.session_id().to_string()
+        };
+        let is_current_session = session_uid == self.current_session;
         let terminal = matches!(
             event,
             RuntimeEvent::TurnCompleted { .. }
@@ -1286,28 +1396,49 @@ impl AgentChatView {
                 | RuntimeEvent::TurnFailed { .. }
                 | RuntimeEvent::NeedUserInput { .. }
         );
-        let applied = match &event {
-            RuntimeEvent::TurnFailed { reason, .. } if self.backend == Backend::Acp => {
-                let error = self.acp_turn_error(reason);
-                self.transcript.apply_acp_failure(&event, &error)
+        let acp_error = match &event {
+            RuntimeEvent::TurnFailed { reason, .. } if backend == Backend::Acp => {
+                Some(self.acp_turn_error(reason))
             }
-            _ => self.transcript.apply(&event),
+            _ => None,
+        };
+        let resources = self.resources.clone();
+        let transcript = if is_current_session {
+            &mut self.transcript
+        } else {
+            self.session_transcripts
+                .entry(session_uid.clone())
+                .or_insert_with(|| {
+                    let mut transcript = AgentTranscript::new();
+                    transcript.set_resource_context(&resources);
+                    transcript
+                })
+        };
+        let applied = if let Some(error) = acp_error.as_ref() {
+            transcript.apply_acp_failure(&event, error)
+        } else {
+            transcript.apply(&event)
         };
         if !applied {
             return;
         }
-        self.sync_composer(cx);
-        // 跟随流式输出 / 新卡片自动滚到底。
-        self.request_scroll_to_bottom();
+        if is_current_session {
+            self.sync_composer(cx);
+            // 跟随当前会话的流式输出 / 新卡片自动滚到底。
+            self.request_scroll_to_bottom();
+        }
         if terminal {
-            if self.backend == Backend::Acp {
+            if backend == Backend::Acp {
                 self.cancel_pending_acp_permissions(cx);
             }
-            self.auto_scroll.request_settle();
-            self.set_running(false, cx);
+            if is_current_session {
+                self.auto_scroll.request_settle();
+            }
+            self.set_session_running(&session_uid, false, cx);
             // 一轮结束:把会话快照落库(仅自研后端;ACP 会话由外部 agent 管理)。
-            if self.backend == Backend::Local {
-                self.persist_current(cx);
+            if backend == Backend::Local {
+                self.persist_session(&session_uid, cx);
+                self.reload_sessions(cx);
             }
         }
         cx.notify();
@@ -1338,9 +1469,33 @@ impl AgentChatView {
     }
 
     fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
-        self.is_running = running;
-        self.input
-            .update(cx, |input, cx| input.set_running(running, cx));
+        let session_uid = self.current_session.clone();
+        self.set_session_running(&session_uid, running, cx);
+    }
+
+    fn set_session_running(&mut self, session_uid: &str, running: bool, cx: &mut Context<Self>) {
+        if running {
+            self.running_sessions.insert(session_uid.to_string());
+        } else {
+            self.running_sessions.remove(session_uid);
+        }
+        if session_uid == self.current_session {
+            self.is_running = running;
+            self.input
+                .update(cx, |input, cx| input.set_running(running, cx));
+        }
+        self.reload_sessions(cx);
+    }
+
+    fn push_system_to_session(&mut self, session_uid: &str, message: String) {
+        if session_uid == self.current_session {
+            self.transcript.push_system(message);
+        } else {
+            self.session_transcripts
+                .entry(session_uid.to_string())
+                .or_default()
+                .push_system(message);
+        }
     }
 
     /// 重建并把展示上下文推给输入框。
@@ -1453,6 +1608,10 @@ impl AgentChatView {
     }
 
     fn select_model(&mut self, id: &str, provider_id: &str, model: &str, cx: &mut Context<Self>) {
+        // 切换模型会替换整个 Runtime；任一后台会话仍在运行时必须保留旧 Runtime。
+        if !self.running_sessions.is_empty() {
+            return;
+        }
         let Some(opt) = self.model_options.iter().find(|o| {
             o.id.as_ref() == id
                 && o.provider_id.as_ref() == provider_id
@@ -1476,16 +1635,17 @@ impl AgentChatView {
             self.sync_session_skills();
             self.selected_model = binding.selected_model;
             self.current_session = self.session_id.to_string();
-            self.sessions.insert(
-                0,
-                SessionSummary::new(
-                    self.current_session.clone(),
-                    format!("{} / {}", opt.provider_label, opt.model),
-                    now_secs(),
-                ),
+            self.session_transcripts.clear();
+            self.live_sessions.clear();
+            self.upsert_live_summary(
+                self.current_session.clone(),
+                format!("{} / {}", opt.provider_label, opt.model),
+                now_secs(),
             );
-            self._event_task =
-                Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+            self.transcript.clear();
+            self.transcript.set_resource_context(&self.resources);
+            self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
+            self.reload_sessions(cx);
         } else if self
             .selected_model
             .as_ref()
@@ -1586,6 +1746,10 @@ impl AgentChatView {
 
     /// 切换驱动后端:`None` = One_Agent(自研);`Some(id)` = 对应 ACP agent。
     fn select_backend(&mut self, agent_id: Option<SharedString>, cx: &mut Context<Self>) {
+        // 后端切换会替换事件订阅；先让所有本地后台任务自然结束。
+        if !self.running_sessions.is_empty() {
+            return;
+        }
         match agent_id {
             None => self.select_local_backend(cx),
             Some(id) => self.select_acp_backend(id, cx),
@@ -1594,49 +1758,41 @@ impl AgentChatView {
 
     /// 新建一个空会话并设为当前(仅运行时层面,不触碰持久化 / 列表)。
     fn start_fresh_session(&mut self, cx: &mut Context<Self>) {
-        if self.is_running {
+        if self.is_running && should_stop_task_before_session_switch(self.backend) {
             self.stop(cx);
         }
+        self.stash_current_transcript();
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
         self.apply_system_instruction_to_current_session();
         self.sync_session_skills();
         self.current_session = self.session_id.to_string();
-        self.transcript.clear();
-        self._event_task =
-            Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+        self.transcript = AgentTranscript::new();
+        self.transcript.set_resource_context(&self.resources);
+        self.is_running = false;
+        self.input
+            .update(cx, |input, cx| input.set_running(false, cx));
+        self.upsert_live_summary(
+            self.current_session.clone(),
+            current_agent_task_title(),
+            now_secs(),
+        );
     }
 
     /// 从存储重载当前视图(活跃 / 已归档)的会话列表。
     fn reload_sessions(&mut self, cx: &mut Context<Self>) {
-        let mut list = if self.show_archived {
+        let persisted = if self.show_archived {
             persistence::list_archived_summaries(cx)
         } else {
             persistence::list_summaries(cx)
         };
-        // 活跃视图:仅当当前实时会话已有内容时才置顶,避免空会话在历史中凭空新增。
-        if !self.show_archived
-            && !list.iter().any(|s| s.id == self.current_session)
-            && self.current_runtime_session_has_history()
-        {
-            let name = self
-                .sessions
-                .iter()
-                .find(|s| s.id == self.current_session)
-                .map(|s| s.name.clone())
-                .unwrap_or_else(|| SharedString::from(current_agent_task_title()));
-            list.insert(
-                0,
-                SessionSummary::new(self.current_session.clone(), name, now_secs()),
-            );
-        }
-        self.sessions = list;
-    }
-
-    fn current_runtime_session_has_history(&self) -> bool {
-        self.runtime
-            .session(&self.session_id)
-            .is_some_and(|session| !session.snapshot().history.is_empty())
+        self.sessions = merge_live_session_summaries(
+            persisted,
+            &self.live_sessions,
+            &self.current_session,
+            &self.running_sessions,
+            self.show_archived,
+        );
     }
 
     /// 切换「活跃 / 已归档」视图。
@@ -1654,6 +1810,7 @@ impl AgentChatView {
         if self.current_session == uid {
             self.start_fresh_session(cx);
         }
+        self.discard_live_session(uid);
         self.reload_sessions(cx);
         cx.notify();
     }
@@ -1668,23 +1825,45 @@ impl AgentChatView {
 
     /// 把当前会话快照写入持久化存储,并刷新其侧边栏摘要(空会话不落库)。
     fn persist_current(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.runtime.session(&self.session_id) else {
+        let uid = self.current_session.clone();
+        self.persist_session(&uid, cx);
+    }
+
+    fn persist_session(&mut self, uid: &str, cx: &mut Context<Self>) {
+        let session_id = SessionId::from_string(uid.to_string());
+        let Some(session) = self.runtime.session(&session_id) else {
             return;
         };
-        // 归档视图下不要把活跃会话塞进展示中的归档列表。
-        if let Some((title, updated_at)) = persistence::save_session(cx, &session)
-            && !self.show_archived
-        {
-            let uid = self.current_session.clone();
-            self.update_summary(uid, title, updated_at);
+        if let Some((title, updated_at)) = persistence::save_session(cx, &session) {
+            self.upsert_live_summary(uid.to_string(), title, updated_at);
         }
     }
 
-    /// 更新(或新增)某会话的侧边栏摘要并置顶。
-    fn update_summary(&mut self, uid: String, title: String, updated_at: i64) {
-        self.sessions.retain(|s| s.id != uid);
-        self.sessions
+    fn upsert_live_summary(&mut self, uid: String, title: String, updated_at: i64) {
+        self.live_sessions.retain(|summary| summary.id != uid);
+        self.live_sessions
             .insert(0, SessionSummary::new(uid, title, updated_at));
+    }
+
+    fn stash_current_transcript(&mut self) {
+        if self.backend != Backend::Local {
+            return;
+        }
+        let mut replacement = AgentTranscript::new();
+        replacement.set_resource_context(&self.resources);
+        let transcript = std::mem::replace(&mut self.transcript, replacement);
+        self.session_transcripts
+            .insert(self.current_session.clone(), transcript);
+    }
+
+    fn discard_live_session(&mut self, uid: &str) {
+        let session_id = SessionId::from_string(uid.to_string());
+        if self.running_sessions.remove(uid) {
+            let _ = self.runtime.interrupt(&session_id);
+        }
+        self.runtime.close_session(&session_id);
+        self.session_transcripts.remove(uid);
+        self.live_sessions.retain(|summary| summary.id != uid);
     }
 
     /// 切换到另一个(已持久化的)会话:保存当前 → 加载快照恢复 → 重建转录。
@@ -1695,33 +1874,48 @@ impl AgentChatView {
             cx.notify();
             return;
         }
-        if self.is_running {
+        if self.is_running && should_stop_task_before_session_switch(self.backend) {
             self.stop(cx);
         }
         self.persist_current(cx);
+        self.stash_current_transcript();
 
         let should_use_ask_mode = persistence::should_use_ask_mode(cx, uid);
-        let Some(snapshot) = persistence::load_snapshot(cx, uid) else {
-            // 无快照(如尚未落库的实时会话):仅切换高亮。
-            self.current_session = uid.to_string();
-            cx.notify();
-            return;
+        let target_id = SessionId::from_string(uid.to_string());
+        let target = if let Some(session) = self.runtime.session(&target_id) {
+            session
+        } else {
+            let Some(snapshot) = persistence::load_snapshot(cx, uid) else {
+                if let Some(transcript) = self.session_transcripts.remove(&self.current_session) {
+                    self.transcript = transcript;
+                }
+                self.reload_sessions(cx);
+                cx.notify();
+                return;
+            };
+            let restored = self.runtime.restore_session(snapshot);
+            restored.set_resources(self.resources.clone());
+            restored
         };
-        let plan = snapshot.plan.clone();
-        let history = snapshot.history.clone();
-        let restored = self.runtime.restore_session(snapshot);
-        // 用当前视图环境覆盖会话资源,保证后续轮次使用现有连接。
-        restored.set_resources(self.resources.clone());
-        self.session_id = restored.id().clone();
-        self.system_instruction = restored.system_instruction();
+        self.session_id = target.id().clone();
+        self.system_instruction = target.system_instruction();
         if should_use_ask_mode {
             self.task_kind = TaskKind::Ask;
         }
         self.current_session = self.session_id.to_string();
-        self.transcript.load_history(&history, plan.as_ref());
-        self._event_task =
-            Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+        if let Some(transcript) = self.session_transcripts.remove(uid) {
+            self.transcript = transcript;
+        } else {
+            let snapshot = target.snapshot();
+            self.transcript
+                .load_history(&snapshot.history, snapshot.plan.as_ref());
+            self.transcript.set_resource_context(&self.resources);
+        }
+        self.is_running = self.running_sessions.contains(uid);
+        self.input
+            .update(cx, |input, cx| input.set_running(self.is_running, cx));
         self.reload_sessions(cx);
+        self.sync_composer(cx);
         self.request_scroll_to_bottom();
         cx.notify();
     }
@@ -1783,6 +1977,14 @@ impl AgentChatView {
     fn apply_rename(&mut self, uid: &str, new_name: String, cx: &mut Context<Self>) {
         if persistence::rename_session(cx, uid, &new_name) {
             if let Some(summary) = self.sessions.iter_mut().find(|s| s.id == uid) {
+                summary.name = new_name.clone().into();
+                summary.updated_at = now_secs();
+            }
+            if let Some(summary) = self
+                .live_sessions
+                .iter_mut()
+                .find(|summary| summary.id == uid)
+            {
                 summary.name = new_name.into();
                 summary.updated_at = now_secs();
             }
@@ -1829,6 +2031,7 @@ impl AgentChatView {
         if self.current_session == uid {
             self.start_fresh_session(cx);
         }
+        self.discard_live_session(uid);
         self.reload_sessions(cx);
         cx.notify();
     }
@@ -1991,12 +2194,25 @@ impl AgentChatView {
         let name = session.name.to_string();
         let archived_view = self.show_archived;
         let selected = !archived_view && self.current_session == session.id;
+        let running = !archived_view && self.running_sessions.contains(&session.id);
         let group = SharedString::from(format!("agent-session-row-{uid}"));
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let row_style = themed_session_row_style(&theme);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
-        let label = session_sidebar::session_row_with_style(session, selected, row_style);
+        let label = session_sidebar::session_row_with_style(session, selected, row_style).when(
+            running,
+            |label| {
+                label.child(
+                    div()
+                        .id(SharedString::from(format!("agent-session-running-{uid}")))
+                        .size(px(6.0))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(theme.accent),
+                )
+            },
+        );
         let label_area = if archived_view {
             div().flex_1().min_w_0().child(label).into_any_element()
         } else {
@@ -5251,6 +5467,78 @@ mod tests {
         assert_eq!(t!("AgentUi.current_agent_task"), current_agent_task_title());
     }
 
+    #[test]
+    fn workbench_sidebar_merges_current_and_background_running_sessions() {
+        let persisted = vec![SessionSummary::new("saved", "已保存任务", 10)];
+        let live = vec![
+            SessionSummary::new("current", "当前任务", 30),
+            SessionSummary::new("running", "后台任务", 20),
+        ];
+        let running = HashSet::from(["running".to_string()]);
+
+        let merged = merge_live_session_summaries(persisted, &live, "current", &running, false);
+
+        assert_eq!(
+            vec!["current", "running", "saved"],
+            merged
+                .iter()
+                .map(|summary| summary.id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn archived_sidebar_does_not_mix_in_live_workbench_tasks() {
+        let archived = vec![SessionSummary::new("archived", "归档任务", 10)];
+        let live = vec![SessionSummary::new("current", "当前任务", 30)];
+        let running = HashSet::from(["current".to_string()]);
+
+        let merged = merge_live_session_summaries(archived, &live, "current", &running, true);
+
+        assert_eq!(
+            vec!["archived"],
+            merged.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn local_workbench_can_switch_away_from_a_running_session() {
+        assert!(!should_stop_task_before_session_switch(Backend::Local));
+        assert!(should_stop_task_before_session_switch(Backend::Acp));
+    }
+
+    #[gpui::test]
+    fn new_local_session_keeps_previous_running_task_in_sidebar(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let previous_session = view.current_session.clone();
+            view.set_running(true, cx);
+            view.new_session(cx);
+
+            assert_ne!(previous_session, view.current_session);
+            assert!(view.running_sessions.contains(&previous_session));
+            assert!(!view.is_running);
+            assert_eq!(
+                Some(view.current_session.as_str()),
+                view.sessions.first().map(|session| session.id.as_str())
+            );
+            assert!(
+                view.sessions
+                    .iter()
+                    .any(|session| session.id == previous_session)
+            );
+
+            view.switch_session(&previous_session, cx);
+            assert_eq!(previous_session, view.current_session);
+            assert!(view.is_running);
+            assert!(view.running_sessions.contains(&previous_session));
+        });
+    }
+
     #[gpui::test]
     fn sidebar_mode_input_is_edge_to_edge(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -5325,6 +5613,39 @@ mod tests {
             user_row.origin.x + user_row.size.width,
             user_bubble.origin.x + user_bubble.size.width,
             "user message bubble should align to the right edge: row={user_row:?}, bubble={user_bubble:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_user_message_uses_plain_text_and_readable_width(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript
+                .messages
+                .push(crate::ChatMessageUI::user("**保持**"));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let bubble = cx
+            .debug_bounds("ai-chat-user-bubble")
+            .expect("user bubble should render");
+        let plain_text = cx
+            .debug_bounds("ai-chat-user-plain-text")
+            .expect("user content should use the plain-text renderer");
+
+        assert!(
+            bubble.size.width >= px(128.0),
+            "short user messages should have a readable minimum width: bubble={bubble:?}"
+        );
+        assert_eq!(
+            bubble.size.width - px(26.0),
+            plain_text.size.width,
+            "plain user text should use the bubble width inside its padding and border: bubble={bubble:?}, text={plain_text:?}"
         );
     }
 

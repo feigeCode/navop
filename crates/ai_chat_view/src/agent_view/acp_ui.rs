@@ -20,8 +20,7 @@ impl AgentChatView {
         self.set_running(false, cx);
         self.input
             .update(cx, |input, cx| input.set_running(false, cx));
-        self._event_task =
-            Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+        self._event_task = Self::spawn_event_pump(self.runtime.subscribe(), None, cx);
         self.sync_composer(cx);
         cx.notify();
     }
@@ -242,7 +241,7 @@ impl AgentChatView {
         self.backend = Backend::Acp;
         self.current_acp_id = Some(agent_id);
         self.transcript.clear_acp_status();
-        self._event_task = Self::spawn_event_pump(receiver, session_id, cx);
+        self._event_task = Self::spawn_event_pump(receiver, Some(session_id), cx);
         self.sync_composer(cx);
         cx.notify();
     }

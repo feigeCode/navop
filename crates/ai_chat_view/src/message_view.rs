@@ -207,7 +207,7 @@ fn render_user_message_themed<E: MessageExtension>(
             div()
                 .debug_selector(|| "ai-chat-user-bubble".to_string())
                 .w(bubble_width)
-                .max_w(px(720.0))
+                .max_w(px(820.0))
                 .min_w_0()
                 .px_3()
                 .py_2()
@@ -217,23 +217,24 @@ fn render_user_message_themed<E: MessageExtension>(
                 .bg(theme.accent.opacity(0.12))
                 .text_color(theme.foreground)
                 .child(
-                    themed_markdown(
-                        SharedString::from(format!("user-msg-{}", msg.id)),
-                        msg.content.clone(),
-                        theme,
-                    )
-                    .selectable(true),
+                    div()
+                        .debug_selector(|| "ai-chat-user-plain-text".to_string())
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .child(msg.content.clone()),
                 ),
         )
         .into_any_element()
 }
 
 fn user_message_bubble_width(content: &str) -> gpui::Pixels {
-    const MIN_WIDTH: f32 = 64.0;
-    const MAX_WIDTH: f32 = 720.0;
-    const HORIZONTAL_PADDING: f32 = 24.0;
-    const ASCII_CHAR_WIDTH: f32 = 7.0;
-    const WIDE_CHAR_WIDTH: f32 = 14.0;
+    const MIN_WIDTH: f32 = 128.0;
+    const MAX_WIDTH: f32 = 820.0;
+    const HORIZONTAL_PADDING_AND_SLACK: f32 = 32.0;
+    const ASCII_CHAR_WIDTH: f32 = 8.0;
+    const WIDE_CHAR_WIDTH: f32 = 16.0;
+    const WIDTH_SAFETY_FACTOR: f32 = 1.08;
 
     let content_width = content
         .lines()
@@ -250,7 +251,10 @@ fn user_message_bubble_width(content: &str) -> gpui::Pixels {
         })
         .fold(0.0, f32::max);
 
-    px((content_width + HORIZONTAL_PADDING).clamp(MIN_WIDTH, MAX_WIDTH))
+    px(
+        (content_width * WIDTH_SAFETY_FACTOR + HORIZONTAL_PADDING_AND_SLACK)
+            .clamp(MIN_WIDTH, MAX_WIDTH),
+    )
 }
 
 pub fn render_system_message<E: MessageExtension>(
