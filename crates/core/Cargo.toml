@@ -42,6 +42,8 @@ sys-locale.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+image.workspace = true
+smallvec.workspace = true
 tempfile = "3"
 
 [build-dependencies]

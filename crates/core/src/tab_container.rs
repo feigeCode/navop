@@ -41,6 +41,13 @@ const SIDEBAR_HANDLE_PADDING: Pixels = px(4.0);
 const SIDEBAR_HANDLE_SIZE: Pixels = px(1.0);
 const TAB_CONTAINER_CONTEXT: &str = "TabContainer";
 
+#[derive(Clone, Copy)]
+struct TitlebarPlatform {
+    is_linux: bool,
+    is_macos: bool,
+    is_windows: bool,
+}
+
 gpui::actions!(
     tab_container,
     [
@@ -786,6 +793,8 @@ pub struct TabContainer {
     rename_input: Option<Entity<InputState>>,
     rename_input_subscription: Option<Subscription>,
     show_window_controls: bool,
+    #[cfg(test)]
+    force_windows_titlebar_for_test: bool,
     /// 窗口置顶切换回调，由上层注入；为 None 时不渲染置顶按钮
     on_toggle_always_on_top: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     /// 当前窗口置顶状态读取器，由上层注入
@@ -831,6 +840,8 @@ impl TabContainer {
             rename_input: None,
             rename_input_subscription: None,
             show_window_controls: false,
+            #[cfg(test)]
+            force_windows_titlebar_for_test: false,
             on_toggle_always_on_top: None,
             is_always_on_top: None,
             on_close_window: None,
@@ -921,6 +932,31 @@ impl TabContainer {
     pub fn with_window_controls(mut self, show: bool) -> Self {
         self.show_window_controls = show;
         self
+    }
+
+    #[cfg(test)]
+    fn with_windows_titlebar_for_test(mut self) -> Self {
+        self.force_windows_titlebar_for_test = true;
+        self
+    }
+
+    fn titlebar_platform(&self) -> TitlebarPlatform {
+        let force_windows = {
+            #[cfg(test)]
+            {
+                self.force_windows_titlebar_for_test
+            }
+            #[cfg(not(test))]
+            {
+                false
+            }
+        };
+
+        TitlebarPlatform {
+            is_linux: cfg!(target_os = "linux") && !force_windows,
+            is_macos: cfg!(target_os = "macos") && !force_windows,
+            is_windows: cfg!(target_os = "windows") || force_windows,
+        }
     }
 
     pub fn with_window_close_action(
@@ -2854,6 +2890,7 @@ impl TabContainer {
 
         div()
             .id("tab-content")
+            .debug_selector(|| "tab-content".to_owned())
             .flex_1()
             .w_full()
             .min_w_0()
@@ -2931,16 +2968,17 @@ impl TabContainer {
         let mut left_padding = self.left_padding.unwrap_or(px(8.0));
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
+        let titlebar_platform = self.titlebar_platform();
 
         // When the application navigation sidebar is fully hidden on macOS,
         // reserve the title-bar area occupied by the traffic-light controls.
-        if cfg!(target_os = "macos") && navigation_sidebar_expanded == Some(false) {
+        if titlebar_platform.is_macos && navigation_sidebar_expanded == Some(false) {
             left_padding = px(36.0);
         }
 
         // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
-        let is_linux = cfg!(target_os = "linux");
-        let is_macos = cfg!(target_os = "macos");
+        let is_linux = titlebar_platform.is_linux;
+        let is_macos = titlebar_platform.is_macos;
         let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let show_window_controls = self.show_window_controls;
         let enable_titlebar_interactions = show_window_controls || is_macos;
@@ -2950,6 +2988,7 @@ impl TabContainer {
 
         h_flex()
             .id("tab-bar")
+            .debug_selector(|| "tab-bar".to_owned())
             .w_full()
             .h(px(40.0))
             .bg(bg_color)
@@ -3101,6 +3140,7 @@ impl TabContainer {
             .child(
                 h_flex()
                     .id("tabs")
+                    .debug_selector(|| "tabs".to_owned())
                     .size_full()
                     .items_center()
                     // 仅在启用窗口控件时设置拖动区域（用于 Windows 原生拖动）
@@ -3469,6 +3509,7 @@ impl TabContainer {
                     .map(|tabs| {
                         div()
                             .id("tab-scroll-boundary")
+                            .debug_selector(|| "tab-scroll-boundary".to_owned())
                             .flex_1()
                             .h_full()
                             .min_w_0()
@@ -3478,6 +3519,7 @@ impl TabContainer {
             )
             .child(
                 Button::new("tab-dropdown-btn")
+                    .debug_selector(|| "tab-dropdown-btn".to_owned())
                     .icon(IconName::ChevronDown)
                     .ghost()
                     .compact()
@@ -3492,18 +3534,20 @@ impl TabContainer {
                     }),
             )
             .when(
-                cfg!(not(target_os = "macos")) && self.show_window_controls,
+                !titlebar_platform.is_macos && self.show_window_controls,
                 |el| el.child(self.render_window_controls(window, cx)),
             )
     }
 
     fn render_window_controls(&self, window: &mut Window, cx: &App) -> impl IntoElement {
-        let is_linux = cfg!(target_os = "linux");
-        let is_windows = cfg!(target_os = "windows");
+        let titlebar_platform = self.titlebar_platform();
+        let is_linux = titlebar_platform.is_linux;
+        let is_windows = titlebar_platform.is_windows;
         let is_maximized = window.is_maximized();
 
         h_flex()
             .id("window-controls")
+            .debug_selector(|| "window-controls".to_owned())
             .items_center()
             .flex_shrink_0()
             .h_full()
@@ -3581,6 +3625,7 @@ impl TabContainer {
 
         div()
             .id(id)
+            .debug_selector(move || id.to_owned())
             .flex()
             .w(px(34.0))
             .h_full()
@@ -3593,8 +3638,10 @@ impl TabContainer {
             .active(move |style| style.bg(active_background).text_color(hover_foreground))
             .when(is_windows, move |this| {
                 // Windows 依赖系统原生标题栏控件行为：
-                // 仅声明 control area，避免手动 on_click 干扰最大化/还原切换。
-                this.window_control_area(control_area)
+                // 先截断后方较大的 Drag hitbox，再声明原生 control area。
+                // 否则 GPUI 的 Windows hit-test 会让先注册的 Drag 抢占
+                // Min/Max/Close，进而把按钮交互误判成标题栏拖动或还原。
+                this.occlude().window_control_area(control_area)
             })
             .when(is_linux, move |this| {
                 this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -3639,6 +3686,7 @@ impl TabContainer {
 
         div()
             .id("always-on-top")
+            .debug_selector(|| "always-on-top".to_owned())
             .flex()
             .w(px(34.0))
             .h_full()
@@ -3770,6 +3818,7 @@ impl Render for TabContainer {
 
         div()
             .id("tab-container")
+            .debug_selector(|| "tab-container".to_owned())
             .track_focus(&focus_handle)
             .key_context(TAB_CONTAINER_CONTEXT)
             .on_action(cx.listener(|this, _: &SwitchToTab1, window, cx| {
@@ -3820,12 +3869,18 @@ impl Render for TabContainer {
 mod tests {
     use super::*;
     use crate::tab_navigation::ActiveTabSlot;
-    use gpui::{TestAppContext, WindowOptions};
-    use gpui_component::Theme;
+    use gpui::{
+        ObjectFit, RenderImage, StyledImage, TestAppContext, VisualTestContext, WindowBounds,
+        WindowOptions, img, size,
+    };
+    use gpui_component::{Root, Theme, h_flex};
+    use image::{ImageBuffer, Rgba};
 
     struct TestTab {
         title: SharedString,
         focus_handle: FocusHandle,
+        frame: Option<Arc<RenderImage>>,
+        status: Option<SharedString>,
     }
 
     impl TestTab {
@@ -3833,7 +3888,27 @@ mod tests {
             Self {
                 title: title.into(),
                 focus_handle: cx.focus_handle(),
+                frame: None,
+                status: None,
             }
+        }
+
+        fn with_status(
+            title: &'static str,
+            status: impl Into<SharedString>,
+            cx: &mut Context<Self>,
+        ) -> Self {
+            Self {
+                title: title.into(),
+                focus_handle: cx.focus_handle(),
+                frame: None,
+                status: Some(status.into()),
+            }
+        }
+
+        fn set_frame(&mut self, frame: Arc<RenderImage>, cx: &mut Context<Self>) {
+            self.frame = Some(frame);
+            cx.notify();
         }
     }
 
@@ -3848,6 +3923,39 @@ mod tests {
     impl Render for TestTab {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             div()
+                .id("test-tab-root")
+                .debug_selector(|| "test-tab-root".to_owned())
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .when_some(self.frame.clone(), |root, frame| {
+                    root.child(
+                        img(frame)
+                            .id("test-rdp-frame")
+                            .debug_selector(|| "test-rdp-frame".to_owned())
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .object_fit(ObjectFit::Fill),
+                    )
+                })
+                .when(self.frame.is_none(), |root| {
+                    root.when_some(self.status.clone(), |root, status| {
+                        root.child(
+                            div()
+                                .id("test-rdp-status")
+                                .debug_selector(|| "test-rdp-status".to_owned())
+                                .px_4()
+                                .py_2()
+                                .whitespace_nowrap()
+                                .child(status),
+                        )
+                    })
+                })
         }
     }
 
@@ -3858,6 +3966,100 @@ mod tests {
 
         fn title(&self, _cx: &App) -> SharedString {
             self.title.clone()
+        }
+    }
+
+    struct TestWindow {
+        tab_container: Entity<TabContainer>,
+    }
+
+    impl Render for TestWindow {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("test-window-root")
+                .debug_selector(|| "test-window-root".to_owned())
+                .size_full()
+                .relative()
+                .child(
+                    h_flex()
+                        .id("test-window-layout")
+                        .debug_selector(|| "test-window-layout".to_owned())
+                        .size_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id("test-navigation-sidebar")
+                                .debug_selector(|| "test-navigation-sidebar".to_owned())
+                                .h_full()
+                                .w(px(220.0))
+                                .flex_shrink_0(),
+                        )
+                        .child(
+                            div()
+                                .id("test-main-slot")
+                                .debug_selector(|| "test-main-slot".to_owned())
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .child(self.tab_container.clone()),
+                        ),
+                )
+        }
+    }
+
+    fn rdp_sized_test_frame() -> Arc<RenderImage> {
+        let image = ImageBuffer::from_pixel(2400, 1400, Rgba([0x44, 0x44, 0x44, 0xff]));
+        Arc::new(RenderImage::new(smallvec::SmallVec::from_elem(
+            image::Frame::new(image),
+            1,
+        )))
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct WindowChromeBounds {
+        window_root: Bounds<Pixels>,
+        window_layout: Bounds<Pixels>,
+        navigation_sidebar: Bounds<Pixels>,
+        main_slot: Bounds<Pixels>,
+        tab_bar: Bounds<Pixels>,
+        tab_scroll_boundary: Bounds<Pixels>,
+        tab_dropdown: Bounds<Pixels>,
+        window_controls: Bounds<Pixels>,
+        always_on_top: Bounds<Pixels>,
+        minimize: Bounds<Pixels>,
+        maximize: Bounds<Pixels>,
+        close: Bounds<Pixels>,
+        tab_content: Bounds<Pixels>,
+        tab_root: Bounds<Pixels>,
+    }
+
+    fn window_chrome_bounds(cx: &mut VisualTestContext) -> WindowChromeBounds {
+        WindowChromeBounds {
+            window_root: cx.debug_bounds("test-window-root").expect("window root"),
+            window_layout: cx
+                .debug_bounds("test-window-layout")
+                .expect("window layout"),
+            navigation_sidebar: cx
+                .debug_bounds("test-navigation-sidebar")
+                .expect("navigation sidebar"),
+            main_slot: cx.debug_bounds("test-main-slot").expect("main slot"),
+            tab_bar: cx.debug_bounds("tab-bar").expect("tab bar"),
+            tab_scroll_boundary: cx
+                .debug_bounds("tab-scroll-boundary")
+                .expect("tab scroll boundary"),
+            tab_dropdown: cx
+                .debug_bounds("tab-dropdown-btn")
+                .expect("tab dropdown button"),
+            window_controls: cx
+                .debug_bounds("window-controls")
+                .expect("Windows controls"),
+            always_on_top: cx.debug_bounds("always-on-top").expect("pin button"),
+            minimize: cx.debug_bounds("minimize").expect("minimize button"),
+            maximize: cx.debug_bounds("maximize").expect("maximize button"),
+            close: cx.debug_bounds("close").expect("close button"),
+            tab_content: cx.debug_bounds("tab-content").expect("tab content"),
+            tab_root: cx.debug_bounds("test-tab-root").expect("tab root"),
         }
     }
 
@@ -4054,5 +4256,142 @@ mod tests {
             })
             .expect("window opens");
         });
+    }
+
+    #[gpui::test]
+    fn opening_rdp_content_and_first_frame_keep_windows_titlebar_controls_anchored(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+
+        let (window, container, rdp) = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            let mut container = None;
+            let mut rdp = None;
+            let window = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let empty = cx.new(|cx| TestTab::new("empty", cx));
+                        let rdp_tab = cx.new(|cx| {
+                            TestTab::with_status(
+                                "rdp",
+                                format!(
+                                    "failed-to-start-C:\\Users\\tester\\{}\\onetcli-rdp-helper.exe",
+                                    "very-long-provider-path\\".repeat(100)
+                                ),
+                                cx,
+                            )
+                        });
+                        let tabs = cx.new(|cx| {
+                            TabContainer::new(window, cx)
+                                .with_window_controls(true)
+                                .with_windows_titlebar_for_test()
+                                .with_navigation_sidebar_toggle(true)
+                                .with_always_on_top_control(Arc::new(|_, _| {}), Arc::new(|| false))
+                        });
+                        tabs.update(cx, |tabs, cx| {
+                            tabs.add_and_activate_tab_with_focus(
+                                TabItem::new("empty", "test", empty),
+                                window,
+                                cx,
+                            );
+                        });
+                        container = Some(tabs.clone());
+                        rdp = Some(rdp_tab);
+                        let root = cx.new(|_| TestWindow {
+                            tab_container: tabs,
+                        });
+                        cx.new(|cx| Root::new(root, window, cx))
+                    },
+                )
+                .expect("test window opens");
+            (
+                window,
+                container.expect("tab container is captured"),
+                rdp.expect("RDP tab is captured"),
+            )
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let before_open = window_chrome_bounds(&mut cx);
+
+        cx.update(|window, cx| {
+            container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy_with_mode(
+                    "rdp",
+                    TabOpenMode::Activate,
+                    |_, _| TabItem::new("rdp", "test", rdp.clone()),
+                    window,
+                    cx,
+                );
+            });
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        let after_open = window_chrome_bounds(&mut cx);
+        assert_eq!(
+            before_open, after_open,
+            "opening an RDP tab without a frame must not move window chrome"
+        );
+        assert!(cx.debug_bounds("test-rdp-status").is_some());
+        assert!(cx.debug_bounds("test-rdp-frame").is_none());
+
+        cx.update(|window, cx| {
+            rdp.update(cx, |rdp, cx| {
+                rdp.set_frame(rdp_sized_test_frame(), cx);
+            });
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        let after_first_frame = window_chrome_bounds(&mut cx);
+        assert_eq!(
+            after_open, after_first_frame,
+            "the first RDP frame must not move window chrome"
+        );
+
+        assert_eq!(
+            after_first_frame.tab_bar.right(),
+            after_first_frame.main_slot.right()
+        );
+        assert_eq!(
+            after_first_frame.window_controls.right(),
+            after_first_frame.tab_bar.right()
+        );
+        assert_eq!(after_first_frame.window_controls.size.width, px(136.0));
+        assert_eq!(after_first_frame.always_on_top.size.width, px(34.0));
+        assert_eq!(after_first_frame.minimize.size.width, px(34.0));
+        assert_eq!(after_first_frame.maximize.size.width, px(34.0));
+        assert_eq!(after_first_frame.close.size.width, px(34.0));
+        assert_eq!(
+            after_first_frame.always_on_top.right(),
+            after_first_frame.minimize.left()
+        );
+        assert_eq!(
+            after_first_frame.minimize.right(),
+            after_first_frame.maximize.left()
+        );
+        assert_eq!(
+            after_first_frame.maximize.right(),
+            after_first_frame.close.left()
+        );
+        assert_eq!(
+            after_first_frame.close.right(),
+            after_first_frame.window_controls.right()
+        );
+
+        let frame_bounds = cx.debug_bounds("test-rdp-frame").expect("RDP frame");
+        assert_eq!(frame_bounds, after_first_frame.tab_content);
     }
 }

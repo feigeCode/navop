@@ -359,6 +359,13 @@
 - **验证方式**：先用 contract 测试确认 sidebar 与非 sidebar 两条路径都经过同一个 active-view boundary，并覆盖 sidebar center、RDP root/content/frame 的 shrink 约束；再运行 `one-core`、对应 view crate 的测试和 `main` 编译检查，手工切换普通 tab/RDP tab、缩放主窗口及展开侧栏，确认窗口 chrome 和侧栏位置不跳变。
 - **适用范围**：`crates/core/src/tab_container.rs`、`crates/remote_desktop_view/src/view/render.rs`，以及任何在 tab 中渲染具有 intrinsic size 的图片、canvas、视频或远程桌面视图。
 
+- **标题**：Windows GPUI 原生标题栏按钮必须截断后方的 Drag hitbox
+- **触发信号**：仅 Windows 在打开 RDP 等 tab 或操作最小化、最大化、关闭按钮时，窗口发生意外拖动、还原或标题栏控件位置跳变，但 GPUI `debug_bounds` 显示标题栏、侧栏和内容区域的 logical layout 始终稳定。
+- **根因 / 约束**：自绘标题栏通常为可拖空白区注册较大的 `WindowControlArea::Drag`；GPUI 的 Windows hit-test 只有遇到 `BlockMouse` 才会截断后方 hitbox。原生 caption button 只声明 `window_control_area` 而不 occlude 时，后方 Drag 区可能抢占 Min/Max/Close 命中，表现得像布局被 RDP 内容挤动。
+- **正确做法**：Windows Min/Max/Close 按钮使用 `.occlude().window_control_area(...)`，顺序与同版本 Zed 保持一致；保留空白标题栏 Drag 区及应用显式 `start_window_move()`，不要继续用堆叠 flex/min-size、缩小整个拖动区或调整 hitbox 注册顺序来规避。
+- **验证方式**：用源码 contract 约束 Windows native controls 先 occlude 再声明 control area；用真实 GPUI 布局测试覆盖普通 tab → RDP tab、超长错误状态和大尺寸首帧，确认标题栏控件 bounds 不变；最后在 Windows 实机验证切换 tab、点击 Min/Max/Close、最大化/还原和拖动空白标题栏。
+- **适用范围**：`crates/core/src/tab_container.rs` 以及其他包含 broad Drag 区的 Windows GPUI 自绘标题栏。
+
 - **标题**：扩展管理器的 reload、安装和卸载刷新必须按 kind 且保持语言 WASM 惰性加载
 - **触发信号**：重新加载、安装或卸载一个静态 composite、数据库驱动或 provider 时，UI 长时间无响应，日志出现大量 `cranelift_codegen`、`wasmtime` 或 Tree-sitter 语言扩展编译记录。
 - **根因 / 约束**：统一刷新路径如果丢失扩展 kind，或调用 `load_language_extensions_from_root`，会在 GPUI 线程同步读取并编译全部语言 WASM；非语言扩展实际只需要刷新 runtime catalog 和贡献点，语言扩展也只需要更新 manifest 与文件后缀映射，parser 应在调用方首次请求语言时惰性加载。

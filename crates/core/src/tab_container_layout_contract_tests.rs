@@ -131,6 +131,29 @@ fn window_controls_follow_the_active_theme_for_contrast() {
 }
 
 #[test]
+fn windows_native_controls_occlude_the_tab_drag_region() {
+    let source = include_str!("tab_container.rs");
+    let button_start = source
+        .find("fn render_control_button")
+        .expect("window control button renderer");
+    let button_end = source[button_start..]
+        .find("/// 渲染窗口置顶按钮")
+        .map(|offset| button_start + offset)
+        .expect("always-on-top renderer");
+    let button = &source[button_start..button_end];
+    let windows_branch_start = button
+        .find(".when(is_windows")
+        .expect("Windows control branch");
+    let windows_branch = &button[windows_branch_start..];
+
+    assert!(
+        windows_branch.contains("this.occlude().window_control_area(control_area)"),
+        "Windows caption buttons must block the broader tab Drag hitbox before declaring \
+         Min/Max/Close areas"
+    );
+}
+
+#[test]
 fn tab_items_keep_visible_blocks_and_a_distinct_active_outline() {
     let source = include_str!("tab_container.rs");
     let tab_bar_start = source
