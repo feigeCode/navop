@@ -39,6 +39,8 @@ fn default_max_restart_attempts() -> u32 {
 pub struct NativeDriverManifest {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub version: String,
     #[serde(default = "default_api")]
     pub api: String,
     #[serde(default = "default_protocol_version")]
@@ -361,6 +363,7 @@ mod tests {
         r#"{
             "id": "redis",
             "name": "Redis",
+            "version": "0.1.2",
             "api": "redis",
             "protocol_version": "1.0",
             "entry": {"command": "./redis-driver"},
@@ -375,6 +378,7 @@ mod tests {
     fn parses_explicit_api_and_driver_policy() {
         let manifest: NativeDriverManifest = serde_json::from_str(manifest_json()).unwrap();
 
+        assert_eq!("0.1.2", manifest.version);
         assert_eq!("redis", manifest.api);
         assert_eq!("1.0", manifest.protocol_version);
         assert_eq!(NativeDriverProcessScope::Connection, manifest.process.scope);

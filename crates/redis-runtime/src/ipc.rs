@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use connection_tunnel::{TunnelGuard, resolve_connection_target};
-use extension_host::{NativeDriverManifest, ProcessRpcSession};
+use extension_host::{HostError, NativeDriverManifest, ProcessRpcSession};
 use extension_protocol::blob::WireBytes;
 use extension_protocol::conn::{ConnOpenParams, ConnOpenResult};
 use extension_protocol::event_stream::{EventOpenResult, EventReadResult};
@@ -26,6 +26,7 @@ pub struct IpcRedisConnection {
     config: RedisConnectionConfig,
     session: Arc<ProcessRpcSession>,
     conn_id: u64,
+    driver_context: String,
     tunnel: Option<TunnelGuard>,
 }
 
@@ -34,6 +35,7 @@ impl IpcRedisConnection {
         manifest: &NativeDriverManifest,
         config: RedisConnectionConfig,
     ) -> Result<Self, RedisError> {
+        let driver_context = native_driver_context(manifest);
         let target =
             resolve_connection_target(&config.host, config.port, config.ssh_tunnel.as_ref())
                 .await
@@ -43,7 +45,7 @@ impl IpcRedisConnection {
         let session = Arc::new(
             ProcessRpcSession::start(session_config)
                 .await
-                .map_err(host_error)?,
+                .map_err(|error| host_connection_error(error, &driver_context))?,
         );
         let wire_config = wire_config_for_target(&config, &target.host, target.port);
         let open = ConnOpenParams::new(
@@ -56,11 +58,12 @@ impl IpcRedisConnection {
                 serde_json::to_value(open).map_err(serialization_error)?,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| host_connection_error(error, &driver_context))?;
         Ok(Self {
             config,
             session,
             conn_id: result.conn_id,
+            driver_context,
             tunnel: target.tunnel,
         })
     }
@@ -90,7 +93,7 @@ impl IpcRedisConnection {
                 serde_json::to_value(params).map_err(serialization_error)?,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| redis_command_host_error(error, &self.driver_context))?;
         Ok(domain_value(result.value))
     }
 
@@ -117,7 +120,7 @@ impl IpcRedisConnection {
                 serde_json::to_value(params).map_err(serialization_error)?,
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| redis_command_host_error(error, &self.driver_context))?;
         Ok(result.values.into_iter().map(domain_value).collect())
     }
 
@@ -629,7 +632,7 @@ impl RedisConnection for IpcRedisConnection {
                 }),
             )
             .await
-            .map_err(host_error)?;
+            .map_err(|error| host_connection_error(error, &self.driver_context))?;
         let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
         let (message_tx, message_rx) = tokio::sync::mpsc::unbounded_channel();
         let session = Arc::clone(&self.session);
@@ -852,22 +855,56 @@ fn value_byte_strings(value: RedisValue) -> Result<Vec<Vec<u8>>, RedisError> {
 }
 
 fn parse_scan(value: RedisValue) -> Result<ScanResult, RedisError> {
+    if let RedisValue::Error(message) = value {
+        return Err(RedisError::command(message));
+    }
     let RedisValue::Bulk(mut values) = value else {
         return Err(RedisError::TypeMismatch {
             expected: "scan tuple".into(),
-            actual: value.to_display_string(),
+            actual: format!(
+                "invalid SCAN response from Redis native driver: {}",
+                value.to_display_string()
+            ),
         });
     };
     if values.len() != 2 {
         return Err(RedisError::Serialization(
-            "SCAN response must contain cursor and keys".into(),
+            "invalid SCAN response from Redis native driver: expected cursor and keys".into(),
         ));
     }
-    let keys = value_strings(values.pop().expect("length checked"))?;
+    let keys = scan_key_strings(values.pop().expect("length checked"))?;
     let cursor = value_string(values.pop().expect("length checked"))?
         .parse::<u64>()
-        .map_err(|error| RedisError::Serialization(error.to_string()))?;
+        .map_err(|error| {
+            RedisError::Serialization(format!(
+                "invalid SCAN cursor returned by Redis native driver: {error}"
+            ))
+        })?;
     Ok(ScanResult::new(cursor, keys))
+}
+
+fn scan_key_strings(value: RedisValue) -> Result<Vec<String>, RedisError> {
+    let RedisValue::Bulk(values) = value else {
+        return Err(RedisError::TypeMismatch {
+            expected: "SCAN key array".into(),
+            actual: format!(
+                "invalid SCAN response from Redis native driver: {}",
+                value.to_display_string()
+            ),
+        });
+    };
+    values
+        .into_iter()
+        .map(|value| match value {
+            RedisValue::Binary(value) => String::from_utf8(value).map_err(|_| {
+                RedisError::Serialization(
+                    "SCAN returned a non-UTF-8 Redis key; binary Redis keys are not currently supported by the key tree"
+                        .into(),
+                )
+            }),
+            value => value_string(value),
+        })
+        .collect()
 }
 
 fn parse_key_type(value: &str) -> RedisKeyType {
@@ -1023,8 +1060,32 @@ fn domain_value(value: RedisRespValue) -> RedisValue {
     }
 }
 
-fn host_error(error: impl std::fmt::Display) -> RedisError {
-    RedisError::connection(error.to_string())
+fn native_driver_context(manifest: &NativeDriverManifest) -> String {
+    let version = if manifest.version.trim().is_empty() {
+        "unknown"
+    } else {
+        manifest.version.as_str()
+    };
+    format!(
+        "driver={}, version={}, protocol={}, manifest={}",
+        manifest.id,
+        version,
+        manifest.protocol_version,
+        manifest.manifest_dir.display()
+    )
+}
+
+fn host_connection_error(error: HostError, driver_context: &str) -> RedisError {
+    RedisError::connection(format!("{error}; {driver_context}"))
+}
+
+fn redis_command_host_error(error: HostError, driver_context: &str) -> RedisError {
+    match error {
+        HostError::Protocol(error) if !error.is_connection_error() => {
+            RedisError::command(format!("{}; {driver_context}", error.message))
+        }
+        error => host_connection_error(error, driver_context),
+    }
 }
 
 fn serialization_error(error: impl std::fmt::Display) -> RedisError {
@@ -1034,6 +1095,7 @@ fn serialization_error(error: impl std::fmt::Display) -> RedisError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use extension_protocol::error::{ProtocolError, error_codes};
 
     #[test]
     fn non_utf8_values_remain_binary() {
@@ -1056,6 +1118,97 @@ mod tests {
         assert_eq!(17, result.cursor);
         assert_eq!(vec!["user:1", "user:2"], result.keys);
         assert!(!result.finished);
+    }
+
+    #[test]
+    fn scan_command_error_preserves_redis_acl_message() {
+        let error = parse_scan(RedisValue::Error(
+            "NOPERM this user has no permissions to run the 'scan' command".into(),
+        ))
+        .expect_err("Redis command errors must not be reported as response shape errors");
+
+        assert!(matches!(error, RedisError::Command { .. }));
+        let message = error.to_string();
+        assert!(message.contains("NOPERM"));
+        assert!(message.contains("scan"));
+    }
+
+    #[test]
+    fn scan_rejects_invalid_driver_response_shape_with_actionable_context() {
+        let error = parse_scan(RedisValue::Bulk(vec![RedisValue::String("0".into())]))
+            .expect_err("incomplete SCAN tuples must be rejected");
+
+        let message = error.to_string();
+        assert!(message.contains("invalid SCAN response"));
+        assert!(message.contains("native driver"));
+    }
+
+    #[test]
+    fn scan_reports_non_utf8_keys_without_lossy_conversion() {
+        let error = parse_scan(RedisValue::Bulk(vec![
+            RedisValue::String("0".into()),
+            RedisValue::Bulk(vec![
+                RedisValue::String("visible".into()),
+                RedisValue::Binary(vec![0xff, 0x00]),
+            ]),
+        ]))
+        .expect_err("binary Redis keys are not representable by the current String key contract");
+
+        let message = error.to_string();
+        assert!(message.contains("non-UTF-8 Redis key"));
+        assert!(message.contains("not currently supported"));
+    }
+
+    #[test]
+    fn sidecar_command_protocol_errors_remain_command_errors_with_driver_context() {
+        let context = "driver=redis, version=0.1.1, protocol=1.0";
+        let error = redis_command_host_error(
+            extension_host::HostError::protocol(ProtocolError::new(
+                error_codes::EXTENSION_CUSTOM_START,
+                "NOPERM this user has no permissions to run the 'scan' command",
+            )),
+            context,
+        );
+
+        assert!(matches!(error, RedisError::Command { .. }));
+        let message = error.to_string();
+        assert!(message.contains("NOPERM"));
+        assert!(message.contains(context));
+    }
+
+    #[test]
+    fn sidecar_connection_protocol_errors_remain_connection_errors() {
+        let error = redis_command_host_error(
+            extension_host::HostError::protocol(ProtocolError::new(
+                error_codes::IO_CONNECTION_REFUSED,
+                "connection reset",
+            )),
+            "driver=redis, version=0.1.2, protocol=1.0",
+        );
+
+        assert!(matches!(error, RedisError::Connection { .. }));
+    }
+
+    #[test]
+    fn native_driver_context_includes_version_protocol_and_manifest_path() {
+        let mut manifest: NativeDriverManifest = serde_json::from_value(serde_json::json!({
+            "id": "redis",
+            "name": "Redis",
+            "version": "0.1.2",
+            "api": "redis",
+            "protocol_version": "1.0",
+            "entry": { "command": "./redis-driver" },
+            "transport": { "name": "redis.sock" }
+        }))
+        .expect("test manifest should deserialize");
+        manifest.manifest_dir = std::path::PathBuf::from("/tmp/database_drivers/redis");
+
+        let context = native_driver_context(&manifest);
+
+        assert!(context.contains("driver=redis"));
+        assert!(context.contains("version=0.1.2"));
+        assert!(context.contains("protocol=1.0"));
+        assert!(context.contains("/tmp/database_drivers/redis"));
     }
 
     #[test]
