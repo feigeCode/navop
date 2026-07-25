@@ -257,4 +257,38 @@ mod tests {
             super::remote_desktop_error_message(&error)
         );
     }
+
+    #[test]
+    fn rendered_frame_cannot_expand_its_tab_container() {
+        let source = include_str!("view/render.rs");
+
+        let content_start = source
+            .find("let content = div()")
+            .expect("remote desktop content");
+        let root_start = source[content_start..]
+            .find("\n        div()\n            .size_full()\n            .min_w_0()")
+            .map(|offset| content_start + offset)
+            .expect("remote desktop root");
+        let content = &source[content_start..root_start];
+        let root = &source[root_start..];
+
+        assert!(content.contains(".size_full()"));
+        assert!(content.contains(".min_w_0()"));
+        assert!(content.contains(".min_h_0()"));
+        assert!(content.contains(".overflow_hidden()"));
+        let frame_start = content.find("img(frame)").expect("rendered frame");
+        let frame_end = content[frame_start..]
+            .find(".object_fit(ObjectFit::Fill)")
+            .map(|offset| frame_start + offset)
+            .expect("rendered frame fit");
+        let frame = &content[frame_start..frame_end];
+        assert!(frame.contains(".size_full()"));
+        assert!(frame.contains(".min_w_0()"));
+        assert!(frame.contains(".min_h_0()"));
+
+        assert!(root.contains(".size_full()"));
+        assert!(root.contains(".min_w_0()"));
+        assert!(root.contains(".min_h_0()"));
+        assert!(root.contains(".overflow_hidden()"));
+    }
 }

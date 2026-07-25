@@ -165,7 +165,10 @@ where
             cx.new(|cx| Root::new(content, window, cx))
         })?;
 
-        window.update(cx, |_, window, cx| {
+        // Updating through the typed WindowHandle<Root> leases Root for the whole
+        // callback. push_notification updates Root again, so use the untyped
+        // window path to avoid a re-entrant Root lease.
+        cx.update_window(window.into(), |_, window, cx| {
             window.activate_window();
             window.set_window_title(&title);
             if let Some(fullscreen_hint) = fullscreen_hint {
@@ -296,11 +299,21 @@ mod tests {
     #[test]
     fn popup_fullscreen_hint_uses_an_auto_hiding_notification() {
         let source = include_str!("popup_window.rs");
+        let open_start = source
+            .find("pub fn open_popup_window")
+            .expect("popup window opener");
+        let content_start = source[open_start..]
+            .find("\nstruct PopupWindowContent")
+            .map(|offset| open_start + offset)
+            .expect("popup window content");
+        let open = &source[open_start..content_start];
 
         assert!(source.contains("fullscreen_hint: Option<SharedString>"));
-        assert!(source.contains("if let Some(fullscreen_hint)"));
-        assert!(source.contains("Notification::info(fullscreen_hint)"));
-        assert!(source.contains(".autohide(true)"));
-        assert!(source.contains("window.push_notification"));
+        assert!(open.contains("if let Some(fullscreen_hint)"));
+        assert!(open.contains("cx.update_window(window.into()"));
+        assert!(!open.contains("window.update(cx"));
+        assert!(open.contains("Notification::info(fullscreen_hint)"));
+        assert!(open.contains(".autohide(true)"));
+        assert!(open.contains("window.push_notification"));
     }
 }

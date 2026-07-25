@@ -2722,6 +2722,20 @@ impl TabContainer {
         cx.notify();
     }
 
+    /// Keep an active tab's intrinsic content size from participating in the
+    /// TabContainer's flex sizing. This boundary is required for image-backed
+    /// views such as RDP, whose current frame can otherwise push sibling
+    /// sidebars and the window chrome outside the available width.
+    fn render_active_tab_view(active_view: Option<AnyView>) -> AnyElement {
+        div()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .when_some(active_view, |el, view| el.child(view))
+            .into_any_element()
+    }
+
     fn render_content_with_sidebars(
         &self,
         content: AnyElement,
@@ -2742,6 +2756,7 @@ impl TabContainer {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .overflow_hidden()
             .child(content)
             .child(self.render_hidden_sidebar_launcher(hidden, cx));
         let center = if bottom.is_empty() {
@@ -2845,14 +2860,10 @@ impl TabContainer {
             .min_h_0()
             .overflow_hidden()
             .when(!has_sidebar_layout, |el| {
-                el.when_some(active_view.clone(), |el, view| el.child(view))
+                el.child(Self::render_active_tab_view(active_view.clone()))
             })
             .when(has_sidebar_layout, |el| {
-                let content = div()
-                    .size_full()
-                    .overflow_hidden()
-                    .when_some(active_view, |el, view| el.child(view))
-                    .into_any_element();
+                let content = Self::render_active_tab_view(active_view);
                 el.child(self.render_content_with_sidebars(content, cx))
             })
     }

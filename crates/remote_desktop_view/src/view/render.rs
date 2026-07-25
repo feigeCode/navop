@@ -60,6 +60,8 @@ impl Render for RemoteDesktopView {
 
         let content = div()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .flex()
             .items_center()
             .justify_center()
@@ -143,7 +145,13 @@ impl Render for RemoteDesktopView {
                 .size_full(),
             )
             .when_some(rendered_frame.clone(), |this, frame| {
-                this.child(img(frame).size_full().object_fit(ObjectFit::Fill))
+                this.child(
+                    img(frame)
+                        .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .object_fit(ObjectFit::Fill),
+                )
             })
             .when(rendered_frame.is_none(), |this| {
                 this.child(
@@ -157,7 +165,10 @@ impl Render for RemoteDesktopView {
 
         div()
             .size_full()
+            .min_w_0()
+            .min_h_0()
             .relative()
+            .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 if let Some(bounds) = bounds.first().copied() {
                     view.update(cx, |view, _| {
