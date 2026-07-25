@@ -2,7 +2,7 @@
 
 use crate::RedisManager;
 use crate::create_key_dialog::CreateKeyDialog;
-use crate::key_value_view::KeyValueView;
+use crate::key_value_view::{KeyValueView, KeyValueViewEvent};
 use crate::redis_cli_view::RedisCliView;
 use crate::redis_tree_view::{RedisTreeView, RedisTreeViewEvent};
 use crate::{GlobalRedisState, RedisKeyType, RedisNode, RedisNodeType};
@@ -38,6 +38,7 @@ fn initial_key_for_create(node: &RedisNode) -> Option<String> {
 /// Redis 事件处理器
 pub struct RedisEventHandler {
     _tree_subscription: Subscription,
+    _key_value_subscription: Subscription,
 }
 
 impl RedisEventHandler {
@@ -104,6 +105,7 @@ impl RedisEventHandler {
                             Self::handle_open_key_in_new_tab(
                                 node,
                                 tab_container.clone(),
+                                tree_view.clone(),
                                 global_state.clone(),
                                 window,
                                 cx,
@@ -178,8 +180,28 @@ impl RedisEventHandler {
             },
         );
 
+        let tree_view_for_key_events = tree_view.clone();
+        let key_value_subscription = cx.subscribe_in(
+            &key_value_view,
+            window,
+            move |_handler, _view, event, _window, cx| {
+                if let KeyValueViewEvent::ValueDeleted {
+                    connection_id,
+                    db_index,
+                    key,
+                } = event
+                {
+                    let node_id = format!("{connection_id}:db{db_index}:{key}");
+                    tree_view_for_key_events.update(cx, |tree, cx| {
+                        tree.remove_node(&node_id, cx);
+                    });
+                }
+            },
+        );
+
         Self {
             _tree_subscription: tree_subscription,
+            _key_value_subscription: key_value_subscription,
         }
     }
 
@@ -335,6 +357,7 @@ impl RedisEventHandler {
     fn handle_open_key_in_new_tab(
         node: RedisNode,
         tab_container: Entity<TabContainer>,
+        tree_view: Entity<RedisTreeView>,
         _global_state: GlobalRedisState,
         window: &mut Window,
         cx: &mut App,
@@ -350,18 +373,38 @@ impl RedisEventHandler {
         );
         let connection_id = node.connection_id.clone();
         let db_index = node.db_index;
+        let tree_view_for_events = tree_view.clone();
 
         // 使用 activate_or_add_tab_lazy 方法：如果标签页存在则激活，否则创建新标签页
         tab_container.update(cx, |container, cx| {
             container.activate_or_add_tab_lazy(
                 tab_id,
-                |window, cx| {
+                move |window, cx| {
                     // 创建新的 KeyValueView 并加载数据
                     let key_value_view =
                         cx.new(|cx| KeyValueView::new_with_closeable(true, window, cx));
                     key_value_view.update(cx, |view, cx| {
                         view.load_key(connection_id.clone(), db_index, full_key.clone(), cx);
                     });
+                    let tree_view = tree_view_for_events.clone();
+                    cx.subscribe_in(
+                        &key_value_view,
+                        window,
+                        move |_, _, event: &KeyValueViewEvent, _, cx| {
+                            if let KeyValueViewEvent::ValueDeleted {
+                                connection_id,
+                                db_index,
+                                key,
+                            } = event
+                            {
+                                let node_id = format!("{connection_id}:db{db_index}:{key}");
+                                tree_view.update(cx, |tree, cx| {
+                                    tree.remove_node(&node_id, cx);
+                                });
+                            }
+                        },
+                    )
+                    .detach();
                     TabItem::new(
                         format!("key-{}-db{}-{}", connection_id, db_index, full_key),
                         full_key.clone(),

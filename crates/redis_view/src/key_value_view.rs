@@ -16,6 +16,7 @@ use gpui_component::{
     h_flex,
     highlighter::Language,
     input::{Input, InputEvent, InputState},
+    notification::Notification,
     radio::Radio,
     select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
@@ -32,7 +33,11 @@ pub enum KeyValueViewEvent {
     /// 值已更新
     ValueUpdated { key: String },
     /// 值已删除
-    ValueDeleted { key: String },
+    ValueDeleted {
+        connection_id: String,
+        db_index: u8,
+        key: String,
+    },
 }
 
 /// 加载状态
@@ -740,11 +745,9 @@ impl KeyValueView {
                             .with_size(Size::Medium)
                             .on_click({
                                 let view = view.clone();
-                                move |_, _, cx| {
+                                move |_, window, cx| {
                                     view.update(cx, |view, cx| {
-                                        cx.emit(KeyValueViewEvent::ValueDeleted {
-                                            key: view.current_key.clone().unwrap_or_default(),
-                                        });
+                                        view.show_delete_dialog(window, cx);
                                     });
                                 }
                             }),
@@ -1825,6 +1828,114 @@ impl KeyValueView {
     }
 
     // === TTL 对话框 ===
+
+    /// 显示删除键确认对话框
+    fn show_delete_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(connection_id) = self.connection_id.clone() else {
+            return;
+        };
+        let Some(key) = self.current_key.clone() else {
+            return;
+        };
+        let db_index = self.db_index;
+        let view = cx.entity().downgrade();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let connection_id_for_delete = connection_id.clone();
+            let key_for_delete = key.clone();
+            let view_for_ok = view.clone();
+
+            dialog
+                .overlay(false)
+                .title(t!("RedisTree.confirm_delete_title").to_string())
+                .confirm()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(t!("RedisTree.confirm_delete_key", key = key).to_string())
+                        .child(t!("RedisTree.irreversible").to_string()),
+                )
+                .on_ok(move |_, _window, cx| {
+                    let _ = view_for_ok.update(cx, |view, cx| {
+                        view.delete_key(
+                            connection_id_for_delete.clone(),
+                            db_index,
+                            key_for_delete.clone(),
+                            cx,
+                        );
+                    });
+                    true
+                })
+        });
+    }
+
+    /// 删除当前键
+    fn delete_key(
+        &mut self,
+        connection_id: String,
+        db_index: u8,
+        key: String,
+        cx: &mut Context<Self>,
+    ) {
+        let global_state = cx.global::<GlobalRedisState>().clone();
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result = Tokio::spawn_result(cx, {
+                let connection_id = connection_id.clone();
+                let key = key.clone();
+                async move {
+                    let conn = global_state.get_connection(&connection_id).ok_or_else(|| {
+                        anyhow::anyhow!("{}", t!("KeyValueView.connection_missing"))
+                    })?;
+                    let guard = conn.read().await;
+                    guard
+                        .del_in_db(db_index, &[key.as_str()])
+                        .await
+                        .map_err(anyhow::Error::new)
+                }
+            })
+            .await;
+
+            match result {
+                Ok(_) => {
+                    _ = this.update(cx, |view, cx| {
+                        if view.connection_id.as_deref() == Some(connection_id.as_str())
+                            && view.db_index == db_index
+                            && view.current_key.as_deref() == Some(key.as_str())
+                        {
+                            view.current_key = None;
+                            view.key_info = None;
+                            view.value_content = None;
+                            view.pending_editor_value = None;
+                            view.load_state = LoadState::Empty;
+                            view.is_dirty = false;
+                        }
+                        cx.emit(KeyValueViewEvent::ValueDeleted {
+                            connection_id,
+                            db_index,
+                            key,
+                        });
+                        cx.notify();
+                    });
+                }
+                Err(error) => {
+                    let message =
+                        t!("RedisTree.delete_key_failed", error = format!("{error:#}")).to_string();
+                    let _ = cx.update(|cx| {
+                        if let Some(window) = cx.active_window() {
+                            _ = window.update(cx, |_, window, cx| {
+                                window.push_notification(
+                                    Notification::error(message).autohide(true),
+                                    cx,
+                                );
+                            });
+                        }
+                    });
+                }
+            }
+        })
+        .detach();
+    }
 
     /// 显示 TTL 设置对话框
     fn show_ttl_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3298,9 +3409,77 @@ impl EventEmitter<TabContentEvent> for KeyValueView {}
 #[cfg(test)]
 mod tests {
     use super::{
-        ViewFormat, display_redis_bytes, format_redis_string_value, is_binary_redis_string,
-        large_text_preview_title, redis_bytes_text, should_replace_set_member,
+        KeyValueContent, KeyValueView, LoadState, ViewFormat, display_redis_bytes,
+        format_redis_string_value, is_binary_redis_string, large_text_preview_title,
+        redis_bytes_text, should_replace_set_member,
     };
+    use crate::{KeyInfo, RedisKeyType};
+    use gpui::{AppContext, TestAppContext, VisualTestContext, WindowOptions};
+    use gpui_component::Root;
+
+    #[gpui::test]
+    fn delete_key_confirmation_dialog_opens(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity = cx.new(|cx| KeyValueView::new(window, cx));
+                    entity.update(cx, |view, cx| {
+                        view.connection_id = Some("redis-1".into());
+                        view.db_index = 2;
+                        view.current_key = Some("session:42".into());
+                        view.key_info =
+                            Some(KeyInfo::new("session:42".into(), RedisKeyType::String));
+                        view.value_content = Some(KeyValueContent::String(b"value".to_vec()));
+                        view.load_state = LoadState::Loaded;
+                        cx.notify();
+                    });
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("open Redis key value test window");
+            (window, view.expect("key value view"))
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        assert!(view.read_with(&cx, |view, _| view.current_key.is_some()));
+        assert!(
+            !cx.update(|window, cx| Root::render_dialog_layer(window, cx).is_some()),
+            "confirmation dialog should initially be closed"
+        );
+        view.update_in(&mut cx, |view, window, cx| {
+            view.show_delete_dialog(window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.update(|window, cx| Root::render_dialog_layer(window, cx).is_some()),
+            "delete confirmation dialog should be registered with the window root"
+        );
+    }
+
+    #[test]
+    fn delete_key_button_routes_to_confirmation_dialog() {
+        let source = include_str!("key_value_view.rs");
+        let button_start = source
+            .find("Button::new(\"delete-key\")")
+            .expect("delete key button");
+        let button_end = source[button_start..]
+            .find("// 第二行：筛选 + 操作按钮")
+            .map(|offset| button_start + offset)
+            .expect("end of key toolbar");
+        let delete_button = &source[button_start..button_end];
+
+        assert!(delete_button.contains("move |_, window, cx|"));
+        assert!(delete_button.contains("view.show_delete_dialog(window, cx)"));
+        assert!(!delete_button.contains("cx.emit(KeyValueViewEvent::ValueDeleted"));
+    }
 
     #[test]
     fn redis_string_format_preserves_utf8_text() {

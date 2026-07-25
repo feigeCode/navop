@@ -30,5 +30,8 @@ redis-runtime.workspace = true
 default = []
 builtin-redis = ["redis-runtime/builtin-redis"]
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true
