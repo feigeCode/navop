@@ -1102,7 +1102,7 @@ impl DatabaseObjects {
             let cell_value = args.row_values.get(col_ix).cloned().unwrap_or_default();
             let tooltip_text = cell_value.clone();
             let cell = if col_ix == 0 {
-                let icon = get_icon_for_node_type(&row_node_type, cx.theme()).color();
+                let icon = get_icon_for_node_type(&row_node_type, cx.theme());
                 h_flex()
                     .gap_2()
                     .items_center()

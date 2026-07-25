@@ -504,7 +504,7 @@ pub fn get_icon_for_node_type(node_type: &DbNodeType, _theme: &gpui_component::T
         DbNodeType::Index => Icon::from(IconName::Index).color(),
         DbNodeType::Trigger => Icon::from(IconName::Trigger).color(),
         DbNodeType::Sequence => Icon::from(IconName::Sequence).color(),
-        DbNodeType::QueryFolder => Icon::from(IconName::Folder).color(),
+        DbNodeType::QueryFolder => IconName::QueryFolderColor.color(),
         DbNodeType::NamedQuery => Icon::from(IconName::Query).color(),
         _ => IconName::File.color(),
     }
@@ -2036,9 +2036,9 @@ impl DbTreeView {
                 .with_size(ComponentSize::Size(px(20.))),
             Some(DbNodeType::QueryFolder) => {
                 let icon = if is_expanded {
-                    IconName::FolderOpen
+                    IconName::QueryFolderOpenColor
                 } else {
-                    IconName::Folder
+                    IconName::QueryFolderColor
                 };
                 Icon::from(icon)
                     .color()

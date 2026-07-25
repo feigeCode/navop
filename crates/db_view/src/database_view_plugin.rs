@@ -1315,11 +1315,11 @@ fn toolbar_icon(action: &DatabaseActionDescriptor) -> IconName {
         | DatabaseActionId::DeleteTable
         | DatabaseActionId::DeleteView
         | DatabaseActionId::DeleteQuery => IconName::Minus,
-        DatabaseActionId::EditDatabase
-        | DatabaseActionId::RenameQuery
-        | DatabaseActionId::OpenNamedQuery => IconName::Edit,
+        DatabaseActionId::EditDatabase | DatabaseActionId::RenameQuery => IconName::Edit,
         DatabaseActionId::RevealQueryInFileManager => IconName::FolderOpen,
-        DatabaseActionId::OpenTableData | DatabaseActionId::OpenViewData => IconName::Eye,
+        DatabaseActionId::OpenTableData
+        | DatabaseActionId::OpenViewData
+        | DatabaseActionId::OpenNamedQuery => IconName::Eye,
         DatabaseActionId::CreateDatabase
         | DatabaseActionId::CreateSchema
         | DatabaseActionId::CreateNewQuery => IconName::Plus,
@@ -1380,6 +1380,7 @@ mod tests {
     use db::plugin_manifest::{
         DatabaseFormField, DatabaseFormFieldType, DatabaseFormManifest, DatabaseFormTab,
     };
+    use gpui_component::IconNamed;
     use std::path::PathBuf;
 
     fn mysql_manifest_plugin() -> ManifestDatabaseViewPlugin {
@@ -1399,6 +1400,20 @@ mod tests {
 
     fn toolbar_ids(buttons: &[ToolbarButton]) -> Vec<&'static str> {
         buttons.iter().map(|button| button.id).collect()
+    }
+
+    fn action_descriptor(id: DatabaseActionId) -> DatabaseActionDescriptor {
+        DatabaseActionDescriptor {
+            id,
+            label_i18n_key: String::new(),
+            icon: None,
+            targets: Vec::new(),
+            placement: DatabaseActionPlacement::Both,
+            requires_active_connection: false,
+            group: None,
+            submenu_of: None,
+            toolbar_scope: None,
+        }
     }
 
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
@@ -1600,6 +1615,14 @@ driver:
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("onetcli-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn open_named_query_uses_open_icon_instead_of_edit_icon() {
+        let action = action_descriptor(DatabaseActionId::OpenNamedQuery);
+
+        assert_eq!(toolbar_icon(&action).path(), IconName::Eye.path());
+        assert_ne!(toolbar_icon(&action).path(), IconName::Edit.path());
     }
 
     #[test]
