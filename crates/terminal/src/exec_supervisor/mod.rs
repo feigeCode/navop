@@ -260,6 +260,9 @@ fn publish_progress(
         output: output.output,
         completion,
         exit_code,
+        truncated: output.truncated,
+        captured_bytes: output.captured_bytes,
+        discarded_bytes: output.discarded_bytes,
         duration_ms: output.duration_ms,
         is_final,
     });

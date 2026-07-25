@@ -792,6 +792,9 @@ mod tests {
                     completion: TerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 })
             })

@@ -84,16 +84,21 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
             } else {
                 TerminalExecCompletion::TimedOut
             };
+            let output = output.unwrap_or_else(|| {
+                "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
+                    .to_string()
+            });
+            let captured_bytes = output.len();
             Ok(TerminalExecResult {
                 target: request.target,
                 command: request.command,
                 submitted: request.submit,
                 completion,
                 exit_code: None,
-                output: output.unwrap_or_else(|| {
-                    "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
-                        .to_string()
-                }),
+                output,
+                truncated: false,
+                captured_bytes,
+                discarded_bytes: 0,
                 duration_ms: 12,
                 command_id: None,
             })
@@ -151,6 +156,25 @@ fn terminal_exec_descriptor_uses_target_and_command_schema() {
 }
 
 #[test]
+fn terminal_exec_result_defaults_truncation_metadata_for_legacy_json() {
+    let result: TerminalExecResult = serde_json::from_value(json!({
+        "target": "terminal-1",
+        "command": "pwd",
+        "submitted": true,
+        "completion": "observed_output",
+        "exit_code": 0,
+        "output": "/workspace",
+        "duration_ms": 12,
+        "command_id": null
+    }))
+    .expect("legacy terminal.exec result should deserialize");
+
+    assert!(!result.truncated);
+    assert_eq!(0, result.captured_bytes);
+    assert_eq!(0, result.discarded_bytes);
+}
+
+#[test]
 fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
     let (registry, terminal) = registry_with_terminal();
     let runtime_registry = terminal_exec_tool_registry(registry);
@@ -182,6 +206,13 @@ fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
             .unwrap_or_default()
             .contains("/dev/sda1")
     );
+    assert_eq!(json!(false), result.structured_content["truncated"]);
+    assert!(
+        result.structured_content["captured_bytes"]
+            .as_u64()
+            .is_some()
+    );
+    assert_eq!(json!(0), result.structured_content["discarded_bytes"]);
 }
 
 #[tokio::test(flavor = "current_thread")]

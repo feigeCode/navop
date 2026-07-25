@@ -163,6 +163,9 @@ impl TerminalExecObserver {
 pub struct TerminalExecProgress {
     pub output: String,
     pub completion: TerminalExecCompletion,
+    pub truncated: bool,
+    pub captured_bytes: usize,
+    pub discarded_bytes: u64,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
     pub is_final: bool,
@@ -180,6 +183,9 @@ pub enum TerminalExecCompletion {
 pub struct TerminalExecOutput {
     pub completion: TerminalExecCompletion,
     pub exit_code: Option<i32>,
+    pub truncated: bool,
+    pub captured_bytes: usize,
+    pub discarded_bytes: u64,
     pub output: String,
     pub duration_ms: u64,
 }
@@ -254,6 +260,9 @@ mod tests {
                     completion: TerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 })
             })

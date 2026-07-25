@@ -79,6 +79,60 @@ fn active_exec_capture_keeps_only_the_newest_bounded_tail() {
 }
 
 #[test]
+fn completed_output_reports_capture_truncation_metadata() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 38, "yes");
+    assert!(supervisor.on_osc(&OscEvent::CommandStart).is_empty());
+    supervisor.on_terminal_chunk(&vec![b'x'; TERMINAL_EXEC_CAPTURE_LIMIT_BYTES], &[]);
+    supervisor.on_terminal_chunk(b"tail", &[]);
+
+    let effects = supervisor.on_osc(&OscEvent::CommandFinished { exit_code: 0 });
+
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { id: 38, output }]
+            if output.truncated
+                && output.captured_bytes == TERMINAL_EXEC_CAPTURE_LIMIT_BYTES
+                && output.discarded_bytes == 4
+                && output.output.ends_with("tail")
+                && output.completion == TerminalExecCompletion::ShellIntegrationExit
+                && output.exit_code == Some(0)
+    ));
+}
+
+#[test]
+fn observer_progress_reports_capture_truncation_metadata() {
+    let progress = Arc::new(Mutex::new(Vec::new()));
+    let sink = progress.clone();
+    let mut tracked = request("yes");
+    tracked.observer = Some(TerminalExecObserver::new(move |update| {
+        sink.lock().expect("progress lock").push(update);
+    }));
+
+    let mut supervisor = ready_supervisor();
+    assert!(matches!(
+        supervisor.start(39, tracked).as_slice(),
+        [ExecEffect::Write { .. }, ExecEffect::ArmTimeout { .. }]
+    ));
+    assert!(supervisor.on_osc(&OscEvent::CommandStart).is_empty());
+    supervisor.on_terminal_chunk(&vec![b'x'; TERMINAL_EXEC_CAPTURE_LIMIT_BYTES], &[]);
+    supervisor.on_terminal_chunk(b"tail", &[]);
+    supervisor.on_osc(&OscEvent::CommandFinished { exit_code: 0 });
+
+    let progress = progress.lock().expect("progress lock");
+    let final_update = progress
+        .iter()
+        .find(|update| update.is_final)
+        .expect("final progress update");
+    assert!(final_update.truncated);
+    assert_eq!(
+        TERMINAL_EXEC_CAPTURE_LIMIT_BYTES,
+        final_update.captured_bytes
+    );
+    assert_eq!(4, final_update.discarded_bytes);
+}
+
+#[test]
 fn submitted_only_exec_becomes_busy_before_command_start_arrives() {
     let mut supervisor = ready_supervisor();
     let mut submitted_only = request("sleep 1");
@@ -90,8 +144,10 @@ fn submitted_only_exec_becomes_busy_before_command_start_arrives() {
                 source: TerminalInputSource::AgentCommand,
                 ..
             },
-            ExecEffect::Complete { id: 34, .. }
-        ]
+            ExecEffect::Complete { id: 34, output }
+        ] if !output.truncated
+            && output.captured_bytes == 0
+            && output.discarded_bytes == 0
     ));
     assert_eq!(
         ShellCommandReadiness::SubmissionPending { command_epoch: 34 },
@@ -342,6 +398,27 @@ fn observing_timeout_returns_bounded_partial_output() {
         [ExecEffect::Complete { output, .. }]
             if output.completion == TerminalExecCompletion::TimedOut
                 && output.output == "partial"
+    ));
+}
+
+#[test]
+fn observing_timeout_reports_capture_truncation_metadata() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 262, "long-command");
+    assert!(supervisor.on_osc(&OscEvent::CommandStart).is_empty());
+    supervisor.on_terminal_chunk(&vec![b'x'; TERMINAL_EXEC_CAPTURE_LIMIT_BYTES], &[]);
+    supervisor.on_terminal_chunk(b"tail", &[]);
+
+    let effects = supervisor.timeout(262, ExecPhase::Observing);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { output, .. }]
+            if output.completion == TerminalExecCompletion::TimedOut
+                && output.truncated
+                && output.captured_bytes == TERMINAL_EXEC_CAPTURE_LIMIT_BYTES
+                && output.discarded_bytes == 4
+                && output.output.ends_with("tail")
     ));
 }
 

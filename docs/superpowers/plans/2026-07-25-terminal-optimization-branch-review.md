@@ -39,6 +39,39 @@ baseline: cf16096f
 
 验证记录见本文末尾的“实施验证记录”。
 
+### 2026-07-25：切片 2，暴露 `terminal.exec` 输出截断元数据
+
+状态：**实现完成并通过跨 crate 验证，作为第二个独立优化提交。**
+
+本切片在切片 1 的 1 MiB capture 上限基础上，将截断状态从 terminal core
+一路暴露到 Public MCP structured result：
+
+```rust
+truncated: bool
+captured_bytes: usize
+discarded_bytes: u64
+```
+
+字段语义：
+
+- `captured_bytes` 是当前内部 capture buffer 保留的原始 terminal 字节数；
+- `discarded_bytes` 是由于 1 MiB 上限累计淘汰的原始字节数；
+- `truncated` 等价于 `discarded_bytes > 0`；
+- submitted-only 结果没有 output capture，三个字段分别为 `false`、`0`、`0`；
+- timeout、observer progress 和最终完成结果使用同一组 capture 元数据；
+- Public MCP 新字段使用 `#[serde(default)]`，旧版缺少这些字段的 JSON 仍可反序列化。
+
+本切片明确不扩展 command store 的历史记录 schema；历史命令是否持久化截断
+元数据留到 command store contract 单独评估，避免把直接执行结果的兼容扩展与
+持久化迁移混在同一提交。
+
+独立审查确认：普通 overflow 和单 chunk 超限都会精确累计丢弃字节并使用
+saturating 计数；observer、timeout、terminal view bridge 和 Public MCP JSON 映射一致；
+没有修改 cancel/detach、OSC 133、no-wait、terminal control、SSH lifecycle、encoding、
+recording 或 ingress queue 行为。
+
+验证记录见本文末尾的“实施验证记录”。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1119,3 +1152,76 @@ git diff --check
 全仓 `cargo fmt --check` 未通过，但报告的剩余差异位于未修改的
 `crates/markdown-editor` 文件；本次涉及的 terminal 文件已单独通过
 `rustfmt --check`。
+
+### 12.2 切片 2：暴露 `terminal.exec` 输出截断元数据
+
+TDD Red 证据：
+
+```text
+cargo test -p terminal capture_buffer --lib
+编译失败，共 9 个错误：captured_bytes、discarded_bytes、truncated 方法不存在
+
+cargo test -p terminal completed_output_reports_capture_truncation_metadata --lib
+编译失败，共 3 个错误：TerminalExecOutput 缺少 truncated、captured_bytes、discarded_bytes
+
+cargo test -p public_mcp --test terminal_exec \
+  terminal_exec_inserts_command_into_terminal_and_returns_observed_output
+1 failed：structured_content["truncated"] 实际为 Null，期望 false
+```
+
+Green、contract 与回归验证：
+
+```text
+cargo test -p terminal capture_buffer --lib
+3 passed
+
+cargo test -p terminal completed_output_reports_capture_truncation_metadata --lib
+1 passed
+
+cargo test -p terminal observer_progress_reports_capture_truncation_metadata --lib
+1 passed
+
+cargo test -p public_mcp --test terminal_exec \
+  terminal_exec_inserts_command_into_terminal_and_returns_observed_output
+1 passed
+
+cargo test -p terminal_view \
+  terminal_exec_handle_maps_backend_output_to_public_mcp_result --lib
+1 passed
+
+cargo test -p terminal --lib
+168 passed
+
+cargo test -p public_mcp
+132 passed
+
+cargo test -p terminal_view --lib
+290 passed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+cargo check -p public_mcp
+通过
+
+cargo check -p terminal_view
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+cargo check -p main
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check <本次修改的 13 个 Rust 文件>
+通过
+
+git diff --check
+通过
+```
+
+额外回归保护覆盖：
+
+- 普通 overflow 和单个超大 chunk 的累计 `discarded_bytes`；
+- submitted-only 的零 capture 元数据；
+- timeout 返回的截断元数据；
+- observer 最终 progress 的截断元数据；
+- terminal core 到 terminal view/Public MCP 的完整字段映射；
+- Public MCP 旧版 JSON 缺少新增字段时的 `serde(default)` 兼容行为。

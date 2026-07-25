@@ -402,6 +402,9 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
                 completion: map_exec_completion(core_result.completion),
                 exit_code: core_result.exit_code,
                 output: core_result.output,
+                truncated: core_result.truncated,
+                captured_bytes: core_result.captured_bytes,
+                discarded_bytes: core_result.discarded_bytes,
                 duration_ms: core_result.duration_ms,
                 command_id: (core_result.completion == CoreTerminalExecCompletion::TimedOut)
                     .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
@@ -655,6 +658,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 },
             )))),
@@ -698,6 +704,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::ShellIntegrationExit,
                     exit_code: Some(0),
                     output: "ssh.service loaded active running".to_string(),
+                    truncated: true,
+                    captured_bytes: 1024 * 1024,
+                    discarded_bytes: 17,
                     duration_ms: 42,
                 },
             )))),
@@ -725,6 +734,9 @@ mod tests {
         );
         assert_eq!(Some(0), result.exit_code);
         assert_eq!("ssh.service loaded active running", result.output);
+        assert!(result.truncated);
+        assert_eq!(1024 * 1024, result.captured_bytes);
+        assert_eq!(17, result.discarded_bytes);
         assert_eq!(42, result.duration_ms);
     }
 
@@ -740,6 +752,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::TimedOut,
                     exit_code: None,
                     output: "partial output".to_string(),
+                    truncated: false,
+                    captured_bytes: 14,
+                    discarded_bytes: 0,
                     duration_ms: 60_000,
                 },
             )))),
@@ -837,6 +852,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 },
             )),

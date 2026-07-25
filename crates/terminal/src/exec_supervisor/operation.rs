@@ -240,6 +240,9 @@ fn complete_submitted(active: &ActiveExec) -> ExecEffect {
             completion: TerminalExecCompletion::SubmittedOnly,
             exit_code: None,
             output: String::new(),
+            truncated: false,
+            captured_bytes: 0,
+            discarded_bytes: 0,
             duration_ms: elapsed_ms(active.started_at),
         },
     }
@@ -255,6 +258,9 @@ pub(super) fn output_with_completion(
         completion,
         exit_code,
         output: sanitize_captured_terminal_output(&raw, &active.request.command),
+        truncated: active.raw.truncated(),
+        captured_bytes: active.raw.captured_bytes(),
+        discarded_bytes: active.raw.discarded_bytes(),
         duration_ms: elapsed_ms(active.started_at),
     }
 }

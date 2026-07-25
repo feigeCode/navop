@@ -7,7 +7,9 @@ fn capture_buffer_never_exceeds_limit_and_keeps_newest_tail() {
     buffer.extend_from_slice(b"ab");
     buffer.extend_from_slice(b"cde");
 
-    assert_eq!(buffer.len(), 4);
+    assert_eq!(buffer.captured_bytes(), 4);
+    assert_eq!(buffer.discarded_bytes(), 1);
+    assert!(buffer.truncated());
     assert_eq!(buffer.to_vec(), b"bcde");
 }
 
@@ -18,7 +20,9 @@ fn capture_chunk_larger_than_limit_replaces_older_bytes() {
 
     buffer.extend_from_slice(b"123456");
 
-    assert_eq!(buffer.len(), 4);
+    assert_eq!(buffer.captured_bytes(), 4);
+    assert_eq!(buffer.discarded_bytes(), 5);
+    assert!(buffer.truncated());
     assert_eq!(buffer.to_vec(), b"3456");
 }
 
@@ -29,5 +33,8 @@ fn capture_buffer_preserves_order_without_truncation() {
     buffer.extend_from_slice(b"ab");
     buffer.extend_from_slice(b"cd");
 
+    assert_eq!(buffer.captured_bytes(), 4);
+    assert_eq!(buffer.discarded_bytes(), 0);
+    assert!(!buffer.truncated());
     assert_eq!(buffer.to_vec(), b"abcd");
 }

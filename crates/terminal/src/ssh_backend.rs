@@ -2208,6 +2208,9 @@ mod tests {
             completion: TerminalExecCompletion::ShellIntegrationExit,
             exit_code: Some(0),
             output: "/tmp".to_string(),
+            truncated: false,
+            captured_bytes: 4,
+            discarded_bytes: 0,
             duration_ms: 4,
         };
         match command_rx.recv().await {
