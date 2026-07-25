@@ -1,42 +1,33 @@
-# Notes local knowledge workspace
+# Notes Markdown workspace
 
-Notes manages Markdown and whiteboard material in a local folder, keeping query records, operational procedures, and project knowledge beside active connections. Files remain in the directory you choose; Navop is not a replacement for backup or version control.
+Notes currently opens and edits local Markdown files through two modes: a **read-only preview** and a **source editor**. Whiteboards, freeform canvases, and HTML, PDF, or Word export are not currently available.
 
-<div class="notes-screenshot-grid">
-  <figure><img src="/images/markdown.png" alt="Markdown source editor"><figcaption>Preview is read-only by default; switch to source mode for exact edits</figcaption></figure>
-  <figure><img src="/images/whiteboard.png" alt="Notes whiteboard workspace"><figcaption>Whiteboard canvas and freeform layout</figcaption></figure>
-</div>
+![Markdown source editor](/images/markdown.png)
 
-## Choose a workspace folder
+## Open Markdown files
 
-Select a readable and writable folder on first use, or change the Notes path in Settings. Use clear project directories and remember that changing the configured path does not move old files. Cloud drives, network folders, and Git repositories may work, but their synchronization and locking rules still apply.
+Choose a readable and writable local folder in Notes to browse its Markdown files. You can also use the operating-system file association to open a `.md` file directly in Navop.
 
-Do not store database passwords, SSH private keys, master keys, or tokens in notes. Review the folder's own access controls before sharing it across devices.
+Changing the Notes folder does not move existing files. When the folder is managed by a cloud drive, network share, or Git repository, that system remains responsible for synchronization, locking, and conflict resolution.
 
-## Create Markdown and whiteboards
+## Preview and edit source
 
-Markdown works well for technical text and portable code samples, while whiteboards organize free-form diagrams and ideas. Markdown opens in a read-only preview by default and switches to source mode for exact editing. The document view renders standard syntax, safely restricted HTML, and images inside Markdown tables; it is not an unrestricted browser rendering environment. Choose a durable format for long-lived content because advanced features can vary across renderers.
+Markdown opens in a read-only preview by default for reading common content such as headings, lists, links, code blocks, and images. Switch to source mode when you need to edit the Markdown text and save changes.
 
-Opening a `.md` file through the operating system sends it to the Notes Markdown view. Relative images and media resolve from the directory containing that Markdown file. Whiteboards keep separate editable data and resources; when exporting or sharing a preview, retain the original whiteboard file so the content remains editable.
+Preview shows the rendered result; it is not a WYSIWYG editor. After editing and saving in source mode, return to preview to verify formatting and resource paths.
 
-## Edit and use shortcuts
+## Images and relative paths
 
-Common editing, selection, search, and save shortcuts are listed under Settings → Shortcuts → Notes. Observe unsaved-change prompts when closing. Auto-save behavior depends on current settings and format; actively save important work and keep revisions elsewhere.
+Relative images and other local resources resolve from the directory containing the current Markdown file. Recheck references after moving, renaming, or deleting a Markdown file or one of its resources.
 
-After pasting external content, inspect the resulting Markdown, HTML, and external resources. Use stable relative paths for links, images, and code-related assets.
+After pasting external content, inspect the generated Markdown, HTML fragments, and external links so that tracking URLs, sensitive information, or short-lived resources are not included unintentionally.
 
-## Export HTML, PDF, and Word
+## Save and handle external changes
 
-With the Notes document exporter extension installed, export the current document as self-contained HTML, PDF, or Word DOCX. The Rust WASM exporter does not require local Chrome, Office, or a host conversion library. Choose the output directory deliberately and inspect images, code, Mermaid, and math in the target environment.
+Observe unsaved-change prompts before closing a file and save important edits explicitly. If another editor, Git operation, or cloud-sync process changes the same file, compare the versions before reloading or overwriting.
 
-## Manage resources and external changes
+Navop does not choose the correct side of a conflict and does not replace Git history or another backup system. Back up the Notes folder regularly and inspect the actual diff before committing or sharing a document.
 
-Images and attachments live in the note directory or its resource area. Moving or deleting them can break references, so search for usage before reorganizing. Avoid accumulating very large binaries as ordinary note assets.
+## Security reminder
 
-If another editor changes a file, compare it with local unsaved content before reloading. Git conflicts, cloud conflict copies, and encoding changes must be resolved at the file level.
-
-## Back up and share safely
-
-Back up the entire Notes directory, including hidden metadata and resources. Markdown is broadly portable, while extension syntax and whiteboards may depend on Navop or a document-renderer extension. Preview in the target environment before distribution.
-
-Redact connection names, internal addresses, query results, logs, screenshot metadata, and personal information before sharing.
+Do not store database passwords, SSH private keys, master keys, tokens, or other plaintext credentials in Markdown notes. Before sharing, redact connection names, internal addresses, query results, logs, screenshots, and personal information.

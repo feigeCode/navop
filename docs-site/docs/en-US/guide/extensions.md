@@ -1,10 +1,10 @@
 # Extension marketplace and local extensions
 
-Extensions add database drivers, ACP Agents, connection importers, remote desktop providers, language packs, document renderers, and related capabilities. Extension code runs locally, so review source, permissions, platform, and compatibility as carefully as other desktop software.
+Extensions add database drivers, ACP Agents, connection importers, remote desktop providers, language packs, and related capabilities. Extension code runs locally, so review source, permissions, platform, and compatibility as carefully as other desktop software.
 
 ## Understand extension types
 
-Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales. Document renderers handle particular Notes or preview formats.
+Database drivers add connection types. ACP Agent extensions connect external agents. Import extensions read other applications. Remote desktop providers enable RDP/VNC. Language extensions add UI locales.
 
 A product name in a compatibility list does not mean its driver is installed. Check the marketplace entry, current platform, and Navop version first.
 
@@ -24,7 +24,7 @@ Keep manifests, binaries, and resources together. Prepare dependencies for an of
 
 An extension may access network, files, connection metadata, or rendering resources according to its manifest. Grant only what is required. Unknown publishers should not receive production credentials. Importers may need additional filesystem permission; missing passwords after denial are expected.
 
-WASM document renderers and controlled runtimes have resource and timeout limits. Optimize input or use a trusted external tool instead of removing every limit.
+WASM and other controlled runtimes have resource and timeout limits. When an extension task fails, inspect its input, permissions, logs, and compatible versions instead of removing every limit.
 
 ## Uninstall and report issues
 

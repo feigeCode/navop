@@ -23,7 +23,7 @@ Navop 将数据库、Redis、MongoDB、SSH、SFTP、终端、远程桌面、Note
 - [SQL 编辑器、事务与查询结果](./guide/sql-editor)
 - [SSH、SFTP、端口转发与 Agent Hub](./guide/ssh-terminal)
 - [远程桌面、串口与服务器监控](./guide/remote-access)
-- [Notes 本地知识库](./guide/notes)
+- [Notes Markdown 预览与源码编辑](./guide/notes)
 - [AI 工作台、Navop Skill 与 Public MCP](./guide/ai-workbench)
 - [团队同步与安全](./guide/teams-sync-security)
 - [设置与疑难排解](./guide/settings-shortcuts)

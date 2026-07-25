@@ -14,7 +14,7 @@ Navop 把資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、串�
 
 首頁管理連線和工作區；資料庫區域包含 SQL、資料表資料、表設計、ER 圖、匯入匯出和結構或資料比較；Redis 與 MongoDB 有各自的瀏覽器、編輯器與診斷頁。SSH 工作區結合分割終端、歷史、快捷命令、SFTP、遠端編輯和伺服器監控。RDP、VNC、Serial 與 Port Forwarding 也從新增連線進入。
 
-Notes 管理本機 Markdown 和白板。AI 工作台可設定 Provider，並選擇 Ask、Plan 或 Auto。Codex 等可執行終端命令的 AI Agent 可以安裝 Navop Skill，透過 `navop` 按需操作資源，不必在每輪攜帶完整 MCP 工具目錄，從而減少重複上下文和 Token 開銷。CLI 仍需啟用 Public MCP，並遵循 Tool Exposure、權限與審批。擴充市場則提供資料庫驅動、ACP Agent、連線匯入、遠端桌面、語言和文件渲染器。
+Notes 提供本機 Markdown 的唯讀預覽與原始碼編輯。AI 工作台可設定 Provider，並選擇 Ask、Plan 或 Auto。Codex 等可執行終端命令的 AI Agent 可以安裝 Navop Skill，透過 `navop` 按需操作資源，不必在每輪攜帶完整 MCP 工具目錄，從而減少重複上下文和 Token 開銷。CLI 仍需啟用 Public MCP，並遵循 Tool Exposure、權限與審批。擴充市場則提供資料庫驅動、ACP Agent、連線匯入、遠端桌面和語言。
 
 ## 建議的學習順序
 

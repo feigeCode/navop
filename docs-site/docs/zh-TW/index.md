@@ -23,7 +23,7 @@ Navop 將資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、Note
 - [SQL 編輯器、交易與查詢結果](./guide/sql-editor)
 - [SSH、SFTP、連接埠轉送與 Agent Hub](./guide/ssh-terminal)
 - [遠端桌面、串口與伺服器監控](./guide/remote-access)
-- [Notes 本機知識庫](./guide/notes)
+- [Notes Markdown 預覽與原始碼編輯](./guide/notes)
 - [AI 工作台、Navop Skill 與 Public MCP](./guide/ai-workbench)
 - [團隊同步與安全](./guide/teams-sync-security)
 - [設定與疑難排解](./guide/settings-shortcuts)

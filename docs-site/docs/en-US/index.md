@@ -23,7 +23,7 @@ Navop brings databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, N
 - [SQL editor, transactions, and query results](./guide/sql-editor)
 - [SSH, SFTP, port forwarding, and Agent Hub](./guide/ssh-terminal)
 - [Remote desktop, serial, and server monitoring](./guide/remote-access)
-- [Local Notes workspace](./guide/notes)
+- [Notes Markdown preview and source editing](./guide/notes)
 - [AI Workbench, Navop Skill, and Public MCP](./guide/ai-workbench)
 - [Team sync and security](./guide/teams-sync-security)
 - [Settings and troubleshooting](./guide/settings-shortcuts)
