@@ -278,6 +278,14 @@ fn themed_session_row_style(theme: &AgentChatTheme) -> SessionRowStyle {
     }
 }
 
+fn running_session_indicator_color(selected: bool, style: SessionRowStyle) -> gpui::Hsla {
+    if selected {
+        style.selected_foreground
+    } else {
+        style.foreground
+    }
+}
+
 impl RuntimeBinding {
     fn new(
         runtime: Arc<Runtime>,
@@ -2202,11 +2210,7 @@ impl AgentChatView {
         let group = SharedString::from(format!("agent-session-row-{uid}"));
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let row_style = themed_session_row_style(&theme);
-        let running_color = if selected {
-            row_style.selected_foreground
-        } else {
-            theme.accent
-        };
+        let running_color = running_session_indicator_color(selected, row_style);
         let running_indicator_id = format!("agent-session-running-spinner-{uid}");
 
         // 标题区:活跃视图可点击切换;归档视图只读。
@@ -5593,6 +5597,57 @@ mod tests {
 
         cx.debug_bounds(spinner_id)
             .expect("running conversation should show an animated loading spinner in the sidebar");
+    }
+
+    #[gpui::test]
+    fn all_parallel_running_sessions_show_loading_in_sidebar(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let (background_session, current_session) = view.update(cx, |view, cx| {
+            let background_session = view.current_session.clone();
+            view.set_running(true, cx);
+            view.new_session(cx);
+            let current_session = view.current_session.clone();
+            view.set_running(true, cx);
+            (background_session, current_session)
+        });
+        let cx: &mut VisualTestContext = cx;
+        let background_spinner_id: &'static str = Box::leak(
+            format!("agent-session-running-spinner-{background_session}").into_boxed_str(),
+        );
+        let current_spinner_id: &'static str =
+            Box::leak(format!("agent-session-running-spinner-{current_session}").into_boxed_str());
+
+        cx.debug_bounds(background_spinner_id)
+            .expect("background running conversation should show loading in the sidebar");
+        cx.debug_bounds(current_spinner_id)
+            .expect("current running conversation should show loading in the sidebar");
+    }
+
+    #[test]
+    fn background_running_session_uses_readable_foreground_color() {
+        let foreground = gpui::rgb(0xf8fafc).into();
+        let selected_foreground = gpui::rgb(0xe2e8f0).into();
+        let style = SessionRowStyle {
+            foreground,
+            muted_foreground: gpui::rgb(0x64748b).into(),
+            selected_background: gpui::rgb(0x1e293b).into(),
+            selected_foreground,
+            hover_background: gpui::rgb(0x0f172a).into(),
+        };
+
+        assert_eq!(
+            foreground,
+            running_session_indicator_color(false, style),
+            "background running tasks must remain clearly visible on the sidebar background"
+        );
+        assert_eq!(
+            selected_foreground,
+            running_session_indicator_color(true, style),
+            "the selected running task should use the selected row foreground"
+        );
     }
 
     #[gpui::test]
