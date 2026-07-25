@@ -30,6 +30,8 @@ mod tree;
 mod tree_model;
 mod workspace_context_menu;
 
+pub(crate) use connection_share::connection_full_info_text;
+
 #[derive(Clone, Copy)]
 pub(super) struct SidebarPalette {
     pub background: Hsla,

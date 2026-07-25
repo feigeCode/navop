@@ -5,10 +5,7 @@ pub(super) enum ConnectionMenuAction {
     OpenInBackground,
     OpenFullscreenWindow,
     OpenSftp,
-    CopyInfo,
-    CopyName,
-    CopyTargets,
-    CopyCommand,
+    CopyConnection,
     MoveToGroup,
     Edit,
     Duplicate,
@@ -26,19 +23,8 @@ pub(super) fn connection_menu_actions(
     if connection_type == ConnectionType::SshSftp {
         actions.push(ConnectionMenuAction::OpenSftp);
     }
-    actions.push(ConnectionMenuAction::CopyInfo);
-    actions.push(ConnectionMenuAction::CopyName);
     if connection_type != ConnectionType::All {
-        actions.push(ConnectionMenuAction::CopyTargets);
-    }
-    if matches!(
-        connection_type,
-        ConnectionType::Database
-            | ConnectionType::SshSftp
-            | ConnectionType::Redis
-            | ConnectionType::MongoDB
-    ) {
-        actions.push(ConnectionMenuAction::CopyCommand);
+        actions.push(ConnectionMenuAction::CopyConnection);
     }
     if can_edit {
         actions.extend([
@@ -62,10 +48,7 @@ mod tests {
             vec![
                 ConnectionMenuAction::OpenInBackground,
                 ConnectionMenuAction::OpenSftp,
-                ConnectionMenuAction::CopyInfo,
-                ConnectionMenuAction::CopyName,
-                ConnectionMenuAction::CopyTargets,
-                ConnectionMenuAction::CopyCommand,
+                ConnectionMenuAction::CopyConnection,
                 ConnectionMenuAction::MoveToGroup,
                 ConnectionMenuAction::Edit,
                 ConnectionMenuAction::Duplicate,
@@ -78,30 +61,32 @@ mod tests {
     fn non_ssh_menu_does_not_offer_sftp() {
         let actions = connection_menu_actions(ConnectionType::Database, true);
         assert!(actions.contains(&ConnectionMenuAction::OpenInBackground));
-        assert!(actions.contains(&ConnectionMenuAction::CopyInfo));
-        assert!(actions.contains(&ConnectionMenuAction::CopyTargets));
-        assert!(actions.contains(&ConnectionMenuAction::CopyCommand));
+        assert!(actions.contains(&ConnectionMenuAction::CopyConnection));
         assert!(!actions.contains(&ConnectionMenuAction::OpenSftp));
     }
 
     #[test]
-    fn read_only_connection_menu_keeps_open_actions_only() {
+    fn read_only_connection_menu_keeps_copy_submenu_without_management_actions() {
         assert_eq!(
             connection_menu_actions(ConnectionType::Rdp, false),
             vec![
                 ConnectionMenuAction::OpenInBackground,
                 ConnectionMenuAction::OpenFullscreenWindow,
-                ConnectionMenuAction::CopyInfo,
-                ConnectionMenuAction::CopyName,
-                ConnectionMenuAction::CopyTargets,
+                ConnectionMenuAction::CopyConnection,
             ]
         );
     }
 
     #[test]
-    fn unsupported_types_do_not_offer_a_cli_command() {
+    fn every_real_connection_type_uses_one_top_level_copy_submenu() {
         let actions = connection_menu_actions(ConnectionType::Rdp, true);
-        assert!(!actions.contains(&ConnectionMenuAction::CopyCommand));
+        assert_eq!(
+            1,
+            actions
+                .iter()
+                .filter(|action| **action == ConnectionMenuAction::CopyConnection)
+                .count()
+        );
         assert!(actions.contains(&ConnectionMenuAction::OpenFullscreenWindow));
         assert!(actions.contains(&ConnectionMenuAction::MoveToGroup));
     }

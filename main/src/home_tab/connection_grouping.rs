@@ -2,6 +2,31 @@ use super::*;
 
 impl HomePage {
     pub(crate) fn can_move_connection(&self, connection_id: i64) -> bool {
+        self.can_manage_connection(connection_id)
+    }
+
+    pub(crate) fn can_export_connection_credentials(&self, connection_id: i64) -> bool {
+        self.connection_credential_export_identity(connection_id)
+            .is_some()
+    }
+
+    pub(crate) fn connection_credential_export_identity(
+        &self,
+        connection_id: i64,
+    ) -> Option<ConnectionCredentialExportIdentity> {
+        let connection = self
+            .connections
+            .iter()
+            .find(|connection| connection.id == Some(connection_id))?;
+        can_edit_connection_with_cached_teams(
+            connection.team_id.as_deref(),
+            &self.team_options,
+            self.current_user.is_some(),
+        )
+        .then(|| ConnectionCredentialExportIdentity::from_connection(connection))
+    }
+
+    fn can_manage_connection(&self, connection_id: i64) -> bool {
         self.connections
             .iter()
             .find(|connection| connection.id == Some(connection_id))

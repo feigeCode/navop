@@ -142,6 +142,36 @@ impl ConnectionRepository {
         Self { conn }
     }
 
+    pub fn get_for_sensitive_export(
+        &self,
+        id: i64,
+        expected_team_id: Option<&str>,
+        expected_owner_id: Option<&str>,
+    ) -> Result<Option<StoredConnection>> {
+        self.conn.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                 FROM connections
+                 WHERE id = ?1
+                   AND ((team_id = ?2) OR (team_id IS NULL AND ?2 IS NULL))
+                   AND ((owner_id = ?3) OR (owner_id IS NULL AND ?3 IS NULL))",
+            )?;
+            let mut rows = stmt.query(params![id, expected_team_id, expected_owner_id])?;
+            let Some(row) = rows.next()? else {
+                return Ok(None);
+            };
+            let row = ConnectionRow::from_row(row)?;
+            let params_are_valid_json =
+                serde_json::from_str::<serde_json::Value>(&row.params).is_ok();
+            if !params_are_valid_json
+                || has_decrypt_failure_in_sensitive_fields(&row.params)
+            {
+                anyhow::bail!("Sensitive connection information is unavailable");
+            }
+            Ok(Some(row.into()))
+        })
+    }
+
     pub fn upsert_cloud_connection(&self, item: &mut StoredConnection) -> Result<()> {
         let cloud_id = item
             .cloud_id
@@ -1035,6 +1065,190 @@ mod tests {
             .expect("clear workspace");
         let unassigned = repo.get(connection_id).expect("read").expect("connection");
         assert_eq!(None, unassigned.workspace_id);
+    }
+
+    #[test]
+    fn sensitive_export_returns_plaintext_credentials_when_params_are_readable() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("sensitive-readable");
+        let connection_id = repo.insert(&mut connection).expect("connection");
+        let plaintext_params = serde_json::to_string(&SshParams {
+            host: "sensitive-readable.example.com".to_string(),
+            port: 22,
+            username: "deploy".to_string(),
+            auth_method: SshAuthMethod::Password {
+                password: "plaintext-secret".to_string(),
+            },
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            x11_forwarding: None,
+            jump_server: None,
+            proxy: None,
+            os_id: None,
+            icon: None,
+        })
+        .expect("serialize SSH params");
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET params = ?1 WHERE id = ?2",
+                params![plaintext_params, connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("store plaintext params");
+        let raw_params_before = raw_connection_params(&conn, connection_id);
+
+        let exported = repo
+            .get_for_sensitive_export(connection_id, None, None)
+            .expect("sensitive export read")
+            .expect("connection");
+        let params = exported.to_ssh_params().expect("SSH params");
+        assert!(matches!(
+            params.auth_method,
+            SshAuthMethod::Password { ref password } if password == "plaintext-secret"
+        ));
+        assert_eq!(
+            raw_params_before,
+            raw_connection_params(&conn, connection_id)
+        );
+    }
+
+    #[test]
+    fn sensitive_export_fails_closed_when_an_encrypted_field_cannot_be_decrypted() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("sensitive-unreadable");
+        let connection_id = repo.insert(&mut connection).expect("connection");
+        let invalid_encrypted_value = "ENC:not-valid-sensitive-ciphertext";
+        let unreadable_params = serde_json::json!({
+            "host": "sensitive-unreadable.example.com",
+            "port": 22,
+            "username": "deploy",
+            "auth_method": {
+                "Password": {
+                    "password": invalid_encrypted_value
+                }
+            }
+        })
+        .to_string();
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET params = ?1 WHERE id = ?2",
+                params![unreadable_params, connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("store unreadable params");
+
+        let error = repo
+            .get_for_sensitive_export(connection_id, None, None)
+            .expect_err("unreadable credentials must fail closed")
+            .to_string();
+        assert!(!error.contains(invalid_encrypted_value));
+        assert!(!error.contains("sensitive-unreadable.example.com"));
+        assert!(!error.contains("\"params\""));
+    }
+
+    #[test]
+    fn sensitive_export_fails_closed_for_nested_unreadable_private_key_content() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("nested-sensitive-unreadable");
+        let connection_id = repo.insert(&mut connection).expect("connection");
+        let invalid_encrypted_value = "ENC:not-valid-private-key-ciphertext";
+        let unreadable_params = serde_json::json!({
+            "host": "nested-sensitive-unreadable.example.com",
+            "tunnels": [{
+                "ssh_private_key_content": invalid_encrypted_value
+            }]
+        })
+        .to_string();
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET params = ?1 WHERE id = ?2",
+                params![unreadable_params, connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("store unreadable params");
+
+        let error = repo
+            .get_for_sensitive_export(connection_id, None, None)
+            .expect_err("nested unreadable credentials must fail closed")
+            .to_string();
+        assert!(!error.contains(invalid_encrypted_value));
+        assert!(!error.contains("nested-sensitive-unreadable.example.com"));
+        assert!(!error.contains("\"params\""));
+    }
+
+    #[test]
+    fn sensitive_export_fails_closed_for_malformed_params_without_leaking_them() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("malformed-sensitive");
+        let connection_id = repo.insert(&mut connection).expect("connection");
+        let malformed_params = r#"{"host":"malformed-sensitive.example.com","password":"secret""#;
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET params = ?1 WHERE id = ?2",
+                params![malformed_params, connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("store malformed params");
+
+        let error = repo
+            .get_for_sensitive_export(connection_id, None, None)
+            .expect_err("malformed params must fail closed")
+            .to_string();
+        assert!(!error.contains(malformed_params));
+        assert!(!error.contains("malformed-sensitive.example.com"));
+        assert!(!error.contains("secret"));
+        assert!(!error.contains("\"params\""));
+    }
+
+    #[test]
+    fn sensitive_export_requires_the_authorized_record_identity() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("identity-bound");
+        connection.team_id = Some("team-a".to_string());
+        connection.owner_id = Some("owner-a".to_string());
+        let connection_id = repo.insert(&mut connection).expect("connection");
+
+        let exported = repo
+            .get_for_sensitive_export(connection_id, Some("team-a"), Some("owner-a"))
+            .expect("matching identity should be readable")
+            .expect("connection");
+        assert_eq!(Some("team-a"), exported.team_id.as_deref());
+        assert_eq!(Some("owner-a"), exported.owner_id.as_deref());
+
+        for (team_id, owner_id) in [
+            (Some("team-b"), Some("owner-a")),
+            (Some("team-a"), Some("owner-b")),
+            (None, None),
+        ] {
+            assert!(
+                repo.get_for_sensitive_export(connection_id, team_id, owner_id)
+                    .expect("identity mismatch should fail closed")
+                    .is_none()
+            );
+        }
+
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET team_id = ?1, owner_id = ?2 WHERE id = ?3",
+                params!["team-b", "owner-b", connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("move connection to another identity");
+
+        assert!(
+            repo.get_for_sensitive_export(connection_id, Some("team-a"), Some("owner-a"))
+                .expect("stale identity should fail closed")
+                .is_none()
+        );
     }
 
     fn raw_connection_params(conn: &SqliteConnection, connection_id: i64) -> String {

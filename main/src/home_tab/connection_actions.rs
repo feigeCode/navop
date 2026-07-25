@@ -1,5 +1,17 @@
 use super::*;
 
+fn sensitive_export_copy_text(
+    authorized_identity: Option<&ConnectionCredentialExportIdentity>,
+    result: anyhow::Result<StoredConnection>,
+) -> Option<String> {
+    let authorized_identity = authorized_identity?;
+    let connection = result.ok()?;
+    if !authorized_identity.matches(&connection) {
+        return None;
+    }
+    crate::persistent_connection_sidebar::connection_full_info_text(&connection)
+}
+
 impl HomePage {
     pub(crate) fn edit_connection(
         &mut self,
@@ -187,6 +199,117 @@ impl HomePage {
         }
     }
 
+    pub(crate) fn confirm_copy_full_connection_info(
+        &mut self,
+        connection_id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_export_connection_credentials(connection_id) {
+            window.push_notification(
+                Notification::error(t!("Connection.copy_sensitive_unavailable").to_string())
+                    .autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        let view = cx.entity();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view = view.clone();
+            dialog
+                .title(
+                    t!("Connection.copy_full_info_confirm_title")
+                        .to_string()
+                        .into_any_element(),
+                )
+                .child(
+                    t!("Connection.copy_full_info_confirm_message")
+                        .to_string()
+                        .into_any_element(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Connection.copy_full_info_confirm_action").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, window, cx| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.copy_full_connection_info(connection_id, window, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    fn copy_full_connection_info(
+        &mut self,
+        connection_id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(export_identity) = self.connection_credential_export_identity(connection_id)
+        else {
+            window.push_notification(
+                Notification::error(t!("Connection.copy_sensitive_unavailable").to_string())
+                    .autohide(true),
+                cx,
+            );
+            return;
+        };
+
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let home = cx.entity();
+        let window_handle = window.window_handle();
+        let expected_team_id = export_identity.team_id;
+        let expected_owner_id = export_identity.owner_id;
+        let load_task = cx.background_spawn(async move {
+            let repo = storage
+                .get::<ConnectionRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+            repo.get_for_sensitive_export(
+                connection_id,
+                expected_team_id.as_deref(),
+                expected_owner_id.as_deref(),
+            )?
+            .ok_or_else(|| anyhow::anyhow!("Connection not found"))
+        });
+
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            let result = load_task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let authorized_identity = home
+                    .read(cx)
+                    .connection_credential_export_identity(connection_id);
+                let text = sensitive_export_copy_text(authorized_identity.as_ref(), result);
+                match text {
+                    Some(text) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        window.push_notification(
+                            Notification::success(
+                                t!("Connection.copy_sensitive_success").to_string(),
+                            )
+                            .autohide(true),
+                            cx,
+                        );
+                    }
+                    None => {
+                        window.push_notification(
+                            Notification::error(
+                                t!("Connection.copy_sensitive_unavailable").to_string(),
+                            )
+                            .autohide(true),
+                            cx,
+                        );
+                    }
+                }
+                window.refresh();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn delete_connection(&mut self, conn_id: i64, cx: &mut Context<Self>) {
         let storage = cx.global::<GlobalStorageState>().storage.clone();
 
@@ -267,5 +390,78 @@ impl HomePage {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod sensitive_copy_tests {
+    use one_core::storage::{SshAuthMethod, SshParams};
+
+    use super::*;
+
+    fn sensitive_ssh_connection() -> StoredConnection {
+        StoredConnection::new_ssh(
+            "Sensitive SSH".to_string(),
+            SshParams {
+                host: "ssh.example.test".to_string(),
+                port: 22,
+                username: "alice".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "clipboard-secret".to_string(),
+                },
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn sensitive_export_text_requires_the_current_authorized_identity() {
+        let mut connection = sensitive_ssh_connection();
+        connection.team_id = Some("team-a".to_string());
+        connection.owner_id = Some("owner-a".to_string());
+        let identity = ConnectionCredentialExportIdentity::from_connection(&connection);
+
+        let allowed = sensitive_export_copy_text(Some(&identity), Ok(connection.clone()))
+            .expect("copyable text");
+        assert!(allowed.contains("clipboard-secret"));
+        assert_eq!(
+            None,
+            sensitive_export_copy_text(None, Ok(connection.clone()))
+        );
+
+        connection.team_id = Some("team-b".to_string());
+        assert_eq!(
+            None,
+            sensitive_export_copy_text(Some(&identity), Ok(connection))
+        );
+    }
+
+    #[test]
+    fn sensitive_export_text_fails_closed_for_load_or_format_errors() {
+        let connection = sensitive_ssh_connection();
+        let identity = ConnectionCredentialExportIdentity::from_connection(&connection);
+        let load_error = sensitive_export_copy_text(
+            Some(&identity),
+            Err(anyhow::anyhow!("private load failure")),
+        );
+        assert_eq!(None, load_error);
+
+        let mut malformed = connection;
+        malformed.params = "{malformed".to_string();
+        assert_eq!(
+            None,
+            sensitive_export_copy_text(Some(&identity), Ok(malformed))
+        );
     }
 }
