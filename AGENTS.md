@@ -345,6 +345,13 @@
 - **验证方式**：补结构性回归测试，断言外层有 flex/h_full/min/overflow_hidden 边界、内层有 size_full/overflow_y_scrollbar；运行相关 UI 模块的定向 `cargo test`，必要时手工打开窗口验证滚轮。
 - **适用范围**：GPUI popup、dialog、tab 面板中需要滚动的列表、卡片网格、表单内容区域。
 
+- **标题**：GPUI 可收缩侧边栏输入区不要让父子两层同时依赖 `h_full()`
+- **触发信号**：AI composer、表单或底部操作区仍存在于元素树中，但 `debug_bounds` 显示外层只剩 0–1px、内层高度为 0，界面表现为输入框完全消失；问题常在给可收缩输入区及其子节点同时增加 `.h_full()` 后出现。
+- **根因 / 约束**：纵向 flex 中，父节点需要根据子节点的 intrinsic height 分配空间，而子节点的 `h_full()` 又依赖父节点先得到确定高度，容易形成无法提供有效 flex basis 的循环；若父节点还允许 `flex_shrink`，输入区会优先塌陷到 0。只断言元素“已渲染”、宽度相等或底边未越界无法发现该问题，因为零高度 bounds 仍满足这些条件。
+- **正确做法**：输入组件根节点保留自然高度和 `.flex_shrink_0()`；由直接外层输入区域承担 `.min_h_0().flex_shrink(1.0)`，并在短窗口中使用有界的 `overflow_y_scroll()` 提供滚动，不要让父子两层都以 `h_full()` 建立高度。消息区继续使用 `.flex_1().min_h_0()`，把剩余空间交给可滚动内容。
+- **验证方式**：真实 GPUI 布局测试必须同时覆盖正常高度和短侧边栏，明确断言 input area 与 input root 的高度大于 0、输入区位于 viewport 内，并验证长消息时输入区边界不越出宿主；不能只检查 `debug_bounds(...).is_some()`。
+- **适用范围**：`crates/ai_chat_view` 的 sidebar composer，以及任何“可滚动主体 + 底部输入/操作区”的 GPUI 纵向 flex 布局。
+
 - **标题**：GPUI `TabContainer` 必须在 active view 的直接边界截断 intrinsic size
 - **触发信号**：打开 RDP、图片、画布等 tab 后，tab 栏窗口控件、左右侧栏或中心区域被内容“挤压”、自动靠拢；只给 `TabContainer` 根节点或 `tab-content` 增加 `.min_w_0()` 后问题仍会复现。
 - **根因 / 约束**：flex shrink 约束必须覆盖从 active view 到窗口 chrome 的每一层直接布局边界。外层已有 `.min_w_0()` / `.min_h_0()` 并不能替代中间 `AnyView` wrapper、sidebar center 和图片根节点自身的约束；任一层保留自动最小尺寸时，RDP frame 的 intrinsic size 都可能继续向上传播。

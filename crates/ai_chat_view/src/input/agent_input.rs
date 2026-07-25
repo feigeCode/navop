@@ -2212,12 +2212,7 @@ impl Render for AgentInput {
             .track_focus(&self.focus_handle)
             .w_full()
             .min_w_0()
-            .when(self.edge_to_edge, |this| {
-                this.h_full()
-                    .min_h_0()
-                    .flex_shrink(1.0)
-                    .overflow_y_scroll()
-            })
+            .when(self.edge_to_edge, |this| this.min_h_0().flex_shrink_0())
             .when(!self.edge_to_edge, |this| this.flex_shrink_0())
             .bg(theme.background)
             .text_color(theme.foreground)
