@@ -18,7 +18,8 @@ use anyhow::{Error, Result, anyhow, bail};
 use async_trait::async_trait;
 use one_core::storage::{
     DatabaseType, DbConnectionConfig, QueryDirectoryEntryKind, QueryDirectoryScope,
-    list_query_directory, query_directory,
+    added_query_directories, default_query_directory, list_query_directory,
+    query_directory_display_name,
 };
 use rust_i18n::t;
 use sqlparser::ast;
@@ -1181,9 +1182,10 @@ pub trait DatabasePlugin: Send + Sync {
 
     async fn load_queries_children(&self, node: &DbNode, id: &str) -> Result<Vec<DbNode>> {
         let metadata = node.metadata.clone();
-        let query_path = if node.node_type == DbNodeType::QueryFolder {
+        let is_query_root = node.node_type != DbNodeType::QueryFolder;
+        let (query_path, scope) = if node.node_type == DbNodeType::QueryFolder {
             match node.metadata.get("directory_path") {
-                Some(path) => std::path::PathBuf::from(path),
+                Some(path) => (std::path::PathBuf::from(path), None),
                 None => return Ok(Vec::new()),
             }
         } else {
@@ -1192,8 +1194,8 @@ pub trait DatabasePlugin: Send + Sync {
                 node.connection_id.clone(),
                 node.get_database_name().unwrap_or_default(),
             );
-            match query_directory(&scope) {
-                Ok(path) => path,
+            match default_query_directory(&scope) {
+                Ok(path) => (path, Some(scope)),
                 Err(e) => {
                     error!("Failed to resolve queries directory: {}", e);
                     return Ok(Vec::new());
@@ -1240,6 +1242,41 @@ pub trait DatabasePlugin: Send + Sync {
             .with_metadata(meta);
 
             query_nodes.push(query_node);
+        }
+
+        if is_query_root {
+            if let Some(scope) = scope {
+                match added_query_directories(&scope) {
+                    Ok(directories) => {
+                        for directory in directories {
+                            let mut meta = metadata.clone();
+                            meta.insert(
+                                "directory_path".to_string(),
+                                directory.to_string_lossy().to_string(),
+                            );
+                            meta.insert("query_directory_root".to_string(), "added".to_string());
+                            query_nodes.push(
+                                DbNode::new(
+                                    format!(
+                                        "{}:added-directory:{}",
+                                        id,
+                                        directory.to_string_lossy()
+                                    ),
+                                    query_directory_display_name(&directory),
+                                    DbNodeType::QueryFolder,
+                                    node.connection_id.clone(),
+                                    node.database_type.clone(),
+                                )
+                                .with_parent_context(id)
+                                .with_metadata(meta),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to load added query directories: {}", e);
+                    }
+                }
+            }
         }
 
         query_nodes.sort();

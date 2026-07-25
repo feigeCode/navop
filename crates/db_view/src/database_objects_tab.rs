@@ -31,8 +31,9 @@ use gpui_component::{
 use gpui_component::{InteractiveElementExt, WindowExt};
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState,
-    QueryDirectoryEntryKind, QueryDirectoryScope, StorageManager, Workspace, list_query_directory,
-    query_directory,
+    QueryDirectoryEntryKind, QueryDirectoryScope, StorageManager, Workspace,
+    added_query_directories, default_query_directory, list_query_directory,
+    query_directory_display_name,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::debouncer::Debouncer;
@@ -100,6 +101,24 @@ fn append_query_rows(
         if entry.kind == QueryDirectoryEntryKind::Directory {
             append_query_rows(&entry.path, depth + 1, rows)?;
         }
+    }
+    Ok(())
+}
+
+fn append_added_query_root_rows(
+    directories: impl IntoIterator<Item = PathBuf>,
+    rows: &mut Vec<Vec<String>>,
+) -> anyhow::Result<()> {
+    for directory in directories {
+        rows.push(vec![
+            query_directory_display_name(&directory),
+            String::new(),
+            String::new(),
+            QUERY_ROW_KIND_DIRECTORY.to_string(),
+            directory.to_string_lossy().into_owned(),
+            "0".to_string(),
+        ]);
+        append_query_rows(&directory, 1, rows)?;
     }
     Ok(())
 }
@@ -563,19 +582,19 @@ impl DatabaseObjects {
     }
 
     async fn load_queries_list_view(node: DbNode) -> Option<ObjectView> {
-        let query_path = if node.node_type == DbNodeType::QueryFolder {
-            PathBuf::from(node.metadata.get("directory_path")?)
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        if node.node_type == DbNodeType::QueryFolder {
+            let query_path = PathBuf::from(node.metadata.get("directory_path")?);
+            append_query_rows(&query_path, 0, &mut rows).ok()?;
         } else {
             let scope = QueryDirectoryScope::new(
                 node.database_type.path_key(),
                 node.connection_id.clone(),
                 node.get_database_name().unwrap_or_default(),
             );
-            query_directory(&scope).ok()?
-        };
-        let mut rows: Vec<Vec<String>> = Vec::new();
-
-        append_query_rows(&query_path, 0, &mut rows).ok()?;
+            append_query_rows(&default_query_directory(&scope).ok()?, 0, &mut rows).ok()?;
+            append_added_query_root_rows(added_query_directories(&scope).ok()?, &mut rows).ok()?;
+        }
 
         Some(ObjectView {
             db_node_type: DbNodeType::NamedQuery,
@@ -1703,6 +1722,34 @@ mod tests {
         assert_eq!("0", rows[2][QUERY_ROW_DEPTH_INDEX]);
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn added_query_directory_is_appended_as_a_root_without_hiding_default_rows() {
+        let default_root = temp_test_dir("default-query-root");
+        let added_root = temp_test_dir("added-query-root");
+        std::fs::create_dir_all(&default_root).unwrap();
+        std::fs::create_dir_all(&added_root).unwrap();
+        std::fs::write(default_root.join("default.sql"), "select 1;").unwrap();
+        std::fs::write(added_root.join("external.sql"), "select 2;").unwrap();
+
+        let mut rows = Vec::new();
+        append_query_rows(&default_root, 0, &mut rows).unwrap();
+        append_added_query_root_rows(vec![added_root.clone()], &mut rows).unwrap();
+
+        assert_eq!(3, rows.len());
+        assert_eq!("default", rows[0][0]);
+        assert_eq!(QUERY_ROW_KIND_SQL, rows[0][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("0", rows[0][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!(query_directory_display_name(&added_root), rows[1][0]);
+        assert_eq!(QUERY_ROW_KIND_DIRECTORY, rows[1][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("0", rows[1][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!("external", rows[2][0]);
+        assert_eq!(QUERY_ROW_KIND_SQL, rows[2][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("1", rows[2][QUERY_ROW_DEPTH_INDEX]);
+
+        std::fs::remove_dir_all(default_root).unwrap();
+        std::fs::remove_dir_all(added_root).unwrap();
     }
 }
 

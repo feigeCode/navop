@@ -1082,8 +1082,8 @@ fn append_query_directory_items(
     ));
     if node_type == DbNodeType::QueriesFolder {
         items.push(ContextMenuItem::item(
-            translate("Query.open_query_directory"),
-            DbTreeViewEvent::ChooseQueryDirectory {
+            translate("Query.add_sql_directory"),
+            DbTreeViewEvent::AddQueryDirectory {
                 node_id: node_id.to_string(),
             },
         ));
@@ -1124,11 +1124,11 @@ fn append_query_directory_toolbar_buttons(buttons: &mut Vec<ToolbarButton>, node
     ));
     if node_type == DbNodeType::QueriesFolder {
         buttons.push(ToolbarButton::current_node(
-            "choose-query-directory",
+            "add-query-directory",
             IconName::FolderOpen,
-            translate("Query.open_query_directory"),
+            translate("Query.add_sql_directory"),
             |node| DatabaseObjectsEvent::TreeEvent {
-                event: DbTreeViewEvent::ChooseQueryDirectory {
+                event: DbTreeViewEvent::AddQueryDirectory {
                     node_id: node.id.clone(),
                 },
             },
@@ -1635,7 +1635,7 @@ driver:
         append_query_directory_items(&mut items, "queries", DbNodeType::QueriesFolder);
 
         assert!(has_label(&items, &translate("Query.new_folder")));
-        assert!(has_label(&items, &translate("Query.open_query_directory")));
+        assert!(has_label(&items, &translate("Query.add_sql_directory")));
         assert!(has_label(&items, &translate("Query.import_sql")));
     }
 
@@ -1647,7 +1647,7 @@ driver:
         assert!(has_label(&items, &translate("Query.new_query")));
         assert!(has_label(&items, &translate("Query.new_folder")));
         assert!(has_label(&items, &translate("Query.import_sql")));
-        assert!(!has_label(&items, &translate("Query.open_query_directory")));
+        assert!(!has_label(&items, &translate("Query.add_sql_directory")));
     }
 
     #[test]
@@ -1657,7 +1657,7 @@ driver:
         assert_eq!(
             vec![
                 "create-query-folder",
-                "choose-query-directory",
+                "add-query-directory",
                 "import-query-sql"
             ],
             toolbar_ids(&root_buttons)

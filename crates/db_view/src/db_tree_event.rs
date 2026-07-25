@@ -20,8 +20,8 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::{WindowExt, h_flex, notification::Notification, v_flex};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{
-    QueryDirectoryScope, create_query_subdirectory, import_query_sql_files, query_directory,
-    set_query_directory,
+    QueryDirectoryScope, add_query_directory, create_query_subdirectory, default_query_directory,
+    import_query_sql_files,
 };
 use one_core::{
     popup_window::{PopupWindowOptions, open_popup_window},
@@ -201,9 +201,9 @@ impl DatabaseEventHandler {
                             Self::handle_create_new_query(node, tab_container, window, cx);
                         }
                     }
-                    DbTreeViewEvent::ChooseQueryDirectory { node_id } => {
+                    DbTreeViewEvent::AddQueryDirectory { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
-                            Self::handle_choose_query_directory(
+                            Self::handle_add_query_directory(
                                 node,
                                 tree_view,
                                 objects_panel,
@@ -828,7 +828,7 @@ impl DatabaseEventHandler {
                 .map(std::path::PathBuf::from)
                 .ok_or_else(|| anyhow::anyhow!("query folder has no directory path"));
         }
-        query_directory(&Self::query_directory_scope(node))
+        default_query_directory(&Self::query_directory_scope(node))
     }
 
     fn refresh_query_views(
@@ -846,7 +846,7 @@ impl DatabaseEventHandler {
         });
     }
 
-    fn handle_choose_query_directory(
+    fn handle_add_query_directory(
         node: DbNode,
         tree_view: Entity<DbTreeView>,
         objects_panel: Entity<DatabaseObjectsPanel>,
@@ -857,7 +857,7 @@ impl DatabaseEventHandler {
             files: false,
             multiple: false,
             directories: true,
-            prompt: Some(t!("Query.select_query_directory").into()),
+            prompt: Some(t!("Query.select_sql_directory").into()),
         });
         let scope = Self::query_directory_scope(&node);
         let node_id = node.id.clone();
@@ -870,25 +870,22 @@ impl DatabaseEventHandler {
             let Some(directory) = paths.into_iter().next() else {
                 return;
             };
-            let task = cx.background_spawn(async move { set_query_directory(&scope, &directory) });
+            let task = cx.background_spawn(async move { add_query_directory(&scope, &directory) });
             match task.await {
-                Ok(()) => {
+                Ok(_) => {
                     let _ = cx.update(|cx| {
                         tree_view.update(cx, |tree, cx| {
                             tree.refresh_tree(node_id, cx);
                         });
                         Self::handle_node_selected(root_node, global_state, objects_panel, cx);
-                        Self::show_success_async(
-                            cx,
-                            t!("Query.query_directory_updated").to_string(),
-                        );
+                        Self::show_success_async(cx, t!("Query.sql_directory_added").to_string());
                     });
                 }
                 Err(error) => {
                     let _ = cx.update(|cx| {
                         Self::show_error_async(
                             cx,
-                            t!("Query.query_directory_update_failed", error = error).to_string(),
+                            t!("Query.add_sql_directory_failed", error = error).to_string(),
                         );
                     });
                 }

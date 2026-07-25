@@ -1121,30 +1121,30 @@ Query:
     en: Folder name
     zh-CN: 目录名称
     zh-HK: 目錄名稱
-  open_query_directory:
-    en: Open Query Directory…
-    zh-CN: 打开查询目录…
-    zh-HK: 開啟查詢目錄…
+  add_sql_directory:
+    en: Add SQL Directory…
+    zh-CN: 添加 SQL 文件目录…
+    zh-HK: 新增 SQL 檔案目錄…
   import_sql:
     en: Import SQL…
     zh-CN: 导入 SQL…
     zh-HK: 匯入 SQL…
-  select_query_directory:
-    en: Select Query Directory
-    zh-CN: 选择查询目录
-    zh-HK: 選擇查詢目錄
+  select_sql_directory:
+    en: Select SQL Directory
+    zh-CN: 选择 SQL 文件目录
+    zh-HK: 選擇 SQL 檔案目錄
   select_sql_files_to_import:
     en: Select SQL Files to Import
     zh-CN: 选择要导入的 SQL 文件
     zh-HK: 選擇要匯入的 SQL 檔案
-  query_directory_updated:
-    en: Query directory updated
-    zh-CN: 查询目录已更新
-    zh-HK: 查詢目錄已更新
-  query_directory_update_failed:
-    en: "Failed to update query directory: %{error}"
-    zh-CN: "更新查询目录失败：%{error}"
-    zh-HK: "更新查詢目錄失敗：%{error}"
+  sql_directory_added:
+    en: SQL directory added
+    zh-CN: SQL 文件目录已添加
+    zh-HK: SQL 檔案目錄已新增
+  add_sql_directory_failed:
+    en: "Failed to add SQL directory: %{error}"
+    zh-CN: "添加 SQL 文件目录失败：%{error}"
+    zh-HK: "新增 SQL 檔案目錄失敗：%{error}"
   query_folder_created:
     en: Query folder created
     zh-CN: 查询目录已创建

@@ -73,12 +73,22 @@ pub fn default_query_directory(scope: &QueryDirectoryScope) -> Result<PathBuf> {
 }
 
 pub fn query_directory(scope: &QueryDirectoryScope) -> Result<PathBuf> {
-    let default = default_query_directory(scope)?;
-    let settings = load_settings(&settings_path()?)?;
-    Ok(resolve_query_directory(scope, default, &settings))
+    default_query_directory(scope)
 }
 
-pub fn set_query_directory(scope: &QueryDirectoryScope, directory: &Path) -> Result<()> {
+pub fn added_query_directories(scope: &QueryDirectoryScope) -> Result<Vec<PathBuf>> {
+    let settings = load_settings(&settings_path()?)?;
+    let mut directories = settings.get_all(scope);
+    directories.sort_by(|left, right| {
+        query_directory_display_name(left)
+            .to_lowercase()
+            .cmp(&query_directory_display_name(right).to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    Ok(directories)
+}
+
+pub fn add_query_directory(scope: &QueryDirectoryScope, directory: &Path) -> Result<PathBuf> {
     if !directory.is_dir() {
         bail!(
             "query directory does not exist or is not a directory: {}",
@@ -89,10 +99,27 @@ pub fn set_query_directory(scope: &QueryDirectoryScope, directory: &Path) -> Res
     let directory = directory
         .canonicalize()
         .with_context(|| format!("failed to resolve query directory {}", directory.display()))?;
+    if default_query_directory(scope)?
+        .canonicalize()
+        .is_ok_and(|default| default == directory)
+    {
+        return Ok(directory);
+    }
+
     let path = settings_path()?;
     let mut settings = load_settings(&path)?;
-    settings.set(scope.clone(), directory);
-    save_settings(&path, &settings)
+    if settings.add(scope.clone(), directory.clone()) {
+        save_settings(&path, &settings)?;
+    }
+    Ok(directory)
+}
+
+pub fn query_directory_display_name(directory: &Path) -> String {
+    directory
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| directory.display().to_string())
 }
 
 pub fn is_sql_file(path: &Path) -> bool {
@@ -270,25 +297,27 @@ mod tests {
     }
 
     #[test]
-    fn configured_directory_overrides_default_for_the_same_scope() {
-        let default = PathBuf::from("/default/mysql/42/reporting");
-        let configured = PathBuf::from("/workspace/sql");
+    fn settings_keep_multiple_added_directories_for_the_same_scope() {
+        let first = PathBuf::from("/workspace/sql");
+        let second = PathBuf::from("/archive/sql");
         let settings = QueryDirectorySettings {
-            entries: vec![QueryDirectoryEntry {
-                scope: scope(),
-                directory: configured.clone(),
-            }],
+            entries: vec![
+                QueryDirectoryEntry {
+                    scope: scope(),
+                    directory: first.clone(),
+                },
+                QueryDirectoryEntry {
+                    scope: scope(),
+                    directory: second.clone(),
+                },
+            ],
         };
 
-        assert_eq!(
-            configured,
-            resolve_query_directory(&scope(), default, &settings)
-        );
+        assert_eq!(vec![first, second], settings.get_all(&scope()));
     }
 
     #[test]
-    fn a_different_scope_keeps_its_default_directory() {
-        let default = PathBuf::from("/default/mysql/43/reporting");
+    fn added_directories_are_isolated_by_scope() {
         let settings = QueryDirectorySettings {
             entries: vec![QueryDirectoryEntry {
                 scope: scope(),
@@ -297,24 +326,57 @@ mod tests {
         };
         let other_scope = QueryDirectoryScope::new("mysql", "43", "reporting");
 
-        assert_eq!(
-            default,
-            resolve_query_directory(&other_scope, default.clone(), &settings)
-        );
+        assert!(settings.get_all(&other_scope).is_empty());
     }
 
     #[test]
-    fn settings_round_trip_preserves_the_selected_directory() {
+    fn settings_round_trip_preserves_all_added_directories() {
         let temp = tempdir().unwrap();
         let settings_path = temp.path().join("query-directories.json");
-        let selected = temp.path().join("queries");
+        let first = temp.path().join("queries");
+        let second = temp.path().join("archive");
         let mut settings = QueryDirectorySettings::default();
-        settings.set(scope(), selected.clone());
+        settings.add(scope(), first.clone());
+        settings.add(scope(), second.clone());
 
         save_settings(&settings_path, &settings).unwrap();
         let loaded = load_settings(&settings_path).unwrap();
 
-        assert_eq!(Some(selected.as_path()), loaded.get(&scope()));
+        assert_eq!(vec![first, second], loaded.get_all(&scope()));
+    }
+
+    #[test]
+    fn adding_the_same_directory_twice_does_not_duplicate_it() {
+        let directory = PathBuf::from("/workspace/sql");
+        let mut settings = QueryDirectorySettings::default();
+
+        assert!(settings.add(scope(), directory.clone()));
+        assert!(!settings.add(scope(), directory.clone()));
+
+        assert_eq!(vec![directory], settings.get_all(&scope()));
+    }
+
+    #[test]
+    fn legacy_single_directory_json_remains_compatible() {
+        let content = r#"{
+            "entries": [
+                {
+                    "scope": {
+                        "database_type": "mysql",
+                        "connection_id": "42",
+                        "database": "reporting"
+                    },
+                    "directory": "/workspace/sql"
+                }
+            ]
+        }"#;
+
+        let settings: QueryDirectorySettings = serde_json::from_str(content).unwrap();
+
+        assert_eq!(
+            vec![PathBuf::from("/workspace/sql")],
+            settings.get_all(&scope())
+        );
     }
 
     #[test]
@@ -440,31 +502,26 @@ mod tests {
     }
 }
 
-fn resolve_query_directory(
-    scope: &QueryDirectoryScope,
-    default: PathBuf,
-    settings: &QueryDirectorySettings,
-) -> PathBuf {
-    settings
-        .get(scope)
-        .map(Path::to_path_buf)
-        .unwrap_or(default)
-}
-
 impl QueryDirectorySettings {
-    fn get(&self, scope: &QueryDirectoryScope) -> Option<&Path> {
+    fn get_all(&self, scope: &QueryDirectoryScope) -> Vec<PathBuf> {
         self.entries
             .iter()
-            .find(|entry| &entry.scope == scope)
-            .map(|entry| entry.directory.as_path())
+            .filter(|entry| &entry.scope == scope)
+            .map(|entry| entry.directory.clone())
+            .collect()
     }
 
-    fn set(&mut self, scope: QueryDirectoryScope, directory: PathBuf) {
-        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.scope == scope) {
-            entry.directory = directory;
-        } else {
-            self.entries.push(QueryDirectoryEntry { scope, directory });
+    fn add(&mut self, scope: QueryDirectoryScope, directory: PathBuf) -> bool {
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.scope == scope && entry.directory == directory)
+        {
+            return false;
         }
+
+        self.entries.push(QueryDirectoryEntry { scope, directory });
+        true
     }
 }
 

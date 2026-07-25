@@ -14,9 +14,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
 };
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
-use one_core::storage::{
-    DatabaseType, QueryDirectoryScope, default_query_directory, query_directory,
-};
+use one_core::storage::{DatabaseType, QueryDirectoryScope, default_query_directory};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_ui::resize_handle::{ResizePanel, resize_handle};
@@ -689,9 +687,7 @@ impl SqlEditorTab {
         database: &str,
     ) -> PathBuf {
         let scope = QueryDirectoryScope::new(database_type.path_key(), connection_id, database);
-        let dir_path = query_directory(&scope)
-            .or_else(|_| default_query_directory(&scope))
-            .unwrap_or_else(|_| PathBuf::from("."));
+        let dir_path = default_query_directory(&scope).unwrap_or_else(|_| PathBuf::from("."));
         Self::generate_new_file_path_in_directory(&dir_path)
     }
 

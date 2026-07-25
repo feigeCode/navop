@@ -436,8 +436,8 @@ pub enum DbTreeViewEvent {
     DeleteQuery { node_id: String },
     /// 在文件管理器中显示查询文件
     RevealQueryInFileManager { node_id: String },
-    /// 选择并记录当前数据库的查询根目录
-    ChooseQueryDirectory { node_id: String },
+    /// 在当前数据库的查询节点下添加外部 SQL 文件目录
+    AddQueryDirectory { node_id: String },
     /// 将 SQL 文件复制到查询目录
     ImportQuerySql { node_id: String },
     /// 在当前查询目录下新建子目录
