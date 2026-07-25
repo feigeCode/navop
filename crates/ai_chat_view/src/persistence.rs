@@ -316,6 +316,34 @@ mod tests {
     }
 
     #[gpui::test]
+    fn saving_unchanged_session_preserves_sidebar_updated_at(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(GlobalStorageState {
+                storage: test_storage(),
+            });
+        });
+
+        let session = test_session();
+        session.record_user_input("不要因为点击会话而重新排序");
+        let first_saved_at = cx
+            .update(|cx| save_session(cx, &session))
+            .expect("initial session save")
+            .1;
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
+        let second_saved_at = cx
+            .update(|cx| save_session(cx, &session))
+            .expect("unchanged session save")
+            .1;
+
+        assert_eq!(
+            first_saved_at, second_saved_at,
+            "saving an unchanged snapshot during navigation must not make the conversation look newly active"
+        );
+    }
+
+    #[gpui::test]
     fn legacy_chat_sessions_are_listed_and_loaded_as_ask_history(cx: &mut TestAppContext) {
         let storage = test_storage();
         let legacy_id = seed_legacy_chat(&storage);

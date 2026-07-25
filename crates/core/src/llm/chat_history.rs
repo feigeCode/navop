@@ -310,6 +310,9 @@ impl AgentSessionRepository {
         let title = title.to_string();
         let snapshot_json = snapshot_json.to_string();
         if let Some(existing) = self.get_by_uid(&uid)? {
+            if existing.title == title && existing.snapshot_json == snapshot_json {
+                return Ok(existing);
+            }
             let updated_at = now();
             self.conn.with_connection(|conn| {
                 conn.execute(

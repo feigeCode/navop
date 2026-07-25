@@ -31,6 +31,7 @@ use gpui_component::{
     input::{Input, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     popover::Popover,
+    spinner::Spinner,
     v_flex,
 };
 #[cfg(not(test))]
@@ -243,24 +244,27 @@ fn merge_live_session_summaries(
         return persisted;
     }
 
-    let mut merged: HashMap<String, SessionSummary> = persisted
-        .into_iter()
-        .map(|summary| (summary.id.clone(), summary))
+    let persisted_ids: HashSet<_> = persisted
+        .iter()
+        .map(|summary| summary.id.as_str())
         .collect();
+    let mut live_by_id = HashMap::new();
+    let mut summaries = Vec::with_capacity(persisted.len() + live.len());
     for summary in live {
         if summary.id == current_session || running_sessions.contains(&summary.id) {
-            merged.insert(summary.id.clone(), summary.clone());
+            if !persisted_ids.contains(summary.id.as_str()) {
+                summaries.push(summary.clone());
+            }
+            live_by_id.insert(summary.id.as_str(), summary);
         }
     }
 
-    let mut summaries: Vec<_> = merged.into_values().collect();
-    summaries.sort_by(|left, right| {
-        let left_current = left.id == current_session;
-        let right_current = right.id == current_session;
-        right_current
-            .cmp(&left_current)
-            .then_with(|| right.updated_at.cmp(&left.updated_at))
-    });
+    summaries.extend(persisted.into_iter().map(|summary| {
+        live_by_id
+            .get(summary.id.as_str())
+            .map_or(summary, |live| (*live).clone())
+    }));
+    summaries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     summaries
 }
 
@@ -2198,18 +2202,29 @@ impl AgentChatView {
         let group = SharedString::from(format!("agent-session-row-{uid}"));
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let row_style = themed_session_row_style(&theme);
+        let running_color = if selected {
+            row_style.selected_foreground
+        } else {
+            theme.accent
+        };
+        let running_indicator_id = format!("agent-session-running-spinner-{uid}");
 
         // 标题区:活跃视图可点击切换;归档视图只读。
         let label = session_sidebar::session_row_with_style(session, selected, row_style).when(
             running,
-            |label| {
+            move |label| {
+                let debug_selector = running_indicator_id.clone();
                 label.child(
-                    div()
-                        .id(SharedString::from(format!("agent-session-running-{uid}")))
-                        .size(px(6.0))
+                    h_flex()
+                        .id(SharedString::from(running_indicator_id))
+                        .debug_selector(move || debug_selector.clone())
+                        .items_center()
+                        .gap_0p5()
                         .flex_shrink_0()
-                        .rounded_full()
-                        .bg(theme.accent),
+                        .text_xs()
+                        .text_color(running_color)
+                        .child(Spinner::new().small().color(running_color))
+                        .child(t!("AgentUi.running").to_string()),
                 )
             },
         );
@@ -5488,6 +5503,28 @@ mod tests {
     }
 
     #[test]
+    fn selecting_session_does_not_move_it_to_front() {
+        let persisted = vec![
+            SessionSummary::new("newest", "最新任务", 30),
+            SessionSummary::new("middle", "中间任务", 20),
+            SessionSummary::new("selected", "选中任务", 10),
+        ];
+        let live = vec![SessionSummary::new("selected", "选中任务", 10)];
+
+        let merged =
+            merge_live_session_summaries(persisted, &live, "selected", &HashSet::new(), false);
+
+        assert_eq!(
+            vec!["newest", "middle", "selected"],
+            merged
+                .iter()
+                .map(|summary| summary.id.as_str())
+                .collect::<Vec<_>>(),
+            "selecting a conversation should only change its selected state, not its list position"
+        );
+    }
+
+    #[test]
     fn archived_sidebar_does_not_mix_in_live_workbench_tasks() {
         let archived = vec![SessionSummary::new("archived", "归档任务", 10)];
         let live = vec![SessionSummary::new("current", "当前任务", 30)];
@@ -5537,6 +5574,25 @@ mod tests {
             assert!(view.is_running);
             assert!(view.running_sessions.contains(&previous_session));
         });
+    }
+
+    #[gpui::test]
+    fn running_session_shows_loading_spinner_in_sidebar(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let running_session = view.update(cx, |view, cx| {
+            let running_session = view.current_session.clone();
+            view.set_running(true, cx);
+            running_session
+        });
+        let cx: &mut VisualTestContext = cx;
+        let spinner_id: &'static str =
+            Box::leak(format!("agent-session-running-spinner-{running_session}").into_boxed_str());
+
+        cx.debug_bounds(spinner_id)
+            .expect("running conversation should show an animated loading spinner in the sidebar");
     }
 
     #[gpui::test]
