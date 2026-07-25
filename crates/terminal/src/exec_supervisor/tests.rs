@@ -1,6 +1,6 @@
 use super::{
-    ExecEffect, ExecPhase, ExecSupervisor, ShellCommandReadiness, TerminalExecError,
-    TerminalInputSource,
+    ExecEffect, ExecPhase, ExecSupervisor, ShellCommandReadiness,
+    TERMINAL_EXEC_CAPTURE_LIMIT_BYTES, TerminalExecError, TerminalInputSource,
 };
 use crate::osc::OscEvent;
 use crate::{
@@ -63,6 +63,19 @@ fn terminal_output_capture_only_stays_enabled_while_observing_an_exec() {
 
     assert!(supervisor.cancel(12).is_empty());
     assert!(!supervisor.captures_terminal_output());
+}
+
+#[test]
+fn active_exec_capture_keeps_only_the_newest_bounded_tail() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 37, "yes");
+    supervisor.on_terminal_chunk(&vec![b'x'; TERMINAL_EXEC_CAPTURE_LIMIT_BYTES], &[]);
+
+    supervisor.on_terminal_chunk(b"tail", &[]);
+
+    let raw = &supervisor.active.as_ref().unwrap().raw;
+    assert_eq!(raw.len(), TERMINAL_EXEC_CAPTURE_LIMIT_BYTES);
+    assert!(raw.to_vec().ends_with(b"tail"));
 }
 
 #[test]

@@ -5,20 +5,23 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
+mod capture_buffer;
 mod model;
 mod operation;
+use capture_buffer::BoundedCaptureBuffer;
 pub use model::TerminalExecError;
 pub(crate) use model::{ExecEffect, ExecPhase, ShellCommandReadiness, TerminalInputSource};
 use operation::output_with_completion;
 
 const CLEAR_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
+pub(super) const TERMINAL_EXEC_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
 struct ActiveExec {
     id: u64,
     request: TerminalExecRequest,
     phase: ExecPhase,
     started_at: Instant,
-    raw: Vec<u8>,
+    raw: BoundedCaptureBuffer,
     command_started: bool,
     detached: bool,
     timed_out: bool,
@@ -262,5 +265,7 @@ fn publish_progress(
     });
 }
 
+#[cfg(test)]
+mod capture_buffer_tests;
 #[cfg(test)]
 mod tests;

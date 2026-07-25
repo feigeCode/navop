@@ -1,6 +1,6 @@
 use super::{
-    ActiveExec, CLEAR_INPUT_TIMEOUT, ExecEffect, ExecPhase, ExecSupervisor, ShellCommandReadiness,
-    TerminalInputSource,
+    ActiveExec, BoundedCaptureBuffer, CLEAR_INPUT_TIMEOUT, ExecEffect, ExecPhase, ExecSupervisor,
+    ShellCommandReadiness, TERMINAL_EXEC_CAPTURE_LIMIT_BYTES, TerminalInputSource,
 };
 use crate::exec_capture::sanitize_captured_terminal_output;
 use crate::{TerminalExecCompletion, TerminalExecOutput, TerminalExecRequest};
@@ -18,7 +18,7 @@ impl ExecSupervisor {
             request,
             phase: ExecPhase::ClearingInput,
             started_at: Instant::now(),
-            raw: Vec::new(),
+            raw: BoundedCaptureBuffer::new(TERMINAL_EXEC_CAPTURE_LIMIT_BYTES),
             command_started: false,
             detached: false,
             timed_out: false,
@@ -39,7 +39,7 @@ impl ExecSupervisor {
             request,
             phase: ExecPhase::WaitingForReady,
             started_at: Instant::now(),
-            raw: Vec::new(),
+            raw: BoundedCaptureBuffer::new(TERMINAL_EXEC_CAPTURE_LIMIT_BYTES),
             command_started: false,
             detached: false,
             timed_out: false,
@@ -59,7 +59,7 @@ impl ExecSupervisor {
             request,
             phase: ExecPhase::ClearingInput,
             started_at: Instant::now(),
-            raw: Vec::new(),
+            raw: BoundedCaptureBuffer::new(TERMINAL_EXEC_CAPTURE_LIMIT_BYTES),
             command_started: false,
             detached: false,
             timed_out: false,
@@ -250,10 +250,11 @@ pub(super) fn output_with_completion(
     completion: TerminalExecCompletion,
     exit_code: Option<i32>,
 ) -> TerminalExecOutput {
+    let raw = active.raw.to_vec();
     TerminalExecOutput {
         completion,
         exit_code,
-        output: sanitize_captured_terminal_output(&active.raw, &active.request.command),
+        output: sanitize_captured_terminal_output(&raw, &active.request.command),
         duration_ms: elapsed_ms(active.started_at),
     }
 }
