@@ -95,18 +95,18 @@ impl SelectItem for ViewFormat {
 
 fn format_redis_string_value(value: &[u8], format: ViewFormat) -> String {
     match format {
-        ViewFormat::Raw => match std::str::from_utf8(value) {
-            Ok(value) => value.to_string(),
-            Err(_) => escape_binary_redis_string(value),
+        ViewFormat::Raw => match readable_redis_text(value) {
+            Some(value) => value.to_string(),
+            None => escape_binary_redis_string(value),
         },
-        ViewFormat::Json => match std::str::from_utf8(value) {
-            Ok(value) => match serde_json::from_str::<serde_json::Value>(value) {
+        ViewFormat::Json => match readable_redis_text(value) {
+            Some(value) => match serde_json::from_str::<serde_json::Value>(value) {
                 Ok(value) => {
                     serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
                 }
                 Err(_) => value.to_string(),
             },
-            Err(_) => escape_binary_redis_string(value),
+            None => escape_binary_redis_string(value),
         },
         ViewFormat::Hex => value
             .iter()
@@ -132,12 +132,19 @@ fn escape_binary_redis_string(value: &[u8]) -> String {
         .collect()
 }
 
+fn readable_redis_text(value: &[u8]) -> Option<&str> {
+    let text = std::str::from_utf8(value).ok()?;
+    text.chars()
+        .all(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+        .then_some(text)
+}
+
 fn is_binary_redis_string(value: &[u8]) -> bool {
-    std::str::from_utf8(value).is_err()
+    readable_redis_text(value).is_none()
 }
 
 fn redis_bytes_text(value: &[u8]) -> Option<String> {
-    std::str::from_utf8(value).ok().map(str::to_string)
+    readable_redis_text(value).map(str::to_string)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3505,7 +3512,7 @@ impl KeyValueView {
     ) -> impl IntoElement {
         let view = cx.entity().clone();
         let muted = cx.theme().muted;
-        let accent = cx.theme().accent;
+        let foreground = cx.theme().foreground;
         let muted_foreground = cx.theme().muted_foreground;
 
         v_flex()
@@ -3529,7 +3536,7 @@ impl KeyValueView {
                             div()
                                 .text_xs()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(accent)
+                                .text_color(foreground)
                                 .child(format!("ID: {}", entry.id)),
                         )
                         .children(entry.fields.iter().enumerate().map({
@@ -3906,9 +3913,14 @@ mod tests {
     }
 
     #[test]
-    fn redis_string_binary_detection_protects_non_utf8_values_from_text_editing() {
+    fn redis_string_binary_detection_protects_binary_values_from_text_editing() {
         assert!(!is_binary_redis_string("普通文本".as_bytes()));
         assert!(is_binary_redis_string(&[0xac, 0xed, 0x00, 0x05]));
+        assert!(is_binary_redis_string(&[0x00, 0x01]));
+        assert_eq!(
+            "\\x00\\x01",
+            format_redis_string_value(&[0x00, 0x01], ViewFormat::Raw)
+        );
     }
 
     #[test]
@@ -3936,6 +3948,22 @@ mod tests {
         );
         assert_eq!("C8/b3gEA", redis_bytes_copy_text(&value));
         assert_eq!("C8/b3gEA", zset_member_copy_text(1.25, &value));
+    }
+
+    #[test]
+    fn utf8_control_bytes_are_treated_as_binary_collection_values() {
+        for (value, expected_base64) in [
+            (&[0x00, 0x01][..], "AAE="),
+            (&[0x10, 0x11, 0x12, 0x00][..], "EBESAA=="),
+        ] {
+            assert_eq!(
+                RedisBytesDisplay::Binary {
+                    byte_len: value.len()
+                },
+                redis_bytes_display(value)
+            );
+            assert_eq!(expected_base64, redis_bytes_copy_text(value));
+        }
     }
 
     #[test]
@@ -3996,6 +4024,23 @@ mod tests {
                 "missing binary download action: {action}"
             );
         }
+    }
+
+    #[test]
+    fn stream_entry_id_uses_readable_foreground_color() {
+        let source = include_str!("key_value_view.rs");
+        let stream_renderer = source
+            .split("fn render_stream_view")
+            .nth(1)
+            .expect("stream renderer");
+        let stream_renderer = stream_renderer
+            .split("fn render_hash_view")
+            .next()
+            .expect("end of stream renderer");
+
+        assert!(stream_renderer.contains("let foreground = cx.theme().foreground;"));
+        assert!(stream_renderer.contains(".text_color(foreground)"));
+        assert!(!stream_renderer.contains(".text_color(accent)"));
     }
 
     #[test]
