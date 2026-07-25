@@ -1033,6 +1033,7 @@ pub fn build_context_menu_for(
     cx: &impl AppContext,
 ) -> Vec<ContextMenuItem> {
     let mut items = manifest_plugin(database_type, cx).build_context_menu(node_id, node_type);
+    append_query_directory_items(&mut items, node_id, node_type);
     append_er_diagram_item(&mut items, node_id, node_type);
     append_compare_items(&mut items, node_id, node_type);
     items
@@ -1044,7 +1045,105 @@ pub fn build_toolbar_buttons_for(
     data_node_type: DbNodeType,
     cx: &impl AppContext,
 ) -> Vec<ToolbarButton> {
-    manifest_plugin(database_type, cx).build_toolbar_buttons(node_type, data_node_type)
+    let mut buttons =
+        manifest_plugin(database_type, cx).build_toolbar_buttons(node_type, data_node_type);
+    append_query_directory_toolbar_buttons(&mut buttons, node_type);
+    buttons
+}
+
+fn append_query_directory_items(
+    items: &mut Vec<ContextMenuItem>,
+    node_id: &str,
+    node_type: DbNodeType,
+) {
+    if !matches!(
+        node_type,
+        DbNodeType::QueriesFolder | DbNodeType::QueryFolder
+    ) {
+        return;
+    }
+
+    if node_type == DbNodeType::QueryFolder {
+        items.push(ContextMenuItem::item(
+            translate("Query.new_query"),
+            DbTreeViewEvent::CreateNewQuery {
+                node_id: node_id.to_string(),
+            },
+        ));
+    }
+    if !items.is_empty() {
+        items.push(ContextMenuItem::separator());
+    }
+    items.push(ContextMenuItem::item(
+        translate("Query.new_folder"),
+        DbTreeViewEvent::CreateQueryFolder {
+            node_id: node_id.to_string(),
+        },
+    ));
+    if node_type == DbNodeType::QueriesFolder {
+        items.push(ContextMenuItem::item(
+            translate("Query.open_query_directory"),
+            DbTreeViewEvent::ChooseQueryDirectory {
+                node_id: node_id.to_string(),
+            },
+        ));
+    }
+    items.push(ContextMenuItem::item(
+        translate("Query.import_sql"),
+        DbTreeViewEvent::ImportQuerySql {
+            node_id: node_id.to_string(),
+        },
+    ));
+}
+
+fn append_query_directory_toolbar_buttons(buttons: &mut Vec<ToolbarButton>, node_type: DbNodeType) {
+    if !matches!(
+        node_type,
+        DbNodeType::QueriesFolder | DbNodeType::QueryFolder
+    ) {
+        return;
+    }
+
+    if node_type == DbNodeType::QueryFolder {
+        buttons.push(ToolbarButton::current_node(
+            "create-query",
+            IconName::Plus,
+            translate("Query.new_query"),
+            |node| DatabaseObjectsEvent::CreateNewQuery { node },
+        ));
+    }
+    buttons.push(ToolbarButton::current_node(
+        "create-query-folder",
+        IconName::NewFolder,
+        translate("Query.new_folder"),
+        |node| DatabaseObjectsEvent::TreeEvent {
+            event: DbTreeViewEvent::CreateQueryFolder {
+                node_id: node.id.clone(),
+            },
+        },
+    ));
+    if node_type == DbNodeType::QueriesFolder {
+        buttons.push(ToolbarButton::current_node(
+            "choose-query-directory",
+            IconName::FolderOpen,
+            translate("Query.open_query_directory"),
+            |node| DatabaseObjectsEvent::TreeEvent {
+                event: DbTreeViewEvent::ChooseQueryDirectory {
+                    node_id: node.id.clone(),
+                },
+            },
+        ));
+    }
+    buttons.push(ToolbarButton::current_node(
+        "import-query-sql",
+        IconName::ArrowDown,
+        translate("Query.import_sql"),
+        |node| DatabaseObjectsEvent::TreeEvent {
+            event: DbTreeViewEvent::ImportQuerySql {
+                node_id: node.id.clone(),
+            },
+        },
+    ));
 }
 
 fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
@@ -1298,6 +1397,10 @@ mod tests {
         })
     }
 
+    fn toolbar_ids(buttons: &[ToolbarButton]) -> Vec<&'static str> {
+        buttons.iter().map(|button| button.id).collect()
+    }
+
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
         tab_group
             .fields
@@ -1523,6 +1626,48 @@ driver:
         assert_eq!(
             "literal text",
             translate_external_driver_text(&driver, "literal text")
+        );
+    }
+
+    #[test]
+    fn query_root_context_menu_exposes_directory_actions() {
+        let mut items = Vec::new();
+        append_query_directory_items(&mut items, "queries", DbNodeType::QueriesFolder);
+
+        assert!(has_label(&items, &translate("Query.new_folder")));
+        assert!(has_label(&items, &translate("Query.open_query_directory")));
+        assert!(has_label(&items, &translate("Query.import_sql")));
+    }
+
+    #[test]
+    fn query_subdirectory_context_menu_exposes_nested_actions_only() {
+        let mut items = Vec::new();
+        append_query_directory_items(&mut items, "reports", DbNodeType::QueryFolder);
+
+        assert!(has_label(&items, &translate("Query.new_query")));
+        assert!(has_label(&items, &translate("Query.new_folder")));
+        assert!(has_label(&items, &translate("Query.import_sql")));
+        assert!(!has_label(&items, &translate("Query.open_query_directory")));
+    }
+
+    #[test]
+    fn query_directory_toolbar_buttons_match_root_and_subdirectory_capabilities() {
+        let mut root_buttons = Vec::new();
+        append_query_directory_toolbar_buttons(&mut root_buttons, DbNodeType::QueriesFolder);
+        assert_eq!(
+            vec![
+                "create-query-folder",
+                "choose-query-directory",
+                "import-query-sql"
+            ],
+            toolbar_ids(&root_buttons)
+        );
+
+        let mut folder_buttons = Vec::new();
+        append_query_directory_toolbar_buttons(&mut folder_buttons, DbNodeType::QueryFolder);
+        assert_eq!(
+            vec!["create-query", "create-query-folder", "import-query-sql"],
+            toolbar_ids(&folder_buttons)
         );
     }
 

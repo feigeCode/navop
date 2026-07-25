@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::rc::Rc;
 
 use anyhow::Result;
@@ -1558,6 +1559,21 @@ impl SqlEditor {
             .update(cx, |s, cx| s.set_value(text, window, cx));
     }
 
+    pub fn replace_range_and_select(
+        &mut self,
+        range: Range<usize>,
+        replacement: String,
+        selection: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor.update(cx, |state, cx| {
+            state.set_selected_range(range, false, window, cx);
+            state.replace(replacement, window, cx);
+            state.set_selected_range(selection, false, window, cx);
+        });
+    }
+
     /// Get the current text content of the editor.
     /// This is a convenience method that accesses the underlying InputState.
     pub fn get_text(&self, cx: &App) -> String {
@@ -1573,6 +1589,11 @@ impl SqlEditor {
     /// Get the current cursor byte offset.
     pub fn cursor_offset(&self, cx: &App) -> usize {
         self.editor.read(cx).cursor()
+    }
+
+    /// Get the current selection as UTF-8 byte offsets.
+    pub fn selected_range(&self, cx: &App) -> Range<usize> {
+        self.editor.read(cx).selected_range()
     }
 }
 

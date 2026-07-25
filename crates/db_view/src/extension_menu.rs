@@ -164,6 +164,7 @@ fn db_node_type_when_value(node_type: DbNodeType) -> &'static str {
         DbNodeType::Procedure => "procedure",
         DbNodeType::Trigger => "trigger",
         DbNodeType::Sequence => "sequence",
+        DbNodeType::QueryFolder => "query_folder",
         DbNodeType::NamedQuery => "query",
         _ => "",
     }

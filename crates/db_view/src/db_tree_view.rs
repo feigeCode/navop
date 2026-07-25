@@ -436,6 +436,12 @@ pub enum DbTreeViewEvent {
     DeleteQuery { node_id: String },
     /// 在文件管理器中显示查询文件
     RevealQueryInFileManager { node_id: String },
+    /// 选择并记录当前数据库的查询根目录
+    ChooseQueryDirectory { node_id: String },
+    /// 将 SQL 文件复制到查询目录
+    ImportQuerySql { node_id: String },
+    /// 在当前查询目录下新建子目录
+    CreateQueryFolder { node_id: String },
     /// 节点被选中（用于更新 objects panel）
     NodeSelected { node_id: String },
     /// 导入数据
@@ -498,6 +504,7 @@ pub fn get_icon_for_node_type(node_type: &DbNodeType, _theme: &gpui_component::T
         DbNodeType::Index => Icon::from(IconName::Index).color(),
         DbNodeType::Trigger => Icon::from(IconName::Trigger).color(),
         DbNodeType::Sequence => Icon::from(IconName::Sequence).color(),
+        DbNodeType::QueryFolder => Icon::from(IconName::Folder).color(),
         DbNodeType::NamedQuery => Icon::from(IconName::Query).color(),
         _ => IconName::File.color(),
     }
@@ -1893,6 +1900,7 @@ impl DbTreeView {
                         | DbNodeType::TriggersFolder
                         | DbNodeType::SequencesFolder
                         | DbNodeType::QueriesFolder
+                        | DbNodeType::QueryFolder
                         | DbNodeType::ForeignKeysFolder
                         | DbNodeType::ChecksFolder
                 );
@@ -1985,12 +1993,7 @@ impl DbTreeView {
     }
 
     /// 根据节点类型获取图标
-    fn get_icon_for_node(
-        &self,
-        node_id: &str,
-        _is_expanded: bool,
-        _cx: &mut Context<Self>,
-    ) -> Icon {
+    fn get_icon_for_node(&self, node_id: &str, is_expanded: bool, _cx: &mut Context<Self>) -> Icon {
         let node = self.db_nodes.get(node_id);
         match node.map(|n| &n.node_type) {
             Some(DbNodeType::Connection) => {
@@ -2031,6 +2034,16 @@ impl DbTreeView {
             Some(DbNodeType::QueriesFolder) => Icon::from(IconName::FolderQueries)
                 .color()
                 .with_size(ComponentSize::Size(px(20.))),
+            Some(DbNodeType::QueryFolder) => {
+                let icon = if is_expanded {
+                    IconName::FolderOpen
+                } else {
+                    IconName::Folder
+                };
+                Icon::from(icon)
+                    .color()
+                    .with_size(ComponentSize::Size(px(20.)))
+            }
             Some(DbNodeType::ColumnsFolder) => Icon::from(IconName::FolderColumns)
                 .color()
                 .with_size(ComponentSize::Size(px(20.))),
@@ -2140,6 +2153,7 @@ impl DbTreeView {
                 | DbNodeType::ProceduresFolder
                 | DbNodeType::TriggersFolder
                 | DbNodeType::QueriesFolder
+                | DbNodeType::QueryFolder
                 | DbNodeType::TablesFolder
                 | DbNodeType::ViewsFolder => {
                     let is_expanded = self.expanded_nodes.contains(node_id);
@@ -2676,6 +2690,7 @@ impl DbTreeView {
                 | Some(DbNodeType::ProceduresFolder)
                 | Some(DbNodeType::TriggersFolder)
                 | Some(DbNodeType::QueriesFolder)
+                | Some(DbNodeType::QueryFolder)
                 | Some(DbNodeType::ColumnsFolder)
                 | Some(DbNodeType::IndexesFolder)
         );

@@ -14,15 +14,16 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
 };
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
-use one_core::storage::DatabaseType;
-use one_core::storage::manager::get_queries_dir;
+use one_core::storage::{
+    DatabaseType, QueryDirectoryScope, default_query_directory, query_directory,
+};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_ui::resize_handle::{ResizePanel, resize_handle};
 use rust_i18n::t;
 use smol::Timer;
-use std::ops::Deref;
-use std::path::PathBuf;
+use std::ops::{Deref, Range};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -34,8 +35,12 @@ const SQL_EDITOR_CONTEXT: &str = "SqlEditor";
 const SQL_EDITOR_INPUT_CONTEXT: &str = "SqlEditor > Input";
 const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
 const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-enter"];
+const TOGGLE_LINE_COMMENT_KEY_BINDINGS: [&str; 2] = ["cmd-/", "ctrl-/"];
 
-gpui::actions!(sql_editor_view, [RunCurrentQuery, RunAllQuery]);
+gpui::actions!(
+    sql_editor_view,
+    [RunCurrentQuery, RunAllQuery, ToggleLineComment]
+);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(init_keybindings(cx));
@@ -65,6 +70,11 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| KeyBinding::new(&key, RunAllQuery, Some(SQL_EDITOR_CONTEXT))),
     );
+    keybindings.extend(
+        TOGGLE_LINE_COMMENT_KEY_BINDINGS
+            .into_iter()
+            .map(|key| KeyBinding::new(key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
+    );
     keybindings
 }
 
@@ -89,6 +99,11 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         Some(SQL_EDITOR_CONTEXT),
         RunAllQuery,
     ));
+    keybindings.extend(
+        TOGGLE_LINE_COMMENT_KEY_BINDINGS
+            .into_iter()
+            .map(|key| KeyBinding::new(key, ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT))),
+    );
     keybindings
 }
 
@@ -200,6 +215,129 @@ fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
         offset -= 1;
     }
     offset
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LineCommentResult {
+    range: Range<usize>,
+    replacement: String,
+    selection: Range<usize>,
+}
+
+impl LineCommentResult {
+    #[cfg(test)]
+    fn apply_to(&self, text: &str) -> String {
+        let mut text = text.to_owned();
+        text.replace_range(self.range.clone(), &self.replacement);
+        text
+    }
+}
+
+#[derive(Debug)]
+struct OffsetEdit {
+    range: Range<usize>,
+    replacement_len: usize,
+}
+
+fn toggle_sql_line_comments(text: &str, selection: Range<usize>) -> LineCommentResult {
+    let selection_start = clamp_to_char_boundary(text, selection.start.min(text.len()));
+    let selection_end =
+        clamp_to_char_boundary(text, selection.end.min(text.len()).max(selection_start));
+    let line_start = text[..selection_start]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    let effective_end = if selection_end > selection_start
+        && text.as_bytes().get(selection_end - 1) == Some(&b'\n')
+    {
+        selection_end - 1
+    } else {
+        selection_end
+    };
+    let line_end = text[effective_end..]
+        .find('\n')
+        .map_or(text.len(), |newline| effective_end + newline);
+    let target = &text[line_start..line_end];
+    let lines = target.split('\n').collect::<Vec<_>>();
+    let uncomment = lines
+        .iter()
+        .filter(|line| !line.trim_matches([' ', '\t', '\r']).is_empty())
+        .all(|line| line.trim_start_matches([' ', '\t']).starts_with("--"))
+        && lines
+            .iter()
+            .any(|line| !line.trim_matches([' ', '\t', '\r']).is_empty());
+
+    let mut edits = Vec::new();
+    let mut relative_line_start = 0;
+    for line in lines {
+        let content = line.strip_suffix('\r').unwrap_or(line);
+        if content.trim_matches([' ', '\t']).is_empty() {
+            relative_line_start += line.len() + 1;
+            continue;
+        }
+        let indentation_len = content.len() - content.trim_start_matches([' ', '\t']).len();
+        let edit_start = line_start + relative_line_start + indentation_len;
+
+        if uncomment {
+            let comment = &content[indentation_len..];
+            let removed_len = if comment.starts_with("-- ") { 3 } else { 2 };
+            edits.push(OffsetEdit {
+                range: edit_start..edit_start + removed_len,
+                replacement_len: 0,
+            });
+        } else {
+            edits.push(OffsetEdit {
+                range: edit_start..edit_start,
+                replacement_len: 3,
+            });
+        }
+
+        relative_line_start += line.len() + 1;
+    }
+
+    let mut replacement = target.to_owned();
+    for edit in edits.iter().rev() {
+        let edit_range = edit.range.start - line_start..edit.range.end.saturating_sub(line_start);
+        let inserted_text = if edit.replacement_len == 0 { "" } else { "-- " };
+        replacement.replace_range(edit_range, inserted_text);
+    }
+
+    let mapped_selection = if selection_start == selection_end {
+        let cursor = map_offset_after_edits(selection_start, &edits, true);
+        cursor..cursor
+    } else {
+        map_offset_after_edits(selection_start, &edits, false)
+            ..map_offset_after_edits(selection_end, &edits, true)
+    };
+
+    LineCommentResult {
+        range: line_start..line_end,
+        replacement,
+        selection: mapped_selection,
+    }
+}
+
+fn map_offset_after_edits(offset: usize, edits: &[OffsetEdit], bias_after_insert: bool) -> usize {
+    let mut delta = 0_isize;
+
+    for edit in edits {
+        if offset < edit.range.start {
+            break;
+        }
+
+        let removed_len = edit.range.len();
+        if removed_len == 0 {
+            if offset > edit.range.start || (offset == edit.range.start && bias_after_insert) {
+                delta += edit.replacement_len as isize;
+            }
+        } else if offset >= edit.range.end {
+            delta += edit.replacement_len as isize - removed_len as isize;
+        } else {
+            return (edit.range.start as isize + delta + edit.replacement_len as isize).max(0)
+                as usize;
+        }
+    }
+
+    (offset as isize + delta).max(0) as usize
 }
 
 fn should_render_schema_select(supports_schema: bool, uses_schema_as_database: bool) -> bool {
@@ -397,6 +535,7 @@ pub struct SqlEditorTabConfig {
     pub connection_id: String,
     pub database_type: DatabaseType,
     pub file_path: Option<PathBuf>,
+    pub new_file_directory: Option<PathBuf>,
     pub initial_database: Option<String>,
     pub initial_schema: Option<String>,
 }
@@ -461,13 +600,17 @@ impl SqlEditorTab {
         );
 
         let should_load_file = config.file_path.is_some();
-        let resolved_file_path = config.file_path.unwrap_or_else(|| {
-            Self::generate_new_file_path(
-                &config.database_type,
-                &connection_id,
-                initial_select_value.as_deref().unwrap_or("default"),
-            )
-        });
+        let resolved_file_path = match config.file_path {
+            Some(path) => path,
+            None => match config.new_file_directory {
+                Some(directory) => Self::generate_new_file_path_in_directory(&directory),
+                None => Self::generate_new_file_path(
+                    &config.database_type,
+                    &connection_id,
+                    initial_select_value.as_deref().unwrap_or("default"),
+                ),
+            },
+        };
 
         let auto_save_seq = Arc::new(AtomicU64::new(0));
         let is_dirty = Arc::new(AtomicBool::new(false));
@@ -545,12 +688,14 @@ impl SqlEditorTab {
         connection_id: &str,
         database: &str,
     ) -> PathBuf {
-        let queries_dir = get_queries_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let dir_path = queries_dir
-            .join(database_type.path_key())
-            .join(connection_id)
-            .join(database);
+        let scope = QueryDirectoryScope::new(database_type.path_key(), connection_id, database);
+        let dir_path = query_directory(&scope)
+            .or_else(|_| default_query_directory(&scope))
+            .unwrap_or_else(|_| PathBuf::from("."));
+        Self::generate_new_file_path_in_directory(&dir_path)
+    }
 
+    fn generate_new_file_path_in_directory(dir_path: &Path) -> PathBuf {
         let mut next_number = 1;
         if let Ok(entries) = std::fs::read_dir(&dir_path) {
             for entry in entries.flatten() {
@@ -1333,6 +1478,29 @@ impl SqlEditorTab {
         self.execute_sql_text(sql, window, cx);
     }
 
+    fn handle_toggle_line_comment_action(
+        &mut self,
+        _: &ToggleLineComment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.get_sql_text(cx);
+        let selection = self.editor.read(cx).selected_range(cx);
+        let result = toggle_sql_line_comments(&text, selection);
+        if text[result.range.clone()] == result.replacement {
+            return;
+        }
+        self.editor.update(cx, |editor, cx| {
+            editor.replace_range_and_select(
+                result.range,
+                result.replacement,
+                result.selection,
+                window,
+                cx,
+            );
+        });
+    }
+
     fn handle_run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
         if selected_text.trim().is_empty() {
@@ -1735,7 +1903,8 @@ impl Render for SqlEditorTab {
         let mut div = v_flex()
             .size_full()
             .on_action(cx.listener(Self::handle_run_current_query_action))
-            .on_action(cx.listener(Self::handle_run_all_query_action));
+            .on_action(cx.listener(Self::handle_run_all_query_action))
+            .on_action(cx.listener(Self::handle_toggle_line_comment_action));
         if has_results && results_visible {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -1909,9 +2078,10 @@ mod tests {
     use super::{
         ManualTransactionAction, ManualTransactionSession, RUN_ALL_QUERY_KEY_BINDINGS,
         RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SQL_EDITOR_CONTEXT,
-        initial_database_select_value, manual_transaction_control_sql, should_render_schema_select,
-        sql_text_for_run_all, sql_text_for_run_current, sql_text_for_run_cursor_statement,
-        sql_text_for_toolbar_run, supports_manual_transactions,
+        SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment, initial_database_select_value,
+        manual_transaction_control_sql, should_render_schema_select, sql_text_for_run_all,
+        sql_text_for_run_current, sql_text_for_run_cursor_statement, sql_text_for_toolbar_run,
+        supports_manual_transactions, toggle_sql_line_comments,
     };
     use db::DbManager;
     use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
@@ -2074,6 +2244,85 @@ mod tests {
             bindings
                 .first()
                 .is_some_and(|binding| binding.action().partial_eq(&RunCurrentQuery))
+        );
+    }
+
+    #[test]
+    fn ctrl_slash_binding_wins_inside_sql_input_context() {
+        let keymap = Keymap::new(vec![
+            KeyBinding::new("ctrl-/", input::SelectAll, Some("Input")),
+            KeyBinding::new("ctrl-/", ToggleLineComment, Some(SQL_EDITOR_INPUT_CONTEXT)),
+        ]);
+        let contexts = vec![
+            KeyContext::parse(SQL_EDITOR_CONTEXT).expect("valid context"),
+            KeyContext::parse("Input").expect("valid context"),
+        ];
+        let keystroke = Keystroke::parse("ctrl-/").expect("valid keystroke");
+        let (bindings, _) = keymap.bindings_for_input(&[keystroke], &contexts);
+
+        assert!(
+            bindings
+                .first()
+                .is_some_and(|binding| binding.action().partial_eq(&ToggleLineComment))
+        );
+    }
+
+    #[test]
+    fn toggle_line_comment_comments_and_uncomments_current_line() {
+        let sql = "select *\n  from users";
+        let cursor = sql.find("from").expect("line exists") + 2;
+
+        let commented = toggle_sql_line_comments(sql, cursor..cursor);
+        let commented_sql = commented.apply_to(sql);
+        assert_eq!("select *\n  -- from users", commented_sql);
+        assert_eq!(cursor + 3..cursor + 3, commented.selection);
+
+        let uncommented = toggle_sql_line_comments(&commented_sql, commented.selection.clone());
+        assert_eq!(sql, uncommented.apply_to(&commented_sql));
+        assert_eq!(cursor..cursor, uncommented.selection);
+    }
+
+    #[test]
+    fn toggle_line_comment_applies_one_operation_to_selected_lines() {
+        let sql = "select id\n  from users\n-- where active = 1";
+        let selection = 0..sql.len();
+
+        let commented = toggle_sql_line_comments(sql, selection);
+
+        assert_eq!(
+            "-- select id\n  -- from users\n-- -- where active = 1",
+            commented.apply_to(sql)
+        );
+    }
+
+    #[test]
+    fn toggle_line_comment_uncomments_when_all_selected_code_lines_are_commented() {
+        let sql = "  -- select id\n\n\t-- from users";
+
+        let uncommented = toggle_sql_line_comments(sql, 0..sql.len());
+
+        assert_eq!("  select id\n\n\tfrom users", uncommented.apply_to(sql));
+    }
+
+    #[test]
+    fn toggle_line_comment_does_not_include_next_line_at_selection_end() {
+        let sql = "select 1\nselect 2";
+        let next_line_start = sql.find("select 2").expect("line exists");
+
+        let commented = toggle_sql_line_comments(sql, 0..next_line_start);
+
+        assert_eq!("-- select 1\nselect 2", commented.apply_to(sql));
+    }
+
+    #[test]
+    fn toggle_line_comment_preserves_utf8_and_crlf() {
+        let sql = "  select * from 用户表;\r\n\twhere 名称 = '测试';";
+
+        let commented = toggle_sql_line_comments(sql, 0..sql.len());
+
+        assert_eq!(
+            "  -- select * from 用户表;\r\n\t-- where 名称 = '测试';",
+            commented.apply_to(sql)
         );
     }
 

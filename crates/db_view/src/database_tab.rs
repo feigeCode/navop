@@ -365,6 +365,7 @@ impl DatabaseTabView {
                                         connection_id: connection_id.clone(),
                                         database_type,
                                         file_path: None,
+                                        new_file_directory: None,
                                         initial_database: None,
                                         initial_schema: None,
                                     },

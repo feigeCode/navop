@@ -1113,6 +1113,54 @@ Query:
     en: New Query
     zh-CN: 新建查询
     zh-HK: 新建查詢
+  new_folder:
+    en: New Folder
+    zh-CN: 新建目录
+    zh-HK: 新增目錄
+  folder_name:
+    en: Folder name
+    zh-CN: 目录名称
+    zh-HK: 目錄名稱
+  open_query_directory:
+    en: Open Query Directory…
+    zh-CN: 打开查询目录…
+    zh-HK: 開啟查詢目錄…
+  import_sql:
+    en: Import SQL…
+    zh-CN: 导入 SQL…
+    zh-HK: 匯入 SQL…
+  select_query_directory:
+    en: Select Query Directory
+    zh-CN: 选择查询目录
+    zh-HK: 選擇查詢目錄
+  select_sql_files_to_import:
+    en: Select SQL Files to Import
+    zh-CN: 选择要导入的 SQL 文件
+    zh-HK: 選擇要匯入的 SQL 檔案
+  query_directory_updated:
+    en: Query directory updated
+    zh-CN: 查询目录已更新
+    zh-HK: 查詢目錄已更新
+  query_directory_update_failed:
+    en: "Failed to update query directory: %{error}"
+    zh-CN: "更新查询目录失败：%{error}"
+    zh-HK: "更新查詢目錄失敗：%{error}"
+  query_folder_created:
+    en: Query folder created
+    zh-CN: 查询目录已创建
+    zh-HK: 查詢目錄已建立
+  import_sql_success:
+    en: "Imported %{count} SQL file(s)"
+    zh-CN: "已导入 %{count} 个 SQL 文件"
+    zh-HK: "已匯入 %{count} 個 SQL 檔案"
+  import_sql_failed:
+    en: "Failed to import SQL: %{error}"
+    zh-CN: "导入 SQL 失败：%{error}"
+    zh-HK: "匯入 SQL 失敗：%{error}"
+  create_folder_failed:
+    en: "Failed to create query folder: %{error}"
+    zh-CN: "新建查询目录失败：%{error}"
+    zh-HK: "新增查詢目錄失敗：%{error}"
   query_table:
     en: Query Table
     zh-CN: 查询表
