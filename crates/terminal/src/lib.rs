@@ -3,6 +3,7 @@ pub(crate) mod exec_supervisor;
 pub mod history;
 mod local_shell;
 pub mod osc;
+pub mod performance_metrics;
 pub mod pty_backend;
 pub mod serial_backend;
 pub mod shell_integration;
@@ -17,6 +18,10 @@ pub use local_shell::{
     local_config_from_custom_profile, local_config_from_settings,
     local_config_from_settings_with_profile,
 };
+pub use performance_metrics::{
+    TerminalActivity, TerminalInputMetricSource, TerminalPerformanceMetrics,
+    TerminalPerformanceSnapshot, TerminalPerformanceWindow,
+};
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
@@ -27,3 +32,6 @@ pub use types::{
     TerminalExecCompletion, TerminalExecHandle, TerminalExecObserver, TerminalExecOutput,
     TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };
+
+#[cfg(test)]
+mod performance_metrics_tests;

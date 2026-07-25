@@ -72,6 +72,40 @@ recording 或 ingress queue 行为。
 
 验证记录见本文末尾的“实施验证记录”。
 
+### 2026-07-25：切片 3，Performance Metrics 纯 Contract
+
+状态：**实现完成并通过 terminal crate 回归验证，作为第三个独立优化提交。**
+
+本切片只建立无 payload、原子统计的 `TerminalPerformanceMetrics` contract：
+
+- parser/ingress 字节、chunk 数量和生命周期最大 chunk；
+- ingress 当前 backlog 和生命周期峰值；
+- user input 与 terminal response 字节数；
+- `Term` lock wait/hold 样本、总时长和最大时长；
+- wakeup request、queued、coalesced 计数；
+- render 样本、总时长、最大时长和最近可见状态；
+- SSH connect、reconnect 和 invalidation 计数；
+- snapshot delta、吞吐率、平均值和 activity 分类。
+
+指标 API 只接受字节数、`Duration`、布尔值和枚举，不保存 terminal payload、
+命令内容或认证信息。所有累计 counter 和 duration 都使用饱和运算，避免长期运行后
+整数回绕；跨字段 snapshot 是由独立 atomic load 组成的 best-effort observability
+数据，不承诺事务一致性，也不得用于驱动 correctness-sensitive terminal 行为。
+`ingress_pending_bytes_max` 表达 metrics 实例的生命周期峰值，不是 snapshot window
+内的峰值。
+
+本切片明确**尚未接入** parser、backend、SSH、GPUI render 或 wakeup 的真实埋点。
+当前 `dev` 已经存在 `GpuiEventProxy::wakeup_pending` 去重和 terminal event loop 的
+8ms 聚合，不能机械覆盖为历史分支实现；wakeup 行为及其 request/queued/coalesced
+埋点将在后续独立切片中审查，重点验证不会丢失最终 repaint。
+
+独立审查确认：本次没有改变现有 wakeup、render、parser、SSH lifecycle、exec
+supervisor 或 ingress queue 行为；atomic 使用适合统计数据的低成本顺序，snapshot
+的不一致边界已经在模块 contract 中明确；duration 转换、累计值和 delta 均采用
+saturating 语义。
+
+验证记录见本文末尾的“实施验证记录”。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1225,3 +1259,56 @@ git diff --check
 - observer 最终 progress 的截断元数据；
 - terminal core 到 terminal view/Public MCP 的完整字段映射；
 - Public MCP 旧版 JSON 缺少新增字段时的 `serde(default)` 兼容行为。
+
+### 12.3 切片 3：Performance Metrics 纯 Contract
+
+TDD Red 证据：
+
+```text
+cargo test -p terminal performance_metrics --lib
+编译失败，退出码 101：
+error[E0583]: file not found for module `performance_metrics`
+```
+
+Green、contract 与回归验证：
+
+```text
+cargo test -p terminal performance_metrics --lib
+5 passed，168 filtered out
+
+cargo test -p terminal --lib
+173 passed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check \
+  crates/terminal/src/lib.rs \
+  crates/terminal/src/performance_metrics.rs \
+  crates/terminal/src/performance_metrics_tests.rs
+通过
+
+git diff --check
+通过
+```
+
+额外回归保护覆盖：
+
+- parser、backlog、input、wakeup 和 SSH counter/max 聚合；
+- lock/render duration 的总值、最大值和 activity 状态；
+- duration total/max 在极值输入下饱和而不回绕；
+- snapshot window 使用 saturating delta，且零 elapsed 时 rate 为零；
+- 多线程并发 atomic 更新不会丢失计数。
+
+补充验证：
+
+```text
+cargo clippy -p terminal --lib -- -D warnings
+未通过，退出码 101；唯一错误位于本切片未修改的
+crates/x11_forwarding/src/detect.rs:238：
+clippy::unnecessary_sort_by
+```
+
+因此本切片自身的定向测试、terminal 全量 lib 测试、编译、格式和 whitespace
+检查均通过；全依赖 Clippy 门禁被既有的 `x11_forwarding` lint 阻塞，本提交不顺手
+修改该无关 crate。
