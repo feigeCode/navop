@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use super::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
-use db::{ColumnInfo, FieldType};
+use base64::Engine as _;
+use db::{BinaryCell, ColumnInfo, FieldType};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Font, InteractiveElement, IntoElement,
+    App, AppContext, ClipboardItem, Context, Font, ImageFormat, InteractiveElement, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
     Window, div, prelude::FluentBuilder, px,
 };
@@ -15,7 +17,11 @@ use gpui_component::input::{InputEvent, InputState, MaskPattern};
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::time_picker::{TimePickerEvent, TimePickerState};
 use gpui_component::tooltip::Tooltip;
-use gpui_component::{ActiveTheme, WindowExt, h_flex};
+use gpui_component::{
+    ActiveTheme, IconName, Sizable as _, Size, WindowExt,
+    button::{Button, ButtonVariants},
+    h_flex,
+};
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
 use one_ui::edit_table::{
@@ -119,6 +125,8 @@ pub struct EditorTableDelegate {
     primary_key_indices: Vec<usize>,
     /// Data grid handle for context menu actions
     data_grid: Option<WeakEntity<DataGrid>>,
+    /// Exact binary values keyed by their coordinates in `rows`.
+    binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>>,
     preview_font_cache: Option<PreviewFontCache>,
 }
 
@@ -211,6 +219,7 @@ impl Clone for EditorTableDelegate {
             table_name: self.table_name.clone(),
             primary_key_indices: self.primary_key_indices.clone(),
             data_grid: self.data_grid.clone(),
+            binary_cells: self.binary_cells.clone(),
             preview_font_cache: self.preview_font_cache.clone(),
         }
     }
@@ -251,6 +260,7 @@ impl EditorTableDelegate {
             table_name: SharedString::default(),
             primary_key_indices: Vec::new(),
             data_grid: None,
+            binary_cells: HashMap::new(),
             preview_font_cache: None,
         }
     }
@@ -274,6 +284,10 @@ impl EditorTableDelegate {
 
     pub fn set_data_grid(&mut self, data_grid: WeakEntity<DataGrid>) {
         self.data_grid = Some(data_grid);
+    }
+
+    pub fn is_binary_cell(&self, row_ix: usize, col_ix: usize) -> bool {
+        self.binary_cells.contains_key(&(row_ix, col_ix))
     }
 
     pub fn set_editable(&mut self, editable: bool) {
@@ -388,6 +402,10 @@ impl EditorTableDelegate {
         col_ix: usize,
         new_opt_value: Option<String>,
     ) -> bool {
+        if self.binary_cells.contains_key(&(row_ix, col_ix)) {
+            return false;
+        }
+
         // Get old value from current rows
         let Some(row) = self.rows.get_mut(row_ix) else {
             return false;
@@ -457,17 +475,40 @@ impl EditorTableDelegate {
         columns: Vec<Column>,
         rows: Vec<Vec<Option<String>>>,
         rowids: Vec<String>,
+        cx: &mut App,
+    ) {
+        self.update_data_with_binary_cells(columns, rows, rowids, vec![], cx);
+    }
+
+    pub fn update_data_with_binary_cells(
+        &mut self,
+        columns: Vec<Column>,
+        rows: Vec<Vec<Option<String>>>,
+        rowids: Vec<String>,
+        binary_cells: Vec<BinaryCell>,
         _cx: &mut App,
     ) {
         const MIN_WIDTH: usize = 80;
         const MAX_WIDTH: usize = 400;
+
+        let binary_cells: HashMap<(usize, usize), Arc<Vec<u8>>> = binary_cells
+            .into_iter()
+            .map(|cell| ((cell.row_index, cell.column_index), Arc::new(cell.bytes)))
+            .collect();
 
         // Set column widths based on data type and content
         self.columns = columns
             .into_iter()
             .enumerate()
             .map(|(ix, mut col)| {
-                let width = self.calculate_column_width(ix, &col, &rows, MIN_WIDTH, MAX_WIDTH);
+                let width = self.calculate_column_width(
+                    ix,
+                    &col,
+                    &rows,
+                    &binary_cells,
+                    MIN_WIDTH,
+                    MAX_WIDTH,
+                );
                 col.width = px(width as f32);
                 col = col.sortable();
                 col
@@ -480,6 +521,7 @@ impl EditorTableDelegate {
         self.rowids = rowids.clone();
         self.original_rowids = rowids;
         self.row_index_map = (0..row_count).map(|i| (i, i)).collect();
+        self.binary_cells = binary_cells;
 
         // Clear all change tracking
         self.clear_changes();
@@ -511,6 +553,7 @@ impl EditorTableDelegate {
         col_ix: usize,
         col: &Column,
         rows: &[Vec<Option<String>>],
+        binary_cells: &HashMap<(usize, usize), Arc<Vec<u8>>>,
         min_width: usize,
         max_width: usize,
     ) -> usize {
@@ -518,9 +561,16 @@ impl EditorTableDelegate {
 
         let content_width = rows
             .iter()
+            .enumerate()
             .take(100)
-            .filter_map(|row| row.get(col_ix))
-            .map(|cell| cell.as_ref().map(|s| s.len()).unwrap_or(4))
+            .filter_map(|(row_ix, row)| {
+                if binary_cells.contains_key(&(row_ix, col_ix)) {
+                    Some(16)
+                } else {
+                    row.get(col_ix)
+                        .map(|cell| cell.as_ref().map(|s| s.len()).unwrap_or(4))
+                }
+            })
             .max()
             .unwrap_or(6);
 
@@ -1385,19 +1435,132 @@ impl EditTableDelegate for EditorTableDelegate {
 
         let font = self.preview_font(cx);
 
+        if let Some(bytes) = self.binary_cells.get(&(actual_row, col)).cloned() {
+            let byte_len = bytes.len();
+            let image_format = binary_cell_image_format(bytes.as_slice());
+            let data_grid = self.data_grid.clone();
+            let column_name = self
+                .columns
+                .get(col)
+                .map(|column| column.name.to_string())
+                .unwrap_or_else(|| "column".to_string());
+            let file_name = binary_download_file_name(&column_name, actual_row);
+            let preview_title = format!("{} · {}", column_name, actual_row + 1);
+
+            return h_flex()
+                .id(SharedString::from(format!(
+                    "binary-cell-{actual_row}-{col}"
+                )))
+                .group("binary-cell")
+                .font(font)
+                .size_full()
+                .min_w_0()
+                .gap_1()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(t!("TableData.binary_value", size = byte_len).to_string()),
+                )
+                .child(
+                    h_flex()
+                        .flex_none()
+                        .gap_0p5()
+                        .opacity(0.)
+                        .group_hover("binary-cell", |this| this.opacity(1.))
+                        .when_some(image_format, |this, format| {
+                            let data_grid = data_grid.clone();
+                            let bytes = bytes.clone();
+                            let preview_title = preview_title.clone();
+                            this.child(
+                                Button::new(SharedString::from(format!(
+                                    "preview-binary-image-{actual_row}-{col}"
+                                )))
+                                .icon(IconName::Maximize)
+                                .ghost()
+                                .with_size(Size::Small)
+                                .tooltip(t!("TableData.preview_binary_image").to_string())
+                                .on_click(
+                                    move |_, window, cx| {
+                                        if let Some(data_grid) = data_grid.clone() {
+                                            let bytes = bytes.clone();
+                                            let preview_title = preview_title.clone();
+                                            let _ = data_grid.update(cx, |grid, cx| {
+                                                grid.show_binary_image_preview(
+                                                    bytes,
+                                                    format,
+                                                    preview_title,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    },
+                                ),
+                            )
+                        })
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "copy-binary-{actual_row}-{col}"
+                            )))
+                            .icon(IconName::Copy)
+                            .ghost()
+                            .with_size(Size::Small)
+                            .tooltip(t!("TableData.copy_binary_base64").to_string())
+                            .on_click({
+                                let bytes = bytes.clone();
+                                move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        binary_cell_copy_text(bytes.as_slice()),
+                                    ));
+                                }
+                            }),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "download-binary-{actual_row}-{col}"
+                            )))
+                            .icon(IconName::ArrowDown)
+                            .ghost()
+                            .with_size(Size::Small)
+                            .tooltip(t!("TableData.download_binary").to_string())
+                            .on_click(move |_, _, cx| {
+                                if let Some(data_grid) = data_grid.clone() {
+                                    let bytes = bytes.clone();
+                                    let file_name = file_name.clone();
+                                    let _ = data_grid.update(cx, |grid, cx| {
+                                        grid.download_binary_value(
+                                            bytes.as_ref().clone(),
+                                            file_name,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }),
+                        ),
+                )
+                .into_any_element();
+        }
+
         match value {
             None => div()
                 .font(font.clone())
                 .text_color(cx.theme().muted_foreground.opacity(0.5))
                 .italic()
-                .child("NULL"),
+                .child("NULL")
+                .into_any_element(),
             Some(s) => div()
                 .font(font)
                 .w_full()
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .child(s),
+                .child(s)
+                .into_any_element(),
         }
     }
 
@@ -1421,6 +1584,9 @@ impl EditTableDelegate for EditorTableDelegate {
         let actual_row = self.map_display_to_actual_row(row_ix);
 
         if self.is_deleted_row(actual_row) {
+            return None;
+        }
+        if self.binary_cells.contains_key(&(actual_row, col_ix)) {
             return None;
         }
 
@@ -2138,6 +2304,10 @@ impl EditTableDelegate for EditorTableDelegate {
         // Map display row index to actual row index
         let actual_row = self.map_display_to_actual_row(row_ix);
 
+        if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
+            return binary_cell_copy_text(bytes.as_slice());
+        }
+
         self.rows
             .get(actual_row)
             .and_then(|r| r.get(col_ix))
@@ -2199,6 +2369,46 @@ impl EditTableDelegate for EditorTableDelegate {
             start.0,
             start.1
         );
+    }
+}
+
+fn binary_cell_copy_text(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn binary_download_file_name(column_name: &str, zero_based_row: usize) -> String {
+    let mut sanitized = String::with_capacity(column_name.len());
+    let mut previous_separator = false;
+    for character in column_name.trim().chars() {
+        let safe = character.is_ascii_alphanumeric() || matches!(character, '-' | '_');
+        if safe {
+            sanitized.push(character);
+            previous_separator = false;
+        } else if !previous_separator && !sanitized.is_empty() {
+            sanitized.push('-');
+            previous_separator = true;
+        }
+    }
+    let sanitized = sanitized.trim_matches('-');
+    let column = if sanitized.is_empty() {
+        "column"
+    } else {
+        sanitized
+    };
+    format!("database-{column}-row-{}.bin", zero_based_row + 1)
+}
+
+fn binary_cell_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Png => Some(ImageFormat::Png),
+        image::ImageFormat::Jpeg => Some(ImageFormat::Jpeg),
+        image::ImageFormat::WebP => Some(ImageFormat::Webp),
+        image::ImageFormat::Gif => Some(ImageFormat::Gif),
+        image::ImageFormat::Bmp => Some(ImageFormat::Bmp),
+        image::ImageFormat::Tiff => Some(ImageFormat::Tiff),
+        image::ImageFormat::Ico => Some(ImageFormat::Ico),
+        image::ImageFormat::Pnm => Some(ImageFormat::Pnm),
+        _ => None,
     }
 }
 
@@ -2316,7 +2526,8 @@ impl EditorTableDelegate {
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorTableDelegate, normalize_row_search_query, normalize_sort_identifier,
+        EditorTableDelegate, binary_cell_copy_text, binary_cell_image_format,
+        binary_download_file_name, normalize_row_search_query, normalize_sort_identifier,
         parse_primary_order_by_clause, row_matches_search_query,
     };
     use db::ColumnInfo;
@@ -2351,6 +2562,7 @@ mod tests {
             table_name: SharedString::default(),
             primary_key_indices: Vec::new(),
             data_grid: None,
+            binary_cells: HashMap::new(),
             preview_font_cache: None,
         }
     }
@@ -2467,5 +2679,54 @@ mod tests {
         assert!(!preview_font.contains("installed_font_names,"));
         assert!(!render_th.contains("cx.text_system().all_font_names()"));
         assert!(!render_td.contains("cx.text_system().all_font_names()"));
+    }
+
+    #[test]
+    fn binary_cell_copy_uses_standard_base64_without_metadata() {
+        assert_eq!(
+            binary_cell_copy_text(&[0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00]),
+            "C8/b3gEA"
+        );
+    }
+
+    #[test]
+    fn binary_cell_cannot_be_changed_through_text_writeback() {
+        let mut delegate = test_delegate(vec![vec![Some("0x010203".to_string())]]);
+        delegate
+            .binary_cells
+            .insert((0, 0), std::sync::Arc::new(vec![1, 2, 3]));
+
+        assert!(!delegate.record_cell_change(0, 0, "replacement".to_string()));
+        assert_eq!(delegate.rows[0][0].as_deref(), Some("0x010203"));
+        assert!(delegate.cell_changes.is_empty());
+    }
+
+    #[test]
+    fn binary_download_name_is_safe_and_stable() {
+        assert_eq!(
+            binary_download_file_name("profile/photo", 0),
+            "database-profile-photo-row-1.bin"
+        );
+        assert_eq!(
+            binary_download_file_name("  ", 11),
+            "database-column-row-12.bin"
+        );
+    }
+
+    #[test]
+    fn binary_image_format_recognizes_valid_image_magic_only() {
+        const PNG_1X1: &[u8] = &[
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, b'I', b'H',
+            b'D', b'R', 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, b'I', b'D', b'A', b'T', 0x08,
+            0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+            0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+        ];
+
+        assert_eq!(
+            binary_cell_image_format(PNG_1X1),
+            Some(gpui::ImageFormat::Png)
+        );
+        assert_eq!(binary_cell_image_format(b"not an image"), None);
     }
 }

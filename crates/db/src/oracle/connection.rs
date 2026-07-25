@@ -12,8 +12,8 @@ use tracing::{debug, error, info};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
+    SqlSource, apply_query_max_rows,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -210,6 +210,7 @@ impl OracleDbConnection {
         columns: Vec<String>,
         column_meta: Vec<QueryColumnMeta>,
         rows: Vec<Vec<Option<String>>>,
+        binary_cells: Vec<BinaryCell>,
         sql: String,
         elapsed_ms: u128,
     ) -> SqlResult {
@@ -218,6 +219,7 @@ impl OracleDbConnection {
             columns,
             column_meta,
             rows,
+            binary_cells,
             elapsed_ms,
         })
     }
@@ -276,6 +278,7 @@ impl OracleDbConnection {
                                 .collect();
 
                             let mut data_rows = Vec::new();
+                            let mut binary_cells = Vec::new();
                             let mut rows = rows;
                             loop {
                                 let Some(row_result) = rows.next() else {
@@ -283,8 +286,30 @@ impl OracleDbConnection {
                                 };
                                 match row_result {
                                     Ok(row) => {
+                                        let row_index = data_rows.len();
                                         let row_data: Vec<Option<String>> = (0..columns.len())
                                             .map(|i| {
+                                                if column_types.get(i).is_some_and(|oracle_type| {
+                                                    matches!(
+                                                        oracle_type,
+                                                        OracleType::Raw(_)
+                                                            | OracleType::LongRaw
+                                                            | OracleType::BLOB
+                                                            | OracleType::BFILE
+                                                    )
+                                                }) {
+                                                    if let Some(bytes) = row
+                                                        .get::<usize, Option<Vec<u8>>>(i)
+                                                        .ok()
+                                                        .flatten()
+                                                    {
+                                                        binary_cells.push(BinaryCell {
+                                                            row_index,
+                                                            column_index: i,
+                                                            bytes,
+                                                        });
+                                                    }
+                                                }
                                                 column_types
                                                     .get(i)
                                                     .and_then(|oracle_type| {
@@ -309,6 +334,7 @@ impl OracleDbConnection {
                                 columns,
                                 column_meta,
                                 data_rows,
+                                binary_cells,
                                 sql_string,
                                 elapsed_ms,
                             ))

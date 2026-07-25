@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
-use tiberius::{AuthMethod, Client, Config, Row};
+use tiberius::{AuthMethod, Client, ColumnType, Config, Row};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -12,8 +12,8 @@ use tracing::{debug, error, info};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
+    SqlSource, apply_query_max_rows,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -105,11 +105,28 @@ impl MssqlDbConnection {
             .map(|(name, db_type)| QueryColumnMeta::new(name.clone(), db_type.clone()))
             .collect();
 
+        let mut binary_cells = Vec::new();
         let all_rows: Vec<Vec<Option<String>>> = rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(row_index, row)| {
                 (0..columns.len())
-                    .map(|i| Self::extract_value(row, i))
+                    .map(|i| {
+                        if matches!(
+                            row.columns()[i].column_type(),
+                            ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image
+                        ) {
+                            if let Some(bytes) = row.try_get::<&[u8], _>(i).ok().flatten() {
+                                binary_cells.push(BinaryCell {
+                                    row_index,
+                                    column_index: i,
+                                    bytes: bytes.to_vec(),
+                                });
+                                return Some(format!("0x{}", hex::encode(bytes)));
+                            }
+                        }
+                        Self::extract_value(row, i)
+                    })
                     .collect()
             })
             .collect();
@@ -119,6 +136,7 @@ impl MssqlDbConnection {
             columns,
             column_meta,
             rows: all_rows,
+            binary_cells,
             elapsed_ms,
         })
     }

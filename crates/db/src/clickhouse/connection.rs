@@ -58,6 +58,7 @@ impl ClickHouseDbConnection {
             columns,
             column_meta,
             rows,
+            binary_cells: vec![],
             elapsed_ms,
         })
     }

@@ -1,7 +1,11 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, Value, prelude::*};
+use mysql_async::{
+    Conn, Opts, OptsBuilder, SslOpts, Value,
+    consts::{ColumnFlags, ColumnType},
+    prelude::*,
+};
 use one_core::storage::DbConnectionConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,8 +16,8 @@ use tracing::{debug, error, info};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
+    SqlSource, apply_query_max_rows,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::{resolve_connection_target, resolve_tunnel_destination};
@@ -196,6 +200,22 @@ impl MysqlDbConnection {
         }
     }
 
+    fn is_binary_column(column_type: ColumnType, flags: ColumnFlags) -> bool {
+        flags.contains(ColumnFlags::BINARY_FLAG)
+            && matches!(
+                column_type,
+                ColumnType::MYSQL_TYPE_STRING
+                    | ColumnType::MYSQL_TYPE_VAR_STRING
+                    | ColumnType::MYSQL_TYPE_VARCHAR
+                    | ColumnType::MYSQL_TYPE_TINY_BLOB
+                    | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                    | ColumnType::MYSQL_TYPE_LONG_BLOB
+                    | ColumnType::MYSQL_TYPE_BLOB
+                    | ColumnType::MYSQL_TYPE_GEOMETRY
+                    | ColumnType::MYSQL_TYPE_VECTOR
+            )
+    }
+
     fn format_datetime(
         year: u16,
         month: u8,
@@ -288,6 +308,7 @@ impl MysqlDbConnection {
             .collect();
 
         let mut all_rows = Vec::new();
+        let mut binary_cells = Vec::new();
         loop {
             let Some(row) = query_result
                 .next()
@@ -296,8 +317,22 @@ impl MysqlDbConnection {
             else {
                 break;
             };
+            let row_index = all_rows.len();
             let row_data: Vec<Option<String>> = (0..row.len())
-                .map(|i| Self::extract_value(&row[i]))
+                .map(|i| {
+                    if columns_arc.get(i).is_some_and(|column| {
+                        Self::is_binary_column(column.column_type(), column.flags())
+                    }) {
+                        if let Value::Bytes(bytes) = &row[i] {
+                            binary_cells.push(BinaryCell {
+                                row_index,
+                                column_index: i,
+                                bytes: bytes.clone(),
+                            });
+                        }
+                    }
+                    Self::extract_value(&row[i])
+                })
                 .collect();
             all_rows.push(row_data);
         }
@@ -307,6 +342,7 @@ impl MysqlDbConnection {
             columns,
             column_meta,
             rows: all_rows,
+            binary_cells,
             elapsed_ms,
         }))
     }
@@ -1125,5 +1161,27 @@ mod tests {
             message,
             MysqlDbConnection::enrich_connect_error_message(&config, message)
         );
+    }
+
+    #[test]
+    fn binary_column_detection_uses_protocol_flags_instead_of_debug_type_names() {
+        use mysql_async::consts::{ColumnFlags, ColumnType};
+
+        assert!(MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_BLOB,
+            ColumnFlags::BLOB_FLAG | ColumnFlags::BINARY_FLAG,
+        ));
+        assert!(MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_VAR_STRING,
+            ColumnFlags::BINARY_FLAG,
+        ));
+        assert!(!MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_BLOB,
+            ColumnFlags::BLOB_FLAG,
+        ));
+        assert!(!MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_LONG,
+            ColumnFlags::BINARY_FLAG,
+        ));
     }
 }

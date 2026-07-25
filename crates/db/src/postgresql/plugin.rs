@@ -2714,6 +2714,7 @@ mod tests {
                 columns: vec![],
                 column_meta: vec![],
                 rows,
+                binary_cells: vec![],
                 elapsed_ms: 0,
             }))
         }
