@@ -6,8 +6,10 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
+const MAX_PENDING_OSC_BYTES: usize = 16 * 1024;
+
 /// OSC 事件类型（基于 OSC 133 协议）
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OscEvent {
     /// 提示符开始（OSC 133;A）
     PromptStart,
@@ -23,48 +25,83 @@ pub enum OscEvent {
     CommandRecorded(String),
 }
 
-/// 从字节流中提取所有 OSC 事件（一次 data 里可能含多个）
-pub fn extract_osc_events(data: &[u8]) -> Vec<OscEvent> {
-    let text = String::from_utf8_lossy(data);
-    let mut events = Vec::new();
+/// 跨 PTY/SSH read chunk 保存未完成 OSC 序列的增量解析器。
+///
+/// ConPTY 和网络 channel 都可能在任意字节边界拆分一次 shell 输出，
+/// 因此不能假设 `ESC ] ... BEL` 会完整出现在同一个 read chunk 中。
+#[derive(Default)]
+pub(crate) struct OscStreamParser {
+    pending: Vec<u8>,
+}
 
-    // OSC 格式: ESC ] <payload> BEL  或  ESC ] <payload> ESC \
-    // 用简单的状态机扫描
-    let mut i = 0;
-    let chars: Vec<char> = text.chars().collect();
+impl OscStreamParser {
+    pub(crate) fn push(&mut self, data: &[u8]) -> Vec<OscEvent> {
+        self.pending.extend_from_slice(data);
+        let mut events = Vec::new();
+        let mut cursor = 0;
 
-    while i < chars.len() {
-        // 找 ESC ]
-        if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == ']' {
-            i += 2;
-            let start = i;
-
-            // 找结束符 BEL(\x07) 或 ST(ESC \)
-            while i < chars.len() {
-                if chars[i] == '\x07' {
-                    let payload: String = chars[start..i].iter().collect();
-                    if let Some(ev) = parse_osc_payload(&payload) {
-                        events.push(ev);
-                    }
-                    i += 1;
-                    break;
+        while let Some(relative_start) = find_osc_start(&self.pending[cursor..]) {
+            let start = cursor + relative_start;
+            let payload_start = start + 2;
+            let Some((payload_end, terminator_len)) = find_osc_end(&self.pending[payload_start..])
+            else {
+                if start > 0 {
+                    self.pending.drain(..start);
                 }
-                if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == '\\' {
-                    let payload: String = chars[start..i].iter().collect();
-                    if let Some(ev) = parse_osc_payload(&payload) {
-                        events.push(ev);
-                    }
-                    i += 2;
-                    break;
+                self.truncate_oversized_pending();
+                return events;
+            };
+            let payload_end = payload_start + payload_end;
+            if let Ok(payload) = std::str::from_utf8(&self.pending[payload_start..payload_end]) {
+                if let Some(event) = parse_osc_payload(payload) {
+                    events.push(event);
                 }
-                i += 1;
             }
-        } else {
-            i += 1;
+            cursor = payload_end + terminator_len;
         }
+
+        let retain_from = if self.pending.last() == Some(&b'\x1b') {
+            self.pending.len() - 1
+        } else {
+            self.pending.len()
+        };
+        if retain_from > 0 {
+            self.pending.drain(..retain_from);
+        }
+        self.truncate_oversized_pending();
+        events
     }
 
-    events
+    fn truncate_oversized_pending(&mut self) {
+        if self.pending.len() <= MAX_PENDING_OSC_BYTES {
+            return;
+        }
+        let retain_from = self.pending.len().saturating_sub(2);
+        self.pending.drain(..retain_from);
+    }
+}
+
+/// 从字节流中提取所有 OSC 事件（一次 data 里可能含多个）
+pub fn extract_osc_events(data: &[u8]) -> Vec<OscEvent> {
+    OscStreamParser::default().push(data)
+}
+
+fn find_osc_start(data: &[u8]) -> Option<usize> {
+    data.windows(2).position(|window| window == b"\x1b]")
+}
+
+fn find_osc_end(data: &[u8]) -> Option<(usize, usize)> {
+    let mut index = 0;
+    while index < data.len() {
+        if data[index] == b'\x07' {
+            return Some((index, 1));
+        }
+        if data[index] == b'\x1b' && data.get(index + 1).is_some_and(|byte| *byte == b'\\') {
+            return Some((index, 2));
+        }
+        index += 1;
+    }
+    None
 }
 
 /// 解析 OSC payload 内容
@@ -207,6 +244,19 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0], OscEvent::CommandStart);
+    }
+
+    #[test]
+    fn stream_parser_preserves_osc_split_across_chunks() {
+        let mut parser = OscStreamParser::default();
+
+        assert!(parser.push(b"\x1b]133;").is_empty());
+        assert_eq!(parser.push(b"B\x07"), vec![OscEvent::InputStart]);
+        assert!(parser.push(b"\x1b]133;D;").is_empty());
+        assert_eq!(
+            parser.push(b"0\x1b\\"),
+            vec![OscEvent::CommandFinished { exit_code: 0 }]
+        );
     }
 
     #[test]

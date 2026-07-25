@@ -31,7 +31,7 @@ function global:prompt {
 "#;
 
 const CMD_SCRIPT: &str = r#"@echo off
-prompt $E]7;file://localhost/$P$E\$P$G
+prompt $E]133;A$E\$E]7;file://localhost/$P$E\$P$G$E]133;B$E\
 "#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +131,8 @@ mod tests {
 
         assert!(script.contains("$P"));
         assert!(script.contains("$E]7;file://localhost/"));
+        assert!(script.contains("$E]133;A"));
+        assert!(script.contains("$E]133;B"));
         assert!(script.contains("$E\\"));
     }
 

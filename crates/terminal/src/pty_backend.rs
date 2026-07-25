@@ -18,7 +18,9 @@ use tokio::sync::{
 use tokio_util::sync::CancellationToken;
 
 use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
-use crate::osc::{OscEvent, extract_osc_events};
+#[cfg(test)]
+use crate::osc::extract_osc_events;
+use crate::osc::{OscEvent, OscStreamParser};
 use crate::{
     TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
     TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
@@ -78,7 +80,10 @@ enum LocalPtyCommand {
         id: u64,
         phase: ExecPhase,
     },
-    TerminalChunk(Vec<u8>),
+    TerminalChunk {
+        data: Vec<u8>,
+        events: Vec<OscEvent>,
+    },
     Disconnect,
     Shutdown,
 }
@@ -152,6 +157,7 @@ fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
     }
 }
 
+#[cfg(test)]
 fn terminal_events_from_osc_chunk(data: &[u8]) -> Vec<TerminalEvent> {
     extract_osc_events(data)
         .into_iter()
@@ -169,6 +175,7 @@ struct OscTrackingReader<T: EventedPty> {
     event_tx: UnboundedSender<TerminalEvent>,
     command_tx: UnboundedSender<LocalPtyCommand>,
     capture_output: Arc<AtomicBool>,
+    osc_parser: OscStreamParser,
 }
 
 // EventLoop owns the wrapper on one thread; the reader pointer targets the boxed
@@ -188,6 +195,7 @@ impl<T: EventedPty> OscTrackingPty<T> {
             event_tx,
             command_tx,
             capture_output,
+            osc_parser: OscStreamParser::default(),
         };
         Self { inner, reader }
     }
@@ -198,14 +206,15 @@ impl<T: EventedPty> Read for OscTrackingReader<T> {
         let bytes_read = unsafe { (&mut *self.inner).reader().read(buf) }?;
         if bytes_read > 0 {
             let data = &buf[..bytes_read];
-            let terminal_events = terminal_events_from_osc_chunk(data);
-            if self.capture_output.load(Ordering::Acquire) || !terminal_events.is_empty() {
-                let _ = self
-                    .command_tx
-                    .send(LocalPtyCommand::TerminalChunk(data.to_vec()));
+            let osc_events = self.osc_parser.push(data);
+            if self.capture_output.load(Ordering::Acquire) || !osc_events.is_empty() {
+                let _ = self.command_tx.send(LocalPtyCommand::TerminalChunk {
+                    data: data.to_vec(),
+                    events: osc_events.clone(),
+                });
             }
-            for event in terminal_events {
-                let _ = self.event_tx.send(event);
+            for event in osc_events {
+                let _ = self.event_tx.send(terminal_event_from_osc_event(event));
             }
         }
         Ok(bytes_read)
@@ -531,15 +540,12 @@ fn run_local_exec_supervisor(
                 &command_tx,
                 &mut exec_results,
             ),
-            LocalPtyCommand::TerminalChunk(data) => {
-                let events = extract_osc_events(&data);
-                apply_local_exec_effects(
-                    supervisor.on_terminal_chunk(&data, &events),
-                    &event_loop_sender,
-                    &command_tx,
-                    &mut exec_results,
-                )
-            }
+            LocalPtyCommand::TerminalChunk { data, events } => apply_local_exec_effects(
+                supervisor.on_terminal_chunk(&data, &events),
+                &event_loop_sender,
+                &command_tx,
+                &mut exec_results,
+            ),
             LocalPtyCommand::Disconnect => false,
             LocalPtyCommand::Shutdown => {
                 let _ = event_loop_sender.send(Msg::Shutdown);

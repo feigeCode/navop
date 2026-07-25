@@ -87,6 +87,7 @@ impl ExecSupervisor {
     }
 
     pub(super) fn on_input_start(&mut self) -> Vec<ExecEffect> {
+        let completed_prompt_render = self.readiness == ShellCommandReadiness::PromptRendering;
         self.prompt_epoch = self.prompt_epoch.saturating_add(1);
         self.input_dirty = false;
         self.readiness = ShellCommandReadiness::Ready {
@@ -99,7 +100,7 @@ impl ExecSupervisor {
             let active = self.active.take().expect("waiting exec exists");
             return self.start_submit(active.id, active.request);
         }
-        if self.active_is_started_observer() {
+        if self.active_is_prompt_completable(completed_prompt_render) {
             let active = self.active.take().expect("started observer exists");
             if active.detached {
                 return Vec::new();
@@ -216,10 +217,11 @@ impl ExecSupervisor {
             .is_some_and(|active| active.phase == ExecPhase::WaitingForReady)
     }
 
-    fn active_is_started_observer(&self) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|active| active.phase == ExecPhase::Observing && active.command_started)
+    fn active_is_prompt_completable(&self, completed_prompt_render: bool) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            active.phase == ExecPhase::Observing
+                && (active.command_started || completed_prompt_render)
+        })
     }
 
     fn finish_unobserved_command(&mut self) {

@@ -298,6 +298,26 @@ fn fresh_input_start_completes_when_finish_marker_is_missing() {
 }
 
 #[test]
+fn fresh_input_start_completes_submitted_command_when_shell_has_no_command_start_marker() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 251, "Get-ChildItem -Hidden -Name");
+    supervisor.on_terminal_chunk(b"Get-ChildItem -Hidden -Name\r\n.git\r\n", &[]);
+
+    assert!(supervisor.on_osc(&OscEvent::PromptStart).is_empty());
+    let effects = supervisor.on_osc(&OscEvent::InputStart);
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { id: 251, output }]
+            if output.completion == TerminalExecCompletion::ObservedOutput
+                && output.output == ".git"
+    ));
+    assert!(matches!(
+        supervisor.readiness(),
+        ShellCommandReadiness::Ready { .. }
+    ));
+}
+
+#[test]
 fn observing_timeout_returns_bounded_partial_output() {
     let mut supervisor = ready_supervisor();
     submit(&mut supervisor, 26, "long-command");

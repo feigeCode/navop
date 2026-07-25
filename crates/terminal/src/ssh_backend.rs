@@ -16,7 +16,9 @@ use ssh::{
 };
 
 use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
-use crate::osc::{OscEvent, extract_osc_events};
+#[cfg(test)]
+use crate::osc::extract_osc_events;
+use crate::osc::{OscEvent, OscStreamParser};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
@@ -494,6 +496,7 @@ impl SshBackend {
             let mut shutdown = false;
             let mut processor: Processor<StdSyncHandler> = Processor::new();
             let mut exec_supervisor = ExecSupervisor::new();
+            let mut osc_parser = OscStreamParser::default();
             let mut exec_results = HashMap::new();
             let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
@@ -608,7 +611,7 @@ impl SshBackend {
                         match event {
                             Some(ChannelEvent::Data(data)) | Some(ChannelEvent::ExtendedData { data, .. }) => {
                                 // 解析所有 OSC 事件
-                                let osc_events = extract_osc_events(&data);
+                                let osc_events = osc_parser.push(&data);
                                 let effects = exec_supervisor.on_terminal_chunk(&data, &osc_events);
                                 tracing::trace!(
                                     readiness = ?exec_supervisor.readiness(),
