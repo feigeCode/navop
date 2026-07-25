@@ -521,6 +521,8 @@ pub enum TerminalSidebarEvent {
     FontSizeChanged(f32),
     /// 字体变更
     FontFamilyChanged(String),
+    /// 滚屏历史保留行数变更
+    ScrollbackLinesChanged(usize),
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
     /// 请求询问 AI
@@ -753,6 +755,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::FontFamilyChanged(family) => {
                     cx.emit(TerminalSidebarEvent::FontFamilyChanged(family.clone()));
+                }
+                settings_panel::SettingsPanelEvent::ScrollbackLinesChanged(lines) => {
+                    cx.emit(TerminalSidebarEvent::ScrollbackLinesChanged(*lines));
                 }
                 settings_panel::SettingsPanelEvent::CursorBlinkChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::CursorBlinkChanged(*enabled));
@@ -1160,6 +1165,17 @@ impl TerminalSidebar {
     ) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_font_family(font_family, window, cx);
+        });
+    }
+
+    pub fn set_scrollback_lines(
+        &mut self,
+        lines: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_scrollback_lines(lines, window, cx);
         });
     }
 

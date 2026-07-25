@@ -720,6 +720,8 @@ pub struct AppSettings {
     pub custom_fonts: Vec<CustomFont>,
     #[serde(default = "default_terminal_font_size")]
     pub terminal_font_size: f64,
+    #[serde(default = "default_terminal_scrollback_lines")]
+    pub terminal_scrollback_lines: usize,
     #[serde(default = "default_true")]
     pub terminal_auto_copy: bool,
     #[serde(default = "default_true")]
@@ -1015,6 +1017,10 @@ fn default_terminal_font_size() -> f64 {
     15.0
 }
 
+fn default_terminal_scrollback_lines() -> usize {
+    AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1059,6 +1065,7 @@ impl Default for AppSettings {
             terminal_font_family: default_monospace_font_family(),
             custom_fonts: Vec::new(),
             terminal_font_size: default_terminal_font_size(),
+            terminal_scrollback_lines: default_terminal_scrollback_lines(),
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
             terminal_middle_click_paste: default_true(),
@@ -1114,6 +1121,9 @@ impl Global for AppSettings {}
 impl AppSettings {
     pub const MIN_WINDOW_OPACITY: f32 = 0.5;
     pub const MAX_WINDOW_OPACITY: f32 = 1.0;
+    pub const DEFAULT_TERMINAL_SCROLLBACK_LINES: usize = 100_000;
+    pub const MIN_TERMINAL_SCROLLBACK_LINES: usize = 1_000;
+    pub const MAX_TERMINAL_SCROLLBACK_LINES: usize = 1_000_000;
 
     fn migrate_legacy_mcp_toolsets(&mut self) {
         let Some(toolsets) = self.mcp.legacy_toolsets.take() else {
@@ -1147,6 +1157,18 @@ impl AppSettings {
         }
     }
 
+    pub fn normalize_terminal_scrollback_lines(lines: usize) -> usize {
+        lines.clamp(
+            Self::MIN_TERMINAL_SCROLLBACK_LINES,
+            Self::MAX_TERMINAL_SCROLLBACK_LINES,
+        )
+    }
+
+    pub fn normalize_terminal_settings(&mut self) {
+        self.terminal_scrollback_lines =
+            Self::normalize_terminal_scrollback_lines(self.terminal_scrollback_lines);
+    }
+
     pub fn effective_theme_mode(&self, system_mode: ThemeMode) -> ThemeMode {
         if self.auto_switch_theme || self.theme_mode == "system" {
             system_mode
@@ -1174,6 +1196,7 @@ impl AppSettings {
         update(&mut settings);
         settings.normalize_font_settings();
         settings.normalize_appearance_settings();
+        settings.normalize_terminal_settings();
         cx.set_global(settings);
     }
 
@@ -1182,6 +1205,7 @@ impl AppSettings {
         update(&mut settings);
         settings.normalize_font_settings();
         settings.normalize_appearance_settings();
+        settings.normalize_terminal_settings();
         settings.save();
         cx.set_global(settings);
     }
@@ -1218,6 +1242,7 @@ impl AppSettings {
                     settings.migrate_legacy_mcp_toolsets();
                     settings.normalize_font_settings();
                     settings.normalize_appearance_settings();
+                    settings.normalize_terminal_settings();
                     settings
                 }
                 Err(e) => {
@@ -1927,6 +1952,29 @@ mod tests {
         );
         assert!(settings.local_terminal_profile.custom_program.is_empty());
         assert!(settings.local_terminal_profile.custom_arguments.is_empty());
+    }
+
+    #[test]
+    fn terminal_scrollback_lines_default_and_normalization_are_safe() {
+        let mut settings = AppSettings::default();
+
+        assert_eq!(100_000, settings.terminal_scrollback_lines);
+
+        settings.terminal_scrollback_lines = 10;
+        settings.normalize_terminal_settings();
+        assert_eq!(1_000, settings.terminal_scrollback_lines);
+
+        settings.terminal_scrollback_lines = 2_000_000;
+        settings.normalize_terminal_settings();
+        assert_eq!(1_000_000, settings.terminal_scrollback_lines);
+    }
+
+    #[test]
+    fn legacy_app_settings_receive_default_terminal_scrollback_lines() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(100_000, settings.terminal_scrollback_lines);
     }
 
     #[test]

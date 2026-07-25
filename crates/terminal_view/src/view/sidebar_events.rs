@@ -77,6 +77,12 @@ impl TerminalView {
                     settings.font_family = family;
                 });
             }
+            TerminalSidebarEvent::ScrollbackLinesChanged(lines) => {
+                let lines = *lines;
+                let _ = update_settings(cx, move |settings| {
+                    settings.scrollback_lines = lines;
+                });
+            }
             TerminalSidebarEvent::ExecuteCommand(command) => {
                 // 仅粘贴命令，不自动回车执行，降低误操作风险
                 self.paste_text(command, window, cx);

@@ -114,6 +114,8 @@ pub enum SettingsPanelEvent {
     FontSizeChanged(f32),
     /// 字体变更
     FontFamilyChanged(String),
+    /// 滚屏历史保留行数变更
+    ScrollbackLinesChanged(usize),
     /// 光标闪烁变更
     CursorBlinkChanged(bool),
     /// 非 bracketed 模式下，多行粘贴确认开关
@@ -144,6 +146,8 @@ pub struct SettingsPanel {
     search_input_state: Entity<InputState>,
     /// 字体大小输入框状态
     font_size_input_state: Entity<InputState>,
+    /// 滚屏历史行数输入框状态
+    scrollback_lines_input_state: Entity<InputState>,
     /// 字体选择状态
     font_select_state: Entity<SelectState<Vec<TerminalFontOption>>>,
     /// 当前主题
@@ -154,6 +158,10 @@ pub struct SettingsPanel {
     font_family: SharedString,
     /// 字体大小输入变更抑制
     suppress_font_size_change: bool,
+    /// 当前滚屏历史保留行数
+    scrollback_lines: usize,
+    /// 滚屏历史行数输入变更抑制
+    suppress_scrollback_lines_change: bool,
     /// 光标闪烁开关
     cursor_blink: bool,
     /// 非 bracketed 模式下，多行粘贴确认
@@ -208,6 +216,19 @@ impl SettingsPanel {
         let font_size_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("13"));
         font_size_input_state.update(cx, |state: &mut InputState, cx| {
             state.set_value(&format!("{:.0}", font_size), window, cx);
+        });
+
+        let scrollback_lines = AppSettings::global(cx).terminal_scrollback_lines;
+        let scrollback_lines_input_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES.to_string())
+                .pattern(
+                    regex::Regex::new(r"^\d{0,7}$")
+                        .expect("terminal scrollback lines regex 应可编译"),
+                )
+        });
+        scrollback_lines_input_state.update(cx, |state: &mut InputState, cx| {
+            state.set_value(&scrollback_lines.to_string(), window, cx);
         });
 
         // 字体选择列表
@@ -292,6 +313,44 @@ impl SettingsPanel {
             },
         ));
 
+        let scrollback_lines_entity = scrollback_lines_input_state.clone();
+        subscriptions.push(cx.subscribe_in(
+            &scrollback_lines_input_state,
+            window,
+            move |this, _state, event: &InputEvent, _window, cx| {
+                if !matches!(event, InputEvent::Change) || this.suppress_scrollback_lines_change {
+                    return;
+                }
+
+                let value = scrollback_lines_entity.read(cx).value().to_string();
+                if let Ok(lines) = value.parse::<usize>() {
+                    let lines = AppSettings::normalize_terminal_scrollback_lines(lines);
+                    this.scrollback_lines = lines;
+                    cx.emit(SettingsPanelEvent::ScrollbackLinesChanged(lines));
+                }
+            },
+        ));
+
+        let scrollback_lines_step_entity = scrollback_lines_input_state.clone();
+        subscriptions.push(cx.subscribe_in(
+            &scrollback_lines_input_state,
+            window,
+            move |this, _state, event: &NumberInputEvent, window, cx| match event {
+                NumberInputEvent::Step(action) => {
+                    let lines = match action {
+                        StepAction::Increment => this.scrollback_lines.saturating_add(1_000),
+                        StepAction::Decrement => this.scrollback_lines.saturating_sub(1_000),
+                    };
+                    let lines = AppSettings::normalize_terminal_scrollback_lines(lines);
+                    this.scrollback_lines = lines;
+                    scrollback_lines_step_entity.update(cx, |state: &mut InputState, cx| {
+                        state.set_value(&lines.to_string(), window, cx);
+                    });
+                    cx.emit(SettingsPanelEvent::ScrollbackLinesChanged(lines));
+                }
+            },
+        ));
+
         // 订阅字体选择事件
         subscriptions.push(cx.subscribe_in(
             &font_select_state,
@@ -309,11 +368,14 @@ impl SettingsPanel {
         Self {
             search_input_state,
             font_size_input_state,
+            scrollback_lines_input_state,
             font_select_state,
             current_theme: initial_theme.clone(),
             font_size,
             font_family: initial_font_family,
             suppress_font_size_change: false,
+            scrollback_lines,
+            suppress_scrollback_lines_change: false,
             cursor_blink: false,
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
@@ -368,6 +430,22 @@ impl SettingsPanel {
             state.set_items(fonts, window, cx);
             state.set_selected_value(&font_family, window, cx);
         });
+        cx.notify();
+    }
+
+    pub fn set_scrollback_lines(
+        &mut self,
+        lines: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lines = AppSettings::normalize_terminal_scrollback_lines(lines);
+        self.scrollback_lines = lines;
+        self.suppress_scrollback_lines_change = true;
+        self.scrollback_lines_input_state.update(cx, |state, cx| {
+            state.set_value(&lines.to_string(), window, cx);
+        });
+        self.suppress_scrollback_lines_change = false;
         cx.notify();
     }
 
@@ -826,6 +904,46 @@ impl SettingsPanel {
                             .text_color(fg)
                             .placeholder(t!("Settings.font_family_placeholder")),
                     ),
+            )
+    }
+
+    fn render_scrollback_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
+        let input_style = self.local_input_style();
+
+        v_flex()
+            .gap_3()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted_fg)
+                            .child(t!("Settings.scrollback_lines").to_uppercase()),
+                    )
+                    .child(
+                        NumberInput::new(&self.scrollback_lines_input_state)
+                            .small()
+                            .local_style(input_style)
+                            .suffix(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted_fg)
+                                    .child(t!("Settings.lines")),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(muted_fg).child(t!(
+                        "Settings.scrollback_lines_help",
+                        min = AppSettings::MIN_TERMINAL_SCROLLBACK_LINES,
+                        max = AppSettings::MAX_TERMINAL_SCROLLBACK_LINES
+                    ))),
             )
     }
 
@@ -1525,6 +1643,7 @@ impl Render for SettingsPanel {
                             .pb_4()
                             .child(self.render_search_section(cx))
                             .child(self.render_font_section(cx))
+                            .child(self.render_scrollback_section(cx))
                             .child(self.render_cursor_section(cx))
                             .child(self.render_safety_section(cx))
                             .when(has_file_manager, |el| {

@@ -37,6 +37,8 @@ pub struct TerminalSettings {
     pub font_size: f32,
     #[serde(default = "default_terminal_font_family")]
     pub font_family: String,
+    #[serde(default = "default_terminal_scrollback_lines")]
+    pub scrollback_lines: usize,
     pub auto_copy: bool,
     pub enable_autocomplete: bool,
     pub middle_click_paste: bool,
@@ -64,6 +66,10 @@ fn default_terminal_font_family() -> String {
     AppSettings::default().terminal_font_family
 }
 
+fn default_terminal_scrollback_lines() -> usize {
+    AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES
+}
+
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self::from_parts(&AppSettings::default(), &TerminalLocalSettings::default())
@@ -75,6 +81,7 @@ impl TerminalSettings {
         Self {
             font_size: app_settings.terminal_font_size as f32,
             font_family: normalize_terminal_primary_font(&app_settings.terminal_font_family),
+            scrollback_lines: app_settings.terminal_scrollback_lines,
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
             middle_click_paste: app_settings.terminal_middle_click_paste,
@@ -277,6 +284,7 @@ fn update_app_settings<T>(
     AppSettings::update_and_save(cx, |settings| {
         settings.terminal_font_size = next.font_size as f64;
         settings.terminal_font_family = next.font_family.clone();
+        settings.terminal_scrollback_lines = next.scrollback_lines;
         settings.terminal_auto_copy = next.auto_copy;
         settings.terminal_enable_autocomplete = next.enable_autocomplete;
         settings.terminal_middle_click_paste = next.middle_click_paste;
@@ -292,6 +300,7 @@ fn update_app_settings<T>(
 fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) -> bool {
     left.font_size == right.font_size
         && left.font_family == right.font_family
+        && left.scrollback_lines == right.scrollback_lines
         && left.auto_copy == right.auto_copy
         && left.enable_autocomplete == right.enable_autocomplete
         && left.middle_click_paste == right.middle_click_paste
@@ -418,6 +427,19 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert!(!settings.paste_image_upload);
+    }
+
+    #[test]
+    fn terminal_settings_reads_scrollback_lines_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_scrollback_lines: 250_000,
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert_eq!(250_000, settings.scrollback_lines);
     }
 
     #[test]

@@ -109,6 +109,12 @@ impl TerminalView {
             window,
             cx,
         );
+        self.terminal.update(cx, |terminal, _cx| {
+            terminal.set_scrollback_lines(settings.scrollback_lines);
+        });
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_scrollback_lines(settings.scrollback_lines, window, cx);
+        });
         self.apply_cursor_blink(settings.cursor_blink, window, cx);
         self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);

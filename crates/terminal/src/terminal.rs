@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::*;
 use one_core::gpui_tokio::Tokio;
+use one_core::settings::AppSettings;
 use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAuthMethod, StoredConnection,
 };
@@ -837,6 +838,8 @@ pub struct Terminal {
 
     /// 连接类型
     connection_kind: TerminalConnectionKind,
+    /// 终端滚屏历史最多保留的行数
+    scrollback_lines: usize,
 }
 
 #[derive(Clone)]
@@ -1027,8 +1030,13 @@ fn normalize_history_matches(
 impl Terminal {
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let (term, event_proxy, _colors) =
-            Self::create_term(DEFAULT_COLS, DEFAULT_ROWS, event_tx.clone());
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (term, event_proxy, _colors) = Self::create_term(
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            scrollback_lines,
+            event_tx.clone(),
+        );
 
         Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
 
@@ -1059,6 +1067,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
+            scrollback_lines,
         }
     }
 
@@ -1081,8 +1090,13 @@ impl Terminal {
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let (term, event_proxy, _colors) =
-            Self::create_term(DEFAULT_COLS, DEFAULT_ROWS, event_tx.clone());
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (term, event_proxy, _colors) = Self::create_term(
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            scrollback_lines,
+            event_tx.clone(),
+        );
         let LocalConfig {
             shell,
             args,
@@ -1143,6 +1157,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
+            scrollback_lines,
         })
     }
 
@@ -1280,7 +1295,9 @@ impl Terminal {
         let cols = config.pty_config.width as usize;
         let rows = config.pty_config.height as usize;
 
-        let (term, event_proxy, _colors) = Self::create_term(cols, rows, event_tx.clone());
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (term, event_proxy, _colors) =
+            Self::create_term(cols, rows, scrollback_lines, event_tx.clone());
         let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
 
@@ -1329,6 +1346,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Ssh,
+            scrollback_lines,
         }
     }
 
@@ -1339,8 +1357,13 @@ impl Terminal {
             .expect("StoredConnection 应包含有效的 SerialParams");
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let (term, event_proxy, _colors) =
-            Self::create_term(DEFAULT_COLS, DEFAULT_ROWS, event_tx.clone());
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (term, event_proxy, _colors) = Self::create_term(
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            scrollback_lines,
+            event_tx.clone(),
+        );
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
         let connection_generation = 1;
 
@@ -1382,6 +1405,7 @@ impl Terminal {
             command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Serial,
+            scrollback_lines,
         }
     }
 
@@ -1402,6 +1426,7 @@ impl Terminal {
     fn create_term(
         cols: usize,
         rows: usize,
+        scrollback_lines: usize,
         event_tx: UnboundedSender<TerminalEvent>,
     ) -> (
         Arc<FairMutex<Term<GpuiEventProxy>>>,
@@ -1409,7 +1434,7 @@ impl Terminal {
         alacritty_terminal::term::color::Colors,
     ) {
         let term_config = TermConfig {
-            scrolling_history: 10000,
+            scrolling_history: scrollback_lines,
             ..Default::default()
         };
         let event_proxy = GpuiEventProxy::new(event_tx);
@@ -1420,6 +1445,23 @@ impl Terminal {
         );
         let colors = term.colors().clone();
         (Arc::new(FairMutex::new(term)), event_proxy, colors)
+    }
+
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let lines = AppSettings::normalize_terminal_scrollback_lines(lines);
+        if self.scrollback_lines == lines {
+            return;
+        }
+
+        self.scrollback_lines = lines;
+        self.term.lock().set_options(TermConfig {
+            scrolling_history: lines,
+            ..Default::default()
+        });
+    }
+
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
     }
 
     fn spawn_local_history_loader(preferred_shell: Option<&str>, cx: &mut Context<Self>) {
@@ -2167,7 +2209,7 @@ impl Terminal {
             .clone()
             .unwrap_or_else(|| GpuiEventProxy::new(event_tx.clone()));
         let term_config = TermConfig {
-            scrolling_history: 10000,
+            scrolling_history: self.scrollback_lines,
             ..Default::default()
         };
         let new_term = Term::new(
@@ -2869,7 +2911,7 @@ mod tests {
     #[test]
     fn reset_terminal_surface_clears_buffer_and_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, event_tx.clone());
+        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let mut terminal = Terminal {
             term,
             backend: None,
@@ -2897,6 +2939,7 @@ mod tests {
             command_record_gate: CommandRecordGate::default(),
             connection_generation: 1,
             connection_kind: TerminalConnectionKind::Ssh,
+            scrollback_lines: 10_000,
         };
 
         let mut processor: Processor<StdSyncHandler> = Processor::new();
@@ -2919,7 +2962,7 @@ mod tests {
     #[test]
     fn recent_text_reads_tail_from_scrollback_without_viewport_offset() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, _event_proxy, _colors) = Terminal::create_term(20, 3, event_tx);
+        let (term, _event_proxy, _colors) = Terminal::create_term(20, 3, 10_000, event_tx);
         let mut processor: Processor<StdSyncHandler> = Processor::new();
         processor.advance(&mut *term.lock(), b"one\r\ntwo\r\nthree\r\nfour");
 
@@ -2929,6 +2972,48 @@ mod tests {
         assert_eq!(2, snapshot.returned_lines);
         assert!(snapshot.available_lines >= 4);
         assert!(snapshot.history_size >= 1);
+    }
+
+    #[test]
+    fn terminal_scrollback_limit_can_be_updated_and_survives_surface_reset() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let mut terminal = Terminal {
+            term,
+            backend: None,
+            title: String::new(),
+            current_working_dir: None,
+            child_exited: None,
+            connection_state: ConnectionState::Connected,
+            cols: 80,
+            rows: 24,
+            pixel_width: 0,
+            pixel_height: 0,
+            ssh_config: None,
+            ssh_session_manager: None,
+            ssh_mfa_responder: None,
+            serial_params: None,
+            event_tx: Some(event_tx),
+            event_proxy: Some(event_proxy),
+            connection_id: Some(1),
+            connection_name: Some("SSH".to_string()),
+            init_commands: None,
+            session_history: VecDeque::new(),
+            persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
+            connection_generation: 1,
+            connection_kind: TerminalConnectionKind::Ssh,
+            scrollback_lines: 10_000,
+        };
+
+        terminal.set_scrollback_lines(250_000);
+        assert_eq!(250_000, terminal.scrollback_lines());
+
+        terminal.reset_terminal_surface();
+
+        assert_eq!(250_000, terminal.scrollback_lines());
     }
 }
 

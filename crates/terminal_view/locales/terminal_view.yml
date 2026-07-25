@@ -443,6 +443,18 @@ Settings:
     en: Select font...
     zh-CN: 选择字体...
     zh-HK: 選擇字體...
+  scrollback_lines:
+    en: Scrollback Lines
+    zh-CN: 滚屏历史行数
+    zh-HK: 捲動歷史行數
+  scrollback_lines_help:
+    en: Retain %{min}–%{max} output lines for scrolling. Changes apply to open terminals immediately.
+    zh-CN: 保留 %{min}–%{max} 行终端输出用于滚动查看，修改后立即应用到已打开终端。
+    zh-HK: 保留 %{min}–%{max} 行終端輸出供捲動查看，修改後立即套用到已開啟終端。
+  lines:
+    en: lines
+    zh-CN: 行
+    zh-HK: 行
   theme:
     en: Theme
     zh-CN: 主题
