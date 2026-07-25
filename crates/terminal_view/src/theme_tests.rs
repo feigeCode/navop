@@ -7,12 +7,25 @@ use gpui::{Pixels, px};
 use gpui_component::{Theme, ThemeColor};
 
 #[test]
-fn application_theme_reuses_application_semantic_colors() {
+fn dark_terminal_theme_reuses_application_semantic_colors() {
     let app_theme = Theme::from(ThemeColor::dark().as_ref());
     let terminal_theme = TerminalTheme::from_application_theme(&app_theme);
 
     assert_eq!(app_theme.background, terminal_theme.background);
     assert_eq!(app_theme.foreground, terminal_theme.foreground);
+    assert_eq!(app_theme.primary, terminal_theme.cursor);
+    assert_eq!(app_theme.selection, terminal_theme.selection);
+}
+
+#[test]
+fn light_terminal_theme_softens_the_canvas_and_default_text() {
+    let app_theme = Theme::from(ThemeColor::light().as_ref());
+    let terminal_theme = TerminalTheme::from_application_theme(&app_theme);
+
+    assert!(terminal_theme.background.l < app_theme.background.l);
+    assert!(terminal_theme.background.l >= 0.97);
+    assert!(terminal_theme.foreground.l > app_theme.foreground.l);
+    assert!(terminal_theme.foreground.l <= 0.32);
     assert_eq!(app_theme.primary, terminal_theme.cursor);
     assert_eq!(app_theme.selection, terminal_theme.selection);
 }

@@ -30,6 +30,8 @@ pub const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.4;
 const TERMINAL_CELL_WIDTH_RATIO: f32 = 0.6;
 const MIN_TERMINAL_CELL_WIDTH_RATIO: f32 = 0.3;
 const MAX_TERMINAL_CELL_WIDTH_RATIO: f32 = 1.2;
+const LIGHT_TERMINAL_BACKGROUND_MAX_LIGHTNESS: f32 = 0.985;
+const LIGHT_TERMINAL_FOREGROUND_MIN_LIGHTNESS: f32 = 0.26;
 
 /// 终端主题配色（用于侧边栏等 UI 组件）
 ///
@@ -147,11 +149,36 @@ impl TerminalTheme {
     /// 从应用主题的语义色生成终端主题。
     ///
     /// 终端只需要背景、前景、光标和选区四种基础颜色，因此直接复用
-    /// 应用主题的对应语义色，避免终端侧边栏和主界面出现两套配色。
+    /// 应用主题的对应语义色。亮色模式会轻微压低纯白背景、提亮过深的
+    /// 默认文字，降低大面积等宽文本的黑白反差；暗色模式保持原色。
     pub fn from_application_theme(theme: &Theme) -> Self {
+        let is_light = theme.background.l >= 0.5;
+        let background = if is_light {
+            Hsla {
+                l: theme
+                    .background
+                    .l
+                    .min(LIGHT_TERMINAL_BACKGROUND_MAX_LIGHTNESS),
+                ..theme.background
+            }
+        } else {
+            theme.background
+        };
+        let foreground = if is_light {
+            Hsla {
+                l: theme
+                    .foreground
+                    .l
+                    .max(LIGHT_TERMINAL_FOREGROUND_MIN_LIGHTNESS),
+                ..theme.foreground
+            }
+        } else {
+            theme.foreground
+        };
+
         Self {
-            foreground: theme.foreground,
-            background: theme.background,
+            foreground,
+            background,
             cursor: theme.primary,
             selection: theme.selection,
         }

@@ -37,6 +37,14 @@ pub struct FontVariants {
 
 impl FontVariants {
     pub fn new(family: SharedString, fallbacks: Vec<String>) -> Self {
+        Self::new_with_bold_weight(family, fallbacks, FontWeight::BOLD)
+    }
+
+    fn new_with_bold_weight(
+        family: SharedString,
+        fallbacks: Vec<String>,
+        bold_weight: FontWeight,
+    ) -> Self {
         // 与 view.rs 保持一致：当 fallbacks 为空时使用 None
         let fallbacks = if fallbacks.is_empty() {
             None
@@ -58,7 +66,7 @@ impl FontVariants {
             },
             bold: Font {
                 family: family.clone(),
-                weight: FontWeight::BOLD,
+                weight: bold_weight,
                 style: FontStyle::Normal,
                 features: features.clone(),
                 fallbacks: fallbacks.clone(),
@@ -72,7 +80,7 @@ impl FontVariants {
             },
             bold_italic: Font {
                 family,
-                weight: FontWeight::BOLD,
+                weight: bold_weight,
                 style: FontStyle::Italic,
                 features: features.clone(),
                 fallbacks: fallbacks.clone(),
@@ -86,7 +94,7 @@ impl FontVariants {
             },
             cjk_bold: Font {
                 family: cjk_family.clone(),
-                weight: FontWeight::BOLD,
+                weight: bold_weight,
                 style: FontStyle::Normal,
                 features: features.clone(),
                 fallbacks: fallbacks.clone(),
@@ -100,7 +108,7 @@ impl FontVariants {
             },
             cjk_bold_italic: Font {
                 family: cjk_family,
-                weight: FontWeight::BOLD,
+                weight: bold_weight,
                 style: FontStyle::Italic,
                 features,
                 fallbacks,
@@ -120,6 +128,15 @@ impl FontVariants {
             (TextRunFontRole::CjkFallback, false, true) => &self.cjk_italic,
             (TextRunFontRole::CjkFallback, true, true) => &self.cjk_bold_italic,
         }
+    }
+}
+
+#[inline]
+fn terminal_bold_weight(background: Hsla) -> FontWeight {
+    if background.l >= 0.5 {
+        FontWeight::SEMIBOLD
+    } else {
+        FontWeight::BOLD
     }
 }
 
@@ -1301,7 +1318,11 @@ impl Element for TerminalElementImpl {
         _cx: &mut App,
     ) -> Self::PrepaintState {
         // 预创建所有字体变体，避免在 paint 中逐次创建
-        let fonts = FontVariants::new(self.font_family.clone(), self.font_fallbacks.clone());
+        let fonts = FontVariants::new_with_bold_weight(
+            self.font_family.clone(),
+            self.font_fallbacks.clone(),
+            terminal_bold_weight(self.custom_background),
+        );
 
         let line_height = self.font_size * self.line_height_scale;
         // 使用由 view.rs 传入的 cell_width，确保与 resize 使用完全相同的值
@@ -1742,11 +1763,12 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 mod tests {
     use super::{
         BlockRect, CellData, RenderCache, TextRunFontRole, block_cursor_glyph_from_cell,
-        block_element_geometry, terminal_text_font_role,
+        block_element_geometry, terminal_bold_weight, terminal_text_font_role,
     };
     use alacritty_terminal::term::cell::{Cell, Flags};
     use alacritty_terminal::term::color::Colors;
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
+    use gpui::{FontWeight, rgb};
 
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
@@ -1842,6 +1864,15 @@ mod tests {
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('协'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('，'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('あ'));
+    }
+
+    #[test]
+    fn light_terminal_uses_semibold_for_ansi_bold_text() {
+        assert_eq!(
+            FontWeight::SEMIBOLD,
+            terminal_bold_weight(rgb(0xFAFAFA).into())
+        );
+        assert_eq!(FontWeight::BOLD, terminal_bold_weight(rgb(0x171717).into()));
     }
 
     #[test]
