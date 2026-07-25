@@ -175,6 +175,77 @@ fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
 }
 
 #[test]
+fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
+    let mut original = StoredConnection::new_ssh(
+        "ssh".to_string(),
+        SshParams {
+            host: "bad.example".to_string(),
+            port: 22,
+            username: "wrong-user".to_string(),
+            auth_method: SshAuthMethod::Password {
+                password: "wrong-password".to_string(),
+            },
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            x11_forwarding: None,
+            jump_server: None,
+            proxy: None,
+            os_id: None,
+            icon: None,
+        },
+        None,
+    );
+    original.id = Some(42);
+    let mut latest = original.clone();
+    latest.params = serde_json::to_string(&SshParams {
+        host: "good.example".to_string(),
+        port: 2222,
+        username: "correct-user".to_string(),
+        auth_method: SshAuthMethod::Password {
+            password: "correct-password".to_string(),
+        },
+        connect_timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        default_directory: None,
+        init_script: None,
+        disable_shell_integration: None,
+        x11_forwarding: None,
+        jump_server: None,
+        proxy: None,
+        os_id: None,
+        icon: None,
+    })
+    .expect("SSH params should serialize");
+    let source = TerminalDuplicateSource::Ssh {
+        connection: original,
+        working_dir: Some("/srv/app".to_string()),
+        sync_path_with_terminal: true,
+    };
+
+    let resolved = resolve_ssh_reconnect_source(&source, |id| {
+        assert_eq!(42, id);
+        Ok(Some(latest.clone()))
+    })
+    .expect("latest connection lookup should succeed")
+    .expect("SSH source should resolve");
+    let params = resolved
+        .connection
+        .to_ssh_params()
+        .expect("resolved connection should contain SSH params");
+
+    assert_eq!("good.example", params.host);
+    assert_eq!(2222, params.port);
+    assert_eq!("correct-user", params.username);
+    assert_eq!(Some("/srv/app"), resolved.working_dir.as_deref());
+    assert!(resolved.sync_path_with_terminal);
+}
+
+#[test]
 fn terminal_history_scope_matches_supported_connection_kinds() {
     let local = terminal_history_scope(TerminalConnectionKind::Local, None)
         .expect("local terminal should have history scope");

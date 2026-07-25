@@ -86,6 +86,7 @@ use mouse_input::{
 use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{SidebarContribution, SidebarPlacement};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
+use one_core::storage::{ConnectionRepository, GlobalStorageState, traits::Repository};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use paste_safety::{
@@ -99,8 +100,8 @@ use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
 use terminal::LocalConfig;
 use terminal::terminal::{
-    ConnectionState, Terminal, TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy,
-    resolve_local_working_dir,
+    ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind, TerminalModelEvent,
+    TerminalScrollProxy, resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};

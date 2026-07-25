@@ -814,6 +814,14 @@ TerminalView:
     en: "Failed to create local terminal: %{error}"
     zh-CN: "创建本地终端失败：%{error}"
     zh-HK: "建立本機終端機失敗：%{error}"
+  reconnect_load_latest_failed:
+    en: "Failed to load the latest SSH connection settings: %{error}"
+    zh-CN: "读取最新 SSH 连接配置失败：%{error}"
+    zh-HK: "讀取最新 SSH 連線設定失敗：%{error}"
+  reconnect_apply_latest_failed:
+    en: "Failed to apply the latest SSH connection settings: %{error}"
+    zh-CN: "应用最新 SSH 连接配置失败：%{error}"
+    zh-HK: "套用最新 SSH 連線設定失敗：%{error}"
   clipboard_image_requires_ssh:
     en: Clipboard images can only be uploaded from an SSH terminal
     zh-CN: 当前终端不是 SSH 终端，无法上传剪贴板图片

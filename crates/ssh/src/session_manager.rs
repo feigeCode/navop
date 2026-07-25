@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -44,9 +44,14 @@ impl<C> Default for SessionState<C> {
 }
 
 struct SessionPool<C, K> {
-    config: SshConnectConfig,
+    config: RwLock<SessionConfig>,
     connector: K,
     state: Mutex<SessionState<C>>,
+}
+
+struct SessionConfig {
+    value: SshConnectConfig,
+    generation: u64,
 }
 
 impl<C, K> SessionPool<C, K>
@@ -56,10 +61,36 @@ where
 {
     fn new(config: SshConnectConfig, connector: K) -> Self {
         Self {
-            config,
+            config: RwLock::new(SessionConfig {
+                value: config,
+                generation: 0,
+            }),
             connector,
             state: Mutex::new(SessionState::default()),
         }
+    }
+
+    fn config(&self) -> SshConnectConfig {
+        self.config_snapshot().0
+    }
+
+    fn replace_config(&self, config: SshConnectConfig) {
+        let mut current = self.config.write().unwrap_or_else(|err| err.into_inner());
+        current.value = config;
+        current.generation = current.generation.wrapping_add(1);
+    }
+
+    fn config_snapshot(&self) -> (SshConnectConfig, u64) {
+        let current = self.config.read().unwrap_or_else(|err| err.into_inner());
+        (current.value.clone(), current.generation)
+    }
+
+    fn is_current_config_generation(&self, generation: u64) -> bool {
+        self.config
+            .read()
+            .unwrap_or_else(|err| err.into_inner())
+            .generation
+            == generation
     }
 
     /// 获取一个"活着"的 client。命中缓存会做节流 ping 验真；失败或未命中走 connect 分支，
@@ -85,7 +116,12 @@ where
                 } else {
                     let notify = Arc::new(Notify::new());
                     state.connecting = Some(notify.clone());
-                    Phase1::Connect(notify)
+                    let (config, generation) = self.config_snapshot();
+                    Phase1::Connect {
+                        notify,
+                        config: Box::new(config),
+                        generation,
+                    }
                 }
             };
 
@@ -123,11 +159,23 @@ where
                 Phase1::Wait(notify) => {
                     notify.notified().await;
                 }
-                Phase1::Connect(notify) => {
+                Phase1::Connect {
+                    notify,
+                    config,
+                    generation,
+                } => {
                     // connect 期间不持 state 锁，别的调用者可以继续 inspect/wait。
-                    let result = self.connector.connect(self.config.clone()).await;
+                    let result = self.connector.connect(*config).await;
                     let mut state = self.state.lock().await;
                     state.connecting = None;
+                    if !self.is_current_config_generation(generation) {
+                        notify.notify_waiters();
+                        drop(state);
+                        if let Ok(mut stale_client) = result {
+                            let _ = stale_client.disconnect().await;
+                        }
+                        continue;
+                    }
                     match result {
                         Ok(new_client) => {
                             let arc = Arc::new(Mutex::new(new_client));
@@ -207,7 +255,11 @@ enum Phase1<C> {
         recently_pinged: bool,
     },
     Wait(Arc<Notify>),
-    Connect(Arc<Notify>),
+    Connect {
+        notify: Arc<Notify>,
+        config: Box<SshConnectConfig>,
+        generation: u64,
+    },
 }
 
 #[derive(Clone, Copy, Default)]
@@ -248,7 +300,14 @@ impl SshSessionManager {
     }
 
     pub fn config(&self) -> SshConnectConfig {
-        self.inner.config.clone()
+        self.inner.config()
+    }
+
+    /// 替换后续连接使用的配置，同时保留 manager 的共享 Arc 身份。
+    ///
+    /// Terminal、SFTP 与监控面板会继续共享同一个 manager；调用方应在重连前断开旧会话。
+    pub fn replace_config(&self, config: SshConnectConfig) {
+        self.inner.replace_config(config);
     }
 
     pub async fn client(&self) -> Result<Arc<Mutex<RusshClient>>> {
@@ -300,8 +359,8 @@ mod tests {
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
     use tokio::sync::Notify;
     use tokio::time::{Duration, sleep};
 
@@ -309,6 +368,7 @@ mod tests {
     struct FakeConnector {
         connect_count: AtomicUsize,
         fail_first: AtomicBool,
+        connected_hosts: StdMutex<Vec<String>>,
     }
 
     struct FakeClient {
@@ -321,6 +381,7 @@ mod tests {
     struct SlowFakeConnector {
         connect_count: AtomicUsize,
         connect_started: Notify,
+        connected_hosts: StdMutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -347,7 +408,11 @@ mod tests {
 
     #[async_trait]
     impl SharedSessionConnector<FakeClient> for Arc<FakeConnector> {
-        async fn connect(&self, _config: SshConnectConfig) -> Result<FakeClient> {
+        async fn connect(&self, config: SshConnectConfig) -> Result<FakeClient> {
+            self.connected_hosts
+                .lock()
+                .expect("connected hosts lock should not be poisoned")
+                .push(config.host);
             let n = self.connect_count.fetch_add(1, Ordering::SeqCst);
             if n == 0 && self.fail_first.load(Ordering::SeqCst) {
                 return Err(anyhow!("first connect fails"));
@@ -363,8 +428,12 @@ mod tests {
 
     #[async_trait]
     impl SharedSessionConnector<FakeClient> for Arc<SlowFakeConnector> {
-        async fn connect(&self, _config: SshConnectConfig) -> Result<FakeClient> {
+        async fn connect(&self, config: SshConnectConfig) -> Result<FakeClient> {
             self.connect_count.fetch_add(1, Ordering::SeqCst);
+            self.connected_hosts
+                .lock()
+                .expect("connected hosts lock should not be poisoned")
+                .push(config.host);
             self.connect_started.notify_waiters();
             sleep(Duration::from_millis(50)).await;
             Ok(FakeClient {
@@ -434,10 +503,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replace_config_is_used_by_next_connection() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+        let _first = pool.client().await.expect("首次连接应成功");
+        let mut latest = test_config();
+        latest.host = "latest.example".to_string();
+        latest.port = 2222;
+
+        pool.replace_config(latest.clone());
+        pool.disconnect().await.expect("旧连接应断开");
+        let _second = pool.client().await.expect("更新配置后连接应成功");
+
+        assert_eq!("latest.example", pool.config().host);
+        assert_eq!(2222, pool.config().port);
+        assert_eq!(
+            vec!["example.com".to_string(), "latest.example".to_string()],
+            *connector
+                .connected_hosts
+                .lock()
+                .expect("connected hosts lock should not be poisoned")
+        );
+    }
+
+    #[tokio::test]
     async fn coalesces_concurrent_client_connects() {
         let connector = Arc::new(SlowFakeConnector {
             connect_count: AtomicUsize::new(0),
             connect_started: Notify::new(),
+            connected_hosts: StdMutex::new(Vec::new()),
         });
         let pool = Arc::new(SessionPool::new(test_config(), connector.clone()));
 
@@ -452,6 +546,34 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn config_replaced_during_connect_discards_stale_client() {
+        let connector = Arc::new(SlowFakeConnector {
+            connect_count: AtomicUsize::new(0),
+            connect_started: Notify::new(),
+            connected_hosts: StdMutex::new(Vec::new()),
+        });
+        let pool = Arc::new(SessionPool::new(test_config(), connector.clone()));
+        let connecting_pool = pool.clone();
+        let connection =
+            tokio::spawn(async move { connecting_pool.client().await.expect("重连应成功") });
+
+        connector.connect_started.notified().await;
+        let mut latest = test_config();
+        latest.host = "latest.example".to_string();
+        pool.replace_config(latest);
+        let _client = connection.await.expect("连接任务不应 panic");
+
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            vec!["example.com".to_string(), "latest.example".to_string()],
+            *connector
+                .connected_hosts
+                .lock()
+                .expect("connected hosts lock should not be poisoned")
+        );
     }
 
     #[tokio::test]

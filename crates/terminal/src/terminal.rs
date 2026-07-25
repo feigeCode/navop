@@ -185,6 +185,51 @@ pub struct SshTerminalConfig {
     pub disable_shell_integration: bool,
 }
 
+pub struct SshConnectionUpdate {
+    pub connection: StoredConnection,
+    pub working_dir: Option<String>,
+    pub sync_path_with_terminal: bool,
+}
+
+struct ResolvedSshConnection {
+    config: SshTerminalConfig,
+    responder: TerminalMfaResponder,
+    init_commands: Option<String>,
+    connection_id: Option<i64>,
+    connection_name: String,
+}
+
+fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
+    match auth {
+        SshAuthMethod::Password { password } => SshAuth::Password(password),
+        SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => SshAuth::PrivateKey {
+            key_path,
+            passphrase,
+            certificate_path: None,
+        },
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => SshAuth::PrivateKeyContent {
+            private_key,
+            passphrase,
+            certificate_path: None,
+        },
+        SshAuthMethod::Agent => SshAuth::Agent,
+        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
+    }
+}
+
+fn password_from_storage_auth(auth: &SshAuthMethod) -> Option<String> {
+    match auth {
+        SshAuthMethod::Password { password } => Some(password.clone()),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalMfaPrompt {
     pub prompt: String,
@@ -374,6 +419,64 @@ fn is_ssh_password_prompt(prompt: &str) -> bool {
         .trim_end_matches(':')
         .to_ascii_lowercase()
         .ends_with("password")
+}
+
+fn resolve_ssh_connection(
+    update: SshConnectionUpdate,
+    event_tx: UnboundedSender<TerminalEvent>,
+) -> Result<ResolvedSshConnection> {
+    let params = update.connection.to_ssh_params()?;
+    let target_password = password_from_storage_auth(&params.auth_method);
+    let jump_password = params
+        .jump_server
+        .as_ref()
+        .and_then(|jump| password_from_storage_auth(&jump.auth_method));
+    let init_commands = build_ssh_init_commands(
+        update.working_dir.as_deref(),
+        params.default_directory.as_deref(),
+        params.init_script.as_deref(),
+        update.sync_path_with_terminal,
+    );
+    let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password);
+    let mut ssh_config = SshConnectConfig {
+        host: params.host,
+        port: params.port,
+        username: params.username,
+        auth: ssh_auth_from_storage(params.auth_method),
+        timeout: params.connect_timeout.map(Duration::from_secs),
+        keepalive_interval: params.keepalive_interval.map(Duration::from_secs),
+        keepalive_max: params.keepalive_max,
+        jump_server: params.jump_server.map(|jump| JumpServerConnectConfig {
+            host: jump.host,
+            port: jump.port,
+            username: jump.username,
+            auth: ssh_auth_from_storage(jump.auth_method),
+        }),
+        proxy: params.proxy.map(|proxy| ProxyConnectConfig {
+            proxy_type: match proxy.proxy_type {
+                StorageProxyType::Socks5 => ProxyType::Socks5,
+                StorageProxyType::Http => ProxyType::Http,
+            },
+            host: proxy.host,
+            port: proxy.port,
+            username: proxy.username,
+            password: proxy.password,
+        }),
+        keyboard_interactive_responder: None,
+        x11_forwarding: params.x11_forwarding.unwrap_or(false),
+    };
+    ssh_config.keyboard_interactive_responder = Some(Arc::new(responder.clone()));
+    Ok(ResolvedSshConnection {
+        config: SshTerminalConfig {
+            ssh_config,
+            pty_config: PtyConfig::default(),
+            disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
+        },
+        responder,
+        init_commands,
+        connection_id: update.connection.id,
+        connection_name: update.connection.name,
+    })
 }
 
 const DEFAULT_COLS: usize = 80;
@@ -1179,117 +1282,17 @@ impl Terminal {
         working_dir: Option<&str>,
         sync_path_with_terminal: bool,
     ) -> Self {
-        let ssh_params = conn
-            .to_ssh_params()
-            .expect("StoredConnection should contain valid SSH params");
-
-        let target_password = match &ssh_params.auth_method {
-            SshAuthMethod::Password { password } => Some(password.clone()),
-            _ => None,
-        };
-        let jump_password =
-            ssh_params
-                .jump_server
-                .as_ref()
-                .and_then(|jump| match &jump.auth_method {
-                    SshAuthMethod::Password { password } => Some(password.clone()),
-                    _ => None,
-                });
-
-        let auth = match ssh_params.auth_method.clone() {
-            SshAuthMethod::Password { password } => SshAuth::Password(password),
-            SshAuthMethod::PrivateKey {
-                key_path,
-                passphrase,
-            } => SshAuth::PrivateKey {
-                key_path,
-                passphrase,
-                certificate_path: None,
-            },
-            SshAuthMethod::PrivateKeyContent {
-                private_key,
-                passphrase,
-            } => SshAuth::PrivateKeyContent {
-                private_key,
-                passphrase,
-                certificate_path: None,
-            },
-            SshAuthMethod::Agent => SshAuth::Agent,
-            SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-        };
-
-        // 构建初始化命令
-        let init_commands = build_ssh_init_commands(
-            working_dir,
-            ssh_params.default_directory.as_deref(),
-            ssh_params.init_script.as_deref(),
-            sync_path_with_terminal,
-        );
-
-        let mut ssh_config = SshConnectConfig {
-            host: ssh_params.host,
-            port: ssh_params.port,
-            username: ssh_params.username,
-            auth,
-            timeout: ssh_params.connect_timeout.map(Duration::from_secs),
-            keepalive_interval: ssh_params.keepalive_interval.map(Duration::from_secs),
-            keepalive_max: ssh_params.keepalive_max,
-            jump_server: ssh_params.jump_server.map(|jump| {
-                let jump_auth = match jump.auth_method {
-                    SshAuthMethod::Password { password } => SshAuth::Password(password),
-                    SshAuthMethod::PrivateKey {
-                        key_path,
-                        passphrase,
-                    } => SshAuth::PrivateKey {
-                        key_path,
-                        passphrase,
-                        certificate_path: None,
-                    },
-                    SshAuthMethod::PrivateKeyContent {
-                        private_key,
-                        passphrase,
-                    } => SshAuth::PrivateKeyContent {
-                        private_key,
-                        passphrase,
-                        certificate_path: None,
-                    },
-                    SshAuthMethod::Agent => SshAuth::Agent,
-                    SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-                };
-                JumpServerConnectConfig {
-                    host: jump.host,
-                    port: jump.port,
-                    username: jump.username,
-                    auth: jump_auth,
-                }
-            }),
-            proxy: ssh_params.proxy.map(|p| {
-                let proxy_type = match p.proxy_type {
-                    StorageProxyType::Socks5 => ProxyType::Socks5,
-                    StorageProxyType::Http => ProxyType::Http,
-                };
-                ProxyConnectConfig {
-                    proxy_type,
-                    host: p.host,
-                    port: p.port,
-                    username: p.username,
-                    password: p.password,
-                }
-            }),
-            keyboard_interactive_responder: None,
-            x11_forwarding: ssh_params.x11_forwarding.unwrap_or(false),
-        };
-
-        let pty_config = PtyConfig::default();
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let ssh_mfa_responder =
-            TerminalMfaResponder::new(event_tx.clone(), jump_password, target_password);
-        ssh_config.keyboard_interactive_responder = Some(Arc::new(ssh_mfa_responder.clone()));
-        let config = SshTerminalConfig {
-            ssh_config,
-            pty_config,
-            disable_shell_integration: ssh_params.disable_shell_integration.unwrap_or(false),
-        };
+        let resolved = resolve_ssh_connection(
+            SshConnectionUpdate {
+                connection: conn,
+                working_dir: working_dir.map(str::to_string),
+                sync_path_with_terminal,
+            },
+            event_tx.clone(),
+        )
+        .expect("StoredConnection should contain valid SSH params");
+        let config = resolved.config;
         let ssh_session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
 
         let cols = config.pty_config.width as usize;
@@ -1309,15 +1312,15 @@ impl Terminal {
             term.clone(),
             event_proxy.clone(),
             event_tx.clone(),
-            conn.id,
+            resolved.connection_id,
             Some(disconnect_tx),
-            init_commands.clone(),
+            resolved.init_commands.clone(),
             connection_generation,
             cx,
         );
         Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
         let history_repository = Self::history_repository(cx);
-        let history_scope = conn.id.map(TerminalHistoryScope::ssh);
+        let history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
 
         Self {
             term,
@@ -1332,13 +1335,13 @@ impl Terminal {
             pixel_height: 0,
             ssh_config: Some(config),
             ssh_session_manager: Some(ssh_session_manager),
-            ssh_mfa_responder: Some(ssh_mfa_responder),
+            ssh_mfa_responder: Some(resolved.responder),
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
-            connection_id: conn.id,
-            connection_name: Some(conn.name),
-            init_commands,
+            connection_id: resolved.connection_id,
+            connection_name: Some(resolved.connection_name),
+            init_commands: resolved.init_commands,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
             history_repository,
@@ -1995,6 +1998,30 @@ impl Terminal {
         self.ssh_session_manager.as_ref()
     }
 
+    pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {
+        let event_tx = self
+            .event_tx
+            .clone()
+            .ok_or_else(|| anyhow!("SSH terminal event channel is unavailable"))?;
+        let resolved = resolve_ssh_connection(update, event_tx)?;
+        let session_manager = self
+            .ssh_session_manager
+            .as_ref()
+            .ok_or_else(|| anyhow!("SSH session manager is unavailable"))?;
+
+        if let Some(responder) = &self.ssh_mfa_responder {
+            responder.cancel();
+        }
+        session_manager.replace_config(resolved.config.ssh_config.clone());
+        self.ssh_config = Some(resolved.config);
+        self.ssh_mfa_responder = Some(resolved.responder);
+        self.connection_id = resolved.connection_id;
+        self.connection_name = Some(resolved.connection_name);
+        self.init_commands = resolved.init_commands;
+        self.history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
+        Ok(())
+    }
+
     pub fn ssh_mfa_request(&self) -> Option<TerminalMfaRequest> {
         self.ssh_mfa_responder
             .as_ref()
@@ -2337,12 +2364,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::with_local_terminal_default_env;
     use super::{
-        CommandRecordGate, ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
-        TerminalMfaRequest, TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
-        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
-        format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
+        CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, build_cd_command,
+        build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
+        compose_ssh_init_commands, format_connection_error,
+        keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, shell_escape_arg,
+        resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
     use crate::TerminalEvent;
     use crate::history::{
@@ -2353,7 +2381,8 @@ mod tests {
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
-    use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder};
+    use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
+    use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth};
     use std::collections::VecDeque;
     use std::fs;
     #[cfg(not(target_os = "windows"))]
@@ -2376,6 +2405,61 @@ mod tests {
     fn build_cd_command_escapes_newline() {
         let cmd = build_cd_command("a\nb");
         assert_eq!(cmd, "cd -- 'a\nb'");
+    }
+
+    #[test]
+    fn resolved_ssh_connection_uses_latest_stored_parameters() {
+        let mut connection = StoredConnection::new_ssh(
+            "Latest SSH".to_string(),
+            SshParams {
+                host: "latest.example".to_string(),
+                port: 2222,
+                username: "latest-user".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "latest-password".to_string(),
+                },
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: Some("/srv/default".to_string()),
+                init_script: Some("echo ready".to_string()),
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+            },
+            None,
+        );
+        connection.id = Some(42);
+        let (event_tx, _event_rx) = unbounded_channel();
+
+        let resolved = resolve_ssh_connection(
+            SshConnectionUpdate {
+                connection,
+                working_dir: Some("/srv/current".to_string()),
+                sync_path_with_terminal: true,
+            },
+            event_tx,
+        )
+        .expect("最新 SSH 配置应可解析");
+
+        assert_eq!("latest.example", resolved.config.ssh_config.host);
+        assert_eq!(2222, resolved.config.ssh_config.port);
+        assert_eq!("latest-user", resolved.config.ssh_config.username);
+        assert!(matches!(
+            resolved.config.ssh_config.auth,
+            SshAuth::Password(ref password) if password == "latest-password"
+        ));
+        assert_eq!(Some(42), resolved.connection_id);
+        assert_eq!("Latest SSH", resolved.connection_name);
+        assert!(
+            resolved
+                .init_commands
+                .as_deref()
+                .is_some_and(|commands| commands.contains("/srv/current"))
+        );
     }
 
     #[test]
