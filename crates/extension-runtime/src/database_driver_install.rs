@@ -36,8 +36,14 @@ pub enum DriverRequirement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeDriverRequirement {
     NotRequired,
-    Required { api: String, driver_id: String },
-    InvalidConfig { message: String },
+    Required {
+        api: String,
+        driver_id: String,
+        minimum_version: Option<String>,
+    },
+    InvalidConfig {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,12 +56,40 @@ pub fn required_native_driver(
     api: impl Into<String>,
     backend: NativeDriverBackend,
 ) -> NativeDriverRequirement {
+    required_native_driver_with_minimum(api, backend, None)
+}
+
+pub fn required_native_driver_at_least(
+    api: impl Into<String>,
+    backend: NativeDriverBackend,
+    minimum_version: impl Into<String>,
+) -> NativeDriverRequirement {
+    required_native_driver_with_minimum(api, backend, Some(minimum_version.into()))
+}
+
+fn required_native_driver_with_minimum(
+    api: impl Into<String>,
+    backend: NativeDriverBackend,
+    minimum_version: Option<String>,
+) -> NativeDriverRequirement {
     let api = api.into();
     if api.trim().is_empty() {
         return NativeDriverRequirement::InvalidConfig {
             message: "native driver api is required".to_string(),
         };
     }
+    let minimum_version = match minimum_version {
+        Some(version) if semver::Version::parse(version.trim()).is_err() => {
+            return NativeDriverRequirement::InvalidConfig {
+                message: format!(
+                    "native driver minimum version `{}` is invalid for api `{api}`",
+                    version.trim()
+                ),
+            };
+        }
+        Some(version) => Some(version.trim().to_string()),
+        None => None,
+    };
     match backend {
         NativeDriverBackend::Builtin => NativeDriverRequirement::NotRequired,
         NativeDriverBackend::Ipc { driver_id } if driver_id.trim().is_empty() => {
@@ -66,6 +100,7 @@ pub fn required_native_driver(
         NativeDriverBackend::Ipc { driver_id } => NativeDriverRequirement::Required {
             api,
             driver_id: driver_id.trim().to_string(),
+            minimum_version,
         },
     }
 }
@@ -74,6 +109,32 @@ pub fn native_driver_is_installed(api: &str, driver_id: &str) -> bool {
     db::ipc::IpcDriverRegistry::load_default()
         .find_by_api(api, driver_id)
         .is_some()
+}
+
+fn native_driver_meets_requirement(
+    api: &str,
+    driver_id: &str,
+    minimum_version: Option<&str>,
+) -> bool {
+    db::ipc::IpcDriverRegistry::load_default()
+        .find_by_api(api, driver_id)
+        .is_some_and(|driver| driver_version_meets_minimum(&driver.version, minimum_version))
+}
+
+pub(crate) fn driver_version_meets_minimum(
+    installed_version: &str,
+    minimum_version: Option<&str>,
+) -> bool {
+    let Some(minimum_version) = minimum_version else {
+        return true;
+    };
+    let Ok(installed) = semver::Version::parse(installed_version.trim()) else {
+        return false;
+    };
+    let Ok(minimum) = semver::Version::parse(minimum_version.trim()) else {
+        return false;
+    };
+    installed >= minimum
 }
 
 pub trait DatabaseDriverConnectionOpener: Sized + 'static {
@@ -170,13 +231,18 @@ pub fn open_native_driver_connection_with_guard<T, F>(
     match requirement {
         NativeDriverRequirement::NotRequired => on_ready(target, window, cx),
         NativeDriverRequirement::InvalidConfig { message } => notify_error(window, cx, message),
-        NativeDriverRequirement::Required { api, driver_id } => {
-            if native_driver_is_installed(&api, &driver_id) {
+        NativeDriverRequirement::Required {
+            api,
+            driver_id,
+            minimum_version,
+        } => {
+            if native_driver_meets_requirement(&api, &driver_id, minimum_version.as_deref()) {
                 on_ready(target, window, cx);
             } else {
                 prompt_install_driver_with_completion(
                     api,
                     driver_id,
+                    minimum_version,
                     connection_name,
                     window,
                     cx,
@@ -201,6 +267,7 @@ fn prompt_install_driver<T>(
     prompt_install_driver_with_completion(
         "database".to_string(),
         driver_id.clone(),
+        None,
         connection_name,
         window,
         cx,
@@ -239,6 +306,7 @@ pub fn prompt_install_native_driver<T>(
     prompt_install_driver_with_completion(
         api,
         driver_id,
+        None,
         connection_name,
         window,
         cx,
@@ -249,6 +317,7 @@ pub fn prompt_install_native_driver<T>(
 fn prompt_install_driver_with_completion<T, F>(
     api: String,
     driver_id: String,
+    minimum_version: Option<String>,
     connection_name: String,
     window: &mut Window,
     cx: &mut Context<T>,
@@ -262,14 +331,18 @@ fn prompt_install_driver_with_completion<T, F>(
         return;
     }
 
+    let requirement_message = minimum_version
+        .as_deref()
+        .map(|version| format!("（最低版本 {version}）"))
+        .unwrap_or_default();
     let answer = window.prompt(
         PromptLevel::Warning,
-        "需要安装驱动",
+        "需要安装或更新驱动",
         Some(&format!(
-            "连接「{}」需要安装「{}」{} 驱动。",
-            connection_name, driver_id, api
+            "连接「{}」需要安装或更新「{}」{} 驱动{}。",
+            connection_name, driver_id, api, requirement_message
         )),
-        &["下载并安装", "取消"],
+        &["下载并安装/更新", "取消"],
         cx,
     );
     let http_client = cx.http_client();
@@ -292,11 +365,13 @@ fn prompt_install_driver_with_completion<T, F>(
         }
         open_install_progress_dialog(window_handle, progress_view, cx);
         let install_driver_id = driver_id.clone();
+        let install_minimum_version = minimum_version.clone();
         let progress_callback = driver_install_progress_callback(progress_snapshot);
         let task = Tokio::spawn(cx, async move {
             install_database_driver_from_marketplace(
                 http_client,
                 &install_driver_id,
+                install_minimum_version.as_deref(),
                 progress_callback,
             )
             .await
@@ -324,19 +399,45 @@ fn prompt_install_driver_with_completion<T, F>(
 async fn install_database_driver_from_marketplace(
     http_client: Arc<dyn gpui::http_client::HttpClient>,
     driver_id: &str,
+    minimum_version: Option<&str>,
     on_progress: DownloadProgressCallback,
 ) -> anyhow::Result<ExtensionSummary> {
     let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
-    let entry = find_database_driver_entry(&entries, driver_id)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("扩展市场未找到数据库驱动 {driver_id}"))?;
+    let entry =
+        find_database_driver_entry_for_requirement(&entries, driver_id, minimum_version)?.clone();
     let staging =
         download_marketplace_entry_to_staging_with_progress(http_client, &entry, on_progress)
             .await?;
     let result = install_staged_database_driver(&staging);
     let _ = std::fs::remove_dir_all(&staging);
     result
+}
+
+pub(crate) fn find_database_driver_entry_for_requirement<'a>(
+    entries: &'a [MarketplaceEntry],
+    driver_id: &str,
+    minimum_version: Option<&str>,
+) -> anyhow::Result<&'a MarketplaceEntry> {
+    let entry = find_database_driver_entry(entries, driver_id)
+        .ok_or_else(|| anyhow::anyhow!("扩展市场未找到数据库驱动 {driver_id}"))?;
+    if !driver_version_meets_minimum(&entry.version, minimum_version) {
+        let required = minimum_version.unwrap_or("<unknown>");
+        anyhow::bail!(
+            "扩展市场中的数据库驱动 {driver_id} 版本 {} 不满足宿主要求的最低版本 {required}",
+            display_driver_version(&entry.version)
+        );
+    }
+    Ok(entry)
+}
+
+fn display_driver_version(version: &str) -> &str {
+    let version = version.trim();
+    if version.is_empty() {
+        "<empty>"
+    } else {
+        version
+    }
 }
 
 fn install_staged_database_driver(staging: &std::path::Path) -> anyhow::Result<ExtensionSummary> {

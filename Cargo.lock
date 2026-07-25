@@ -9718,6 +9718,7 @@ dependencies = [
  "one-core",
  "redis",
  "rust-i18n",
+ "semver",
  "serde",
  "serde_json",
  "shell-words",

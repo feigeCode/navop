@@ -142,7 +142,11 @@ impl ConnectionOpenStrategy for RedisOpenStrategy {
             }
         };
         let requirement =
-            extension_runtime::database_driver_install::required_native_driver("redis", backend);
+            extension_runtime::database_driver_install::required_native_driver_at_least(
+                "redis",
+                backend,
+                redis_runtime::MINIMUM_REDIS_DRIVER_VERSION,
+            );
         extension_runtime::database_driver_install::open_native_driver_connection_with_guard(
             home,
             requirement,

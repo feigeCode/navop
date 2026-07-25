@@ -35,6 +35,7 @@ impl IpcRedisConnection {
         manifest: &NativeDriverManifest,
         config: RedisConnectionConfig,
     ) -> Result<Self, RedisError> {
+        crate::validate_native_driver_version(manifest)?;
         let driver_context = native_driver_context(manifest);
         let target =
             resolve_connection_target(&config.host, config.port, config.ssh_tunnel.as_ref())

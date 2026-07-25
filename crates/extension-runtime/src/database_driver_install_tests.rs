@@ -8,9 +8,10 @@ use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 
 use crate::database_driver_install::{
-    DriverRequirement, NativeDriverBackend, NativeDriverRequirement, find_database_driver_entry,
+    DriverRequirement, NativeDriverBackend, NativeDriverRequirement, driver_version_meets_minimum,
+    find_database_driver_entry, find_database_driver_entry_for_requirement,
     install_database_driver_from_marketplace_with_registry, required_driver_for_config,
-    required_native_driver,
+    required_native_driver, required_native_driver_at_least,
 };
 use crate::extension::{DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry};
 use crate::extension_downloader::MarketplaceEntry;
@@ -33,6 +34,7 @@ fn native_driver_requirement_is_shared_by_redis_and_mongodb() {
         NativeDriverRequirement::Required {
             api: "redis".to_string(),
             driver_id: "redis".to_string(),
+            minimum_version: None,
         },
         required_native_driver(
             "redis",
@@ -45,6 +47,7 @@ fn native_driver_requirement_is_shared_by_redis_and_mongodb() {
         NativeDriverRequirement::Required {
             api: "mongodb".to_string(),
             driver_id: "mongodb-modern".to_string(),
+            minimum_version: None,
         },
         required_native_driver(
             "mongodb",
@@ -53,6 +56,50 @@ fn native_driver_requirement_is_shared_by_redis_and_mongodb() {
             },
         )
     );
+}
+
+#[test]
+fn native_driver_requirement_can_declare_a_minimum_version() {
+    assert_eq!(
+        NativeDriverRequirement::Required {
+            api: "redis".to_string(),
+            driver_id: "redis".to_string(),
+            minimum_version: Some("0.1.2".to_string()),
+        },
+        required_native_driver_at_least(
+            "redis",
+            NativeDriverBackend::Ipc {
+                driver_id: "redis".to_string(),
+            },
+            "0.1.2",
+        )
+    );
+}
+
+#[test]
+fn native_driver_version_requirement_rejects_old_or_invalid_installs() {
+    assert!(!driver_version_meets_minimum("0.1.1", Some("0.1.2")));
+    assert!(!driver_version_meets_minimum("", Some("0.1.2")));
+    assert!(!driver_version_meets_minimum("not-semver", Some("0.1.2")));
+    assert!(driver_version_meets_minimum("0.1.2", Some("0.1.2")));
+    assert!(driver_version_meets_minimum("0.2.0", Some("0.1.2")));
+    assert!(driver_version_meets_minimum("", None));
+}
+
+#[test]
+fn marketplace_driver_must_satisfy_the_host_minimum_version() {
+    let entries = vec![entry_with_version(
+        "redis",
+        ExtensionKind::DatabaseDriver,
+        "0.1.1",
+    )];
+
+    let error = find_database_driver_entry_for_requirement(&entries, "redis", Some("0.1.2"))
+        .expect_err("the host must not reinstall an incompatible marketplace release");
+
+    let message = error.to_string();
+    assert!(message.contains("0.1.1"));
+    assert!(message.contains("0.1.2"));
 }
 
 #[test]
@@ -173,11 +220,15 @@ fn external_config(driver_id: &str) -> DbConnectionConfig {
 }
 
 fn entry(id: &str, kind: ExtensionKind) -> MarketplaceEntry {
+    entry_with_version(id, kind, "1.0.0")
+}
+
+fn entry_with_version(id: &str, kind: ExtensionKind, version: &str) -> MarketplaceEntry {
     MarketplaceEntry::from_resolved_urls(
         id,
         kind,
         id,
-        "1.0.0",
+        version,
         "",
         Vec::new(),
         vec![format!("https://example.test/{id}.tar.gz")],

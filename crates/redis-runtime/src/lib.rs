@@ -71,6 +71,38 @@ pub enum RedisBackendKind {
 }
 
 pub const DEFAULT_REDIS_DRIVER_ID: &str = "redis";
+pub const MINIMUM_REDIS_DRIVER_VERSION: &str = "0.1.2";
+
+pub fn validate_native_driver_version(
+    manifest: &extension_host::NativeDriverManifest,
+) -> Result<(), RedisError> {
+    let installed = semver::Version::parse(manifest.version.trim()).map_err(|_| {
+        RedisError::connection(format!(
+            "Redis native driver `{}` has invalid version `{}`; host requires version >= {}",
+            manifest.id,
+            display_native_driver_version(&manifest.version),
+            MINIMUM_REDIS_DRIVER_VERSION
+        ))
+    })?;
+    let required = semver::Version::parse(MINIMUM_REDIS_DRIVER_VERSION)
+        .expect("minimum Redis native driver version must be valid semver");
+    if installed < required {
+        return Err(RedisError::connection(format!(
+            "Redis native driver `{}` is incompatible: host requires version >= {}, installed {}",
+            manifest.id, required, installed
+        )));
+    }
+    Ok(())
+}
+
+fn display_native_driver_version(version: &str) -> &str {
+    let version = version.trim();
+    if version.is_empty() {
+        "<empty>"
+    } else {
+        version
+    }
+}
 
 pub const fn default_backend_kind() -> RedisBackendKind {
     #[cfg(feature = "builtin-redis")]
@@ -157,6 +189,35 @@ mod tests {
             RedisBackendKind::Ipc,
             RedisConnectionFactory::from_installed_root("database_drivers").backend_kind()
         );
+    }
+
+    #[test]
+    fn redis_native_driver_requires_the_scan_compatible_release() {
+        assert_eq!("0.1.2", MINIMUM_REDIS_DRIVER_VERSION);
+
+        let old = native_driver_manifest("0.1.1");
+        let error = validate_native_driver_version(&old)
+            .expect_err("the incompatible connection-manager release must be rejected");
+        assert!(error.to_string().contains("requires version >= 0.1.2"));
+        assert!(error.to_string().contains("installed 0.1.1"));
+
+        validate_native_driver_version(&native_driver_manifest("0.1.2"))
+            .expect("the fixed driver release must be accepted");
+        validate_native_driver_version(&native_driver_manifest("0.2.0"))
+            .expect("newer compatible driver releases must be accepted");
+    }
+
+    fn native_driver_manifest(version: &str) -> extension_host::NativeDriverManifest {
+        serde_json::from_value(serde_json::json!({
+            "id": "redis",
+            "name": "Redis",
+            "version": version,
+            "api": "redis",
+            "protocol_version": "1.0",
+            "entry": { "command": "./redis-driver" },
+            "transport": { "name": "redis.sock" }
+        }))
+        .expect("test manifest should deserialize")
     }
 
     #[cfg(feature = "builtin-redis")]
