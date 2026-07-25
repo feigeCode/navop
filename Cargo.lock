@@ -3157,6 +3157,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6747,6 +6753,7 @@ dependencies = [
  "db",
  "db_view",
  "dirs 6.0.0",
+ "dotenvy",
  "extension-host",
  "extension-runtime",
  "extension_view",
@@ -8018,6 +8025,7 @@ dependencies = [
  "connection_tunnel",
  "dashmap 5.5.3",
  "dirs 6.0.0",
+ "dotenvy",
  "ed25519-dalek 2.2.0",
  "futures",
  "futures-util",
