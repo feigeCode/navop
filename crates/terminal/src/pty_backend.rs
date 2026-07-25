@@ -24,7 +24,7 @@ use crate::osc::{OscEvent, OscStreamParser};
 use crate::{
     TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
     TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
-    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    TerminalExecRequest, TerminalInputHandle, TerminalPerformanceMetrics, TerminalSize,
 };
 
 /// 终端事件类型
@@ -624,10 +624,18 @@ pub struct GpuiEventProxy {
     window_size: Arc<Mutex<WindowSize>>,
     /// Wakeup 去重标记：true 表示已有未消费的 Wakeup 在事件队列里
     wakeup_pending: Arc<AtomicBool>,
+    metrics: Arc<TerminalPerformanceMetrics>,
 }
 
 impl GpuiEventProxy {
     pub fn new(event_tx: UnboundedSender<TerminalEvent>) -> Self {
+        Self::with_metrics(event_tx, Arc::new(TerminalPerformanceMetrics::default()))
+    }
+
+    pub fn with_metrics(
+        event_tx: UnboundedSender<TerminalEvent>,
+        metrics: Arc<TerminalPerformanceMetrics>,
+    ) -> Self {
         Self {
             event_tx,
             write_back: Arc::new(Mutex::new(None)),
@@ -638,7 +646,12 @@ impl GpuiEventProxy {
                 cell_height: 18,
             })),
             wakeup_pending: Arc::new(AtomicBool::new(false)),
+            metrics,
         }
+    }
+
+    pub fn performance_metrics(&self) -> Arc<TerminalPerformanceMetrics> {
+        self.metrics.clone()
     }
 
     /// 设置回写通道
@@ -702,8 +715,10 @@ impl EventListener for GpuiEventProxy {
                 return;
             }
             AlacTermEvent::Wakeup => {
+                self.metrics.record_wakeup_request();
                 // 去重：已有未消费 Wakeup 时直接丢弃，避免高速输出下事件堆积
                 if self.wakeup_pending.swap(true, Ordering::AcqRel) {
+                    self.metrics.record_wakeup_coalesced();
                     return;
                 }
                 TerminalEvent::Wakeup
@@ -718,7 +733,10 @@ impl EventListener for GpuiEventProxy {
             }
             _ => return,
         };
-        let _ = self.event_tx.send(terminal_event);
+        let is_wakeup = matches!(terminal_event, TerminalEvent::Wakeup);
+        if self.event_tx.send(terminal_event).is_ok() && is_wakeup {
+            self.metrics.record_wakeup_queued();
+        }
     }
 }
 
@@ -750,6 +768,7 @@ fn default_color_for_index(index: usize) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TerminalPerformanceMetrics;
     use base64::Engine;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
@@ -764,6 +783,47 @@ mod tests {
             timeout: std::time::Duration::from_secs(1),
             observer: None,
         }
+    }
+
+    #[test]
+    fn event_proxy_records_wakeup_request_queue_and_coalescing() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
+
+        proxy.send_event(AlacTermEvent::Wakeup);
+        proxy.send_event(AlacTermEvent::Wakeup);
+        proxy.send_event(AlacTermEvent::Wakeup);
+
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+        assert!(event_rx.try_recv().is_err());
+        let snapshot = metrics.snapshot();
+        assert_eq!(3, snapshot.wakeup_requests);
+        assert_eq!(1, snapshot.wakeup_queued);
+        assert_eq!(2, snapshot.wakeup_coalesced);
+
+        proxy.reset_wakeup_pending();
+        proxy.send_event(AlacTermEvent::Wakeup);
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+        let snapshot = proxy.performance_metrics().snapshot();
+        assert_eq!(4, snapshot.wakeup_requests);
+        assert_eq!(2, snapshot.wakeup_queued);
+        assert_eq!(2, snapshot.wakeup_coalesced);
+    }
+
+    #[test]
+    fn event_proxy_only_records_queued_wakeup_after_successful_send() {
+        let (event_tx, event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
+        drop(event_rx);
+
+        proxy.send_event(AlacTermEvent::Wakeup);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(1, snapshot.wakeup_requests);
+        assert_eq!(0, snapshot.wakeup_queued);
+        assert_eq!(0, snapshot.wakeup_coalesced);
     }
 
     #[test]

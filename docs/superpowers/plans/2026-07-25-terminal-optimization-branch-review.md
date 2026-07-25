@@ -106,6 +106,43 @@ saturating 语义。
 
 验证记录见本文末尾的“实施验证记录”。
 
+### 2026-07-25：切片 4，接入现有 Wakeup 去重指标
+
+状态：**实现完成并通过 terminal crate 回归验证，作为第四个独立优化提交。**
+
+本切片没有重新实现 wakeup coalescing，而是在当前 `dev` 已有行为上接入切片 3
+的三项指标：
+
+- 每次 Alacritty `Wakeup` 请求记录 `wakeup_requests`；
+- 首次通过 pending gate 且成功进入 terminal event channel 时记录
+  `wakeup_queued`；
+- pending gate 已经为 true、当前请求被现有去重逻辑吸收时记录
+  `wakeup_coalesced`。
+
+`GpuiEventProxy::new` 继续保持原调用方式，并为每个 proxy 创建独立 metrics；
+新增 `with_metrics` 用于显式共享/测试注入，`performance_metrics` 返回同一个
+`Arc<TerminalPerformanceMetrics>`。指标不包含事件 payload，也不增加日志。
+
+本切片刻意不修改：
+
+- `wakeup_pending.swap(true)` 的去重 gate；
+- terminal event loop 的 8ms 聚合周期；
+- tick 中先转发非 Wakeup、最后转发 Wakeup 的顺序；
+- 转发 Wakeup 前 reset pending gate 的时机；
+- SSH/Serial 直接发送的 Wakeup；
+- parser、lock 和 render 的真实埋点。
+
+最终 repaint 不丢失的关键边界仍由当前实现保证：event loop 转发已聚合 Wakeup
+前先 reset gate，因此 reset 后到达的新 Wakeup 会进入下一批，而不会被上一批永久
+吞掉。现有 reset 后重新入队测试继续通过，新增 metrics 测试也覆盖 reset 后请求、
+queued 和 coalesced 计数继续增长。
+
+独立审查确认：指标更新位于既有分支判定旁边，queued 只在 channel send 成功后
+增加；Title、Bell、Exit 等非 Wakeup 事件仍走原路径，未受 metrics 或 pending gate
+影响。
+
+验证记录见本文末尾的“实施验证记录”。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1312,3 +1349,62 @@ clippy::unnecessary_sort_by
 因此本切片自身的定向测试、terminal 全量 lib 测试、编译、格式和 whitespace
 检查均通过；全依赖 Clippy 门禁被既有的 `x11_forwarding` lint 阻塞，本提交不顺手
 修改该无关 crate。
+
+### 12.4 切片 4：接入现有 Wakeup 去重指标
+
+TDD Red 证据：
+
+```text
+cargo test -p terminal \
+  event_proxy_records_wakeup_request_queue_and_coalescing --lib
+编译失败，退出码 101：
+error[E0599]: no associated function or constant named `with_metrics`
+found for struct `GpuiEventProxy`
+```
+
+Green、contract 与回归验证：
+
+```text
+cargo test -p terminal \
+  event_proxy_records_wakeup_request_queue_and_coalescing --lib
+1 passed，173 filtered out
+
+cargo test -p terminal wakeup --lib
+4 passed，171 filtered out
+
+cargo test -p terminal --lib
+175 passed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check \
+  crates/terminal/src/pty_backend.rs \
+  crates/terminal/src/performance_metrics.rs \
+  crates/terminal/src/performance_metrics_tests.rs \
+  crates/terminal/src/lib.rs
+通过
+
+git diff --check
+通过
+```
+
+额外回归保护覆盖：
+
+- 三个连续 Wakeup 只入队一个，分别累计 3 requests、1 queued、2 coalesced；
+- reset pending gate 后的新 Wakeup 能再次入队并累计 queued；
+- event channel 已关闭时只累计 request，不误报 queued；
+- 非 Wakeup 事件不被 pending gate 吞掉；
+- 当前 8ms event loop 的 reset-before-forward 顺序保持未修改。
+
+补充验证：
+
+```text
+cargo clippy -p terminal --lib -- -D warnings
+未通过，退出码 101；唯一错误仍位于本切片未修改的
+crates/x11_forwarding/src/detect.rs:238：
+clippy::unnecessary_sort_by
+```
+
+因此本切片的 wakeup 定向测试、terminal 全量 lib 测试、编译、格式和 whitespace
+检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞。
