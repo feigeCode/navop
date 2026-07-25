@@ -143,6 +143,39 @@ queued 和 coalesced 计数继续增长。
 
 验证记录见本文末尾的“实施验证记录”。
 
+### 2026-07-25：切片 5，Terminal 共享并暴露 Performance Metrics
+
+状态：**实现完成并通过 terminal crate 回归验证，作为第五个独立优化提交。**
+
+本切片只建立 `Terminal` 对 metrics 的稳定所有权和只读观察入口，不增加新的
+parser、render、lock、SSH 或 ingress 埋点：
+
+- `Terminal::create_term` 为每个终端实例创建唯一的
+  `Arc<TerminalPerformanceMetrics>`；
+- 同一个 `Arc` 同时交给 `GpuiEventProxy` 并保存在 `Terminal`；
+- local、local-disconnected、SSH 和 Serial 四条构造路径统一持有该实例；
+- `performance_metrics`、`performance_snapshot` 和 `performance_window` 提供读取入口；
+- surface reset 在没有缓存 `event_proxy` 时重建 proxy，仍复用原 metrics，避免重连或
+  reset 后指标无声归零。
+
+snapshot 仍是切片 3 定义的 best-effort observability 数据，不承诺跨字段事务一致性，
+也没有被接入任何 correctness-sensitive 决策。公开 `Arc` 只暴露 payload-free counter
+contract，不包含命令、终端输出、认证信息或其他敏感 payload。
+
+本切片刻意不修改：
+
+- 现有 wakeup pending gate 和 8ms event loop；
+- parser、render、term lock、SSH lifecycle 或 ingress queue；
+- Local/SSH/Serial backend 的执行、重连与 shutdown 行为；
+- terminal view、Public MCP 或设置 UI。
+
+独立审查确认：四条生产构造路径均从 `create_term` 接收同一个 metrics；local 和
+Serial 的 `event_proxy: None` reset fallback 不再调用会创建独立 metrics 的
+`GpuiEventProxy::new`；已有 `GpuiEventProxy::new` API 仍保持兼容，未影响 crate 内其他
+测试和调用方。
+
+验证记录见本文末尾的“实施验证记录”。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1408,3 +1441,71 @@ clippy::unnecessary_sort_by
 
 因此本切片的 wakeup 定向测试、terminal 全量 lib 测试、编译、格式和 whitespace
 检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞。
+
+### 12.5 切片 5：Terminal 共享并暴露 Performance Metrics
+
+TDD Red 证据：
+
+```text
+cargo test -p terminal \
+  create_term_shares_performance_metrics_with_event_proxy --lib
+编译失败，退出码 101：
+error[E0308]: mismatched types
+expected a tuple with 3 elements, found one with 4 elements
+```
+
+该 Red 明确证明当前 `create_term` 尚未返回可由 `Terminal` 和 `GpuiEventProxy` 共享的
+metrics 实例。补齐测试作用域 import 后重新执行，失败原因只剩上述 contract 缺失。
+
+Green、contract 与回归验证：
+
+```text
+cargo test -p terminal \
+  create_term_shares_performance_metrics_with_event_proxy --lib
+1 passed，175 filtered out
+
+cargo test -p terminal \
+  reset_terminal_surface_clears_buffer_and_stale_connection_metadata --lib
+1 passed，175 filtered out
+
+cargo test -p terminal --lib
+176 passed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+cargo check -p main
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check \
+  crates/terminal/src/terminal.rs \
+  crates/terminal/src/pty_backend.rs \
+  crates/terminal/src/performance_metrics.rs \
+  crates/terminal/src/performance_metrics_tests.rs \
+  crates/terminal/src/lib.rs
+通过
+
+git diff --check
+通过
+```
+
+额外回归保护覆盖：
+
+- `create_term` 返回的 metrics 与 proxy 内部 metrics 为同一个 `Arc`；
+- proxy 的 Wakeup request/queued 更新可从该共享实例读取；
+- surface reset 在 `event_proxy: None` fallback 路径复用原 metrics；
+- reset 前后 `Terminal::performance_metrics` 返回同一个实例；
+- `performance_snapshot` 和 `performance_window` 可正确观察已有 counter contract；
+- local、local-disconnected、SSH、Serial 构造路径均通过编译和 terminal 全量测试。
+
+补充验证：
+
+```text
+cargo clippy -p terminal --lib -- -D warnings
+未通过，退出码 101；唯一错误仍位于本切片未修改的
+crates/x11_forwarding/src/detect.rs:238：
+clippy::unnecessary_sort_by
+```
+
+因此本切片的两项定向 contract、terminal 全量 lib 测试、编译、格式和 whitespace
+检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞，本切片不修改无关 crate。

@@ -56,7 +56,8 @@ use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
-    TerminalExecHandle, TerminalInputHandle, TerminalSize,
+    TerminalExecHandle, TerminalInputHandle, TerminalPerformanceMetrics,
+    TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
 };
 use ssh::{
     ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
@@ -786,6 +787,8 @@ async fn load_ssh_history(manager: Arc<SshSessionManager>) -> anyhow::Result<Vec
 pub struct Terminal {
     /// alacritty 终端状态
     term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    /// 当前终端实例的共享性能指标。
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
     /// PTY/SSH 后端
     backend: Option<Box<dyn TerminalBackend>>,
 
@@ -1031,7 +1034,7 @@ impl Terminal {
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1042,6 +1045,7 @@ impl Terminal {
 
         Self {
             term,
+            performance_metrics,
             backend: None,
             title: String::new(),
             current_working_dir: None,
@@ -1091,7 +1095,7 @@ impl Terminal {
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1132,6 +1136,7 @@ impl Terminal {
 
         Ok(Self {
             term,
+            performance_metrics,
             backend: Some(Box::new(local_backend)),
             title: String::new(),
             current_working_dir: None,
@@ -1296,7 +1301,7 @@ impl Terminal {
         let rows = config.pty_config.height as usize;
 
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) =
+        let (term, event_proxy, _colors, performance_metrics) =
             Self::create_term(cols, rows, scrollback_lines, event_tx.clone());
         let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
@@ -1321,6 +1326,7 @@ impl Terminal {
 
         Self {
             term,
+            performance_metrics,
             backend: None,
             title: String::new(),
             current_working_dir: None,
@@ -1358,7 +1364,7 @@ impl Terminal {
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1380,6 +1386,7 @@ impl Terminal {
 
         Self {
             term,
+            performance_metrics,
             backend: None,
             title: String::new(),
             current_working_dir: None,
@@ -1432,19 +1439,26 @@ impl Terminal {
         Arc<FairMutex<Term<GpuiEventProxy>>>,
         GpuiEventProxy,
         alacritty_terminal::term::color::Colors,
+        Arc<TerminalPerformanceMetrics>,
     ) {
         let term_config = TermConfig {
             scrolling_history: scrollback_lines,
             ..Default::default()
         };
-        let event_proxy = GpuiEventProxy::new(event_tx);
+        let performance_metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let event_proxy = GpuiEventProxy::with_metrics(event_tx, performance_metrics.clone());
         let term = Term::new(
             term_config,
             &TermDimensions { cols, rows },
             event_proxy.clone(),
         );
         let colors = term.colors().clone();
-        (Arc::new(FairMutex::new(term)), event_proxy, colors)
+        (
+            Arc::new(FairMutex::new(term)),
+            event_proxy,
+            colors,
+            performance_metrics,
+        )
     }
 
     pub fn set_scrollback_lines(&mut self, lines: usize) {
@@ -2012,6 +2026,25 @@ impl Terminal {
         self.connection_kind
     }
 
+    /// 获取当前终端实例共享的性能指标。
+    pub fn performance_metrics(&self) -> Arc<TerminalPerformanceMetrics> {
+        self.performance_metrics.clone()
+    }
+
+    /// 获取当前终端性能指标的 best-effort 快照。
+    pub fn performance_snapshot(&self) -> TerminalPerformanceSnapshot {
+        self.performance_metrics.snapshot()
+    }
+
+    /// 计算相对前一个快照的窗口指标。
+    pub fn performance_window(
+        &self,
+        previous: &TerminalPerformanceSnapshot,
+        elapsed: Duration,
+    ) -> TerminalPerformanceWindow {
+        self.performance_snapshot().delta_since(previous, elapsed)
+    }
+
     /// 是否可以重连
     pub fn can_reconnect(&self) -> bool {
         self.ssh_config.is_some() || self.serial_params.is_some()
@@ -2204,10 +2237,7 @@ impl Terminal {
             return;
         };
 
-        let event_proxy = self
-            .event_proxy
-            .clone()
-            .unwrap_or_else(|| GpuiEventProxy::new(event_tx.clone()));
+        let event_proxy = self.event_proxy_for_surface_reset(event_tx);
         let term_config = TermConfig {
             scrolling_history: self.scrollback_lines,
             ..Default::default()
@@ -2225,6 +2255,15 @@ impl Terminal {
         self.title.clear();
         self.current_working_dir = None;
         self.child_exited = None;
+    }
+
+    fn event_proxy_for_surface_reset(
+        &self,
+        event_tx: UnboundedSender<TerminalEvent>,
+    ) -> GpuiEventProxy {
+        self.event_proxy.clone().unwrap_or_else(|| {
+            GpuiEventProxy::with_metrics(event_tx, self.performance_metrics.clone())
+        })
     }
 
     /// 更新 SSH 终端的路径同步设置。
@@ -2349,6 +2388,7 @@ mod tests {
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
         parse_shell_history, push_history_entry,
     };
+    use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
@@ -2358,6 +2398,7 @@ mod tests {
     use std::fs;
     #[cfg(not(target_os = "windows"))]
     use std::process::Command;
+    use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -2909,11 +2950,30 @@ mod tests {
     }
 
     #[test]
+    fn create_term_shares_performance_metrics_with_event_proxy() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let (_term, event_proxy, _colors, metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx);
+
+        assert!(Arc::ptr_eq(&metrics, &event_proxy.performance_metrics()));
+
+        event_proxy.send_event(AlacTermEvent::Wakeup);
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(1, snapshot.wakeup_requests);
+        assert_eq!(1, snapshot.wakeup_queued);
+    }
+
+    #[test]
     fn reset_terminal_surface_clears_buffer_and_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let (term, _event_proxy, _colors, performance_metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let shared_metrics = performance_metrics.clone();
         let mut terminal = Terminal {
             term,
+            performance_metrics,
             backend: None,
             title: "old title".to_string(),
             current_working_dir: Some("/tmp/project".to_string()),
@@ -2928,7 +2988,7 @@ mod tests {
             ssh_mfa_responder: None,
             serial_params: None,
             event_tx: Some(event_tx),
-            event_proxy: Some(event_proxy),
+            event_proxy: None,
             connection_id: Some(1),
             connection_name: Some("SSH".to_string()),
             init_commands: None,
@@ -2946,8 +3006,30 @@ mod tests {
         processor.advance(&mut *terminal.term.lock(), b"hello");
 
         assert_eq!(terminal.term.lock().grid()[Line(0)][Column(0)].c, 'h');
+        let reset_proxy = terminal.event_proxy_for_surface_reset(
+            terminal
+                .event_tx
+                .clone()
+                .expect("event sender should exist"),
+        );
+        assert!(Arc::ptr_eq(
+            &shared_metrics,
+            &reset_proxy.performance_metrics()
+        ));
+
+        let previous = terminal.performance_snapshot();
+        terminal
+            .performance_metrics()
+            .record_render(std::time::Duration::from_millis(4), true);
+        let window = terminal.performance_window(&previous, std::time::Duration::from_secs(2));
+        assert_eq!(1, window.render_samples);
+        assert_eq!(4_000_000.0, window.average_render_ns);
 
         terminal.reset_terminal_surface();
+        assert!(Arc::ptr_eq(
+            &shared_metrics,
+            &terminal.performance_metrics()
+        ));
 
         let term = terminal.term.lock();
         assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
@@ -2962,7 +3044,8 @@ mod tests {
     #[test]
     fn recent_text_reads_tail_from_scrollback_without_viewport_offset() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, _event_proxy, _colors) = Terminal::create_term(20, 3, 10_000, event_tx);
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(20, 3, 10_000, event_tx);
         let mut processor: Processor<StdSyncHandler> = Processor::new();
         processor.advance(&mut *term.lock(), b"one\r\ntwo\r\nthree\r\nfour");
 
@@ -2977,9 +3060,11 @@ mod tests {
     #[test]
     fn terminal_scrollback_limit_can_be_updated_and_survives_surface_reset() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let (term, event_proxy, _colors, performance_metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let mut terminal = Terminal {
             term,
+            performance_metrics,
             backend: None,
             title: String::new(),
             current_working_dir: None,
