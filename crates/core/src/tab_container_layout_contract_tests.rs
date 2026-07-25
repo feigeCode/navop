@@ -18,6 +18,35 @@ fn scrollable_tabs_keep_window_controls_at_the_right_edge() {
 }
 
 #[test]
+fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
+    let source = include_str!("tab_container.rs");
+    let render_start = source
+        .find("impl Render for TabContainer")
+        .expect("tab container renderer");
+    let render = &source[render_start..];
+    let root_end = render.find(".child(").expect("tab container root child");
+    let root = &render[..root_end];
+
+    assert!(root.contains(".size_full()"));
+    assert!(root.contains(".min_w_0()"));
+    assert!(root.contains(".min_h_0()"));
+    assert!(root.contains(".overflow_hidden()"));
+
+    let content_start = source.find(".id(\"tab-content\")").expect("tab content");
+    let content_end = source[content_start..]
+        .find(".when(!has_sidebar_layout")
+        .map(|offset| content_start + offset)
+        .expect("tab content body");
+    let content = &source[content_start..content_end];
+
+    assert!(content.contains(".flex_1()"));
+    assert!(content.contains(".w_full()"));
+    assert!(content.contains(".min_w_0()"));
+    assert!(content.contains(".min_h_0()"));
+    assert!(content.contains(".overflow_hidden()"));
+}
+
+#[test]
 fn window_controls_follow_the_active_theme_for_contrast() {
     let source = include_str!("tab_container.rs");
     let controls_start = source

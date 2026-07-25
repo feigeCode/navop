@@ -149,9 +149,10 @@ impl ControlIcon {
 }
 
 impl RenderOnce for ControlIcon {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let is_linux = cfg!(target_os = "linux");
         let is_windows = cfg!(target_os = "windows");
+        let is_fullscreen = window.is_fullscreen();
         let hover_fg = self.hover_fg(cx);
         let hover_bg = self.hover_bg(cx);
         let active_bg = self.active_bg(cx);
@@ -160,6 +161,8 @@ impl RenderOnce for ControlIcon {
             ControlIcon::Close { on_close_window } => on_close_window.clone(),
             _ => None,
         };
+        let fullscreen_icon = icon.clone();
+        let fullscreen_on_close_window = on_close_window.clone();
 
         div()
             .id(self.id())
@@ -173,8 +176,28 @@ impl RenderOnce for ControlIcon {
             .text_color(cx.theme().foreground)
             .hover(|style| style.bg(hover_bg).text_color(hover_fg))
             .active(|style| style.bg(active_bg).text_color(hover_fg))
-            .when(is_windows, |this| {
+            .when(is_windows && !is_fullscreen, |this| {
                 this.window_control_area(self.window_control_area())
+            })
+            .when(is_windows && is_fullscreen, |this| {
+                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    match fullscreen_icon {
+                        Self::Minimize => window.minimize_window(),
+                        Self::Restore | Self::Maximize => window.toggle_fullscreen(),
+                        Self::Close { .. } => {
+                            if let Some(f) = fullscreen_on_close_window.clone() {
+                                f(&ClickEvent::default(), window, cx);
+                            } else {
+                                window.remove_window();
+                            }
+                        }
+                    }
+                })
             })
             .when(is_linux, |this| {
                 this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -331,5 +354,28 @@ impl RenderOnce for TitleBar {
                     on_close_window: self.on_close_window,
                 }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn windows_fullscreen_controls_use_explicit_window_actions() {
+        let source = include_str!("title_bar.rs");
+        let render_start = source
+            .find("impl RenderOnce for ControlIcon")
+            .expect("control icon renderer");
+        let render_end = source[render_start..]
+            .find("\n#[derive(IntoElement)]\nstruct WindowControls")
+            .map(|offset| render_start + offset)
+            .expect("window controls renderer");
+        let render = &source[render_start..render_end];
+
+        assert!(render.contains("let is_fullscreen = window.is_fullscreen();"));
+        assert!(render.contains("is_windows && !is_fullscreen"));
+        assert!(render.contains("is_windows && is_fullscreen"));
+        assert!(render.contains("window.minimize_window()"));
+        assert!(render.contains("window.toggle_fullscreen()"));
+        assert!(render.contains("window.remove_window()"));
     }
 }

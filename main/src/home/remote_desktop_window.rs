@@ -2,6 +2,7 @@ use gpui::{AppContext, Focusable};
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use remote_desktop::RemoteDesktopConnectionOptions;
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
+use rust_i18n::t;
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
@@ -14,7 +15,8 @@ fn remote_desktop_window_options(title: String) -> PopupWindowOptions {
         .min_width(MIN_WINDOW_WIDTH)
         .min_height(MIN_WINDOW_HEIGHT)
         .fullscreen(true)
-        .hide_titlebar_when_fullscreen(false)
+        .hide_titlebar_when_fullscreen(true)
+        .fullscreen_hint(t!("Connection.fullscreen_exit_hint").to_string())
 }
 
 pub(crate) fn open_remote_desktop_fullscreen_window(
@@ -46,10 +48,11 @@ pub(crate) fn open_remote_desktop_fullscreen_window(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn fullscreen_window_keeps_titlebar_for_window_controls_and_dragging() {
+    fn fullscreen_window_auto_hides_titlebar() {
         let options = super::remote_desktop_window_options("RDP".to_string());
 
         assert!(options.fullscreen);
-        assert!(!options.hide_titlebar_when_fullscreen);
+        assert!(options.hide_titlebar_when_fullscreen);
+        assert!(options.fullscreen_hint.is_some());
     }
 }

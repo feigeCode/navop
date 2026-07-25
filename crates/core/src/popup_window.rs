@@ -1,9 +1,25 @@
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, SharedString,
-    Size, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, prelude::FluentBuilder, px,
-    size,
+    AnyView, App, AppContext, Bounds, Context, InteractiveElement, IntoElement, KeyBinding,
+    ParentElement, Render, SharedString, Size, StatefulInteractiveElement, Styled, Window,
+    WindowBounds, WindowKind, WindowOptions, actions, div, prelude::FluentBuilder, px, size,
 };
-use gpui_component::{ActiveTheme, Root, TitleBar, v_flex};
+use gpui_component::{
+    ActiveTheme, Root, TITLE_BAR_HEIGHT, TitleBar, WindowExt, notification::Notification, v_flex,
+};
+
+const FULLSCREEN_POPUP_CONTEXT: &str = "FullscreenPopupWindow";
+
+actions!(popup_window, [ExitPopupFullscreen]);
+
+struct FullscreenHintNotification;
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        ExitPopupFullscreen,
+        Some(FULLSCREEN_POPUP_CONTEXT),
+    )]);
+}
 
 /// 弹出窗口的配置选项
 pub struct PopupWindowOptions {
@@ -14,6 +30,7 @@ pub struct PopupWindowOptions {
     pub min_height: f32,
     pub fullscreen: bool,
     pub hide_titlebar_when_fullscreen: bool,
+    pub fullscreen_hint: Option<SharedString>,
 }
 
 impl Default for PopupWindowOptions {
@@ -26,6 +43,7 @@ impl Default for PopupWindowOptions {
             min_height: 300.0,
             fullscreen: false,
             hide_titlebar_when_fullscreen: false,
+            fullscreen_hint: None,
         }
     }
 }
@@ -73,6 +91,11 @@ impl PopupWindowOptions {
         self.hide_titlebar_when_fullscreen = hide;
         self
     }
+
+    pub fn fullscreen_hint(mut self, hint: impl Into<SharedString>) -> Self {
+        self.fullscreen_hint = Some(hint.into());
+        self
+    }
 }
 
 /// 创建弹出窗口
@@ -108,6 +131,7 @@ where
     }
     let window_bounds = Bounds::centered(None, window_size, cx);
     let title = options.title.clone();
+    let fullscreen_hint = options.fullscreen_hint.clone();
 
     cx.spawn(async move |cx| {
         let window_bounds = if options.fullscreen {
@@ -136,13 +160,22 @@ where
                 view: view.into(),
                 title,
                 hide_titlebar_when_fullscreen: options.hide_titlebar_when_fullscreen,
+                titlebar_revealed: false,
             });
             cx.new(|cx| Root::new(content, window, cx))
         })?;
 
-        window.update(cx, |_, window, _| {
+        window.update(cx, |_, window, cx| {
             window.activate_window();
             window.set_window_title(&title);
+            if let Some(fullscreen_hint) = fullscreen_hint {
+                window.push_notification(
+                    Notification::info(fullscreen_hint)
+                        .id::<FullscreenHintNotification>()
+                        .autohide(true),
+                    cx,
+                );
+            }
         })?;
 
         Ok::<_, anyhow::Error>(())
@@ -154,6 +187,7 @@ struct PopupWindowContent {
     view: AnyView,
     title: String,
     hide_titlebar_when_fullscreen: bool,
+    titlebar_revealed: bool,
 }
 
 impl Render for PopupWindowContent {
@@ -161,32 +195,112 @@ impl Render for PopupWindowContent {
         let sheet_layer = Root::render_sheet_layer(window, cx);
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
+        let auto_hide_titlebar = self.hide_titlebar_when_fullscreen && window.is_fullscreen();
 
         v_flex()
+            .relative()
+            .when(auto_hide_titlebar, |this| {
+                this.key_context(FULLSCREEN_POPUP_CONTEXT)
+                    .on_action(cx.listener(|this, _: &ExitPopupFullscreen, window, cx| {
+                        this.titlebar_revealed = false;
+                        window.toggle_fullscreen();
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+            })
             .justify_center()
             .size_full()
             .bg(cx.theme().background)
             .opacity(crate::settings::AppSettings::global(cx).window_opacity)
-            .when(
-                !self.hide_titlebar_when_fullscreen || !window.is_fullscreen(),
-                |this| {
-                    this.child(
-                        TitleBar::new().child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .flex_1()
-                                .text_sm()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(self.title.clone()),
-                        ),
-                    )
-                },
-            )
+            .when(!auto_hide_titlebar, |this| {
+                this.child(render_popup_titlebar(self.title.clone()))
+            })
             .child(self.view.clone())
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
+            .when(auto_hide_titlebar, |this| {
+                this.child(
+                    div()
+                        .id("fullscreen-titlebar-reveal-zone")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w_full()
+                        .h(if self.titlebar_revealed {
+                            TITLE_BAR_HEIGHT
+                        } else {
+                            px(4.0)
+                        })
+                        .overflow_hidden()
+                        .on_hover(cx.listener(|this, hovered, _, cx| {
+                            if this.titlebar_revealed != *hovered {
+                                this.titlebar_revealed = *hovered;
+                                cx.notify();
+                            }
+                        }))
+                        .when(self.titlebar_revealed, |this| {
+                            this.child(render_popup_titlebar(self.title.clone()))
+                        }),
+                )
+            })
+    }
+}
+
+fn render_popup_titlebar(title: String) -> TitleBar {
+    TitleBar::new().child(
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .flex_1()
+            .text_sm()
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .child(title),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fullscreen_hidden_titlebar_is_revealed_from_a_top_edge_hover_zone() {
+        let source = include_str!("popup_window.rs");
+        let render_start = source
+            .find("impl Render for PopupWindowContent")
+            .expect("popup content renderer");
+        let render = &source[render_start..];
+
+        assert!(render.contains("let auto_hide_titlebar"));
+        assert!(render.contains(".id(\"fullscreen-titlebar-reveal-zone\")"));
+        assert!(render.contains(".absolute()"));
+        assert!(render.contains(".top_0()"));
+        assert!(render.contains(".on_hover(cx.listener"));
+        assert!(render.contains("this.titlebar_revealed = *hovered"));
+        assert!(render.contains("TitleBar::new()"));
+    }
+
+    #[test]
+    fn escape_exits_auto_hidden_popup_fullscreen() {
+        let source = include_str!("popup_window.rs");
+
+        assert!(source.contains("KeyBinding::new("));
+        assert!(source.contains("\"escape\","));
+        assert!(source.contains("ExitPopupFullscreen,"));
+        assert!(source.contains(".when(auto_hide_titlebar"));
+        assert!(source.contains(".key_context(FULLSCREEN_POPUP_CONTEXT)"));
+        assert!(source.contains(".on_action(cx.listener"));
+        assert!(source.contains("window.toggle_fullscreen()"));
+        assert!(source.contains("cx.stop_propagation()"));
+    }
+
+    #[test]
+    fn popup_fullscreen_hint_uses_an_auto_hiding_notification() {
+        let source = include_str!("popup_window.rs");
+
+        assert!(source.contains("fullscreen_hint: Option<SharedString>"));
+        assert!(source.contains("if let Some(fullscreen_hint)"));
+        assert!(source.contains("Notification::info(fullscreen_hint)"));
+        assert!(source.contains(".autohide(true)"));
+        assert!(source.contains("window.push_notification"));
     }
 }

@@ -1072,6 +1072,10 @@ Connection:
     en: Open in Fullscreen Window
     zh-CN: 在独立窗口中全屏打开
     zh-HK: 在獨立視窗中全螢幕開啟
+  fullscreen_exit_hint:
+    en: "Fullscreen mode. Press Esc to exit fullscreen."
+    zh-CN: "已进入全屏，按 Esc 退出全屏。"
+    zh-HK: "已進入全螢幕，按 Esc 退出全螢幕。"
   copy_connection_info:
     en: Copy Connection Info
     zh-CN: 复制连接信息

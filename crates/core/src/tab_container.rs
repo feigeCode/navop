@@ -2841,6 +2841,8 @@ impl TabContainer {
             .id("tab-content")
             .flex_1()
             .w_full()
+            .min_w_0()
+            .min_h_0()
             .overflow_hidden()
             .when(!has_sidebar_layout, |el| {
                 el.when_some(active_view.clone(), |el, view| el.child(view))
@@ -3776,9 +3778,15 @@ impl Render for TabContainer {
             }))
             .relative()
             .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
             .child(
                 v_flex()
                     .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
                     .child(self.render_tab_bar(window, cx))
                     .child(self.render_tab_content(window, cx)),
             )

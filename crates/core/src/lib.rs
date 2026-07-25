@@ -57,5 +57,6 @@ pub fn init(cx: &mut App) {
     llm::init(cx);
     agent::init(cx);
     connection_notifier::init(cx);
+    popup_window::init(cx);
     tab_container::init(cx);
 }
