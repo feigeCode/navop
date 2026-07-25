@@ -159,6 +159,9 @@ impl RedisEventHandler {
                     RedisTreeViewEvent::ConnectionEstablished { .. } => {
                         // 连接建立事件，不需要特殊处理
                     }
+                    RedisTreeViewEvent::LoadKeysFailed { error } => {
+                        Self::show_error(window, error.clone(), cx);
+                    }
                     RedisTreeViewEvent::OpenToolView { .. } => {
                         // 工具页签由 RedisTabView 自己处理
                     }

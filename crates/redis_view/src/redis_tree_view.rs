@@ -56,6 +56,8 @@ pub enum RedisTreeViewEvent {
     CloseConnection { node_id: String },
     /// 连接已建立
     ConnectionEstablished { node_id: String },
+    /// 键列表加载失败
+    LoadKeysFailed { error: String },
     /// 打开 CLI
     OpenCli {
         connection_id: String,
@@ -97,6 +99,21 @@ struct LocalSearchInput {
 struct EntryTraversal {
     depth: usize,
     ancestor_matches: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NodeErrorRetry {
+    Reconnect,
+    ReloadKeys,
+    None,
+}
+
+fn node_error_retry(node_type: &RedisNodeType) -> NodeErrorRetry {
+    match node_type {
+        RedisNodeType::Connection => NodeErrorRetry::Reconnect,
+        RedisNodeType::Database(_) => NodeErrorRetry::ReloadKeys,
+        _ => NodeErrorRetry::None,
+    }
 }
 
 fn effective_tree_expansion(
@@ -713,6 +730,7 @@ impl RedisTreeView {
         token: u64,
         cx: &mut Context<Self>,
     ) {
+        self.error_nodes.remove(&node_id);
         self.set_node_loading(&node_id, true, cx);
         let global_state = cx.global::<GlobalRedisState>().clone();
 
@@ -748,9 +766,30 @@ impl RedisTreeView {
             })
             .await {
                 Ok(result) => result,
-                Err(_) => {
+                Err(error) => {
+                    let error_msg = format!("{error:#}");
+                    error!(
+                        "redis_view: key scan failed (connection={}, db={}, cursor={}, append={}, pattern={}): {}",
+                        connection_id,
+                        db_index,
+                        cursor,
+                        append,
+                        pattern,
+                        error_msg
+                    );
                     let _ = this.update(cx, |view, cx| {
+                        if !view.is_search_token_current(&node_id, token) {
+                            return;
+                        }
                         view.set_node_loading(&node_id, false, cx);
+                        view.error_nodes.insert(node_id.clone(), error_msg.clone());
+                        cx.emit(RedisTreeViewEvent::LoadKeysFailed {
+                            error: t!(
+                                "RedisTree.load_keys_failed",
+                                error = error_msg
+                            )
+                            .to_string(),
+                        });
                     });
                     return;
                 }
@@ -1540,7 +1579,16 @@ impl RedisTreeView {
         // 如果有错误，双击重试
         if self.error_nodes.contains_key(node_id) {
             self.error_nodes.remove(node_id);
-            self.connect_node(node_id.to_string(), cx);
+            match self
+                .nodes
+                .get(node_id)
+                .map(|node| node_error_retry(&node.node_type))
+                .unwrap_or(NodeErrorRetry::None)
+            {
+                NodeErrorRetry::Reconnect => self.connect_node(node_id.to_string(), cx),
+                NodeErrorRetry::ReloadKeys => self.refresh_keys(node_id.to_string(), cx),
+                NodeErrorRetry::None => cx.notify(),
+            }
             return;
         }
 
@@ -1998,6 +2046,10 @@ impl RedisTreeView {
             self.loading_nodes.contains(&node_id)
         };
         let error_msg = self.error_nodes.get(&node_id).cloned();
+        let error_title = match &node.node_type {
+            RedisNodeType::Database(_) => t!("RedisTree.key_load_error").to_string(),
+            _ => t!("RedisTree.connection_error").to_string(),
+        };
         let is_key = matches!(node.node_type, RedisNodeType::Key(_));
         let key_type_badge = if let RedisNodeType::Key(key_type) = &node.node_type {
             Some(self.get_key_type_badge(key_type))
@@ -2287,9 +2339,7 @@ impl RedisTreeView {
                                                         .with_size(Size::Small)
                                                         .text_color(cx.theme().warning),
                                                 )
-                                                .child(
-                                                    t!("RedisTree.connection_error").to_string(),
-                                                ),
+                                                .child(error_title.clone()),
                                         )
                                         .child(
                                             Clipboard::new(SharedString::from(format!(
@@ -2765,6 +2815,18 @@ mod tests {
         assert_eq!(
             5,
             RedisTreeView::normalize_database_for_mode(RedisConnectionMode::Standalone, 5)
+        );
+    }
+
+    #[test]
+    fn database_scan_error_retries_key_loading_instead_of_reconnecting() {
+        assert_eq!(
+            NodeErrorRetry::ReloadKeys,
+            node_error_retry(&RedisNodeType::Database(0))
+        );
+        assert_eq!(
+            NodeErrorRetry::Reconnect,
+            node_error_retry(&RedisNodeType::Connection)
         );
     }
 

@@ -1042,6 +1042,23 @@ mod tests {
     }
 
     #[test]
+    fn scan_response_from_ipc_array_is_parsed() {
+        let value = domain_value(RedisRespValue::Array(vec![
+            RedisRespValue::Bytes(WireBytes::Utf8("17".into())),
+            RedisRespValue::Array(vec![
+                RedisRespValue::Bytes(WireBytes::Utf8("user:1".into())),
+                RedisRespValue::Bytes(WireBytes::Utf8("user:2".into())),
+            ]),
+        ]));
+
+        let result = parse_scan(value).expect("IPC SCAN response should follow Redis tuple shape");
+
+        assert_eq!(17, result.cursor);
+        assert_eq!(vec!["user:1", "user:2"], result.keys);
+        assert!(!result.finished);
+    }
+
+    #[test]
     fn zset_members_preserve_non_utf8_bytes() {
         let bytes = vec![0x0b, 0xcf, 0xdb, 0xde, 0x01, 0x00];
         let members = parse_zset(RedisValue::Bulk(vec![

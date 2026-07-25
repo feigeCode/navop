@@ -2,7 +2,7 @@
 //! sidecar path; the test is skipped when no integration environment is set.
 
 use extension_host::NativeDriverManifest;
-use redis_runtime::{IpcRedisConnection, RedisConnectionConfig, RedisValue};
+use redis_runtime::{IpcRedisConnection, RedisConnection, RedisConnectionConfig, RedisValue};
 
 #[tokio::test]
 async fn sidecar_round_trips_binary_values_and_pipeline() {
@@ -60,5 +60,19 @@ async fn sidecar_round_trips_binary_values_and_pipeline() {
         .unwrap();
     assert_eq!(2, values.len());
     assert_eq!(RedisValue::String("ok".into()), values[1]);
+
+    connection
+        .set_in_db(1, "navop:scan-contract:key", "ok", None)
+        .await
+        .expect("SCAN contract key should be written to db1");
+    let scan = connection
+        .scan_in_db(1, 0, "navop:scan-contract:*", 500)
+        .await
+        .expect("Redis sidecar should return a valid SCAN tuple");
+    assert!(
+        scan.keys.iter().any(|key| key == "navop:scan-contract:key"),
+        "SCAN should return the key from the requested database"
+    );
+
     connection.shutdown().await;
 }

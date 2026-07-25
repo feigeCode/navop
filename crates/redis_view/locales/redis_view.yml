@@ -577,6 +577,14 @@ RedisTree:
     en: "Connection error"
     zh-CN: "连接错误"
     zh-HK: "連線錯誤"
+  key_load_error:
+    en: "Key loading error"
+    zh-CN: "键列表加载错误"
+    zh-HK: "鍵列表載入錯誤"
+  load_keys_failed:
+    en: "Failed to load Redis keys: %{error}"
+    zh-CN: "加载 Redis 键列表失败：%{error}"
+    zh-HK: "載入 Redis 鍵列表失敗：%{error}"
   menu_open_in_new_tab:
     en: "Open in new tab"
     zh-CN: "在新标签页中打开"

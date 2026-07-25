@@ -255,6 +255,7 @@ impl RedisTabView {
                     };
                     this.open_tool_view(*kind, connection_id, db_index, window, cx);
                 }
+                RedisTreeViewEvent::LoadKeysFailed { .. } => {}
                 _ => {}
             },
         )
