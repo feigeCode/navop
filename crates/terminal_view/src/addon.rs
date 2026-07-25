@@ -4,9 +4,9 @@
 
 use crate::settings::TerminalHighlightRule;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point as AlacPoint};
+use alacritty_terminal::index::{Column, Direction, Line, Point as AlacPoint};
 use alacritty_terminal::term::Term;
-use alacritty_terminal::term::search::RegexSearch;
+use alacritty_terminal::term::search::{RegexIter, RegexSearch};
 use gpui::*;
 use gpui_component::try_parse_color;
 use std::any::Any;
@@ -603,6 +603,7 @@ impl TerminalAddon for WebLinksAddon {
 pub struct SearchAddon {
     regex: Option<RegexSearch>,
     current_match: Option<RangeInclusive<AlacPoint>>,
+    visible_decorations: Vec<DecorationSpan>,
     pattern: String,
 }
 
@@ -611,6 +612,7 @@ impl SearchAddon {
         Self {
             regex: None,
             current_match: None,
+            visible_decorations: Vec::new(),
             pattern: String::new(),
         }
     }
@@ -620,6 +622,7 @@ impl SearchAddon {
         if pattern.is_empty() {
             self.regex = None;
             self.current_match = None;
+            self.visible_decorations.clear();
             self.pattern.clear();
             return Ok(());
         }
@@ -627,6 +630,7 @@ impl SearchAddon {
         let regex = RegexSearch::new(pattern).map_err(|e| regex::Error::Syntax(e.to_string()))?;
         self.regex = Some(regex);
         self.current_match = None;
+        self.visible_decorations.clear();
         self.pattern = pattern.to_string();
         Ok(())
     }
@@ -645,6 +649,7 @@ impl SearchAddon {
     pub fn clear(&mut self) {
         self.regex = None;
         self.current_match = None;
+        self.visible_decorations.clear();
         self.pattern.clear();
     }
 
@@ -748,37 +753,45 @@ impl TerminalAddon for SearchAddon {
         "search"
     }
 
+    fn on_frame(&mut self, context: &TerminalAddonFrameContext) {
+        self.visible_decorations.clear();
+
+        if context.visible_lines.is_empty() || context.term.columns() == 0 {
+            return;
+        }
+
+        let current_match = self.current_match.clone();
+        let Some(regex) = self.regex.as_mut() else {
+            return;
+        };
+
+        let start = AlacPoint::new(
+            Line(context.visible_lines.start as i32 - context.display_offset as i32),
+            Column(0),
+        );
+        let end = AlacPoint::new(
+            Line(context.visible_lines.end as i32 - 1 - context.display_offset as i32),
+            Column(context.term.columns() - 1),
+        );
+
+        for match_range in RegexIter::new(start, end, Direction::Right, context.term, regex) {
+            let is_current = current_match.as_ref() == Some(&match_range);
+            self.visible_decorations.extend(search_match_decorations(
+                &match_range,
+                context.visible_lines.clone(),
+                context.display_offset,
+                context.term.columns(),
+                is_current,
+            ));
+        }
+    }
+
     fn provide_decorations(
         &self,
         _visible_lines: Range<usize>,
-        display_offset: usize,
+        _display_offset: usize,
     ) -> Vec<DecorationSpan> {
-        if let Some(ref match_range) = self.current_match {
-            let start = match_range.start();
-            let end = match_range.end();
-
-            // Convert AlacPoint to screen coordinates
-            let start_line = (start.line.0 + display_offset as i32) as usize;
-            let end_line = (end.line.0 + display_offset as i32) as usize;
-
-            if start_line == end_line {
-                // Single line match
-                vec![DecorationSpan {
-                    line: start_line,
-                    col_range: start.column.0..end.column.0 + 1,
-                    decoration: CellDecoration::Highlight {
-                        foreground: hsla(0.0, 0.0, 0.0, 1.0),  // Black text
-                        background: hsla(0.15, 0.8, 0.5, 1.0), // Yellow highlight
-                        priority: 100,                         // High priority
-                    },
-                }]
-            } else {
-                // Multi-line match - not common but handle it
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
+        self.visible_decorations.clone()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -788,6 +801,62 @@ impl TerminalAddon for SearchAddon {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+fn search_match_decorations(
+    match_range: &RangeInclusive<AlacPoint>,
+    visible_lines: Range<usize>,
+    display_offset: usize,
+    columns: usize,
+    is_current: bool,
+) -> Vec<DecorationSpan> {
+    let start = match_range.start();
+    let end = match_range.end();
+    let start_screen_line = start.line.0 + display_offset as i32;
+    let end_screen_line = end.line.0 + display_offset as i32;
+    let foreground = hsla(0.0, 0.0, 0.0, 1.0);
+    let (background, priority) = if is_current {
+        (hsla(0.15, 0.8, 0.5, 1.0), 100)
+    } else {
+        (hsla(0.15, 0.65, 0.38, 1.0), 90)
+    };
+    let mut decorations = Vec::new();
+
+    for screen_line in start_screen_line..=end_screen_line {
+        if screen_line < 0 {
+            continue;
+        }
+        let screen_line = screen_line as usize;
+        if !visible_lines.contains(&screen_line) {
+            continue;
+        }
+
+        let start_column = if screen_line as i32 == start_screen_line {
+            start.column.0
+        } else {
+            0
+        };
+        let end_column = if screen_line as i32 == end_screen_line {
+            end.column.0 + 1
+        } else {
+            columns
+        };
+        if start_column >= end_column {
+            continue;
+        }
+
+        decorations.push(DecorationSpan {
+            line: screen_line,
+            col_range: start_column..end_column,
+            decoration: CellDecoration::Highlight {
+                foreground,
+                background,
+                priority,
+            },
+        });
+    }
+
+    decorations
 }
 
 pub struct CustomHighlightAddon {
@@ -1372,12 +1441,37 @@ fn file_path_to_url(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AddonManager, FilePathAddon, compile_custom_highlight_rules, register_default_addons,
+        AddonManager, FilePathAddon, SearchAddon, TerminalAddon, TerminalAddonFrameContext,
+        compile_custom_highlight_rules, register_default_addons,
     };
     use crate::settings::TerminalHighlightRule;
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::term::{Config as TermConfig, Term};
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use terminal::pty_backend::GpuiEventProxy;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    struct TestTermDimensions {
+        columns: usize,
+        screen_lines: usize,
+    }
+
+    impl Dimensions for TestTermDimensions {
+        fn total_lines(&self) -> usize {
+            self.screen_lines
+        }
+
+        fn screen_lines(&self) -> usize {
+            self.screen_lines
+        }
+
+        fn columns(&self) -> usize {
+            self.columns
+        }
+    }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
         let timestamp = SystemTime::now()
@@ -1427,6 +1521,52 @@ mod tests {
 
         assert!(manager.is_loaded("custom_highlights"));
         assert!(!manager.is_loaded("ip_highlight"));
+    }
+
+    #[test]
+    fn search_addon_highlights_every_visible_match() {
+        let term = test_term_with_content(b"foo foo\r\nbar foo");
+
+        let mut addon = SearchAddon::new();
+        addon.set_pattern("foo").expect("pattern should compile");
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+        });
+
+        let decorations =
+            addon.provide_decorations(0..term.screen_lines(), term.grid().display_offset());
+
+        assert_eq!(3, decorations.len());
+        assert_eq!(0..3, decorations[0].col_range);
+        assert_eq!(4..7, decorations[1].col_range);
+        assert_eq!(4..7, decorations[2].col_range);
+    }
+
+    #[test]
+    fn search_addon_marks_current_match_with_higher_priority() {
+        let mut term = test_term_with_content(b"foo foo\r\nbar foo");
+        let mut addon = SearchAddon::new();
+        addon.set_pattern("foo").expect("pattern should compile");
+        addon.find_last(&mut term);
+        addon.on_frame(&TerminalAddonFrameContext {
+            term: &term,
+            visible_lines: 0..term.screen_lines(),
+            display_offset: term.grid().display_offset(),
+            is_local: false,
+            base_dir: None,
+        });
+
+        let priorities = addon
+            .provide_decorations(0..term.screen_lines(), term.grid().display_offset())
+            .into_iter()
+            .map(|decoration| decoration.decoration.priority())
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![90, 90, 100], priorities);
     }
 
     #[test]
@@ -1534,5 +1674,21 @@ mod tests {
 
     fn char_column(text: &str, byte_index: usize) -> usize {
         text[..byte_index].chars().count()
+    }
+
+    fn test_term_with_content(content: &[u8]) -> Term<GpuiEventProxy> {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let dimensions = TestTermDimensions {
+            columns: 20,
+            screen_lines: 3,
+        };
+        let mut term = Term::new(
+            TermConfig::default(),
+            &dimensions,
+            GpuiEventProxy::new(event_tx),
+        );
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut term, content);
+        term
     }
 }
