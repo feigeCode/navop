@@ -269,8 +269,31 @@ mod tests {
     }
 
     #[test]
-    fn rendered_frame_cannot_expand_its_tab_container() {
+    fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() {
         let source = include_str!("view/render.rs");
+
+        let canvas_start = source
+            .find("fn remote_desktop_frame_canvas")
+            .expect("remote desktop frame canvas");
+        let canvas_end = source[canvas_start..]
+            .find("impl Focusable for RemoteDesktopView")
+            .map(|offset| canvas_start + offset)
+            .expect("remote desktop view implementation");
+        let canvas = &source[canvas_start..canvas_end];
+
+        assert!(canvas.contains("canvas("));
+        assert!(canvas.contains("window.handle_input("));
+        assert!(canvas.contains("window.paint_image("));
+        assert!(canvas.contains(".absolute()"));
+        assert!(canvas.contains(".inset_0()"));
+        assert!(canvas.contains(".size_full()"));
+        assert!(canvas.contains(".min_w_0()"));
+        assert!(canvas.contains(".min_h_0()"));
+        assert!(canvas.contains(".overflow_hidden()"));
+        assert!(
+            !canvas.contains("img("),
+            "GPUI Img injects the remote frame aspect ratio during request_layout"
+        );
 
         let content_start = source
             .find("let content = div()")
@@ -285,19 +308,18 @@ mod tests {
         assert!(content.contains(".size_full()"));
         assert!(content.contains(".min_w_0()"));
         assert!(content.contains(".min_h_0()"));
+        assert!(content.contains(".relative()"));
         assert!(content.contains(".overflow_hidden()"));
-        let frame_start = content.find("img(frame)").expect("rendered frame");
-        let frame_end = content[frame_start..]
-            .find(".object_fit(ObjectFit::Fill)")
-            .map(|offset| frame_start + offset)
-            .expect("rendered frame fit");
-        let frame = &content[frame_start..frame_end];
-        assert!(frame.contains(".size_full()"));
-        assert!(frame.contains(".min_w_0()"));
-        assert!(frame.contains(".min_h_0()"));
+        assert!(
+            content.contains(".child(remote_desktop_frame_canvas(rendered_frame, focus_handle))")
+        );
+        assert!(
+            !content.contains(".when_some(rendered_frame"),
+            "frame replacement must not switch between Img and status layout trees"
+        );
 
         let status = &content[content
-            .find(".when(rendered_frame.is_none()")
+            .find(".when(show_empty_status")
             .expect("empty-frame status")..];
         assert!(status.contains(".min_w_0()"));
         assert!(status.contains(".max_w_full()"));

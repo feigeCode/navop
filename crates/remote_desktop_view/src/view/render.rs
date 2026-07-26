@@ -2,6 +2,31 @@ use gpui::prelude::FluentBuilder;
 
 use super::*;
 
+fn remote_desktop_frame_canvas(
+    frame: Option<Arc<RenderImage>>,
+    focus_handle: FocusHandle,
+) -> impl IntoElement {
+    canvas(
+        move |bounds, window, cx| {
+            window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
+            frame
+        },
+        move |bounds, frame, window, _cx| {
+            if let Some(frame) = frame
+                && let Err(error) = window.paint_image(bounds, Corners::default(), frame, 0, false)
+            {
+                tracing::warn!(?error, "failed to paint remote desktop frame");
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+    .min_w_0()
+    .min_h_0()
+    .overflow_hidden()
+}
+
 impl Focusable for RemoteDesktopView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -63,6 +88,7 @@ impl Render for RemoteDesktopView {
             tracing::warn!(?error, "failed to retire remote desktop frame");
         }
         let rendered_frame = self.rendered_frames.current().cloned();
+        let show_empty_status = rendered_frame.is_none();
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
 
@@ -70,6 +96,7 @@ impl Render for RemoteDesktopView {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .relative()
             .flex()
             .items_center()
             .justify_center()
@@ -142,26 +169,8 @@ impl Render for RemoteDesktopView {
                 this.send_scroll(event);
                 cx.stop_propagation();
             }))
-            .child(
-                canvas(
-                    |_, _, _| (),
-                    move |bounds, _, window, cx| {
-                        window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
-            .when_some(rendered_frame.clone(), |this, frame| {
-                this.child(
-                    img(frame)
-                        .size_full()
-                        .min_w_0()
-                        .min_h_0()
-                        .object_fit(ObjectFit::Fill),
-                )
-            })
-            .when(rendered_frame.is_none(), |this| {
+            .child(remote_desktop_frame_canvas(rendered_frame, focus_handle))
+            .when(show_empty_status, |this| {
                 this.child(
                     div()
                         .min_w_0()
