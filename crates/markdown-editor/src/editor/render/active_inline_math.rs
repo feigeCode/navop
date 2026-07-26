@@ -1,4 +1,5 @@
 use super::MarkdownEditor;
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     App, Bounds, Corners, Image, ImageFormat, IntoElement, ObjectFit, Pixels, Styled, Window,
     canvas, point, px,
@@ -8,32 +9,51 @@ use std::{ops::Range, sync::Arc};
 
 impl MarkdownEditor {
     pub(super) fn active_inline_math_overlays(&self) -> Vec<gpui::AnyElement> {
-        let Some(block_id) = self.active_block else {
+        self.inline_math_overlays(self.active_surface_key())
+    }
+
+    pub(super) fn inline_math_overlays(&self, key: MarkdownSurfaceKey) -> Vec<gpui::AnyElement> {
+        let document = self.history.document();
+        let nodes = match key {
+            MarkdownSurfaceKey::Empty => return Vec::new(),
+            MarkdownSurfaceKey::Block(block_id) => {
+                let Some(block) = document.block_by_id(block_id) else {
+                    return Vec::new();
+                };
+                &block.inline_nodes
+            }
+            MarkdownSurfaceKey::TableCell { .. } => {
+                let Some(address) = key.table_address() else {
+                    return Vec::new();
+                };
+                let Ok(cell) = document.table_cell(address) else {
+                    return Vec::new();
+                };
+                &cell.inline_nodes
+            }
+        };
+        let Some(surface) = self.surface(key) else {
             return Vec::new();
         };
-        let Some(block) = self.history.document().block_by_id(block_id) else {
-            return Vec::new();
-        };
-        block
-            .inline_nodes
+        nodes
             .iter()
             .filter_map(|node| {
                 let SourceInlineKind::InlineMath { .. } = node.kind else {
                     return None;
                 };
-                if self.projection.active_inline == Some(node.id) {
+                if surface.projection.active_inline == Some(node.id) {
                     return None;
                 }
-                let source = self.history.document().source[node.content_range.clone()?].to_owned();
+                let source = document.source[node.content_range.clone()?].to_owned();
                 let artifact = self.inline_math_artifacts.get(&source)?;
-                let range = self
+                let range = surface
                     .projection
                     .source_to_display(node.content_range.as_ref()?.start)
-                    ..self
+                    ..surface
                         .projection
                         .source_to_display(node.content_range.as_ref()?.end);
                 Some(inline_math_overlay(
-                    self.input.clone(),
+                    surface.input.clone(),
                     range,
                     artifact.clone(),
                 ))

@@ -13,13 +13,8 @@ impl MarkdownEditor {
             .debug_selector(|| format!("markdown-block-frame-{}", block.id.0))
             .w_full()
             .min_w_0();
-        if self.active_block != Some(block.id) || matches!(block.kind, SourceBlockKind::Table(_)) {
-            return frame
-                .child(self.render_natural_block(block, cx))
-                .into_any_element();
-        }
         frame
-            .child(self.render_active_block(block, cx))
+            .child(self.render_natural_block(block, cx))
             .into_any_element()
     }
 
@@ -32,8 +27,11 @@ impl MarkdownEditor {
             return self.render_table(block, table, cx);
         }
         if let Some(rendered) = self.render_block_output(block, cx) {
+            if self.active_block == Some(block.id) {
+                return self.render_block_edit_surface(block, cx);
+            }
             return self.render_artifact_preview(block, rendered, cx);
         }
-        self.render_preview_block(block, cx)
+        self.render_block_edit_surface(block, cx)
     }
 }

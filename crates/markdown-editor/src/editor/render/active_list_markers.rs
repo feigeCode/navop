@@ -1,5 +1,6 @@
 use super::MarkdownEditor;
 use super::list_marker_source::list_markers;
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     App, Bounds, Corners, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
     Pixels, SharedString, Styled, TextAlign, TextRun, Window, canvas, point, px,
@@ -11,15 +12,30 @@ const FONT_SIZE: f32 = 16.;
 const MARKER_GAP: f32 = 6.;
 
 impl MarkdownEditor {
-    pub(super) fn active_list_marker_overlay(&self, block: &SourceBlock) -> gpui::AnyElement {
-        let markers = list_markers(block, |offset| self.projection.source_to_display(offset));
-        let input = self.input.clone();
+    pub(super) fn list_marker_overlay(
+        &self,
+        key: MarkdownSurfaceKey,
+        block: &SourceBlock,
+        active: bool,
+    ) -> gpui::AnyElement {
+        let surface = self
+            .surface(key)
+            .expect("a list marker overlay must use its block surface");
+        let markers = list_markers(block, |offset| surface.projection.source_to_display(offset));
+        let input = surface.input.clone();
+        let block_id = block.id;
         let foreground = self.theme.foreground;
         let primary = self.theme.primary;
         let check = self.theme.background;
         gpui::div()
-            .id(("markdown-active-list-markers", block.id.0))
-            .debug_selector(|| format!("markdown-active-list-markers-{}", block.id.0))
+            .id(("markdown-list-markers", block.id.0))
+            .debug_selector(move || {
+                if active {
+                    format!("markdown-active-list-markers-{}", block_id.0)
+                } else {
+                    format!("markdown-list-markers-{}", block_id.0)
+                }
+            })
             .absolute()
             .top_0()
             .right_0()

@@ -1,9 +1,8 @@
 use super::{
     MarkdownEditor,
-    active_block::active_block_height,
     layout_metrics::{
         DOCUMENT_BOTTOM_PADDING, DOCUMENT_MAX_WIDTH, DOCUMENT_SIDE_PADDING, DOCUMENT_TOP_PADDING,
-        estimated_visual_lines, should_virtualize, virtual_item_sizes,
+        should_virtualize, virtual_item_sizes,
     },
 };
 use gpui::{
@@ -15,7 +14,7 @@ use gpui_component::{
     scroll::{Scrollbar, ScrollbarShow},
     v_flex, v_virtual_list,
 };
-use markdown_source::{SourceBlock, SourceBlockKind};
+use markdown_source::SourceBlock;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -40,7 +39,6 @@ impl MarkdownEditor {
     }
 
     fn render_virtual_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let active_block = self.active_block;
         let item_sizes = Rc::new(virtual_item_sizes(
             &self.history.document().blocks,
             &self.measured_block_heights,
@@ -53,7 +51,7 @@ impl MarkdownEditor {
                 editor.request_block_renders(visible_range.clone(), cx);
                 editor.request_inline_math_renders(visible_range.clone(), cx);
                 visible_range
-                    .map(|index| editor.render_block(index, &item_sizes, active_block, cx))
+                    .map(|index| editor.render_block(index, &item_sizes, cx))
                     .collect()
             },
         )
@@ -133,7 +131,6 @@ impl MarkdownEditor {
         &self,
         index: usize,
         item_sizes: &[gpui::Size<gpui::Pixels>],
-        active_block: Option<markdown_source::SourceNodeId>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let Some(block) = self.history.document().blocks.get(index).cloned() else {
@@ -155,7 +152,7 @@ impl MarkdownEditor {
                     .when(index + 1 == block_count, |this| {
                         this.pb(px(DOCUMENT_BOTTOM_PADDING))
                     })
-                    .child(self.render_block_content(&block, active_block, cx)),
+                    .child(self.render_natural_block(&block, cx)),
             )
             .into_any_element()
     }
@@ -165,41 +162,10 @@ impl MarkdownEditor {
         block: &SourceBlock,
         preview_height: gpui::Pixels,
     ) -> gpui::Pixels {
-        if self.active_block != Some(block.id) {
-            return preview_height;
-        }
-        if let Some(measured) = self.measured_block_heights.get(&block.id) {
-            return preview_height.max(*measured);
-        }
-        let rows = estimated_visual_lines(&self.projection.text) as f32;
-        let heading = match block.kind {
-            SourceBlockKind::Heading { level, .. } => Some(level),
-            _ => None,
-        };
-        let source_code = matches!(
-            block.kind,
-            SourceBlockKind::CodeFence { .. } | SourceBlockKind::MathBlock { .. }
-        );
-        let active = px(active_block_height(rows, heading, source_code) * 16.);
-        preview_height.max(active)
-    }
-
-    fn render_block_content(
-        &self,
-        block: &SourceBlock,
-        active_block: Option<markdown_source::SourceNodeId>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        if active_block != Some(block.id)
-            && let Some(rendered) = self.render_block_output(block, cx)
-        {
-            return self.render_artifact_preview(block, rendered, cx);
-        }
-        match &block.kind {
-            SourceBlockKind::Table(table) => self.render_table(block, table, cx),
-            _ if active_block == Some(block.id) => self.render_active_block(block, cx),
-            _ => self.render_preview_block(block, cx),
-        }
+        self.measured_block_heights
+            .get(&block.id)
+            .copied()
+            .map_or(preview_height, |measured| preview_height.max(measured))
     }
 
     pub(super) fn render_artifact_preview(

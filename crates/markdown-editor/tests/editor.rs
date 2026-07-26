@@ -1365,13 +1365,13 @@ fn clicking_a_list_item_places_the_cursor_on_that_visual_line(cx: &mut TestAppCo
     let mut cx = VisualTestContext::from_window(window, cx);
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    let preview = cx
+    let input_slot = cx
         .debug_bounds(Box::leak(
-            format!("markdown-preview-block-{}", list_id.0).into_boxed_str(),
+            format!("markdown-block-input-slot-{}", list_id.0).into_boxed_str(),
         ))
-        .unwrap();
+        .expect("the list input must be mounted before activation");
     cx.simulate_click(
-        point(preview.left() + px(80.), preview.top() + px(30.)),
+        point(input_slot.left() + px(4.), input_slot.top() + px(30.)),
         Modifiers::none(),
     );
     cx.run_until_parked();
@@ -1468,13 +1468,13 @@ fn clicking_code_content_maps_to_content_lines_not_fence_lines(cx: &mut TestAppC
     let mut cx = VisualTestContext::from_window(window, cx);
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    let preview = cx
+    let input_slot = cx
         .debug_bounds(Box::leak(
-            format!("markdown-preview-block-{}", code_id.0).into_boxed_str(),
+            format!("markdown-block-input-slot-{}", code_id.0).into_boxed_str(),
         ))
-        .unwrap();
+        .expect("the code input must be mounted before activation");
     cx.simulate_click(
-        point(preview.left() + px(80.), preview.top() + px(30.)),
+        point(input_slot.left() + px(4.), input_slot.top() + px(30.)),
         Modifiers::none(),
     );
     cx.run_until_parked();
