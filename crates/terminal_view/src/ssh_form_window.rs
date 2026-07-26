@@ -30,8 +30,8 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 use ssh::{
-    ChannelEvent, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth,
-    SshChannel, SshClient, SshConnectConfig, SshSessionManager,
+    ChannelEvent, HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType,
+    RusshClient, SshAuth, SshChannel, SshClient, SshConnectConfig, SshSessionManager,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -1013,6 +1013,7 @@ impl SshFormWindow {
             jump_server,
             proxy,
             keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
         }
     }

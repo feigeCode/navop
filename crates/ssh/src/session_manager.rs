@@ -354,8 +354,8 @@ impl SshSessionManager {
 mod tests {
     use super::{PING_THROTTLE, SessionPool, SharedSessionClient, SharedSessionConnector};
     use crate::{
-        JumpServerConnectConfig, ProxyConnectConfig, ShellIntegrationSetup, SshAuth,
-        SshConnectConfig,
+        HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ShellIntegrationSetup,
+        SshAuth, SshConnectConfig,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -457,6 +457,7 @@ mod tests {
             jump_server: None::<JumpServerConnectConfig>,
             proxy: None::<ProxyConnectConfig>,
             keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
         }
     }

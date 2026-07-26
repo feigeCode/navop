@@ -210,7 +210,8 @@ pub struct HostKeyDetails {
 }
 
 impl HostKeyDetails {
-    fn from_public_key(public_key: &PublicKey) -> Self {
+    #[must_use]
+    pub fn from_public_key(public_key: &PublicKey) -> Self {
         Self {
             algorithm: public_key.algorithm().as_str().to_owned(),
             fingerprint: public_key.fingerprint(HashAlg::Sha256).to_string(),

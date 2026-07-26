@@ -1,6 +1,9 @@
 use anyhow::{Context as _, Result};
 use one_core::storage::models::{ProxyType as StorageProxyType, SshAuthMethod, StoredConnection};
-use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
+use ssh::{
+    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
+    SshConnectConfig,
+};
 use std::time::Duration;
 
 pub(crate) fn ssh_config_for(connection: &StoredConnection) -> Result<SshConnectConfig> {
@@ -32,6 +35,7 @@ pub(crate) fn ssh_config_for(connection: &StoredConnection) -> Result<SshConnect
             password: proxy.password,
         }),
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
     })
 }

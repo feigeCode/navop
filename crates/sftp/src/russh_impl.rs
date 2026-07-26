@@ -14,8 +14,9 @@ use russh_sftp::client::rawsession::Limits;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
-    AuthFailureMessages, ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig,
-    authenticate_with_strategy, defaults,
+    AuthFailureMessages, HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyVerifier,
+    ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, authenticate_with_strategy,
+    defaults,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -38,16 +39,56 @@ fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-struct SftpHandler;
+struct SftpHandler {
+    identity: HostKeyIdentity,
+    host_key_verifier: HostKeyVerifier,
+}
+
+impl SftpHandler {
+    fn new(identity: HostKeyIdentity, host_key_verifier: HostKeyVerifier) -> Self {
+        Self {
+            identity,
+            host_key_verifier,
+        }
+    }
+}
 
 impl client::Handler for SftpHandler {
-    type Error = russh::Error;
+    type Error = anyhow::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        match self
+            .host_key_verifier
+            .verify(&self.identity, server_public_key)
+        {
+            Ok(HostKeyAcceptance::Known) => Ok(true),
+            Ok(HostKeyAcceptance::AcceptedNew) => {
+                let details = HostKeyDetails::from_public_key(server_public_key);
+                tracing::warn!(
+                    target: "ssh.host_key",
+                    identity = %self.identity,
+                    algorithm = %details.algorithm,
+                    fingerprint = %details.fingerprint,
+                    "accepted and persisted a new SFTP SSH host key"
+                );
+                Ok(true)
+            }
+            Ok(HostKeyAcceptance::Insecure) => {
+                let details = HostKeyDetails::from_public_key(server_public_key);
+                tracing::warn!(
+                    target: "ssh.host_key",
+                    identity = %self.identity,
+                    algorithm = %details.algorithm,
+                    fingerprint = %details.fingerprint,
+                    "accepted an SFTP SSH host key using explicit insecure mode"
+                );
+                Ok(true)
+            }
+            Err(rejection) => Err(rejection.into()),
+        }
     }
 }
 
@@ -700,18 +741,24 @@ impl SftpClient for RusshSftpClient {
             nodelay: true,
             ..<_>::default()
         });
+        let target_host_key_identity = ssh_config.target_host_key_identity();
+        let jump_host_key_identity = ssh_config.jump_host_key_identity();
+        let host_key_verifier = ssh_config.host_key_verifier.clone();
 
         let (mut session, jump_session) = if let Some(ref jump) = ssh_config.jump_server {
             tracing::info!("SFTP: 通过跳板机 {}:{} 连接", jump.host, jump.port);
+            let jump_identity = jump_host_key_identity
+                .clone()
+                .expect("jump identity must exist when jump server is configured");
 
             // 连接跳板机
             let mut jump_session = if let Some(ref proxy) = ssh_config.proxy {
                 tracing::info!("SFTP: 通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                 let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                let handler = SftpHandler;
+                let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
                 client::connect_stream(config.clone(), stream, handler).await?
             } else {
-                let handler = SftpHandler;
+                let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
                 client::connect(config.clone(), (jump.host.as_str(), jump.port), handler).await?
             };
 
@@ -729,7 +776,8 @@ impl SftpClient for RusshSftpClient {
                 .channel_open_direct_tcpip(&ssh_config.host, ssh_config.port as u32, "127.0.0.1", 0)
                 .await?;
 
-            let handler = SftpHandler;
+            let handler =
+                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
             let session =
                 client::connect_stream(config, forwarded_channel.into_stream(), handler).await?;
 
@@ -737,11 +785,13 @@ impl SftpClient for RusshSftpClient {
         } else if let Some(ref proxy) = ssh_config.proxy {
             tracing::info!("SFTP: 通过代理 {}:{} 连接", proxy.host, proxy.port);
             let stream = sftp_connect_via_proxy(proxy, &ssh_config.host, ssh_config.port).await?;
-            let handler = SftpHandler;
+            let handler =
+                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
             let session = client::connect_stream(config, stream, handler).await?;
             (session, None)
         } else {
-            let handler = SftpHandler;
+            let handler =
+                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
             let session =
                 client::connect(config, (ssh_config.host.as_str(), ssh_config.port), handler)
                     .await?;

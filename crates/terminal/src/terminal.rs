@@ -60,7 +60,7 @@ use crate::{
     TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
 };
 use ssh::{
-    ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
+    ChannelEvent, HostKeyVerifier, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
     KeyboardInteractiveTarget, SshChannel, SshSessionManager,
 };
 pub use ssh::{
@@ -464,6 +464,7 @@ fn resolve_ssh_connection(
             password: proxy.password,
         }),
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
     };
     ssh_config.keyboard_interactive_responder = Some(Arc::new(responder.clone()));

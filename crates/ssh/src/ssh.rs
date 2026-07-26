@@ -14,6 +14,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
+use crate::{
+    HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
+    HostKeyVerifier,
+};
+
 /// keepalive/超时的集中默认值，供 ssh 与 sftp 两侧共享。
 pub mod defaults {
     use std::time::Duration;
@@ -84,8 +89,60 @@ pub struct SshConnectConfig {
     pub proxy: Option<ProxyConnectConfig>,
     /// keyboard-interactive/MFA 输入回调。用于跳板机或目标服务器按需请求二次认证。
     pub keyboard_interactive_responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    /// 服务端身份校验策略和 trust store。生产入口默认使用严格模式。
+    pub host_key_verifier: HostKeyVerifier,
     /// 是否启用 X11 转发（需要本机有可用 X server，如 macOS 的 XQuartz）。
     pub x11_forwarding: bool,
+}
+
+impl SshConnectConfig {
+    /// 目标服务器的 host-key identity。跳板和代理链都参与身份绑定。
+    #[must_use]
+    pub fn target_host_key_identity(&self) -> HostKeyIdentity {
+        let route = match (&self.jump_server, &self.proxy) {
+            (Some(jump), Some(proxy)) => HostKeyRoute::JumpViaProxy {
+                jump_host: jump.host.clone(),
+                jump_port: jump.port,
+                proxy_type: host_key_proxy_type(proxy.proxy_type),
+                proxy_host: proxy.host.clone(),
+                proxy_port: proxy.port,
+            },
+            (Some(jump), None) => HostKeyRoute::Jump {
+                host: jump.host.clone(),
+                port: jump.port,
+            },
+            (None, Some(proxy)) => HostKeyRoute::Proxy {
+                proxy_type: host_key_proxy_type(proxy.proxy_type),
+                host: proxy.host.clone(),
+                port: proxy.port,
+            },
+            (None, None) => HostKeyRoute::Direct,
+        };
+        HostKeyIdentity::new(&self.host, self.port, route)
+    }
+
+    /// 跳板机本身的 host-key identity；目标服务器不会复用该 identity。
+    #[must_use]
+    pub fn jump_host_key_identity(&self) -> Option<HostKeyIdentity> {
+        self.jump_server.as_ref().map(|jump| {
+            let route =
+                self.proxy
+                    .as_ref()
+                    .map_or(HostKeyRoute::Direct, |proxy| HostKeyRoute::Proxy {
+                        proxy_type: host_key_proxy_type(proxy.proxy_type),
+                        host: proxy.host.clone(),
+                        port: proxy.port,
+                    });
+            HostKeyIdentity::new(&jump.host, jump.port, route)
+        })
+    }
+}
+
+fn host_key_proxy_type(proxy_type: ProxyType) -> HostKeyProxyType {
+    match proxy_type {
+        ProxyType::Socks5 => HostKeyProxyType::Socks5,
+        ProxyType::Http => HostKeyProxyType::Http,
+    }
 }
 
 /// 跳板机连接配置
@@ -260,16 +317,60 @@ pub trait SshClient: Send + Sync {
 
 struct RusshHandler {
     x11_handle: Option<X11ProxyHandle>,
+    identity: HostKeyIdentity,
+    host_key_verifier: HostKeyVerifier,
+}
+
+impl RusshHandler {
+    fn new(
+        identity: HostKeyIdentity,
+        host_key_verifier: HostKeyVerifier,
+        x11_handle: Option<X11ProxyHandle>,
+    ) -> Self {
+        Self {
+            x11_handle,
+            identity,
+            host_key_verifier,
+        }
+    }
 }
 
 impl client::Handler for RusshHandler {
-    type Error = russh::Error;
+    type Error = anyhow::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        match self
+            .host_key_verifier
+            .verify(&self.identity, server_public_key)
+        {
+            Ok(HostKeyAcceptance::Known) => Ok(true),
+            Ok(HostKeyAcceptance::AcceptedNew) => {
+                let details = HostKeyDetails::from_public_key(server_public_key);
+                tracing::warn!(
+                    target: "ssh.host_key",
+                    identity = %self.identity,
+                    algorithm = %details.algorithm,
+                    fingerprint = %details.fingerprint,
+                    "accepted and persisted a new SSH host key"
+                );
+                Ok(true)
+            }
+            Ok(HostKeyAcceptance::Insecure) => {
+                let details = HostKeyDetails::from_public_key(server_public_key);
+                tracing::warn!(
+                    target: "ssh.host_key",
+                    identity = %self.identity,
+                    algorithm = %details.algorithm,
+                    fingerprint = %details.fingerprint,
+                    "accepted an SSH host key using explicit insecure mode"
+                );
+                Ok(true)
+            }
+            Err(rejection) => Err(rejection.into()),
+        }
     }
 
     /// sshd 为远端 X client 回连的 `x11` 通道：按 fake cookie 找到注册会话，
@@ -1389,21 +1490,27 @@ impl SshClient for RusshClient {
             None
         };
         let x11_handle = x11_proxy.as_ref().map(|proxy| proxy.handle());
+        let target_host_key_identity = config.target_host_key_identity();
+        let jump_host_key_identity = config.jump_host_key_identity();
+        let host_key_verifier = config.host_key_verifier.clone();
 
         let connect = async {
             // 情况1: 使用跳板机连接
             if let Some(ref jump) = config.jump_server {
                 tracing::info!("通过跳板机 {}:{} 连接", jump.host, jump.port);
+                let jump_identity = jump_host_key_identity
+                    .clone()
+                    .expect("jump identity must exist when jump server is configured");
 
                 // 先连接到跳板机（可能通过代理）
                 let jump_session = if let Some(ref proxy) = config.proxy {
                     tracing::info!("通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                     let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                    let handler = RusshHandler { x11_handle: None };
+                    let handler = RusshHandler::new(jump_identity, host_key_verifier.clone(), None);
                     client::connect_stream(russh_config.clone(), stream, handler).await?
                 } else {
                     let addrs = (jump.host.as_str(), jump.port);
-                    let handler = RusshHandler { x11_handle: None };
+                    let handler = RusshHandler::new(jump_identity, host_key_verifier.clone(), None);
                     client::connect(russh_config.clone(), addrs, handler).await?
                 };
 
@@ -1426,9 +1533,11 @@ impl SshClient for RusshClient {
                     .await?;
 
                 // 使用转发通道创建SSH会话
-                let handler = RusshHandler {
-                    x11_handle: x11_handle.clone(),
-                };
+                let handler = RusshHandler::new(
+                    target_host_key_identity.clone(),
+                    host_key_verifier.clone(),
+                    x11_handle.clone(),
+                );
                 let mut session =
                     client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
                         .await?;
@@ -1460,9 +1569,11 @@ impl SshClient for RusshClient {
                     config.port
                 );
                 let stream = connect_via_proxy(proxy, &config.host, config.port).await?;
-                let handler = RusshHandler {
-                    x11_handle: x11_handle.clone(),
-                };
+                let handler = RusshHandler::new(
+                    target_host_key_identity.clone(),
+                    host_key_verifier.clone(),
+                    x11_handle.clone(),
+                );
                 let mut session = client::connect_stream(russh_config, stream, handler).await?;
 
                 authenticate_with_strategy_for_target(
@@ -1484,9 +1595,11 @@ impl SshClient for RusshClient {
             // 情况3: 直接连接
             else {
                 let addrs = (config.host.as_str(), config.port);
-                let handler = RusshHandler {
-                    x11_handle: x11_handle.clone(),
-                };
+                let handler = RusshHandler::new(
+                    target_host_key_identity.clone(),
+                    host_key_verifier.clone(),
+                    x11_handle.clone(),
+                );
                 let mut session = client::connect(russh_config, addrs, handler).await?;
 
                 authenticate_with_strategy_for_target(
@@ -1605,8 +1718,9 @@ mod port_forward_tests {
     use tokio::net::TcpListener;
 
     use super::{
-        Algorithm, Preferred, PrivateKey, RusshClient, SshAuth, SshClient, SshConnectConfig,
-        build_client_preferred_algorithms, build_local_forward_bind_addr,
+        Algorithm, HostKeyProxyType, HostKeyRoute, HostKeyVerifier, JumpServerConnectConfig,
+        Preferred, PrivateKey, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
+        SshConnectConfig, build_client_preferred_algorithms, build_local_forward_bind_addr,
         normalize_disconnect_result,
     };
 
@@ -1635,6 +1749,138 @@ mod port_forward_tests {
             .iter()
             .map(|name| name.as_ref().to_string())
             .collect()
+    }
+
+    fn identity_test_config() -> SshConnectConfig {
+        SshConnectConfig {
+            host: " Target.Example. ".to_owned(),
+            port: 2200,
+            username: "tester".to_owned(),
+            auth: SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
+        }
+    }
+
+    #[test]
+    fn target_identity_is_direct_and_normalized_without_route_hops() {
+        let config = identity_test_config();
+        let identity = config.target_host_key_identity();
+
+        assert_eq!(identity.host(), "target.example");
+        assert_eq!(identity.port(), 2200);
+        assert_eq!(identity.route(), &HostKeyRoute::Direct);
+        assert!(config.jump_host_key_identity().is_none());
+    }
+
+    #[test]
+    fn target_identity_binds_proxy_protocol_and_endpoint() {
+        let mut config = identity_test_config();
+        config.proxy = Some(ProxyConnectConfig {
+            proxy_type: ProxyType::Socks5,
+            host: " Proxy.Example. ".to_owned(),
+            port: 1080,
+            username: None,
+            password: None,
+        });
+        assert_eq!(
+            config.target_host_key_identity().route(),
+            &HostKeyRoute::Proxy {
+                proxy_type: HostKeyProxyType::Socks5,
+                host: "proxy.example".to_owned(),
+                port: 1080,
+            }
+        );
+
+        config
+            .proxy
+            .as_mut()
+            .expect("proxy is configured")
+            .proxy_type = ProxyType::Http;
+        assert_eq!(
+            config.target_host_key_identity().route(),
+            &HostKeyRoute::Proxy {
+                proxy_type: HostKeyProxyType::Http,
+                host: "proxy.example".to_owned(),
+                port: 1080,
+            }
+        );
+    }
+
+    #[test]
+    fn jump_and_target_identities_are_distinct_and_bind_the_proxy_route() {
+        let mut config = identity_test_config();
+        config.jump_server = Some(JumpServerConnectConfig {
+            host: " Jump.Example. ".to_owned(),
+            port: 2222,
+            username: "jumper".to_owned(),
+            auth: SshAuth::Agent,
+        });
+        config.proxy = Some(ProxyConnectConfig {
+            proxy_type: ProxyType::Http,
+            host: " Proxy.Example. ".to_owned(),
+            port: 8080,
+            username: None,
+            password: None,
+        });
+
+        assert_eq!(
+            config.target_host_key_identity().route(),
+            &HostKeyRoute::JumpViaProxy {
+                jump_host: "jump.example".to_owned(),
+                jump_port: 2222,
+                proxy_type: HostKeyProxyType::Http,
+                proxy_host: "proxy.example".to_owned(),
+                proxy_port: 8080,
+            }
+        );
+        assert_eq!(
+            config
+                .jump_host_key_identity()
+                .expect("jump identity should exist")
+                .route(),
+            &HostKeyRoute::Proxy {
+                proxy_type: HostKeyProxyType::Http,
+                host: "proxy.example".to_owned(),
+                port: 8080,
+            }
+        );
+        assert_ne!(
+            config.target_host_key_identity(),
+            config
+                .jump_host_key_identity()
+                .expect("jump identity should exist")
+        );
+    }
+
+    #[test]
+    fn jump_identity_is_direct_when_no_proxy_is_configured() {
+        let mut config = identity_test_config();
+        config.jump_server = Some(JumpServerConnectConfig {
+            host: "jump.example".to_owned(),
+            port: 22,
+            username: "jumper".to_owned(),
+            auth: SshAuth::Agent,
+        });
+
+        assert_eq!(
+            config
+                .jump_host_key_identity()
+                .expect("jump identity should exist")
+                .route(),
+            &HostKeyRoute::Direct
+        );
+        assert!(matches!(
+            config.target_host_key_identity().route(),
+            HostKeyRoute::Jump { host, port }
+                if host == "jump.example" && *port == 22
+        ));
     }
 
     #[test]
@@ -1702,6 +1948,9 @@ mod port_forward_tests {
             jump_server: None,
             proxy: None,
             keyboard_interactive_responder: None,
+            // This compatibility test validates KEX negotiation, not trust
+            // enrollment. Production connection builders use strict mode.
+            host_key_verifier: HostKeyVerifier::insecure(),
             x11_forwarding: false,
         };
 

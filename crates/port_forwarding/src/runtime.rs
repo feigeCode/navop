@@ -8,9 +8,10 @@ use one_core::storage::{
     StoredConnection,
 };
 use ssh::{
-    DynamicSocksConfig, DynamicSocksTunnel, JumpServerConnectConfig, LocalPortForwardActivity,
-    LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, SshAuth,
-    SshConnectConfig, start_dynamic_socks_forward, start_local_port_forward_with_config,
+    DynamicSocksConfig, DynamicSocksTunnel, HostKeyVerifier, JumpServerConnectConfig,
+    LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
+    ProxyType, SshAuth, SshConnectConfig, start_dynamic_socks_forward,
+    start_local_port_forward_with_config,
 };
 
 pub struct LocalForwardingRequest {
@@ -200,6 +201,7 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
             password: proxy.password.clone(),
         }),
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
     }
 }
