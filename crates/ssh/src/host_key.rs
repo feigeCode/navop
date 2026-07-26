@@ -386,6 +386,11 @@ impl HostKeyVerifier {
         self.trust_store_path.as_deref()
     }
 
+    #[must_use]
+    pub fn openssh_known_hosts_path(&self) -> Option<&Path> {
+        self.openssh_known_hosts_path.as_deref()
+    }
+
     /// Verify a server key and, in `AcceptNew`, persist an unknown key.
     pub fn verify(
         &self,
@@ -693,7 +698,7 @@ fn public_key_string(public_key: &PublicKey) -> String {
         .unwrap_or_else(|_| public_key.to_string())
 }
 
-fn normalize_host(host: &str) -> String {
+pub(crate) fn normalize_host(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
