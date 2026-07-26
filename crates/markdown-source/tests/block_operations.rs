@@ -69,6 +69,22 @@ fn splitting_task_items_starts_the_next_item_unchecked() {
 }
 
 #[test]
+fn splitting_an_empty_list_item_removes_its_marker() {
+    for (source, expected) in [
+        ("- item\n- ", "- item\n\n"),
+        ("1. item\n2. ", "1. item\n\n"),
+        ("- [x] item\n- [ ] ", "- [x] item\n\n"),
+    ] {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        let transaction = document
+            .split_block(document.blocks[0].id, document.source.len())
+            .unwrap();
+
+        assert_eq!(expected, apply(&document, &transaction).document.source);
+    }
+}
+
+#[test]
 fn blockquote_and_code_fence_toggles_round_trip() {
     let paragraph = SourceMarkdownDocument::parse("one\ntwo").unwrap();
     let quote = apply(

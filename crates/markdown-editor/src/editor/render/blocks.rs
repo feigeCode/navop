@@ -39,10 +39,16 @@ impl MarkdownEditor {
     }
 
     fn render_virtual_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let item_sizes = Rc::new(virtual_item_sizes(
+        let mut item_sizes = virtual_item_sizes(
             &self.history.document().blocks,
             &self.measured_block_heights,
-        ));
+        );
+        if let Some((index, _)) = self.active_empty_gap_placement()
+            && let Some(size) = item_sizes.get_mut(index)
+        {
+            size.height += px(super::MARKDOWN_BODY_LINE_HEIGHT);
+        }
+        let item_sizes = Rc::new(item_sizes);
         let blocks = v_virtual_list(
             cx.entity(),
             "markdown-block-list",
@@ -78,7 +84,8 @@ impl MarkdownEditor {
         let content = document_column().children(
             blocks
                 .into_iter()
-                .map(|block| self.render_standard_block(&block, cx)),
+                .enumerate()
+                .map(|(index, block)| self.render_standard_block(index, &block, cx)),
         );
         let blocks = gpui::div()
             .id("markdown-standard-block-list")
@@ -137,6 +144,7 @@ impl MarkdownEditor {
             return gpui::div().into_any_element();
         };
         let block_count = self.history.document().blocks.len();
+        let empty_gap = self.active_empty_gap_placement();
         gpui::div()
             .id(("markdown-block-frame", block.id.0))
             .debug_selector(move || format!("markdown-block-frame-{}", block.id.0))
@@ -152,9 +160,44 @@ impl MarkdownEditor {
                     .when(index + 1 == block_count, |this| {
                         this.pb(px(DOCUMENT_BOTTOM_PADDING))
                     })
-                    .child(self.render_natural_block(&block, cx)),
+                    .when(empty_gap == Some((index, true)), |this| {
+                        this.child(self.render_empty_gap_surface())
+                    })
+                    .child(self.render_natural_block(&block, cx))
+                    .when(empty_gap == Some((index, false)), |this| {
+                        this.child(self.render_empty_gap_surface())
+                    }),
             )
             .into_any_element()
+    }
+
+    /// Places the transient empty Input next to its neighboring parsed block.
+    ///
+    /// Markdown parsers intentionally do not create an AST paragraph for an
+    /// empty line. Keeping that line inside an adjacent virtual item lets the
+    /// user continue typing without inventing placeholder source characters or
+    /// replacing the document's scrolling implementation.
+    pub(super) fn active_empty_gap_placement(&self) -> Option<(usize, bool)> {
+        if self.active_surface_key() != MarkdownSurfaceKey::Empty
+            || self.active_block.is_some()
+            || self.history.document().blocks.is_empty()
+        {
+            return None;
+        }
+        let range = &self
+            .surface(MarkdownSurfaceKey::Empty)?
+            .projection
+            .source_range;
+        if !range.is_empty() {
+            return None;
+        }
+        let blocks = &self.history.document().blocks;
+        let insertion_index = blocks.partition_point(|block| block.source_range.end <= range.start);
+        if insertion_index < blocks.len() {
+            Some((insertion_index, true))
+        } else {
+            Some((blocks.len() - 1, false))
+        }
     }
 
     fn rendered_block_height(

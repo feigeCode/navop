@@ -66,8 +66,13 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let projection = projection_for(self.history.document(), MarkdownSurfaceKey::Empty, None)
-            .unwrap_or_else(|| self.projection.clone());
+        let projection = projection_for(
+            self.history.document(),
+            MarkdownSurfaceKey::Empty,
+            None,
+            self.empty_surface_range.clone(),
+        )
+        .unwrap_or_else(|| self.projection.clone());
         let mode = mode_for(self.history.document(), MarkdownSurfaceKey::Empty);
         apply_surface_mode(&self.input, &mode, window, cx);
         apply_projection_styles(&self.input, &projection, &self.theme, cx);
@@ -144,7 +149,7 @@ impl MarkdownEditor {
             .and_then(|key| self.surfaces.get(&key))
             .and_then(|surface| surface.projection.active_inline);
         let document = self.history.document();
-        surface_specs(document)
+        surface_specs(document, self.empty_surface_range.clone())
             .into_iter()
             .map(|(key, range)| SurfaceSpec {
                 key,

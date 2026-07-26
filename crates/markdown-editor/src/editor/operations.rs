@@ -65,6 +65,7 @@ impl MarkdownEditor {
         let selection = self.surface_selection(key, cx).unwrap_or_default();
         self.pending_newline = None;
         self.collapse_surface_projection(key, selection, window, cx);
+        self.empty_surface_range = 0..self.history.document().source.len();
         let _ = self.set_active_surface(MarkdownSurfaceKey::Empty);
         self.collapse_surface_projection(MarkdownSurfaceKey::Empty, selection, window, cx);
         window.blur();
@@ -236,7 +237,8 @@ impl MarkdownEditor {
             .history
             .document()
             .split_block(block_id, source_offset)?;
-        let cursor = source_offset + transaction.edits[0].replacement.len();
+        let edit = &transaction.edits[0];
+        let cursor = edit.range.start + edit.replacement.len();
         self.apply_block_transaction(transaction, cursor, window, cx)
     }
 

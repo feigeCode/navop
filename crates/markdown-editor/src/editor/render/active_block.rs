@@ -94,7 +94,7 @@ impl MarkdownEditor {
             .into_any_element()
     }
 
-    fn surface_input(
+    pub(super) fn surface_input(
         &self,
         input: &gpui::Entity<gpui_component::input::InputState>,
         heading: Option<u8>,

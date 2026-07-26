@@ -33,6 +33,11 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) {
         let (active_block, key) = self.block_surface_at(source_cursor);
+        self.empty_surface_range = if key == MarkdownSurfaceKey::Empty {
+            source_cursor..source_cursor
+        } else {
+            0..self.history.document().source.len()
+        };
         self.active_block = active_block;
         self.active_table_cell = None;
         self.active_surface = Some(key);
@@ -61,6 +66,7 @@ impl MarkdownEditor {
             return;
         }
         let key = MarkdownSurfaceKey::table_cell(address);
+        self.empty_surface_range = 0..self.history.document().source.len();
         self.active_block = Some(address.block_id);
         self.active_table_cell = Some(address);
         self.active_surface = Some(key);
@@ -126,11 +132,21 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(base) = projection_for(self.history.document(), key, None) else {
+        let Some(base) = projection_for(
+            self.history.document(),
+            key,
+            None,
+            self.empty_surface_range.clone(),
+        ) else {
             return;
         };
         let active_inline = self.inline_at_source(&base, selection.head);
-        let Some(projection) = projection_for(self.history.document(), key, active_inline) else {
+        let Some(projection) = projection_for(
+            self.history.document(),
+            key,
+            active_inline,
+            self.empty_surface_range.clone(),
+        ) else {
             return;
         };
         self.update_surface_projection(
@@ -152,7 +168,12 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(projection) = projection_for(self.history.document(), key, None) else {
+        let Some(projection) = projection_for(
+            self.history.document(),
+            key,
+            None,
+            self.empty_surface_range.clone(),
+        ) else {
             return;
         };
         self.update_surface_projection(

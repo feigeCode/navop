@@ -1,5 +1,5 @@
 use super::MarkdownEditor;
-use gpui::{Context, InteractiveElement, IntoElement, ParentElement, Styled, rems};
+use gpui::{Context, InteractiveElement, IntoElement, ParentElement, Styled, px, rems};
 use gpui_component::{
     Sizable,
     button::{Button, ButtonVariants},
@@ -41,6 +41,21 @@ impl MarkdownEditor {
                     .text_layout_margin(false)
                     .caret_color(self.theme.primary),
             )
+            .into_any_element()
+    }
+
+    fn render_empty_gap_surface(&self) -> gpui::AnyElement {
+        let surface = self
+            .surface(crate::editor::surface::MarkdownSurfaceKey::Empty)
+            .expect("the empty markdown surface must remain mounted");
+        gpui::div()
+            .id("markdown-empty-gap")
+            .debug_selector(|| "markdown-empty-gap".to_owned())
+            .w_full()
+            .min_w_0()
+            .min_h(px(MARKDOWN_BODY_LINE_HEIGHT))
+            .cursor_text()
+            .child(self.surface_input(&surface.input, None))
             .into_any_element()
     }
 

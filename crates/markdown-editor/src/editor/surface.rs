@@ -76,8 +76,9 @@ pub(super) struct SurfaceProjectionUpdate {
 
 pub(super) fn surface_specs(
     document: &SourceMarkdownDocument,
+    empty_surface_range: Range<usize>,
 ) -> Vec<(MarkdownSurfaceKey, Range<usize>)> {
-    let mut specs = vec![(MarkdownSurfaceKey::Empty, 0..document.source.len())];
+    let mut specs = vec![(MarkdownSurfaceKey::Empty, empty_surface_range)];
     for block in &document.blocks {
         match &block.kind {
             SourceBlockKind::Table(table) => {
@@ -110,9 +111,10 @@ pub(super) fn projection_for(
     document: &SourceMarkdownDocument,
     key: MarkdownSurfaceKey,
     active_inline: Option<SourceNodeId>,
+    empty_surface_range: Range<usize>,
 ) -> Option<crate::MarkdownProjection> {
     let range = match key {
-        MarkdownSurfaceKey::Empty => 0..document.source.len(),
+        MarkdownSurfaceKey::Empty => empty_surface_range,
         MarkdownSurfaceKey::Block(block_id) => document.block_by_id(block_id)?.source_range.clone(),
         MarkdownSurfaceKey::TableCell {
             block_id,

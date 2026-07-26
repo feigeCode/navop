@@ -42,6 +42,7 @@ pub struct MarkdownEditor {
     syncing_input: bool,
     surfaces: HashMap<MarkdownSurfaceKey, MarkdownEditSurface>,
     active_surface: Option<MarkdownSurfaceKey>,
+    empty_surface_range: std::ops::Range<usize>,
     source_mode_selection: SourceSelection,
     pending_newline: Option<(MarkdownSurfaceKey, usize)>,
     block_scroll: VirtualListScrollHandle,
@@ -70,6 +71,7 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> Result<Self, MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
+        let source_len = document.source.len();
         let projection = MarkdownProjection::build(&document, None);
         let input = create_input(&projection.text, window, cx);
         let image_alt_input = create_property_input(window, cx);
@@ -89,6 +91,7 @@ impl MarkdownEditor {
             syncing_input: false,
             surfaces: HashMap::new(),
             active_surface: None,
+            empty_surface_range: 0..source_len,
             source_mode_selection: SourceSelection::default(),
             pending_newline: None,
             block_scroll: VirtualListScrollHandle::new(),
@@ -297,6 +300,7 @@ impl MarkdownEditor {
         self.active_block = None;
         self.active_table_cell = None;
         self.active_surface = None;
+        self.empty_surface_range = 0..self.source().len();
         self.pending_newline = None;
         self.dirty = false;
         self.reconcile_surfaces(window, cx);

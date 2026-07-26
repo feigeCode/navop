@@ -2814,6 +2814,78 @@ fn active_block_structure_actions_are_source_transactions(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn pressing_enter_twice_exits_an_empty_unordered_list_item(cx: &mut TestAppContext) {
+    assert_second_enter_exits_list("- item", "- item\n- ", "- item\n\n", cx);
+}
+
+#[gpui::test]
+fn pressing_enter_twice_exits_an_empty_ordered_list_item(cx: &mut TestAppContext) {
+    assert_second_enter_exits_list("1. item", "1. item\n2. ", "1. item\n\n", cx);
+}
+
+#[gpui::test]
+fn pressing_enter_twice_exits_an_empty_task_list_item(cx: &mut TestAppContext) {
+    assert_second_enter_exits_list(
+        "- [x] item",
+        "- [x] item\n- [ ] ",
+        "- [x] item\n\n",
+        cx,
+    );
+}
+
+#[gpui::test]
+fn pressing_enter_twice_keeps_the_empty_paragraph_editable_in_a_virtual_document(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        markdown_editor::init(cx);
+    });
+    let source: &'static str = Box::leak(
+        (0..80)
+            .map(|index| format!("Paragraph {index}"))
+            .chain(std::iter::once("- item".to_owned()))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+            .into_boxed_str(),
+    );
+    let list_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks
+        .last()
+        .unwrap()
+        .id;
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    cx.run_until_parked();
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.uses_virtual_layout());
+        assert!(editor.activate_block(list_id, window, cx));
+    });
+    cx.run_until_parked();
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    input.update_in(&mut cx, |input, window, cx| {
+        let end = input.value().len();
+        input.set_selected_range(end..end, false, window, cx);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(editor.read_with(&cx, |editor, _| editor.source().ends_with("- item\n\n")));
+    assert!(cx.debug_bounds("markdown-empty-gap").is_some());
+
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    assert!(editor.read_with(&cx, |editor, _| editor.source().ends_with("- item\n\np")));
+
+    cx.simulate_keystrokes("lain");
+    cx.run_until_parked();
+    assert!(editor.read_with(&cx, |editor, _| editor.source().ends_with("- item\n\nplain")));
+}
+
+#[gpui::test]
 fn enter_splits_an_ordered_list_with_the_next_source_marker(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -2857,6 +2929,67 @@ fn shift_enter_in_a_list_inserts_a_plain_newline(cx: &mut TestAppContext) {
         "2. one\n",
         editor.read_with(&cx, |editor, _| editor.source().to_owned())
     );
+}
+
+fn assert_second_enter_exits_list(
+    source: &'static str,
+    continued: &str,
+    exited: &str,
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        markdown_editor::init(cx);
+    });
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| editor.focus(window, cx));
+    cx.run_until_parked();
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    input.update_in(&mut cx, |input, window, cx| {
+        let end = input.value().len();
+        input.set_selected_range(end..end, false, window, cx);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        continued,
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        exited,
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        None,
+        editor.read_with(&cx, |editor, _| editor.active_block())
+    );
+    assert!(
+        cx.debug_bounds("markdown-empty-gap").is_some(),
+        "the editable empty paragraph must be mounted before more typing"
+    );
+
+    cx.simulate_keystrokes("p");
+    cx.run_until_parked();
+    assert_eq!(
+        format!("{exited}p"),
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+
+    cx.simulate_keystrokes("lain");
+    cx.run_until_parked();
+    assert_eq!(
+        format!("{exited}plain"),
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert!(editor.read_with(&cx, |editor, _| {
+        let document = markdown_source::SourceMarkdownDocument::parse(editor.source()).unwrap();
+        matches!(document.blocks.last().unwrap().kind, SourceBlockKind::Paragraph)
+    }));
 }
 
 #[gpui::test]
