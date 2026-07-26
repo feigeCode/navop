@@ -13,10 +13,18 @@ mod events;
 
 impl MarkdownEditor {
     pub(super) fn refresh_projection_highlights(&self, cx: &mut Context<Self>) {
-        let highlights =
-            projection_highlights(&self.projection, &self.theme, &self.inline_math_artifacts);
-        self.input
-            .update(cx, |input, cx| input.set_text_highlights(highlights, cx));
+        let surfaces = self
+            .surfaces
+            .values()
+            .map(|surface| (surface.input.clone(), surface.projection.clone()))
+            .collect::<Vec<_>>();
+        for (input, projection) in surfaces {
+            let highlights =
+                projection_highlights(&projection, &self.theme, &self.inline_math_artifacts);
+            input.update(cx, |input, cx| {
+                input.set_text_highlights(highlights, cx);
+            });
+        }
     }
 
     pub(super) fn sync_projection(
@@ -160,7 +168,7 @@ impl MarkdownEditor {
         cx.notify();
     }
 
-    fn sync_image_property_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn sync_image_property_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
         let (alt, destination) = self.active_image_properties().unwrap_or_default();
         self.image_alt_input
             .update(cx, |input, cx| input.set_value(alt, window, cx));

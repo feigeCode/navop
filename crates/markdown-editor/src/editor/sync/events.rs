@@ -162,11 +162,6 @@ impl MarkdownEditor {
     }
 
     fn focus_active_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let key = self.active_surface_key();
-        if let Some(surface) = self.surface(key) {
-            surface
-                .input
-                .update(cx, |input, cx| input.focus(window, cx));
-        }
+        let _ = self.focus_surface(self.active_surface_key(), window, cx);
     }
 }

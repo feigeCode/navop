@@ -280,12 +280,23 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> Result<(), MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
+        window.blur();
         self.history = SourceHistory::new(document);
         self.reset_block_renders();
         self.active_block = None;
         self.active_table_cell = None;
+        self.active_surface = None;
+        self.pending_newline = None;
         self.dirty = false;
-        self.sync_projection(0, window, cx);
+        self.reconcile_surfaces(window, cx);
+        let _ = self.set_active_surface(MarkdownSurfaceKey::Empty);
+        self.collapse_surface_projection(
+            MarkdownSurfaceKey::Empty,
+            SourceSelection::default(),
+            window,
+            cx,
+        );
+        self.sync_image_property_inputs(window, cx);
         Ok(())
     }
 
@@ -297,7 +308,7 @@ impl MarkdownEditor {
         if self.theme != theme {
             self.theme = theme;
             self.reset_block_renders();
-            apply_projection_styles(&self.input, &self.projection, &self.theme, cx);
+            self.refresh_projection_highlights(cx);
             cx.notify();
         }
     }

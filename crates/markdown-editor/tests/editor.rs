@@ -1028,7 +1028,9 @@ fn clicking_a_visible_virtual_list_keeps_the_document_scroll_offset(cx: &mut Tes
     });
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
-    editor.update(&mut cx, |editor, cx| editor.deactivate_block(cx));
+    editor.update_in(&mut cx, |editor, window, cx| {
+        editor.deactivate_block(window, cx);
+    });
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
 

@@ -85,8 +85,7 @@ impl MarkdownEditor {
         self.active_block = Some(block_id);
         self.active_table_cell = None;
         self.sync_projection(cursor, window, cx);
-        self.input.update(cx, |input, cx| input.focus(window, cx));
-        true
+        self.focus_surface(self.active_surface_key(), window, cx)
     }
 }
 
