@@ -159,6 +159,7 @@ struct FavoritePathEdit {
 }
 
 const MAX_CONCURRENT_TRANSFERS: usize = 2;
+const SFTP_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.0;
 const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
 
@@ -172,6 +173,12 @@ struct TransferClientPool {
 struct TransferClientPoolState<Client> {
     total_created: usize,
     available: Vec<Client>,
+}
+
+enum BoundedDisconnectOutcome {
+    Disconnected,
+    Failed(anyhow::Error),
+    TimedOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -513,10 +520,33 @@ async fn release_transfer_client(
     }
 }
 
+async fn bounded_disconnect<F>(timeout: Duration, disconnect: F) -> BoundedDisconnectOutcome
+where
+    F: std::future::Future<Output = anyhow::Result<()>>,
+{
+    match tokio::time::timeout(timeout, disconnect).await {
+        Ok(Ok(())) => BoundedDisconnectOutcome::Disconnected,
+        Ok(Err(error)) => BoundedDisconnectOutcome::Failed(error),
+        Err(_) => BoundedDisconnectOutcome::TimedOut,
+    }
+}
+
 pub(crate) async fn disconnect_sftp_client(client: Arc<Mutex<RusshSftpClient>>) {
-    let mut client = client.lock().await;
-    if let Err(error) = client.disconnect().await {
-        tracing::error!("Failed to disconnect SFTP client: {}", error);
+    let disconnect = async move {
+        let mut client = client.lock().await;
+        client.disconnect().await
+    };
+    match bounded_disconnect(SFTP_DISCONNECT_TIMEOUT, disconnect).await {
+        BoundedDisconnectOutcome::Disconnected => {}
+        BoundedDisconnectOutcome::Failed(error) => {
+            tracing::error!("Failed to disconnect SFTP client: {}", error);
+        }
+        BoundedDisconnectOutcome::TimedOut => {
+            tracing::warn!(
+                timeout_ms = SFTP_DISCONNECT_TIMEOUT.as_millis(),
+                "Timed out disconnecting SFTP client"
+            );
+        }
     }
 }
 
@@ -6391,15 +6421,17 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{
-        CloseState, ConnectionGeneration, SharedProgress, TransferAdmission, TransferClientPool,
-        TransferClientPoolState, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
-        acquire_transfer_client, is_valid_entry_name, join_remote_path, should_apply_local_listing,
+        BoundedDisconnectOutcome, CloseState, ConnectionGeneration, SharedProgress,
+        TransferAdmission, TransferClientPool, TransferClientPoolState, TransferOperation,
+        TransferQueue, TransferTask, TransferTaskState, acquire_transfer_client,
+        bounded_disconnect, is_valid_entry_name, join_remote_path, should_apply_local_listing,
         should_apply_remote_listing,
     };
     use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
 
     fn transfer_task(id: usize) -> TransferTask {
         TransferTask {
@@ -6559,6 +6591,35 @@ mod tests {
         };
 
         assert!(error.to_string().contains("pool retired"));
+    }
+
+    #[tokio::test]
+    async fn bounded_disconnect_reports_completion_and_failure() {
+        assert!(matches!(
+            bounded_disconnect(Duration::from_secs(1), async { Ok(()) }).await,
+            BoundedDisconnectOutcome::Disconnected
+        ));
+
+        let failed = bounded_disconnect(Duration::from_secs(1), async {
+            Err(anyhow::anyhow!("disconnect failed"))
+        })
+        .await;
+        assert!(matches!(
+            failed,
+            BoundedDisconnectOutcome::Failed(error)
+                if error.to_string() == "disconnect failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn bounded_disconnect_times_out_a_stalled_shutdown() {
+        let outcome = bounded_disconnect(
+            Duration::from_millis(20),
+            std::future::pending::<anyhow::Result<()>>(),
+        )
+        .await;
+
+        assert!(matches!(outcome, BoundedDisconnectOutcome::TimedOut));
     }
 
     #[test]
