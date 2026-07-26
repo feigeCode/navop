@@ -53,6 +53,22 @@ fn splitting_list_items_reuses_the_marker_style() {
 }
 
 #[test]
+fn splitting_task_items_starts_the_next_item_unchecked() {
+    for source in ["- [ ] Todo", "- [x] Done", "* [X] Done"] {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        let transaction = document
+            .split_block(document.blocks[0].id, document.source.len())
+            .unwrap();
+        let bullet = source.chars().next().unwrap();
+
+        assert_eq!(
+            format!("{source}\n{bullet} [ ] "),
+            apply(&document, &transaction).document.source
+        );
+    }
+}
+
+#[test]
 fn blockquote_and_code_fence_toggles_round_trip() {
     let paragraph = SourceMarkdownDocument::parse("one\ntwo").unwrap();
     let quote = apply(

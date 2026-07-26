@@ -180,7 +180,28 @@ fn list_item_separator(
         .ok_or(SourceOperationError::CannotSplitBlock)?;
     let marker = &trimmed[..marker_end];
     let next_marker = ordered_next_marker(marker).unwrap_or_else(|| marker.to_owned());
-    Ok(format!("\n{}{} ", &line[..indent_len], next_marker))
+    let task = unordered_task_continuation(marker, &trimmed[marker_end..]);
+    Ok(format!(
+        "\n{}{} {}",
+        &line[..indent_len],
+        next_marker,
+        task.unwrap_or_default()
+    ))
+}
+
+fn unordered_task_continuation<'a>(marker: &str, after_marker: &'a str) -> Option<&'a str> {
+    if !matches!(marker, "-" | "*" | "+") {
+        return None;
+    }
+    let content = after_marker.trim_start();
+    ["[ ]", "[x]", "[X]"]
+        .into_iter()
+        .find(|task| {
+            content.strip_prefix(task).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with(char::is_whitespace)
+            })
+        })
+        .map(|_| "[ ] ")
 }
 
 fn ordered_next_marker(marker: &str) -> Option<String> {
