@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 futures.workspace = true
 gpui.workspace = true
-gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
+gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
 markdown-source.workspace = true
 thiserror.workspace = true
 

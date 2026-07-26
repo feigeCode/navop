@@ -1,13 +1,18 @@
 #![cfg(target_os = "macos")]
 
 use gpui::{AppContext, Bounds, QuitMode, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-use gpui_component::{Root, highlighter::HighlightTheme};
+use gpui_component::{
+    Root,
+    highlighter::{
+        HighlightTheme, LanguageKind, LanguageRegistry, register_extension_manifests_dir,
+    },
+};
 use gpui_component_assets::Assets;
 use markdown_editor::{
     MarkdownBlockRenderArtifact, MarkdownBlockRenderKind, MarkdownBlockRenderProvider,
     MarkdownEditor, MarkdownEditorTheme,
 };
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 fn main() {
     gpui_platform::application()
@@ -15,6 +20,7 @@ fn main() {
         .with_quit_mode(QuitMode::LastWindowClosed)
         .run(|cx| {
             gpui_component::init(cx);
+            register_installed_language_extensions();
             markdown_editor::init(cx);
 
             let task_list_id = markdown_source::SourceMarkdownDocument::parse(COMBINED_SAMPLE)
@@ -72,6 +78,52 @@ fn main() {
             })
             .expect("open Markdown active task list audit window");
         });
+}
+
+fn register_installed_language_extensions() {
+    let Some(root) = language_extensions_root() else {
+        eprintln!("WASM 高亮验收已跳过：无法确定语言扩展目录");
+        return;
+    };
+    let report = register_extension_manifests_dir(&root, LanguageRegistry::singleton())
+        .unwrap_or_else(|error| panic!("扫描语言扩展目录 {} 失败: {error:#}", root.display()));
+    if !report.loaded.iter().any(|language| language == "rust") {
+        eprintln!(
+            "WASM 高亮验收已跳过：{} 中没有 Rust 语言扩展",
+            root.display()
+        );
+        return;
+    }
+
+    assert_eq!(
+        Some("rust".to_string()),
+        LanguageRegistry::singleton().resolve_language_name("rs")
+    );
+    let rust = LanguageRegistry::singleton()
+        .language("rust")
+        .expect("Rust parser.wasm 必须能够从已安装扩展中加载");
+    assert!(
+        matches!(&rust.kind, LanguageKind::Wasm { .. }),
+        "visual_snapshot 的 Rust 高亮必须使用 WASM grammar"
+    );
+    assert!(
+        !rust.highlights.is_empty(),
+        "Rust WASM 扩展必须提供 highlights.scm"
+    );
+    eprintln!(
+        "已验证 Rust fenced code 使用 WASM grammar：{}",
+        root.display()
+    );
+}
+
+fn language_extensions_root() -> Option<PathBuf> {
+    std::env::var_os("ONETCLI_LANGUAGE_EXTENSIONS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".config/navop/extensions/languages"))
+        })
 }
 
 /// A deterministic in-process provider keeps this example independent from

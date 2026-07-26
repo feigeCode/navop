@@ -148,20 +148,79 @@ pub(super) fn mode_for(
     let language = block_id.and_then(|id| {
         let block = document.block_by_id(id)?;
         match &block.kind {
-            SourceBlockKind::CodeFence { language_range, .. } => language_range
-                .as_ref()
-                .map(|range| document.source[range.clone()].to_owned())
-                .map(|language| {
-                    if language.eq_ignore_ascii_case("mermaid") {
-                        "text".to_owned()
-                    } else {
-                        language
-                    }
-                })
-                .or_else(|| Some("text".to_owned())),
+            SourceBlockKind::CodeFence { language_range, .. } => {
+                Some(fenced_code_language(document, language_range.as_ref()))
+            }
             SourceBlockKind::MathBlock { .. } => Some("latex".to_owned()),
             _ => None,
         }
     });
     language.map_or(MarkdownInputMode::RichText, MarkdownInputMode::Code)
+}
+
+fn fenced_code_language(
+    document: &SourceMarkdownDocument,
+    language_range: Option<&Range<usize>>,
+) -> String {
+    let Some(range) = language_range else {
+        return "text".to_owned();
+    };
+    let language = &document.source[range.clone()];
+    if language.eq_ignore_ascii_case("mermaid") {
+        return "text".to_owned();
+    }
+    gpui_component::highlighter::LanguageRegistry::singleton()
+        .resolve_language_name(language)
+        .unwrap_or_else(|| "text".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_component::highlighter::{LanguageManifest, LanguageRegistry};
+    use std::path::PathBuf;
+
+    fn first_block_mode(source: &str) -> MarkdownInputMode {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        mode_for(&document, MarkdownSurfaceKey::Block(document.blocks[0].id))
+    }
+
+    #[test]
+    fn code_fence_mode_resolves_registered_wasm_extension_alias() {
+        let registry = LanguageRegistry::singleton();
+        let language = "__markdown_fenced_wasm_test__";
+        registry.register_wasm_manifest(
+            LanguageManifest {
+                name: language.to_string(),
+                version: "0.1.0".to_string(),
+                file_extensions: vec!["fence_alias".to_string()],
+                injection_languages: Vec::new(),
+                requires: Vec::new(),
+                sha256_wasm: None,
+            },
+            PathBuf::from("/definitely/missing/markdown-language-extension"),
+        );
+
+        assert_eq!(
+            MarkdownInputMode::Code(language.to_string()),
+            first_block_mode("```FENCE_ALIAS title=\"example\"\nfn main() {}\n```")
+        );
+        assert!(registry.unregister(language));
+    }
+
+    #[test]
+    fn unavailable_and_rendered_code_fences_use_plain_text_highlighting() {
+        assert_eq!(
+            MarkdownInputMode::Code("text".to_string()),
+            first_block_mode("```not-installed\ncontent\n```")
+        );
+        assert_eq!(
+            MarkdownInputMode::Code("text".to_string()),
+            first_block_mode("```mermaid\ngraph LR\n```")
+        );
+        assert_eq!(
+            MarkdownInputMode::Code("text".to_string()),
+            first_block_mode("```\ncontent\n```")
+        );
+    }
 }

@@ -641,23 +641,51 @@ impl LanguageRegistry {
 
     /// Returns the language configuration for the given language name.
     pub fn language(&self, name: &str) -> Option<LanguageConfig> {
-        // Try to get by name first, there may have a custom language registered
-        // Then try to get built-in language to support short language names, e.g. "js" for "javascript"
+        let builtin = Language::from_name(name);
         let languages = self.languages.lock().unwrap();
         if let Some(config) = languages.get(name).cloned() {
             return Some(config);
         }
-        if let Some(language) = Language::from_name(name) {
-            return Some(
-                languages
-                    .get(language.name())
-                    .cloned()
-                    .unwrap_or_else(|| language.config()),
-            );
+        if let Some(config) = builtin
+            .and_then(|language| languages.get(language.name()))
+            .cloned()
+        {
+            return Some(config);
         }
         drop(languages);
 
-        self.load_lazy_wasm_language(name)
+        if let Some(config) = self.load_lazy_wasm_language(name) {
+            return Some(config);
+        }
+        if let Some(language) = builtin {
+            if language.name() != name {
+                if let Some(config) = self.load_lazy_wasm_language(language.name()) {
+                    return Some(config);
+                }
+            }
+            return Some(language.config());
+        }
+        None
+    }
+
+    /// Resolves a language name or file-extension alias without loading a lazy wasm parser.
+    pub fn resolve_language_name(&self, identifier: &str) -> Option<String> {
+        let normalized = normalize_file_extension(identifier)?;
+        if let Some(config) = self.languages.lock().unwrap().get(normalized.as_str()) {
+            return Some(config.name.to_string());
+        }
+        if let Some((language, _)) = self
+            .wasm_extensions
+            .lock()
+            .unwrap()
+            .get_key_value(normalized.as_str())
+        {
+            return Some(language.to_string());
+        }
+        if let Some(language) = Language::from_name(&normalized) {
+            return Some(language.name().to_string());
+        }
+        self.language_name_for_extension(&normalized)
     }
 
     /// Returns the registered language name for a file extension, without the leading dot.
@@ -839,6 +867,41 @@ mod tests {
     }
 
     #[test]
+    fn registry_resolves_lazy_wasm_identifiers_without_loading_parser() {
+        let registry = LanguageRegistry::with_default_languages();
+        let name = "__test_fenced_wasm_language__";
+        registry.register_wasm_manifest(
+            LanguageManifest {
+                name: name.to_string(),
+                version: "0.1.0".to_string(),
+                file_extensions: vec!["fence_alias".to_string()],
+                injection_languages: Vec::new(),
+                requires: Vec::new(),
+                sha256_wasm: None,
+            },
+            PathBuf::from("/definitely/missing/fenced-language-extension"),
+        );
+
+        assert_eq!(
+            Some(name.to_string()),
+            registry.resolve_language_name("  __TEST_FENCED_WASM_LANGUAGE__  ")
+        );
+        assert_eq!(
+            Some(name.to_string()),
+            registry.resolve_language_name(".FENCE_ALIAS")
+        );
+        assert_eq!(
+            Some("json".to_string()),
+            registry.resolve_language_name(" JSON ")
+        );
+        assert_eq!(None, registry.resolve_language_name("not-installed"));
+        assert!(
+            registry.failed_wasm_languages.lock().unwrap().is_empty(),
+            "resolving fence metadata must not load parser.wasm"
+        );
+    }
+
+    #[test]
     fn unregister_removes_registered_file_extensions() {
         let registry = LanguageRegistry::with_default_languages();
         registry.register_with_file_extensions(
@@ -919,6 +982,36 @@ mod tests {
         assert_eq!(builtin, registry.language("json").unwrap());
         assert!(!registry.unregister("json"));
         assert_eq!(builtin, registry.language("json").unwrap());
+    }
+
+    #[test]
+    fn lazy_wasm_manifest_is_tried_before_builtin_language() {
+        let registry = LanguageRegistry::with_default_languages();
+        registry.register_wasm_manifest(
+            LanguageManifest {
+                name: "json".to_string(),
+                version: "0.1.0".to_string(),
+                file_extensions: vec!["json".to_string()],
+                injection_languages: Vec::new(),
+                requires: Vec::new(),
+                sha256_wasm: None,
+            },
+            PathBuf::from("/definitely/missing/json-language-extension"),
+        );
+
+        let language = registry
+            .language("json")
+            .expect("broken wasm extension should fall back to builtin JSON");
+
+        assert!(matches!(language.kind, LanguageKind::Native));
+        assert!(
+            registry
+                .failed_wasm_languages
+                .lock()
+                .unwrap()
+                .contains("json"),
+            "the registered wasm extension must be attempted before native fallback"
+        );
     }
 
     #[test]
