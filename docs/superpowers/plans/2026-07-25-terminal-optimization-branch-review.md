@@ -360,6 +360,37 @@ Serial 接入提交。**
 完整 Red/Green、回归和未覆盖范围见 `12.9`。切片 8 中“Serial 尚未接入”的描述
 保留为当时的历史事实，不回写或删除。
 
+### 2026-07-26：Local PTY ingress decision gate
+
+状态：**已完成运行时边界核对，暂不机械增加第二层 parser queue。**
+
+当前 Local PTY 主数据链不是 SSH/Serial 那种“reader 把 payload 送入独立
+unbounded parser channel”的结构。`alacritty_terminal` 的 `EventLoop` 在同一个
+线程中执行 PTY read 和 `Processor::advance()`；无法取得 `Term` lock 时，待读数据
+受上游固定 read buffer 约束，取得 lock 后同步消费，再继续下一次读取。GPUI channel
+只承载已有的 payload-free、coalesced wakeup edge。
+
+因此，在没有 RSS/throughput 证据前为 Local 主 parser 路径再套一层通用 queue，
+会形成双重背压，并可能要求复制或重写 Alacritty event loop，违反最新架构手册
+“保留现有 Terminal 主体、根据真实边界接入预算”的原则。
+
+Local 仍有一个需要单独处理的 payload 边界：
+
+```text
+OscTrackingReader
+  -> LocalPtyCommand::TerminalChunk { data: data.to_vec(), events }
+  -> exec supervisor command channel
+```
+
+该复制在 output capture 或 OSC event 存在时发生。后续 Local 切片应先为
+`TerminalChunk`/exec capture relay 定义 byte、chunk、control 与顺序预算，或用真实
+flood/RSS baseline 证明现有边界；不能直接照搬 SSH/Serial parser worker。
+
+下一实现切片转为最新架构手册排序中的应用级 SSH registry 前置工作：先在 `ssh`
+crate 建立脱敏、不可序列化、可单独测试的 `ConnectionKey` domain contract，再分步
+实现 slot、lease、应用级 owner 和 consumer 迁移。这个 decision gate 不代表 Local
+端到端验收已经完成。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -866,9 +897,17 @@ Serial 存在 Text、Hex、Mixed 等模式，不能把所有数据都走文本 d
 
 local terminal 已受 Alacritty event loop、PTY reader 和 GPUI wakeup 调度约束。如果机械增加一层 queue，可能形成双重背压。
 
-因此 local PTY 是否接入应由 metrics 和 baseline 决定，而不是因为 SSH 和 Serial 已接入就自动照搬。
+运行时核对进一步确认：Local 的 PTY read 与 `Processor::advance()` 位于同一个
+Alacritty event-loop 线程，上游固定 read buffer 是 parser 前的现有上界，GPUI
+channel 只发送不带 payload 的 coalesced wakeup。因此 local PTY 是否接入仍应由
+metrics 和 baseline 决定，而不是因为 SSH 和 Serial 已接入就自动照搬。
 
-## 6.5 P2：SSH connection registry
+当前应优先审查 Local 特有的 `LocalPtyCommand::TerminalChunk` capture/OSC relay；
+这里会复制 `Vec<u8>` 到既有 unbounded command channel，才是已经确认的额外 payload
+边界。任何改动都必须同时保留 output、OSC event、command/control 的顺序，以及
+自然 EOF graceful drain 与显式 shutdown abort 的差异。
+
+## 6.5 P1：SSH connection registry
 
 参考文件：
 
@@ -969,7 +1008,7 @@ lifecycle.state = SshConnectionState::Disconnected;
 
 将 registry 作为独立架构项目：
 
-1. 实现 `ConnectionIdentity`；
+1. 实现 `ConnectionKey`；
 2. 实现 fake manager contract；
 3. 覆盖 lease、generation、idle cancel 和 stale result；
 4. 使用统一可取消 timer；
@@ -983,6 +1022,19 @@ lifecycle.state = SshConnectionState::Disconnected;
 > 关闭 terminal 不影响共享连接的 SFTP；关闭 SFTP 不影响 forwarding；只有最后一个 lease 释放且 idle timeout 到期后，才断开 transport。
 
 迁移时必须保留当前 `dev` 的 X11 forwarding。
+
+首个纯 domain 切片只建立 key，不拨号、不创建 global、不迁移 consumer：
+
+- 复用 `HostKeyIdentity` 的 target/route normalization；
+- 隔离 username、auth 类型及调用方提供的 opaque credential revision；
+- 隔离 jump/proxy route 和各自的 auth identity；
+- 隔离 host-key policy、应用 trust store 与 OpenSSH `known_hosts` namespace；
+- 隔离 X11、timeout、keepalive 和 keyboard-interactive auth context；
+- `Debug`、错误和测试不得包含 password、passphrase、private-key content 或 proxy
+  password；
+- key 字段保持私有，不实现持久化序列化。credential revision 必须来自非敏感的
+  credential slot/version；调用方在秘密或 responder context 变化时必须递增 revision，
+  不能把明文 secret 或普通未加盐摘要当 identity。
 
 ## 6.6 P2：连接级终端编码
 
@@ -1434,8 +1486,12 @@ local PTY 是否接入应根据 PR 1 的指标决定。
 
 第一阶段只做：
 
-- identity；
-- credential revision；
+- 脱敏 `ConnectionKey` identity；
+- opaque credential revision 与 keyboard-interactive context identity；
+- host-key policy/trust namespace 与 X11 等安全边界；
+
+随后再做：
+
 - lease；
 - fake manager；
 - generation；
@@ -2384,14 +2440,18 @@ cargo clippy -p terminal --lib -- -D warnings
 
 本切片仍未实现：
 
-- Local PTY bounded ingress，以及三条真实路径的统一 flood/slow-consumer/
-  reconnect 压力验收；
+- Local PTY 的最终端到端验收，以及三条真实路径的统一 flood/slow-consumer/
+  reconnect 压力验收；运行时 decision gate 已确认主 parser 前存在固定 read buffer，
+  后续先处理 `LocalPtyCommand::TerminalChunk` capture/OSC relay，而不是机械复制
+  SSH/Serial queue；
 - Serial write command channel 的 bounded 化；
 - Text/Hex/Mixed、encoding model、schema 或 UI；
 - SSH host-key policy、应用级 session registry、SFTP 完整性与 transfer
   registry；
 - Terminal P1 的整体完成定义。
 
-后续应在不改变本切片 reservation 和 wakeup 语义的前提下迁移 Local，并补齐
-跨 Local/SSH/Serial 的 byte hash、关闭、重连、控制事件延迟和 per-pane budget
-验收，再根据结果判断 P1 是否达到手册中的完成标准。
+后续应在不改变本切片 reservation 和 wakeup 语义的前提下为 Local 已确认的 payload
+relay 建立预算，并补齐跨 Local/SSH/Serial 的 byte hash、关闭、重连、控制事件延迟和
+per-pane budget 验收，再根据结果判断 ingress P1 是否达到手册中的完成标准。按最新
+架构手册顺序，下一个独立实现切片先建立应用级 SSH registry 所需的
+`ConnectionKey` 纯 contract。
