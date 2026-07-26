@@ -165,8 +165,7 @@ impl MarkdownEditor {
         }
         let current = input.read(cx).value().to_owned();
         let patch = minimal_text_patch(&current, &spec.projection.text);
-        let highlights =
-            projection_highlights(&spec.projection, &self.theme, &self.inline_math_artifacts);
+        let highlights = projection_highlights(&spec.projection, &self.theme);
         input.update(cx, |input, cx| {
             if let Some((range, replacement)) = patch {
                 input.replace_text_range(range, &replacement, window, cx);

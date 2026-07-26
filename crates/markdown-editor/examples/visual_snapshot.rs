@@ -81,6 +81,9 @@ fn audit_render_provider() -> MarkdownBlockRenderProvider {
     Arc::new(|request| {
         Box::pin(async move {
             let (svg, width, height) = match request.kind {
+                MarkdownBlockRenderKind::Math if request.source.contains(r"e^{i\pi}") => {
+                    (INLINE_MATH_SVG, 132., 24.)
+                }
                 MarkdownBlockRenderKind::Math => (MATH_SVG, 360., 120.),
                 MarkdownBlockRenderKind::Mermaid => (MERMAID_SVG, 620., 164.),
             };
@@ -168,4 +171,8 @@ const MATH_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="360" h
   <text x="180" y="43" text-anchor="middle" font-family="Times New Roman, serif" font-style="italic" font-size="34" fill="#24292f">a + b</text>
   <line x1="118" y1="57" x2="242" y2="57" stroke="#24292f" stroke-width="2"/>
   <text x="180" y="94" text-anchor="middle" font-family="Times New Roman, serif" font-style="italic" font-size="34" fill="#24292f">c</text>
+</svg>"##;
+
+const INLINE_MATH_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="132" height="24" viewBox="0 0 132 24">
+  <text x="66" y="18" text-anchor="middle" font-family="Times New Roman, serif" font-style="italic" font-size="20" fill="#24292f">e<tspan baseline-shift="super" font-size="12">iπ</tspan><tspan baseline-shift="baseline" font-size="20"> + 1 = 0</tspan></text>
 </svg>"##;

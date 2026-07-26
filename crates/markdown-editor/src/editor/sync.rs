@@ -19,8 +19,7 @@ impl MarkdownEditor {
             .map(|surface| (surface.input.clone(), surface.projection.clone()))
             .collect::<Vec<_>>();
         for (input, projection) in surfaces {
-            let highlights =
-                projection_highlights(&projection, &self.theme, &self.inline_math_artifacts);
+            let highlights = projection_highlights(&projection, &self.theme);
             input.update(cx, |input, cx| {
                 input.set_text_highlights(highlights, cx);
             });
