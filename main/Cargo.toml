@@ -1,6 +1,6 @@
 [package]
 name = "main"
-version = "0.9.3"
+version = "0.9.5"
 publish.workspace = true
 edition.workspace = true
 
@@ -21,6 +21,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+dotenvy = "0.15"
 rust-i18n = { workspace = true }
 base64 = { workspace = true }
 percent-encoding = { workspace = true }

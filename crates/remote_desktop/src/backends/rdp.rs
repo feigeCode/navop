@@ -71,14 +71,21 @@ impl RemoteDesktopBackend for RdpBackend {
                 let mut latest_clipboard_text = None;
                 let mut reconnect_attempt = 0usize;
                 loop {
-                    match run_helper_session(
+                    let session_output_tx = output_tx.begin_session();
+                    let result = run_helper_session(
                         &helper,
                         &mut connect,
                         &mut latest_clipboard_text,
                         &mut input_rx,
-                        &output_tx,
+                        &session_output_tx,
                         protocol,
-                    ) {
+                    );
+                    // The helper stdout reader is intentionally detached. Cut
+                    // off its generation before publishing a reconnect barrier
+                    // or starting the next process so late output cannot reset
+                    // or resize the new session.
+                    session_output_tx.end_session();
+                    match result {
                         HelperRunResult::Closed | HelperRunResult::InputClosed => break,
                         HelperRunResult::Reconnect {
                             reason,
@@ -89,7 +96,7 @@ impl RemoteDesktopBackend for RdpBackend {
                                 reconnect_attempt = 0;
                             }
                             if manual {
-                                transport::send_status(
+                                transport::send_reconnecting(
                                     &output_tx,
                                     "reconnecting remote desktop session",
                                 );
@@ -97,7 +104,7 @@ impl RemoteDesktopBackend for RdpBackend {
                             }
                             let delay = input::reconnect_delay(reconnect_attempt);
                             reconnect_attempt = reconnect_attempt.saturating_add(1);
-                            transport::send_status(
+                            transport::send_reconnecting(
                                 &output_tx,
                                 &input::reconnect_status_message(&reason, delay),
                             );

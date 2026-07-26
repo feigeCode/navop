@@ -556,9 +556,9 @@ Home:
     zh-CN: 编辑连接
     zh-HK: 編輯連線
   duplicate_connection:
-    en: Duplicate Connection
-    zh-CN: 复制连接
-    zh-HK: 複製連線
+    en: Clone Connection
+    zh-CN: 克隆连接
+    zh-HK: 克隆連線
   delete_connection:
     en: Delete Connection
     zh-CN: 删除连接
@@ -1076,6 +1076,42 @@ Connection:
     en: "Fullscreen mode. Press Esc to exit fullscreen."
     zh-CN: "已进入全屏，按 Esc 退出全屏。"
     zh-HK: "已進入全螢幕，按 Esc 退出全螢幕。"
+  copy_connection:
+    en: Copy Connection
+    zh-CN: 复制连接
+    zh-HK: 複製連線
+  copy_basic_info:
+    en: Copy Basic Info
+    zh-CN: 复制基础信息
+    zh-HK: 複製基礎資訊
+  copy_full_info:
+    en: Copy Full Info
+    zh-CN: 复制全部信息
+    zh-HK: 複製全部資訊
+  copy_full_info_confirm_title:
+    en: Copy sensitive connection information?
+    zh-CN: 复制敏感连接信息？
+    zh-HK: 複製敏感連線資訊？
+  copy_full_info_confirm_message:
+    en: Passwords, passphrases, and other credentials will be copied. Clipboard contents may be read by other applications. Embedded private key content will not be copied.
+    zh-CN: 将复制密码、口令及其他凭据。剪贴板内容可能被其他应用读取。内嵌私钥正文不会被复制。
+    zh-HK: 將複製密碼、口令及其他憑證。剪貼簿內容可能被其他應用程式讀取。內嵌私鑰內容不會被複製。
+  copy_full_info_confirm_action:
+    en: Copy Sensitive Info
+    zh-CN: 复制敏感信息
+    zh-HK: 複製敏感資訊
+  copy_sensitive_success:
+    en: Sensitive connection information copied
+    zh-CN: 敏感连接信息已复制
+    zh-HK: 敏感連線資訊已複製
+  copy_success:
+    en: Copied to clipboard
+    zh-CN: 已复制到剪贴板
+    zh-HK: 已複製到剪貼簿
+  copy_sensitive_unavailable:
+    en: Sensitive connection information is unavailable
+    zh-CN: 无法获取敏感连接信息
+    zh-HK: 無法取得敏感連線資訊
   copy_connection_info:
     en: Copy Connection Info
     zh-CN: 复制连接信息
@@ -1128,10 +1164,67 @@ Connection:
     en: Copy CLI Command
     zh-CN: 复制命令行命令
     zh-HK: 複製命令列命令
+  copy_ssh_command:
+    en: Copy SSH Command
+    zh-CN: 复制 SSH 命令
+    zh-HK: 複製 SSH 命令
+  copy_sftp_command:
+    en: Copy SFTP Command
+    zh-CN: 复制 SFTP 命令
+    zh-HK: 複製 SFTP 命令
+  copy_jdbc_url:
+    en: Copy JDBC URL
+    zh-CN: 复制 JDBC 地址
+    zh-HK: 複製 JDBC 位址
+  copy_connection_uri:
+    en: Copy Connection URI
+    zh-CN: 复制连接 URI
+    zh-HK: 複製連線 URI
+  copy_serial_config:
+    en: Copy Serial Configuration
+    zh-CN: 复制串口配置
+    zh-HK: 複製串列埠設定
+  copy_forwarding_command:
+    en: Copy Forwarding Command
+    zh-CN: 复制转发命令
+    zh-HK: 複製轉送命令
+  copy_sentinel_config:
+    en: Copy Sentinel Configuration
+    zh-CN: 复制 Sentinel 配置
+    zh-HK: 複製 Sentinel 設定
+  copy_cluster_nodes:
+    en: Copy Cluster Nodes
+    zh-CN: 复制集群节点
+    zh-HK: 複製叢集節點
   move_to_group:
     en: Move to Group
     zh-CN: 移动到分组
     zh-HK: 移動到分組
+  FullInfo:
+    title:
+      en: "[Full Connection Info]"
+      zh-CN: "【全部连接信息】"
+      zh-HK: "【全部連線資訊】"
+    name:
+      en: Name
+      zh-CN: 名称
+      zh-HK: 名稱
+    type:
+      en: Type
+      zh-CN: 类型
+      zh-HK: 類型
+    remark:
+      en: Remark
+      zh-CN: 备注
+      zh-HK: 備註
+    parameters:
+      en: Parameters
+      zh-CN: 参数
+      zh-HK: 參數
+    embedded_private_key_redacted:
+      en: Embedded private key configured; the private key content was not copied for security
+      zh-CN: 已配置内嵌私钥，出于安全原因未复制私钥正文
+      zh-HK: 已設定內嵌私鑰，基於安全原因未複製私鑰內容
   Share:
     title:
       en: "[Connection Info]"

@@ -16,8 +16,11 @@ use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
 use anyhow::{Error, Result, anyhow, bail};
 use async_trait::async_trait;
-use one_core::storage::manager::get_queries_dir;
-use one_core::storage::{DatabaseType, DbConnectionConfig};
+use one_core::storage::{
+    DatabaseType, DbConnectionConfig, QueryDirectoryEntryKind, QueryDirectoryScope,
+    added_query_directories, default_query_directory, list_query_directory,
+    query_directory_display_name,
+};
 use rust_i18n::t;
 use sqlparser::ast;
 use sqlparser::ast::{Expr, SetExpr, Statement, TableFactor};
@@ -1016,7 +1019,7 @@ pub trait DatabasePlugin: Send + Sync {
                 }
                 self.load_schema_folder_children(connection, node, id).await
             }
-            DbNodeType::QueriesFolder => {
+            DbNodeType::QueriesFolder | DbNodeType::QueryFolder => {
                 if node.children_loaded {
                     return Ok(node.children.clone());
                 }
@@ -1179,27 +1182,28 @@ pub trait DatabasePlugin: Send + Sync {
 
     async fn load_queries_children(&self, node: &DbNode, id: &str) -> Result<Vec<DbNode>> {
         let metadata = node.metadata.clone();
-        let database_name = node.get_database_name().unwrap_or_default();
-        let database_type = node.database_type.path_key();
-
-        let queries_dir = match get_queries_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                error!("Failed to get queries directory: {}", e);
-                return Ok(Vec::new());
+        let is_query_root = node.node_type != DbNodeType::QueryFolder;
+        let (query_path, scope) = if node.node_type == DbNodeType::QueryFolder {
+            match node.metadata.get("directory_path") {
+                Some(path) => (std::path::PathBuf::from(path), None),
+                None => return Ok(Vec::new()),
+            }
+        } else {
+            let scope = QueryDirectoryScope::new(
+                node.database_type.path_key(),
+                node.connection_id.clone(),
+                node.get_database_name().unwrap_or_default(),
+            );
+            match default_query_directory(&scope) {
+                Ok(path) => (path, Some(scope)),
+                Err(e) => {
+                    error!("Failed to resolve queries directory: {}", e);
+                    return Ok(Vec::new());
+                }
             }
         };
 
-        let query_path = queries_dir
-            .join(&database_type)
-            .join(&node.connection_id)
-            .join(&database_name);
-
-        if !query_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let entries = match std::fs::read_dir(&query_path) {
+        let entries = match list_query_directory(&query_path) {
             Ok(entries) => entries,
             Err(e) => {
                 error!("Failed to read queries directory {:?}: {}", query_path, e);
@@ -1208,33 +1212,74 @@ pub trait DatabasePlugin: Send + Sync {
         };
 
         let mut query_nodes = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "sql") {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
+        for entry in entries {
+            let mut meta = metadata.clone();
+            let (node_type, path_key) = match entry.kind {
+                QueryDirectoryEntryKind::Directory => {
+                    meta.insert(
+                        "directory_path".to_string(),
+                        entry.path.to_string_lossy().to_string(),
+                    );
+                    (DbNodeType::QueryFolder, "directory")
+                }
+                QueryDirectoryEntryKind::SqlFile => {
+                    meta.insert(
+                        "file_path".to_string(),
+                        entry.path.to_string_lossy().to_string(),
+                    );
+                    (DbNodeType::NamedQuery, "file")
+                }
+            };
 
-                let mut meta = metadata.clone();
-                meta.insert("file_path".to_string(), path.to_string_lossy().to_string());
+            let query_node = DbNode::new(
+                format!("{}:{}:{}", id, path_key, entry.path.to_string_lossy()),
+                entry.name,
+                node_type,
+                node.connection_id.clone(),
+                node.database_type.clone(),
+            )
+            .with_parent_context(id)
+            .with_metadata(meta);
 
-                let query_node = DbNode::new(
-                    format!("{}:{}", id, file_name),
-                    file_name.clone(),
-                    DbNodeType::NamedQuery,
-                    node.connection_id.clone(),
-                    node.database_type.clone(),
-                )
-                .with_parent_context(id)
-                .with_metadata(meta);
+            query_nodes.push(query_node);
+        }
 
-                query_nodes.push(query_node);
+        if is_query_root {
+            if let Some(scope) = scope {
+                match added_query_directories(&scope) {
+                    Ok(directories) => {
+                        for directory in directories {
+                            let mut meta = metadata.clone();
+                            meta.insert(
+                                "directory_path".to_string(),
+                                directory.to_string_lossy().to_string(),
+                            );
+                            meta.insert("query_directory_root".to_string(), "added".to_string());
+                            query_nodes.push(
+                                DbNode::new(
+                                    format!(
+                                        "{}:added-directory:{}",
+                                        id,
+                                        directory.to_string_lossy()
+                                    ),
+                                    query_directory_display_name(&directory),
+                                    DbNodeType::QueryFolder,
+                                    node.connection_id.clone(),
+                                    node.database_type.clone(),
+                                )
+                                .with_parent_context(id)
+                                .with_metadata(meta),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to load added query directories: {}", e);
+                    }
+                }
             }
         }
 
-        query_nodes.sort_by(|a, b| a.name.cmp(&b.name));
+        query_nodes.sort();
         Ok(query_nodes)
     }
 

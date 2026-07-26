@@ -13,6 +13,10 @@ pub struct OutputBatch {
 #[derive(Clone)]
 pub struct OutputMailboxSender {
     shared: Arc<Mutex<State>>,
+    /// `None` is the backend-owned lifecycle sender. Helper sessions receive
+    /// a generation-scoped clone so a detached reader from an old process
+    /// cannot publish into a newer session.
+    session_generation: Option<u64>,
 }
 
 pub struct OutputMailboxReceiver {
@@ -27,44 +31,103 @@ struct State {
     control: Vec<RemoteDesktopOutput>,
     latest_frame: Option<RemoteDesktopOutput>,
     latest_delta: Option<RemoteDesktopOutput>,
+    /// Frames are accepted only while a helper session is known to be
+    /// connected. A reconnect barrier flips this off so late output from the
+    /// previous helper cannot be applied after the view has reset.
+    accepting_frames: bool,
+    next_session_generation: u64,
+    active_session_generation: Option<u64>,
     receiver_alive: bool,
 }
 
 pub fn output_mailbox() -> (OutputMailboxSender, OutputMailboxReceiver) {
     let shared = Arc::new(Mutex::new(State {
         receiver_alive: true,
+        accepting_frames: true,
         ..State::default()
     }));
     (
         OutputMailboxSender {
             shared: shared.clone(),
+            session_generation: None,
         },
         OutputMailboxReceiver { shared },
     )
 }
 
 impl OutputMailboxSender {
+    /// Create the sender for one helper-process session.
+    ///
+    /// Output readers are detached threads because joining them can block
+    /// indefinitely when a descendant inherits the helper's stdout handle.
+    /// Scoping their sender lets the backend retire a session synchronously
+    /// without waiting for that reader to exit.
+    pub fn begin_session(&self) -> Self {
+        let mut state = lock(&self.shared);
+        state.next_session_generation = state.next_session_generation.wrapping_add(1);
+        let session_generation = state.next_session_generation;
+        state.active_session_generation = Some(session_generation);
+        Self {
+            shared: self.shared.clone(),
+            session_generation: Some(session_generation),
+        }
+    }
+
+    /// Retire this helper session before the backend publishes its reconnect
+    /// barrier. Any output still buffered by the detached reader is ignored.
+    pub fn end_session(&self) {
+        let Some(session_generation) = self.session_generation else {
+            return;
+        };
+        let mut state = lock(&self.shared);
+        if state.active_session_generation == Some(session_generation) {
+            state.active_session_generation = None;
+        }
+    }
+
     pub fn send(&self, output: RemoteDesktopOutput) -> Result<(), OutputMailboxClosed> {
         let mut state = lock(&self.shared);
         if !state.receiver_alive {
             return Err(OutputMailboxClosed);
         }
+        if let Some(session_generation) = self.session_generation
+            && state.active_session_generation != Some(session_generation)
+        {
+            return Ok(());
+        }
         match output {
             frame @ (RemoteDesktopOutput::Frame { .. } | RemoteDesktopOutput::FrameBgra { .. }) => {
-                state.latest_frame = Some(frame);
-                state.latest_delta = None;
+                if state.accepting_frames {
+                    state.latest_frame = Some(frame);
+                    state.latest_delta = None;
+                }
             }
             delta @ RemoteDesktopOutput::FrameBgraRects { .. } => {
-                state.latest_delta = Some(match state.latest_delta.take() {
-                    Some(previous) => merge_deltas(previous, delta),
-                    None => delta,
-                });
+                if state.accepting_frames {
+                    state.latest_delta = Some(match state.latest_delta.take() {
+                        Some(previous) => merge_deltas(previous, delta),
+                        None => delta,
+                    });
+                }
+            }
+            connected @ RemoteDesktopOutput::Connected { .. } => {
+                state.accepting_frames = true;
+                state.control.push(connected);
             }
             terminal @ (RemoteDesktopOutput::ConnectionFailure(_)
             | RemoteDesktopOutput::Terminated(_)) => {
+                state.accepting_frames = false;
                 state.latest_frame = None;
                 state.latest_delta = None;
                 state.control.push(terminal);
+            }
+            reconnecting @ RemoteDesktopOutput::Reconnecting(_) => {
+                // A frame queued by the old helper session must not be
+                // accepted after the view has reset for the next session.
+                state.accepting_frames = false;
+                state.latest_frame = None;
+                state.latest_delta = None;
+                state.control.push(reconnecting);
             }
             control => state.control.push(control),
         }
@@ -198,6 +261,127 @@ mod tests {
         assert_eq!(
             vec![RemoteDesktopOutput::Terminated("closed".into())],
             batch.control
+        );
+    }
+
+    #[test]
+    fn reconnecting_event_discards_frames_from_the_previous_session() {
+        let (tx, rx) = output_mailbox();
+        tx.send(frame(7)).unwrap();
+        tx.send(RemoteDesktopOutput::FrameBgraRects {
+            width: 1,
+            height: 1,
+            rects: vec![RemoteDesktopFrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                byte_len: 4,
+            }],
+            bgra: vec![1, 2, 3, 255],
+        })
+        .unwrap();
+        tx.send(RemoteDesktopOutput::Reconnecting("network lost".into()))
+            .unwrap();
+
+        let batch = rx.drain();
+
+        assert_eq!(None, batch.latest_frame);
+        assert_eq!(None, batch.latest_delta);
+        assert_eq!(
+            vec![RemoteDesktopOutput::Reconnecting("network lost".into())],
+            batch.control
+        );
+    }
+
+    #[test]
+    fn drops_late_frames_until_the_next_session_connects() {
+        let (tx, rx) = output_mailbox();
+        tx.send(RemoteDesktopOutput::Reconnecting("network lost".into()))
+            .unwrap();
+        tx.send(frame(7)).unwrap();
+        tx.send(RemoteDesktopOutput::FrameBgraRects {
+            width: 1,
+            height: 1,
+            rects: vec![RemoteDesktopFrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                byte_len: 4,
+            }],
+            bgra: vec![1, 2, 3, 255],
+        })
+        .unwrap();
+        tx.send(RemoteDesktopOutput::Connected {
+            width: 1,
+            height: 1,
+            capabilities: crate::RemoteDesktopCapabilities::rdp_mvp(),
+        })
+        .unwrap();
+        tx.send(frame(8)).unwrap();
+
+        let batch = rx.drain();
+
+        assert_eq!(None, batch.latest_delta);
+        assert_eq!(Some(frame(8)), batch.latest_frame);
+        assert!(matches!(
+            batch.control.as_slice(),
+            [
+                RemoteDesktopOutput::Reconnecting(_),
+                RemoteDesktopOutput::Connected { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn old_session_output_is_ignored_after_the_next_session_starts() {
+        let (root_tx, rx) = output_mailbox();
+        let first_session = root_tx.begin_session();
+        first_session
+            .send(RemoteDesktopOutput::Connected {
+                width: 1,
+                height: 1,
+                capabilities: crate::RemoteDesktopCapabilities::rdp_mvp(),
+            })
+            .unwrap();
+        first_session.send(frame(1)).unwrap();
+        let first_batch = rx.drain();
+        assert_eq!(Some(frame(1)), first_batch.latest_frame);
+
+        first_session.end_session();
+        root_tx
+            .send(RemoteDesktopOutput::Reconnecting("network lost".into()))
+            .unwrap();
+        let second_session = root_tx.begin_session();
+        second_session
+            .send(RemoteDesktopOutput::Connected {
+                width: 2,
+                height: 2,
+                capabilities: crate::RemoteDesktopCapabilities::rdp_mvp(),
+            })
+            .unwrap();
+        second_session.send(frame(2)).unwrap();
+
+        first_session
+            .send(RemoteDesktopOutput::Terminated(
+                "late output from the old helper".into(),
+            ))
+            .unwrap();
+        first_session.send(frame(3)).unwrap();
+
+        let second_batch = rx.drain();
+        assert_eq!(Some(frame(2)), second_batch.latest_frame);
+        assert_eq!(
+            vec![
+                RemoteDesktopOutput::Reconnecting("network lost".into()),
+                RemoteDesktopOutput::Connected {
+                    width: 2,
+                    height: 2,
+                    capabilities: crate::RemoteDesktopCapabilities::rdp_mvp(),
+                },
+            ],
+            second_batch.control
         );
     }
 

@@ -9,11 +9,13 @@ use tracing::{debug, error, info};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
+    SqlSource, apply_query_max_rows,
 };
 use crate::{DatabasePlugin, format_message, truncate_str};
 use one_core::storage::DbConnectionConfig;
+
+type QueryRowsWithBinary = (Vec<Vec<Option<String>>>, Vec<BinaryCell>);
 
 pub struct SqliteDbConnection {
     config: DbConnectionConfig,
@@ -67,6 +69,7 @@ impl SqliteDbConnection {
         columns: Vec<String>,
         column_types: Vec<Option<String>>,
         rows: Vec<Vec<Option<String>>>,
+        binary_cells: Vec<BinaryCell>,
         sql: String,
         elapsed_ms: u128,
     ) -> SqlResult {
@@ -86,6 +89,7 @@ impl SqliteDbConnection {
             columns,
             column_meta,
             rows,
+            binary_cells,
             elapsed_ms,
         })
     }
@@ -143,26 +147,32 @@ impl SqliteDbConnection {
                         .map(|c| c.decl_type().map(|s| s.to_string()))
                         .collect();
 
-                    let rows_result: Result<Vec<Vec<Option<String>>>, rusqlite::Error> =
+                    let rows_result: Result<QueryRowsWithBinary, rusqlite::Error> =
                         stmt.query([]).and_then(|mut rows| {
                             let mut data_rows = Vec::new();
+                            let mut binary_cells = Vec::new();
                             while let Some(row) = rows.next()? {
-                                let row_data: Vec<Option<String>> = (0..column_count)
-                                    .map(|i| {
-                                        let decl_type =
-                                            column_types.get(i).and_then(|t| t.as_deref());
-                                        row.get_ref(i)
-                                            .ok()
-                                            .and_then(|v| Self::extract_value(v, decl_type))
-                                    })
-                                    .collect();
+                                let row_index = data_rows.len();
+                                let mut row_data = Vec::with_capacity(column_count);
+                                for i in 0..column_count {
+                                    let decl_type = column_types.get(i).and_then(|t| t.as_deref());
+                                    let value = row.get_ref(i)?;
+                                    if let ValueRef::Blob(bytes) = value {
+                                        binary_cells.push(BinaryCell {
+                                            row_index,
+                                            column_index: i,
+                                            bytes: bytes.to_vec(),
+                                        });
+                                    }
+                                    row_data.push(Self::extract_value(value, decl_type));
+                                }
                                 data_rows.push(row_data);
                             }
-                            Ok(data_rows)
+                            Ok((data_rows, binary_cells))
                         });
 
                     match rows_result {
-                        Ok(data_rows) => {
+                        Ok((data_rows, binary_cells)) => {
                             let elapsed_ms = start.elapsed().as_millis();
                             debug!(
                                 "[SQLite] Query completed: {} rows, {} columns, {}ms",
@@ -174,6 +184,7 @@ impl SqliteDbConnection {
                                 columns,
                                 column_types,
                                 data_rows,
+                                binary_cells,
                                 sql.to_string(),
                                 elapsed_ms,
                             )

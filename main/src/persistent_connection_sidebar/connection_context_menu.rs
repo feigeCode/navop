@@ -1,16 +1,17 @@
-use gpui::{ClipboardItem, Entity, Window};
+use gpui::{Entity, Window};
 use gpui_component::{
     IconName,
     menu::{PopupMenu, PopupMenuItem},
 };
-use one_core::{storage::StoredConnection, tab_container::TabOpenMode};
+use one_core::{
+    storage::{ConnectionType, StoredConnection},
+    tab_container::TabOpenMode,
+};
 use rust_i18n::t;
 
 use super::{
     PersistentConnectionSidebar,
-    connection_command::connection_command,
-    connection_copy_menu::{append_copy_targets, copy_text_item},
-    connection_share::connection_share_text,
+    connection_copy_menu::append_copy_connection_submenu,
     context_menu::{ConnectionMenuAction, connection_menu_actions},
 };
 
@@ -33,9 +34,33 @@ impl PersistentConnectionSidebar {
             return menu;
         };
         let can_edit = home.read(cx).can_move_connection(connection_id);
+        let can_export_credentials = home
+            .read(cx)
+            .can_export_connection_credentials(connection_id);
+        let resolved_ssh = {
+            let home = home.read(cx);
+            connection
+                .to_port_forwarding_params()
+                .ok()
+                .and_then(|params| {
+                    home.connections
+                        .iter()
+                        .find(|candidate| {
+                            candidate.id == Some(params.ssh_connection_id)
+                                && candidate.connection_type == ConnectionType::SshSftp
+                        })
+                        .cloned()
+                })
+        };
 
+        let action_context = ConnectionActionContext {
+            connection: &connection,
+            can_export_credentials,
+            resolved_ssh: resolved_ssh.as_ref(),
+            home: &home,
+        };
         for action in connection_menu_actions(connection.connection_type, can_edit) {
-            menu = add_connection_action(menu, action, &connection, &home, window, cx);
+            menu = add_connection_action(menu, action, &action_context, window, cx);
         }
         menu
     }
@@ -44,15 +69,21 @@ impl PersistentConnectionSidebar {
 fn starts_menu_section(action: ConnectionMenuAction) -> bool {
     matches!(
         action,
-        ConnectionMenuAction::CopyInfo | ConnectionMenuAction::MoveToGroup
+        ConnectionMenuAction::CopyConnection | ConnectionMenuAction::MoveToGroup
     )
+}
+
+struct ConnectionActionContext<'a> {
+    connection: &'a StoredConnection,
+    can_export_credentials: bool,
+    resolved_ssh: Option<&'a StoredConnection>,
+    home: &'a Entity<crate::home_tab::HomePage>,
 }
 
 fn add_connection_action(
     menu: PopupMenu,
     action: ConnectionMenuAction,
-    connection: &StoredConnection,
-    home: &Entity<crate::home_tab::HomePage>,
+    action_context: &ConnectionActionContext<'_>,
     window: &mut Window,
     cx: &mut gpui::Context<PopupMenu>,
 ) -> PopupMenu {
@@ -62,11 +93,27 @@ fn add_connection_action(
         menu
     };
     match action {
-        ConnectionMenuAction::MoveToGroup => {
-            append_move_to_group_submenu(menu, connection, home, window, cx)
-        }
-        ConnectionMenuAction::CopyTargets => append_copy_targets(menu, connection),
-        _ => menu.item(connection_menu_item(action, connection, home)),
+        ConnectionMenuAction::MoveToGroup => append_move_to_group_submenu(
+            menu,
+            action_context.connection,
+            action_context.home,
+            window,
+            cx,
+        ),
+        ConnectionMenuAction::CopyConnection => append_copy_connection_submenu(
+            menu,
+            action_context.connection,
+            action_context.can_export_credentials,
+            action_context.resolved_ssh,
+            action_context.home,
+            window,
+            cx,
+        ),
+        _ => menu.item(connection_menu_item(
+            action,
+            action_context.connection,
+            action_context.home,
+        )),
     }
 }
 
@@ -81,13 +128,9 @@ fn connection_menu_item(
             fullscreen_window_connection_item(connection, home)
         }
         ConnectionMenuAction::OpenSftp => open_sftp_item(connection, home),
-        ConnectionMenuAction::CopyInfo => copy_info_item(connection),
-        ConnectionMenuAction::CopyName => copy_text_item(
-            t!("Connection.copy_connection_name").to_string(),
-            connection.name.clone(),
-        ),
-        ConnectionMenuAction::CopyTargets => unreachable!("copy targets render dynamically"),
-        ConnectionMenuAction::CopyCommand => copy_command_item(connection),
+        ConnectionMenuAction::CopyConnection => {
+            unreachable!("copy connection action renders a submenu")
+        }
         ConnectionMenuAction::MoveToGroup => unreachable!("move action renders a submenu"),
         ConnectionMenuAction::Edit => edit_connection_item(connection, home),
         ConnectionMenuAction::Duplicate => duplicate_connection_item(connection, home),
@@ -107,18 +150,6 @@ fn fullscreen_window_connection_item(
             home.update(cx, |home, cx| {
                 home.open_remote_desktop_fullscreen_window(&connection, window, cx);
             });
-        })
-}
-
-fn copy_command_item(connection: &StoredConnection) -> PopupMenuItem {
-    let command = connection_command(connection);
-    PopupMenuItem::new(t!("Connection.copy_connection_command").to_string())
-        .icon(IconName::SquareTerminal)
-        .disabled(command.is_none())
-        .on_click(move |_, _, cx| {
-            if let Some(command) = command.clone() {
-                cx.write_to_clipboard(ClipboardItem::new_string(command));
-            }
         })
 }
 
@@ -216,18 +247,6 @@ fn open_sftp_item(
             home.update(cx, |home, cx| {
                 home.open_sftp_view(connection.clone(), window, cx);
             });
-        })
-}
-
-fn copy_info_item(connection: &StoredConnection) -> PopupMenuItem {
-    let share_text = connection_share_text(connection);
-    PopupMenuItem::new(t!("Connection.copy_connection_info").to_string())
-        .icon(IconName::Copy)
-        .disabled(share_text.is_none())
-        .on_click(move |_, _, cx| {
-            if let Some(share_text) = share_text.clone() {
-                cx.write_to_clipboard(ClipboardItem::new_string(share_text));
-            }
         })
 }
 

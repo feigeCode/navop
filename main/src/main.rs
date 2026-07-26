@@ -6,6 +6,7 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod env_file;
 mod external_driver_display;
 mod file_association;
 mod file_open;
@@ -141,6 +142,8 @@ impl AssetSource for AppAssets {
 }
 
 fn main() {
+    env_file::load_env_files();
+
     if update::handle_update_command() {
         return;
     }
@@ -319,6 +322,30 @@ mod embedded_cli_removal_tests {
 
         assert!(!source.contains(&handler_name));
         assert!(source.contains("update::handle_update_command()"));
+    }
+
+    #[test]
+    fn startup_loads_environment_files_before_handling_commands() {
+        let source = include_str!("main.rs");
+        let load = source
+            .find("env_file::load_env_files()")
+            .expect("environment file loading");
+        let update = source
+            .find("update::handle_update_command()")
+            .expect("update command handling");
+
+        assert!(load < update);
+    }
+
+    #[test]
+    fn environment_files_are_disabled_for_release_builds() {
+        let runtime_loader = include_str!("env_file.rs");
+        let build_script = include_str!("../../crates/core/build.rs");
+
+        assert!(
+            runtime_loader.contains("#[cfg(not(debug_assertions))]\npub fn load_env_files() {}")
+        );
+        assert!(build_script.contains("std::env::var(\"PROFILE\").as_deref() == Ok(\"debug\")"));
     }
 
     #[test]

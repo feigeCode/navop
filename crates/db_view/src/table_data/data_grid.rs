@@ -1,14 +1,15 @@
 use gpui::prelude::*;
 use gpui::{
     Anchor, AnyElement, App, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Subscription,
-    Window, actions, div, px,
+    Focusable, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, PathPromptOptions,
+    SharedString, Styled, Subscription, Window, actions, div, img, px,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size, WindowExt,
     button::Button,
     h_flex,
     input::{Input, InputEvent, InputState},
+    notification::Notification,
     v_flex,
 };
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
@@ -25,8 +26,8 @@ use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, Tab
 use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
-    ColumnInfo, DbManager, ExecOptions, GlobalDbState, IndexInfo, QueryResult, SqlResult,
-    TableCellChange, TableDataRequest, TableRowChange, TableSaveRequest,
+    BinaryCell, ColumnInfo, DbManager, ExecOptions, GlobalDbState, IndexInfo, QueryResult,
+    SqlResult, TableCellChange, TableDataRequest, TableRowChange, TableSaveRequest,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
@@ -37,6 +38,7 @@ use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 actions!(
     data_grid,
@@ -491,9 +493,114 @@ impl DataGrid {
         rowids: Vec<String>,
         cx: &mut App,
     ) {
+        self.update_data_with_binary_cells(columns, rows, rowids, vec![], cx);
+    }
+
+    pub fn update_data_with_binary_cells(
+        &self,
+        columns: Vec<Column>,
+        rows: Vec<Vec<Option<String>>>,
+        rowids: Vec<String>,
+        binary_cells: Vec<BinaryCell>,
+        cx: &mut App,
+    ) {
         self.table.update(cx, |state, cx| {
-            state.delegate_mut().update_data(columns, rows, rowids, cx);
+            state.delegate_mut().update_data_with_binary_cells(
+                columns,
+                rows,
+                rowids,
+                binary_cells,
+                cx,
+            );
             state.refresh(cx);
+        });
+    }
+
+    pub(crate) fn download_binary_value(
+        &self,
+        bytes: Vec<u8>,
+        file_name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let window_id = cx.active_window();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: false,
+            directories: true,
+            prompt: Some(t!("TableData.select_binary_download_directory").into()),
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let output_dir = match future.await {
+                Ok(Ok(Some(paths))) => match paths.into_iter().next() {
+                    Some(path) => path,
+                    None => return,
+                },
+                _ => return,
+            };
+            let output_path = output_dir.join(file_name);
+            let path_for_write = output_path.clone();
+            let write_result = cx
+                .background_spawn(async move { std::fs::write(path_for_write, bytes) })
+                .await;
+
+            let _ = cx.update(|cx| {
+                if let Some(window_id) = window_id {
+                    let _ = cx.update_window(window_id, |_entity, window, cx| match write_result {
+                        Ok(()) => window.push_notification(
+                            Notification::success(
+                                t!(
+                                    "TableData.binary_download_complete",
+                                    path = output_path.display()
+                                )
+                                .to_string(),
+                            )
+                            .autohide(true),
+                            cx,
+                        ),
+                        Err(error) => window.push_notification(
+                            Notification::error(
+                                t!("TableData.binary_download_failed", error = error).to_string(),
+                            )
+                            .autohide(true),
+                            cx,
+                        ),
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn show_binary_image_preview(
+        &self,
+        bytes: Arc<Vec<u8>>,
+        format: ImageFormat,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let image = Arc::new(Image::from_bytes(format, bytes.as_ref().clone()));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog
+                .title(SharedString::from(title.clone()))
+                .w(px(900.))
+                .h(px(680.))
+                .child(
+                    div()
+                        .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(
+                            img(image.clone())
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        ),
+                )
+                .close_button(true)
+                .overlay(false)
+                .content_center()
         });
     }
 
@@ -643,7 +750,7 @@ impl DataGrid {
                 Ok(response) => {
                     let query_result = response.query_result;
 
-                    let (columns, rows, rowids) =
+                    let (columns, rows, rowids, binary_cells) =
                         if query_result.columns.first().map(|c| c.as_str()) == Some("__rowid__") {
                             let columns: Vec<Column> = query_result
                                 .columns
@@ -662,7 +769,20 @@ impl DataGrid {
                                     row.iter().skip(1).cloned().collect()
                                 })
                                 .collect();
-                            (columns, rows, rowids)
+                            let binary_cells = query_result
+                                .binary_cells
+                                .iter()
+                                .filter_map(|cell| {
+                                    cell.column_index.checked_sub(1).map(|column_index| {
+                                        BinaryCell {
+                                            row_index: cell.row_index,
+                                            column_index,
+                                            bytes: cell.bytes.clone(),
+                                        }
+                                    })
+                                })
+                                .collect();
+                            (columns, rows, rowids, binary_cells)
                         } else {
                             let columns: Vec<Column> = query_result
                                 .columns
@@ -674,7 +794,7 @@ impl DataGrid {
                                 .iter()
                                 .map(|row| row.iter().cloned().collect())
                                 .collect();
-                            (columns, rows, Vec::new())
+                            (columns, rows, Vec::new(), query_result.binary_cells.clone())
                         };
 
                     let column_meta: Vec<ColumnInfo> = query_result
@@ -719,7 +839,13 @@ impl DataGrid {
                         table.update(cx, |state, cx| {
                             state.delegate_mut().set_loading(false);
                             state.delegate_mut().set_column_meta(column_meta);
-                            state.delegate_mut().update_data(columns, rows, rowids, cx);
+                            state.delegate_mut().update_data_with_binary_cells(
+                                columns,
+                                rows,
+                                rowids,
+                                binary_cells,
+                                cx,
+                            );
                             state.delegate_mut().apply_order_by_clause(&order_by_clause);
                             state.refresh(cx);
                         });
@@ -1171,6 +1297,7 @@ impl DataGrid {
                 Ok(results) => {
                     let (result, column_meta) = results;
                     if let SqlResult::Query(query_result) = result {
+                        let binary_cells = query_result.binary_cells.clone();
                         let columns: Vec<Column> = query_result
                             .columns
                             .iter()
@@ -1186,7 +1313,13 @@ impl DataGrid {
                                 if let Some(columns) = column_meta {
                                     state.delegate_mut().set_column_meta(columns);
                                 }
-                                state.delegate_mut().update_data(columns, rows, vec![], cx);
+                                state.delegate_mut().update_data_with_binary_cells(
+                                    columns,
+                                    rows,
+                                    vec![],
+                                    binary_cells,
+                                    cx,
+                                );
                                 state.refresh(cx);
                             });
                         })
@@ -1376,6 +1509,9 @@ impl DataGrid {
         let col_ix = selected_col_ix.checked_sub(1)?;
         let delegate = table.delegate();
         let actual_row_ix = delegate.resolve_display_row(display_row_ix)?;
+        if delegate.is_binary_cell(actual_row_ix, col_ix) {
+            return None;
+        }
         let value = delegate
             .rows
             .get(actual_row_ix)

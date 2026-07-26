@@ -133,7 +133,58 @@ impl TerminalView {
         self.line_height_scale
     }
 
-    pub fn reconnect(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let reconnect_source =
+            resolve_ssh_reconnect_source(&self.duplicate_source, |connection_id| {
+                let storage = cx
+                    .try_global::<GlobalStorageState>()
+                    .ok_or_else(|| anyhow::anyhow!("Global storage is unavailable"))?;
+                let repository = storage
+                    .storage
+                    .get::<ConnectionRepository>()
+                    .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+                repository.get(connection_id)
+            });
+        let reconnect_source = match reconnect_source {
+            Ok(source) => source,
+            Err(error) => {
+                tracing::error!(%error, "Failed to load latest SSH connection for reconnect");
+                window.push_notification(
+                    Notification::error(
+                        t!("TerminalView.reconnect_load_latest_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+                return;
+            }
+        };
+        if let Some(source) = reconnect_source {
+            let apply_result = self.terminal.update(cx, |terminal, _cx| {
+                terminal.apply_ssh_connection_update(SshConnectionUpdate {
+                    connection: source.connection.clone(),
+                    working_dir: source.working_dir.clone(),
+                    sync_path_with_terminal: source.sync_path_with_terminal,
+                })
+            });
+            if let Err(error) = apply_result {
+                tracing::error!(%error, "Failed to apply latest SSH connection for reconnect");
+                window.push_notification(
+                    Notification::error(
+                        t!("TerminalView.reconnect_apply_latest_failed", error = error).to_string(),
+                    )
+                    .autohide(true),
+                    cx,
+                );
+                return;
+            }
+            self.duplicate_source = TerminalDuplicateSource::Ssh {
+                connection: source.connection,
+                working_dir: source.working_dir,
+                sync_path_with_terminal: source.sync_path_with_terminal,
+            };
+        }
+
         let working_dir = self
             .terminal
             .read(cx)

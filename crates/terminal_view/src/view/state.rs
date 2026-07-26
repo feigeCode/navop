@@ -30,6 +30,38 @@ pub(crate) enum TerminalDuplicateSource {
     Serial(StoredConnection),
 }
 
+#[derive(Clone)]
+pub(super) struct SshReconnectSource {
+    pub(super) connection: StoredConnection,
+    pub(super) working_dir: Option<String>,
+    pub(super) sync_path_with_terminal: bool,
+}
+
+pub(super) fn resolve_ssh_reconnect_source(
+    source: &TerminalDuplicateSource,
+    load_connection: impl FnOnce(i64) -> anyhow::Result<Option<StoredConnection>>,
+) -> anyhow::Result<Option<SshReconnectSource>> {
+    let TerminalDuplicateSource::Ssh {
+        connection,
+        working_dir,
+        sync_path_with_terminal,
+    } = source
+    else {
+        return Ok(None);
+    };
+
+    let latest = match connection.id {
+        Some(id) => load_connection(id)?
+            .ok_or_else(|| anyhow::anyhow!("SSH connection {id} no longer exists"))?,
+        None => connection.clone(),
+    };
+    Ok(Some(SshReconnectSource {
+        connection: latest,
+        working_dir: working_dir.clone(),
+        sync_path_with_terminal: *sync_path_with_terminal,
+    }))
+}
+
 pub(super) fn terminal_tab_duplicate_supported(source: &TerminalDuplicateSource) -> bool {
     matches!(
         source,

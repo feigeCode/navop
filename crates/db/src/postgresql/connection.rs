@@ -23,8 +23,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
-    apply_query_max_rows,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult,
+    SqlSource, apply_query_max_rows,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
@@ -521,11 +521,25 @@ impl PostgresDbConnection {
             })
             .collect();
 
+        let mut binary_cells = Vec::new();
         let all_rows: Vec<Vec<Option<String>>> = rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(row_index, row)| {
                 (0..columns.len())
-                    .map(|i| Self::extract_value(row, i))
+                    .map(|i| {
+                        if stmt.columns()[i].type_() == &Type::BYTEA {
+                            if let Some(bytes) = row.try_get::<_, Option<Vec<u8>>>(i).ok().flatten()
+                            {
+                                binary_cells.push(BinaryCell {
+                                    row_index,
+                                    column_index: i,
+                                    bytes,
+                                });
+                            }
+                        }
+                        Self::extract_value(row, i)
+                    })
                     .collect()
             })
             .collect();
@@ -535,6 +549,7 @@ impl PostgresDbConnection {
             columns,
             column_meta,
             rows: all_rows,
+            binary_cells,
             elapsed_ms,
         })
     }

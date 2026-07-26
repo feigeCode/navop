@@ -55,6 +55,7 @@ pub enum DbNodeType {
     SequencesFolder,
     Sequence,
     QueriesFolder,
+    QueryFolder,
     NamedQuery,
 }
 
@@ -83,6 +84,7 @@ impl fmt::Display for DbNodeType {
             DbNodeType::ProceduresFolder => write!(f, "Procedures"),
             DbNodeType::Procedure => write!(f, "Procedure"),
             DbNodeType::QueriesFolder => write!(f, "Queries"),
+            DbNodeType::QueryFolder => write!(f, "Query Folder"),
             DbNodeType::NamedQuery => write!(f, "Query"),
             DbNodeType::SequencesFolder => write!(f, "Sequences"),
             DbNodeType::Sequence => write!(f, "Sequence"),

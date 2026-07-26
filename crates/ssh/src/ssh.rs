@@ -279,6 +279,7 @@ impl client::Handler for RusshHandler {
         channel: Channel<client::Msg>,
         originator_address: &str,
         originator_port: u32,
+        reply: client::ChannelOpenHandle,
         _session: &mut client::Session,
     ) -> Result<(), Self::Error> {
         let Some(x11_handle) = self.x11_handle.clone() else {
@@ -286,11 +287,17 @@ impl client::Handler for RusshHandler {
                 target: "ssh.x11",
                 originator_address,
                 originator_port,
-                "收到 x11 回连通道，但本连接未启用 X11 转发，直接关闭"
+                "收到 x11 回连通道，但本连接未启用 X11 转发，拒绝通道"
             );
-            let _ = channel.close().await;
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
             return Ok(());
         };
+
+        // russh 0.62 起，服务端主动打开的通道必须由回调显式确认。
+        // 仅在本连接确实启用了 X11 转发时接受，避免先确认再立即关闭。
+        reply.accept().await;
 
         let originator = Some((
             originator_address.to_string(),

@@ -104,7 +104,7 @@ The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP
 The startup sequence in `main/src/main.rs` and `main/src/onetcli_app.rs` is order-sensitive:
 
 1. `update::handle_update_command()` — handle self-update CLI commands
-2. `load_env_files()` — load `.env.local` / `.env` from CWD + exe directory + Resources
+2. `load_env_files()` — 仅开发构建从 CWD / 工作区加载 `.env.local` / `.env`
 3. `Application::new().with_assets(Assets)` — create app with bundled assets
 4. `onetcli_app::init(cx)` — tracing, HTTP client, then subsystem init:
    - `gpui_component::init(cx)` — **must be called before any UI component usage**
@@ -163,7 +163,7 @@ Text input based on Rope (`ropey` crate) with:
 
 ## Configuration
 
-- **Environment files**: `.env.local` (priority) → `.env` (fallback), loaded from CWD + exe directory + macOS Resources directory
+- **Environment files**: 仅开发构建加载 `.env.local`（优先）→ `.env`（回退），搜索 CWD 与工作区根目录；Release 不读取环境文件
 - **Build-time config**: `SUPABASE_URL`, `SUPABASE_ANON_KEY` can be baked in at compile time, overridden at runtime
 - **Update URL**: the implementation currently accepts the legacy `NAVOP_UPDATE_URL` env var for compatibility
 - **Log level**: `RUST_LOG` env var (default: `info`)

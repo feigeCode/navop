@@ -46,6 +46,9 @@ impl RemoteDesktopView {
                 height,
                 rgba,
             } => {
+                if !self.connected {
+                    return;
+                }
                 self.remote_size = Some((width, height));
                 self.install_frame(rgba_to_render_image(width, height, rgba));
             }
@@ -54,6 +57,9 @@ impl RemoteDesktopView {
                 height,
                 bgra,
             } => {
+                if !self.connected {
+                    return;
+                }
                 self.remote_size = Some((width, height));
                 self.install_bgra_frame(width, height, bgra);
             }
@@ -63,12 +69,16 @@ impl RemoteDesktopView {
                 rects,
                 bgra,
             } => {
+                if !self.connected {
+                    return;
+                }
                 self.remote_size = Some((width, height));
                 self.apply_bgra_rects(width, height, &rects, bgra);
             }
+            RemoteDesktopOutput::Reconnecting(message) => self.reset_session_state(message),
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
             RemoteDesktopOutput::ConnectionFailure(message)
-            | RemoteDesktopOutput::Terminated(message) => self.handle_disconnect_status(message),
+            | RemoteDesktopOutput::Terminated(message) => self.reset_session_state(message),
             RemoteDesktopOutput::CursorDefault
             | RemoteDesktopOutput::CursorHidden
             | RemoteDesktopOutput::CursorPosition { .. } => {}
@@ -181,16 +191,24 @@ impl RemoteDesktopView {
         self.send_input(RemoteDesktopInput::ClipboardText { text });
     }
 
-    fn handle_disconnect_status(&mut self, message: String) {
+    fn reset_session_state(&mut self, message: String) {
         self.modifiers = Modifiers::default();
         self.connected = false;
         self.status = SharedString::from(message);
+        self.remote_size = None;
+        self.framebuffer = None;
+        self.pending_frame_drops.extend(
+            self.rendered_frames
+                .take_all_distinct(self.latest_frame.take()),
+        );
+        self.last_resize_size = None;
+        self.pending_resize_size = None;
+        self.pending_resize_updated_at = None;
+        self.last_resize_sent_at = None;
     }
 
     pub(super) fn request_reconnect(&mut self) {
-        self.modifiers = Modifiers::default();
-        self.connected = false;
-        self.status = SharedString::from(t!("RemoteDesktop.status_reconnecting").to_string());
+        self.reset_session_state(t!("RemoteDesktop.status_reconnecting").to_string());
         self.send_input(RemoteDesktopInput::Reconnect);
     }
 
@@ -234,7 +252,7 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn flush_pending_resize(&mut self) {
-        if self.remote_size.is_none() {
+        if !resize::can_flush_pending_resize(self.connected, self.remote_size) {
             return;
         }
         let (Some(size), Some(updated_at)) =

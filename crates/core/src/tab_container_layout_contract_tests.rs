@@ -44,6 +44,63 @@ fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
     assert!(content.contains(".min_w_0()"));
     assert!(content.contains(".min_h_0()"));
     assert!(content.contains(".overflow_hidden()"));
+
+    let active_view_start = source
+        .find("fn render_active_tab_view")
+        .expect("active tab view boundary");
+    let active_view_end = source[active_view_start..]
+        .find("fn render_content_with_sidebars")
+        .map(|offset| active_view_start + offset)
+        .expect("sidebar content renderer");
+    let active_view = &source[active_view_start..active_view_end];
+
+    assert!(active_view.contains(".size_full()"));
+    assert!(active_view.contains(".min_w_0()"));
+    assert!(active_view.contains(".min_h_0()"));
+    assert!(active_view.contains(".overflow_hidden()"));
+
+    let tab_content_start = source
+        .find("pub fn render_tab_content")
+        .expect("tab content renderer");
+    let tab_content_end = source[tab_content_start..]
+        .find("fn tab_switcher_entries")
+        .map(|offset| tab_content_start + offset)
+        .expect("tab switcher entries");
+    let tab_content = &source[tab_content_start..tab_content_end];
+
+    assert_eq!(
+        tab_content.matches("Self::render_active_tab_view(").count(),
+        2,
+        "both sidebar and non-sidebar paths must isolate the active view"
+    );
+    assert!(!tab_content.contains("el.child(view)"));
+}
+
+#[test]
+fn sidebar_center_clips_active_view_intrinsic_size_at_every_flex_boundary() {
+    let source = include_str!("tab_container.rs");
+    let renderer_start = source
+        .find("fn render_content_with_sidebars")
+        .expect("sidebar content renderer");
+    let renderer_end = source[renderer_start..]
+        .find("pub fn render_tab_content")
+        .map(|offset| renderer_start + offset)
+        .expect("tab content renderer");
+    let renderer = &source[renderer_start..renderer_end];
+
+    let center_start = renderer
+        .find("let center_content = div()")
+        .expect("sidebar center content");
+    let center_end = renderer[center_start..]
+        .find("let center = if bottom.is_empty()")
+        .map(|offset| center_start + offset)
+        .expect("sidebar center layout");
+    let center = &renderer[center_start..center_end];
+
+    assert!(center.contains(".size_full()"));
+    assert!(center.contains(".min_w_0()"));
+    assert!(center.contains(".min_h_0()"));
+    assert!(center.contains(".overflow_hidden()"));
 }
 
 #[test]
@@ -71,6 +128,29 @@ fn window_controls_follow_the_active_theme_for_contrast() {
     assert!(always_on_top.contains("cx.theme().secondary_active"));
     assert!(!always_on_top.contains("gpui::rgb(0xffffff)"));
     assert!(!always_on_top.contains("gpui::rgb(0x2a2a2a)"));
+}
+
+#[test]
+fn windows_native_controls_occlude_the_tab_drag_region() {
+    let source = include_str!("tab_container.rs");
+    let button_start = source
+        .find("fn render_control_button")
+        .expect("window control button renderer");
+    let button_end = source[button_start..]
+        .find("/// 渲染窗口置顶按钮")
+        .map(|offset| button_start + offset)
+        .expect("always-on-top renderer");
+    let button = &source[button_start..button_end];
+    let windows_branch_start = button
+        .find(".when(is_windows")
+        .expect("Windows control branch");
+    let windows_branch = &button[windows_branch_start..];
+
+    assert!(
+        windows_branch.contains("this.occlude().window_control_area(control_area)"),
+        "Windows caption buttons must block the broader tab Drag hitbox before declaring \
+         Min/Max/Close areas"
+    );
 }
 
 #[test]

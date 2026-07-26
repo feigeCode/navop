@@ -3,6 +3,7 @@ use one_core::storage::{
     RedisMode, RedisParams, RemoteDesktopParams, SerialParams, SshAuthMethod, SshParams,
     StoredConnection,
 };
+use serde_json::Value;
 
 use crate::_rust_i18n_translate;
 
@@ -29,6 +30,44 @@ pub(super) fn connection_share_text_for_locale(
         ConnectionType::All => return None,
     };
     Some(render_share_template(connection, fields, locale))
+}
+
+pub(crate) fn connection_full_info_text(connection: &StoredConnection) -> Option<String> {
+    connection_full_info_text_for_locale(connection, rust_i18n::locale().as_ref())
+}
+
+pub(crate) fn connection_full_info_text_for_locale(
+    connection: &StoredConnection,
+    locale: &str,
+) -> Option<String> {
+    let mut params = serde_json::from_str::<Value>(&connection.params).ok()?;
+    redact_embedded_private_keys(&mut params, locale);
+    let params = serde_json::to_string_pretty(&params).ok()?;
+    let separator = tr(locale, "Connection.Share.separator");
+    let mut lines = vec![
+        tr(locale, "Connection.FullInfo.title"),
+        full_info_line(locale, "name", &connection.name, &separator),
+        full_info_line(
+            locale,
+            "type",
+            &tr(locale, connection_type_key(connection.connection_type)),
+            &separator,
+        ),
+    ];
+    if let Some(remark) = connection
+        .remark
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(full_info_line(locale, "remark", remark, &separator));
+    }
+    lines.push(format!(
+        "{}{}\n{}",
+        tr(locale, "Connection.FullInfo.parameters"),
+        separator.trim_end(),
+        params
+    ));
+    Some(lines.join("\n"))
 }
 
 fn render_share_template(
@@ -179,6 +218,54 @@ fn share_line(locale: &str, field: &str, value: &str, separator: &str) -> String
         "{}{separator}{value}",
         tr(locale, &format!("Connection.Share.{field}"))
     )
+}
+
+fn full_info_line(locale: &str, field: &str, value: &str, separator: &str) -> String {
+    format!(
+        "{}{separator}{value}",
+        tr(locale, &format!("Connection.FullInfo.{field}"))
+    )
+}
+
+fn redact_embedded_private_keys(value: &mut Value, locale: &str) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if is_private_key_content_variant(key, value) {
+                    redact_embedded_private_keys(value, locale);
+                } else if is_embedded_private_key_field(key) {
+                    *value = Value::String(tr(
+                        locale,
+                        "Connection.FullInfo.embedded_private_key_redacted",
+                    ));
+                } else {
+                    redact_embedded_private_keys(value, locale);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_embedded_private_keys(value, locale);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_private_key_content_variant(key: &str, value: &Value) -> bool {
+    key == "PrivateKeyContent"
+        && value
+            .as_object()
+            .is_some_and(|fields| fields.contains_key("private_key"))
+}
+
+fn is_embedded_private_key_field(key: &str) -> bool {
+    let normalized = key
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    normalized.ends_with("privatekey") || normalized.ends_with("privatekeycontent")
 }
 
 fn tr(locale: &str, key: &str) -> String {

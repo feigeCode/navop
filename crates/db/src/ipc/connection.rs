@@ -13,7 +13,7 @@
 
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
-    ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlResult, SqlSource,
+    BinaryCell, ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlResult, SqlSource,
 };
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::method_support::{MethodSet, MethodSupport};
@@ -236,13 +236,14 @@ impl ExternalDbConnection {
         }
 
         // close 之后再传播 fetch 错误,保证错误路径也释放了 cursor。
-        let rows = fetch_outcome?;
+        let fetched = fetch_outcome?;
 
         Ok(SqlResult::Query(QueryResult {
             sql: sql.to_string(),
             columns,
             column_meta,
-            rows,
+            rows: fetched.rows,
+            binary_cells: fetched.binary_cells,
             elapsed_ms: start.elapsed().as_millis(),
         }))
     }
@@ -256,8 +257,9 @@ impl ExternalDbConnection {
         &self,
         conn_id: ConnId,
         cursor_id: &str,
-    ) -> Result<Vec<Vec<Option<String>>>, DbError> {
+    ) -> Result<FetchedRows, DbError> {
         let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+        let mut binary_cells = Vec::new();
         loop {
             let fetch_resp: CursorFetchOutput = self
                 .call::<CursorFetchOutput>(
@@ -267,13 +269,26 @@ impl ExternalDbConnection {
                 .await?;
 
             for row in fetch_resp.rows {
-                rows.push(row_to_strings(row));
+                let row_index = rows.len();
+                let mut display_row = Vec::with_capacity(row.len());
+                for (column_index, cell) in row.into_iter().enumerate() {
+                    let value = cell_to_display_value(cell);
+                    if let Some(bytes) = value.binary {
+                        binary_cells.push(BinaryCell {
+                            row_index,
+                            column_index,
+                            bytes,
+                        });
+                    }
+                    display_row.push(value.text);
+                }
+                rows.push(display_row);
             }
             if fetch_resp.done {
                 break;
             }
         }
-        Ok(rows)
+        Ok(FetchedRows { rows, binary_cells })
     }
 
     /// wire 透传分发:解析信封 → 按需注入 conn_id → 按 [`MethodSupport`] 决定调外部
@@ -490,8 +505,19 @@ fn column_spec_to_meta(spec: &ColumnSpec) -> QueryColumnMeta {
 }
 
 /// 把一行 `Row` 翻译成宿主侧的 `Vec<Option<String>>`(每列一个可空字符串)。
+#[cfg(test)]
 fn row_to_strings(row: Row) -> Vec<Option<String>> {
     row.into_iter().map(cell_to_string).collect()
+}
+
+struct FetchedRows {
+    rows: Vec<Vec<Option<String>>>,
+    binary_cells: Vec<BinaryCell>,
+}
+
+struct CellDisplayValue {
+    text: Option<String>,
+    binary: Option<Vec<u8>>,
 }
 
 /// 单个 `CellValue` → 显示字符串。
@@ -503,9 +529,14 @@ fn row_to_strings(row: Row) -> Vec<Option<String>> {
 /// - datetime:归一到宿主表格常用的空格分隔格式
 /// - bytes:`0x...` hex 化,保持宿主表格中的二进制展示稳定
 /// - json / array / map / geo / custom:`to_string()` 让 caller 看到原 JSON
+#[cfg(test)]
 fn cell_to_string(cell: CellValue) -> Option<String> {
+    cell_to_display_value(cell).text
+}
+
+fn cell_to_display_value(cell: CellValue) -> CellDisplayValue {
     use base64::Engine;
-    match cell {
+    let text = match cell {
         CellValue::Null => None,
         CellValue::Bool { value } => Some(value.to_string()),
         CellValue::I64 { value } => Some(value.to_string()),
@@ -519,18 +550,24 @@ fn cell_to_string(cell: CellValue) -> Option<String> {
         | CellValue::Duration { value } => Some(value),
         CellValue::Datetime { value } => Some(format_ipc_datetime(&value)),
         CellValue::Bytes { value } => {
-            // wire 上是 base64,宿主查询表格统一展示为 hex(`0x...`)。
-            match base64::engine::general_purpose::STANDARD.decode(value.as_bytes()) {
-                Ok(bytes) => Some(format!("0x{}", hex::encode(&bytes))),
-                Err(_) => Some(value), // 解码失败,原 string 显示
-            }
+            return match base64::engine::general_purpose::STANDARD.decode(value.as_bytes()) {
+                Ok(bytes) => CellDisplayValue {
+                    text: Some(format!("0x{}", hex::encode(&bytes))),
+                    binary: Some(bytes),
+                },
+                Err(_) => CellDisplayValue {
+                    text: Some(value),
+                    binary: None,
+                },
+            };
         }
         CellValue::Json { value } => Some(value.to_string()),
         CellValue::Array { value, .. } => Some(json!(value).to_string()),
         CellValue::Map { value } => Some(Value::Object(value).to_string()),
         CellValue::Geo { value, .. } => Some(value),
         CellValue::Custom { subtype, raw } => Some(format!("custom:{subtype}({raw})")),
-    }
+    };
+    CellDisplayValue { text, binary: None }
 }
 
 fn format_ipc_datetime(value: &str) -> String {
@@ -1000,6 +1037,7 @@ fn wire_value_result(sql: &str, value: Value) -> SqlResult {
         columns: vec!["json".to_string()],
         column_meta: vec![QueryColumnMeta::new("json", "JSON")],
         rows: vec![vec![Some(value.to_string())]],
+        binary_cells: vec![],
         elapsed_ms: 0,
     })
 }
@@ -1039,6 +1077,7 @@ fn schema_users_value_result(sql: &str, value: Value) -> Option<SqlResult> {
         columns,
         column_meta,
         rows,
+        binary_cells: vec![],
         elapsed_ms: 0,
     }))
 }
@@ -1050,6 +1089,7 @@ fn sql_explain_value_result(sql: &str, value: Value) -> Option<SqlResult> {
         columns: vec!["explain".to_string()],
         column_meta: vec![QueryColumnMeta::new("explain", "TEXT")],
         rows: vec![vec![Some(result.content)]],
+        binary_cells: vec![],
         elapsed_ms: 0,
     }))
 }
@@ -1240,20 +1280,22 @@ mod tests {
     }
 
     #[test]
-    fn cell_to_string_decodes_bytes_to_hex() {
+    fn cell_to_display_value_preserves_binary_bytes() {
         // base64 of [1,2,3] = "AQID"
-        let s = cell_to_string(CellValue::Bytes {
+        let value = cell_to_display_value(CellValue::Bytes {
             value: "AQID".into(),
         });
-        assert_eq!(s.as_deref(), Some("0x010203"));
+        assert_eq!(value.text.as_deref(), Some("0x010203"));
+        assert_eq!(value.binary.as_deref(), Some([1, 2, 3].as_slice()));
     }
 
     #[test]
-    fn cell_to_string_bytes_invalid_base64_returns_raw() {
-        let s = cell_to_string(CellValue::Bytes {
+    fn cell_to_display_value_invalid_base64_returns_raw_without_binary_sidecar() {
+        let value = cell_to_display_value(CellValue::Bytes {
             value: "not_base64!".into(),
         });
-        assert_eq!(s.as_deref(), Some("not_base64!"));
+        assert_eq!(value.text.as_deref(), Some("not_base64!"));
+        assert!(value.binary.is_none());
     }
 
     #[test]

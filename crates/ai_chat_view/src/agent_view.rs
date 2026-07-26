@@ -286,6 +286,10 @@ fn running_session_indicator_color(selected: bool, style: SessionRowStyle) -> gp
     }
 }
 
+fn running_session_animation_id(uid: &str) -> SharedString {
+    SharedString::from(format!("agent-session-running-animation-{uid}"))
+}
+
 impl RuntimeBinding {
     fn new(
         runtime: Arc<Runtime>,
@@ -2212,6 +2216,7 @@ impl AgentChatView {
         let row_style = themed_session_row_style(&theme);
         let running_color = running_session_indicator_color(selected, row_style);
         let running_indicator_id = format!("agent-session-running-spinner-{uid}");
+        let running_animation_id = running_session_animation_id(&uid);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
         let label = session_sidebar::session_row_with_style(session, selected, row_style).when(
@@ -2227,7 +2232,12 @@ impl AgentChatView {
                         .flex_shrink_0()
                         .text_xs()
                         .text_color(running_color)
-                        .child(Spinner::new().small().color(running_color))
+                        .child(
+                            Spinner::new()
+                                .small()
+                                .color(running_color)
+                                .animation_id(running_animation_id),
+                        )
                         .child(t!("AgentUi.running").to_string()),
                 )
             },
@@ -2718,11 +2728,16 @@ impl Render for AgentChatView {
             )
         };
         let input_area = div()
+            .id("agent-input-area")
             .debug_selector(|| "agent-input-area".to_string())
             .w_full()
             .min_w_0()
-            .flex_shrink_0()
-            .overflow_hidden()
+            .when(self.sidebar_mode, |this| {
+                this.min_h_0().flex_shrink(1.0).overflow_y_scroll()
+            })
+            .when(!self.sidebar_mode, |this| {
+                this.flex_shrink_0().overflow_hidden()
+            })
             .border_t_1()
             .border_color(chat_theme.border)
             .bg(chat_theme.background)
@@ -2730,6 +2745,7 @@ impl Render for AgentChatView {
                 v_flex()
                     .w_full()
                     .min_w_0()
+                    .when(self.sidebar_mode, |this| this.min_h_0().overflow_hidden())
                     .when(!self.sidebar_mode, |this| this.p_3())
                     .child(self.input.clone()),
             );
@@ -5650,6 +5666,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parallel_running_sessions_use_independent_animation_ids() {
+        assert_ne!(
+            running_session_animation_id("session-a"),
+            running_session_animation_id("session-b")
+        );
+    }
+
     #[gpui::test]
     fn sidebar_mode_input_is_edge_to_edge(cx: &mut TestAppContext) {
         init_test_ui(cx);
@@ -5828,6 +5852,14 @@ mod tests {
         assert_eq!(root.size.width, input_area.size.width);
         assert_eq!(input_area.origin.x, input.origin.x);
         assert_eq!(input_area.size.width, input.size.width);
+        assert!(
+            input_area.size.height > px(0.0),
+            "sidebar input area must keep a visible height: area={input_area:?}, input={input:?}"
+        );
+        assert!(
+            input.size.height > px(0.0),
+            "sidebar input root must keep a visible height: area={input_area:?}, input={input:?}"
+        );
     }
 
     #[gpui::test]
@@ -5864,6 +5896,14 @@ mod tests {
             .expect("input root should remain rendered");
 
         assert!(
+            input_area.size.height > px(0.0),
+            "input area must not collapse in a short sidebar: slot={slot:?}, input={input_area:?}"
+        );
+        assert!(
+            input.size.height > px(0.0),
+            "input root must not collapse in a short sidebar: slot={slot:?}, input={input:?}"
+        );
+        assert!(
             messages.bottom() <= input_area.origin.y,
             "messages must end before the input area: messages={messages:?}, input={input_area:?}"
         );
@@ -5872,8 +5912,8 @@ mod tests {
             "input area must stay inside the sidebar viewport: slot={slot:?}, input={input_area:?}"
         );
         assert!(
-            input.bottom() <= slot.bottom(),
-            "input root must stay visible after the reply: slot={slot:?}, input={input:?}"
+            input.origin.y < slot.bottom(),
+            "the scrollable input root must start inside the sidebar viewport: slot={slot:?}, input={input:?}"
         );
     }
 

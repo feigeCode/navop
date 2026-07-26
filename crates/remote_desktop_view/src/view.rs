@@ -72,6 +72,7 @@ pub struct RemoteDesktopView {
     latest_frame: Option<Arc<RenderImage>>,
     framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
+    pending_frame_drops: Vec<Arc<RenderImage>>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
     initial_size: resize::InitialSize,
@@ -110,9 +111,11 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
-            let frames = this
-                .rendered_frames
-                .take_all_distinct(this.latest_frame.take());
+            let mut frames = std::mem::take(&mut this.pending_frame_drops);
+            frames.extend(
+                this.rendered_frames
+                    .take_all_distinct(this.latest_frame.take()),
+            );
             let _ = window_handle.update(cx, move |_, window, _| {
                 for frame in frames {
                     if let Err(error) = window.drop_image(frame) {
@@ -132,6 +135,7 @@ impl RemoteDesktopView {
             latest_frame: None,
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
+            pending_frame_drops: Vec::new(),
             remote_size: None,
             content_bounds: None,
             initial_size: resize::InitialSize::default(),
@@ -256,5 +260,72 @@ mod tests {
             "VNC provider version 0.1.0 is too old. Please update the provider to 0.1.1 or newer.",
             super::remote_desktop_error_message(&error)
         );
+    }
+
+    #[test]
+    fn rendered_frame_cannot_expand_its_tab_container() {
+        let source = include_str!("view/render.rs");
+
+        let content_start = source
+            .find("let content = div()")
+            .expect("remote desktop content");
+        let root_start = source[content_start..]
+            .find("\n        div()\n            .size_full()\n            .min_w_0()")
+            .map(|offset| content_start + offset)
+            .expect("remote desktop root");
+        let content = &source[content_start..root_start];
+        let root = &source[root_start..];
+
+        assert!(content.contains(".size_full()"));
+        assert!(content.contains(".min_w_0()"));
+        assert!(content.contains(".min_h_0()"));
+        assert!(content.contains(".overflow_hidden()"));
+        let frame_start = content.find("img(frame)").expect("rendered frame");
+        let frame_end = content[frame_start..]
+            .find(".object_fit(ObjectFit::Fill)")
+            .map(|offset| frame_start + offset)
+            .expect("rendered frame fit");
+        let frame = &content[frame_start..frame_end];
+        assert!(frame.contains(".size_full()"));
+        assert!(frame.contains(".min_w_0()"));
+        assert!(frame.contains(".min_h_0()"));
+
+        let status = &content[content
+            .find(".when(rendered_frame.is_none()")
+            .expect("empty-frame status")..];
+        assert!(status.contains(".min_w_0()"));
+        assert!(status.contains(".max_w_full()"));
+        assert!(status.contains(".overflow_hidden()"));
+
+        assert!(root.contains(".size_full()"));
+        assert!(root.contains(".min_w_0()"));
+        assert!(root.contains(".min_h_0()"));
+        assert!(root.contains(".overflow_hidden()"));
+    }
+
+    #[test]
+    fn reconnect_status_overlay_has_a_full_size_layout_boundary() {
+        let source = include_str!("view/render.rs");
+        let overlay_start = source
+            .find(".when(show_status_overlay")
+            .expect("reconnect overlay");
+        let overlay = &source[overlay_start..];
+        let badge_start = overlay
+            .find(".id(\"remote-desktop-status-overlay\")")
+            .expect("reconnect status badge");
+        let boundary = &overlay[..badge_start];
+        let badge = &overlay[badge_start..];
+
+        assert!(boundary.contains(".absolute()"));
+        assert!(boundary.contains(".inset_0()"));
+        assert!(boundary.contains(".min_w_0()"));
+        assert!(boundary.contains(".min_h_0()"));
+        assert!(boundary.contains(".flex()"));
+        assert!(boundary.contains(".overflow_hidden()"));
+        assert!(boundary.contains(".p_2()"));
+        assert!(badge.contains(".min_w_0()"));
+        assert!(badge.contains(".max_w(px(520.0))"));
+        assert!(badge.contains(".flex_shrink(1.0)"));
+        assert!(badge.contains(".overflow_hidden()"));
     }
 }

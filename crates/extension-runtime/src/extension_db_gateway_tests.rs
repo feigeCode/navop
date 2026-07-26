@@ -64,6 +64,7 @@ fn query_result_converts_to_row_batch() {
         columns: vec!["id".to_string()],
         column_meta: vec![QueryColumnMeta::new("id", "int").with_nullable(false)],
         rows: vec![vec![Some("1".to_string())], vec![None]],
+        binary_cells: vec![],
         elapsed_ms: 1,
     })]);
 

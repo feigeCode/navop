@@ -2352,6 +2352,7 @@ mod tests {
                     columns: vec!["COUNT".into()],
                     column_meta: vec![],
                     rows: vec![vec![Some("1".into())]],
+                    binary_cells: vec![],
                     elapsed_ms: 0,
                 }));
             }
@@ -2360,6 +2361,7 @@ mod tests {
                 columns: vec!["__rowid__".into(), "ID".into()],
                 column_meta: vec![],
                 rows: vec![vec![Some("AAABBB".into()), Some("1".into())]],
+                binary_cells: vec![],
                 elapsed_ms: 0,
             }))
         }

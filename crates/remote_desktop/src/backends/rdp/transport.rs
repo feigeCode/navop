@@ -254,13 +254,23 @@ pub(super) fn forward_helper_output(
     output_tx: &OutputMailboxSender,
     signal_tx: &std::sync::mpsc::Sender<BackendSignal>,
 ) {
-    if helper_output.connected {
+    // Publish the output before notifying the backend loop. The loop reacts
+    // to a disconnect by starting the next helper session and emitting the
+    // `Reconnecting` barrier. If the signal were sent first, that barrier
+    // could overtake this session's terminal/connected output and let a stale
+    // event clear or overwrite state from the next session.
+    let HelperOutput {
+        output,
+        connected,
+        disconnect_message,
+    } = helper_output;
+    let _ = output_tx.send(output);
+    if connected {
         let _ = signal_tx.send(BackendSignal::Connected);
     }
-    if let Some(message) = helper_output.disconnect_message {
+    if let Some(message) = disconnect_message {
         let _ = signal_tx.send(BackendSignal::Disconnected(message));
     }
-    let _ = output_tx.send(helper_output.output);
 }
 
 pub(super) fn write_request(
@@ -327,6 +337,10 @@ pub(super) fn helper_disconnect_message(event: &HelperEvent) -> Option<String> {
 
 pub(super) fn send_status(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::Status(message.to_string()));
+}
+
+pub(super) fn send_reconnecting(output_tx: &OutputMailboxSender, message: &str) {
+    let _ = output_tx.send(RemoteDesktopOutput::Reconnecting(message.to_string()));
 }
 
 pub(super) fn send_failure(output_tx: &OutputMailboxSender, message: &str) {

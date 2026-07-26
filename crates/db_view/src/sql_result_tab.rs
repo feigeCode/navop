@@ -668,7 +668,13 @@ impl SqlResultTabContainer {
                     .collect();
 
                 data_grid.update(cx, |this, cx| {
-                    this.update_data(columns, rows, vec![], cx);
+                    this.update_data_with_binary_cells(
+                        columns,
+                        rows,
+                        vec![],
+                        query_result.binary_cells.clone(),
+                        cx,
+                    );
                     this.load_column_meta_if_editable(cx);
                 });
 

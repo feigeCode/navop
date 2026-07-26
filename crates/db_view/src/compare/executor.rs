@@ -967,6 +967,7 @@ fn empty_target_response_from_columns(columns: &[ColumnInfo]) -> TableDataRespon
                 .map(|column| QueryColumnMeta::new(&column.name, &column.data_type))
                 .collect(),
             rows: Vec::new(),
+            binary_cells: Vec::new(),
             elapsed_ms: 0,
         },
     }
@@ -1696,6 +1697,7 @@ mod tests {
                 QueryColumnMeta::new("name", "text"),
             ],
             rows: vec![vec![Some("1".to_string()), None]],
+            binary_cells: vec![],
             elapsed_ms: 0,
         };
 
@@ -1728,6 +1730,7 @@ mod tests {
                 Some("true".to_string()),
                 Some("{\"sku\":\"A-1\"}".to_string()),
             ]],
+            binary_cells: vec![],
             elapsed_ms: 0,
         };
 
@@ -1749,6 +1752,7 @@ mod tests {
             columns: vec!["price".to_string()],
             column_meta: vec![QueryColumnMeta::new("price", "decimal")],
             rows: vec![vec![Some("12345678901234567890.1234500".to_string())]],
+            binary_cells: vec![],
             elapsed_ms: 0,
         };
 
@@ -2198,6 +2202,7 @@ mod tests {
                 columns: columns.into_iter().map(ToString::to_string).collect(),
                 column_meta,
                 rows,
+                binary_cells: vec![],
                 elapsed_ms: 0,
             },
         }

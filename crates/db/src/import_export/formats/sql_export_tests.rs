@@ -65,6 +65,7 @@ impl DbConnection for PagedConnection {
                 QueryColumnMeta::new("name", "VARCHAR"),
             ],
             rows,
+            binary_cells: vec![],
             elapsed_ms: 1,
         }))
     }

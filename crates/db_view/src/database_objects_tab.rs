@@ -29,16 +29,18 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, table::Column, tooltip::Tooltip, v_flex,
 };
 use gpui_component::{InteractiveElementExt, WindowExt};
-use one_core::storage::manager::get_queries_dir;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState,
-    StorageManager, Workspace,
+    QueryDirectoryEntryKind, QueryDirectoryScope, StorageManager, Workspace,
+    added_query_directories, default_query_directory, list_query_directory,
+    query_directory_display_name,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::debouncer::Debouncer;
 use rust_i18n::t;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::log::warn;
@@ -51,6 +53,74 @@ fn format_timestamp(ts: i64) -> String {
     } else {
         "".to_string()
     }
+}
+
+const QUERY_ROW_KIND_INDEX: usize = 3;
+const QUERY_ROW_PATH_INDEX: usize = 4;
+const QUERY_ROW_DEPTH_INDEX: usize = 5;
+const QUERY_ROW_KIND_DIRECTORY: &str = "directory";
+const QUERY_ROW_KIND_SQL: &str = "sql";
+
+fn append_query_rows(
+    directory: &Path,
+    depth: usize,
+    rows: &mut Vec<Vec<String>>,
+) -> anyhow::Result<()> {
+    use std::time::UNIX_EPOCH;
+
+    for entry in list_query_directory(directory)? {
+        let (created, modified) = if let Ok(metadata) = std::fs::metadata(&entry.path) {
+            let created_time = metadata
+                .created()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| format_timestamp(duration.as_millis() as i64))
+                .unwrap_or_default();
+            let modified_time = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| format_timestamp(duration.as_millis() as i64))
+                .unwrap_or_default();
+            (created_time, modified_time)
+        } else {
+            (String::new(), String::new())
+        };
+        let kind = match entry.kind {
+            QueryDirectoryEntryKind::Directory => QUERY_ROW_KIND_DIRECTORY,
+            QueryDirectoryEntryKind::SqlFile => QUERY_ROW_KIND_SQL,
+        };
+        rows.push(vec![
+            entry.name,
+            created,
+            modified,
+            kind.to_string(),
+            entry.path.to_string_lossy().into_owned(),
+            depth.to_string(),
+        ]);
+        if entry.kind == QueryDirectoryEntryKind::Directory {
+            append_query_rows(&entry.path, depth + 1, rows)?;
+        }
+    }
+    Ok(())
+}
+
+fn append_added_query_root_rows(
+    directories: impl IntoIterator<Item = PathBuf>,
+    rows: &mut Vec<Vec<String>>,
+) -> anyhow::Result<()> {
+    for directory in directories {
+        rows.push(vec![
+            query_directory_display_name(&directory),
+            String::new(),
+            String::new(),
+            QUERY_ROW_KIND_DIRECTORY.to_string(),
+            directory.to_string_lossy().into_owned(),
+            "0".to_string(),
+        ]);
+        append_query_rows(&directory, 1, rows)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn object_name_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
@@ -362,11 +432,17 @@ impl DatabaseObjects {
             | DbNodeType::ViewsFolder
             | DbNodeType::View
             | DbNodeType::QueriesFolder
+            | DbNodeType::QueryFolder
             | DbNodeType::NamedQuery => {}
             _ => return,
         }
 
-        if !node.children_loaded && node.node_type != DbNodeType::Connection {
+        if !node.children_loaded
+            && !matches!(
+                node.node_type,
+                DbNodeType::Connection | DbNodeType::QueriesFolder | DbNodeType::QueryFolder
+            )
+        {
             return;
         }
 
@@ -383,6 +459,7 @@ impl DatabaseObjects {
                 if !node_clone.children_loaded && node_clone.node_type == DbNodeType::Connection {
                     Self::load_connection_list_view(storage_manager, workspace)
                 } else if node_clone.node_type == DbNodeType::QueriesFolder
+                    || node_clone.node_type == DbNodeType::QueryFolder
                     || node_clone.node_type == DbNodeType::NamedQuery
                 {
                     Self::load_queries_list_view(node_clone.clone()).await
@@ -445,6 +522,7 @@ impl DatabaseObjects {
                 .enumerate()
                 .filter(|(_, row)| {
                     row.iter()
+                        .take(self.columns.len())
                         .any(|cell| cell.to_lowercase().contains(&self.search_query))
                 })
                 .map(|(idx, _)| idx)
@@ -504,66 +582,19 @@ impl DatabaseObjects {
     }
 
     async fn load_queries_list_view(node: DbNode) -> Option<ObjectView> {
-        use std::time::UNIX_EPOCH;
-
-        let database_name = node.get_database_name().unwrap_or_default();
-        let database_type = node.database_type.path_key();
-        let connection_id = node.connection_id.clone();
-
-        let queries_dir = get_queries_dir().ok()?;
-        let query_path = queries_dir
-            .join(database_type)
-            .join(&connection_id)
-            .join(&database_name);
-
-        if !query_path.exists() {
-            return Some(ObjectView {
-                db_node_type: DbNodeType::NamedQuery,
-                columns: vec![
-                    ObjectViewColumn::new("name", t!("Query.query_name")).width(200.0),
-                    ObjectViewColumn::new("created_at", t!("Table.created_at")).width(180.0),
-                    ObjectViewColumn::new("updated_at", t!("Table.updated_at")).width(180.0),
-                ],
-                rows: vec![],
-                title: t!("Query.query_list").to_string(),
-            });
-        }
-
-        let entries = std::fs::read_dir(&query_path).ok()?;
         let mut rows: Vec<Vec<String>> = Vec::new();
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "sql") {
-                let file_name = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                let (created, modified) = if let Ok(metadata) = std::fs::metadata(&path) {
-                    let created_time = metadata
-                        .created()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| format_timestamp(d.as_millis() as i64))
-                        .unwrap_or_default();
-                    let modified_time = metadata
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| format_timestamp(d.as_millis() as i64))
-                        .unwrap_or_default();
-                    (created_time, modified_time)
-                } else {
-                    (String::new(), String::new())
-                };
-
-                rows.push(vec![file_name, created, modified]);
-            }
+        if node.node_type == DbNodeType::QueryFolder {
+            let query_path = PathBuf::from(node.metadata.get("directory_path")?);
+            append_query_rows(&query_path, 0, &mut rows).ok()?;
+        } else {
+            let scope = QueryDirectoryScope::new(
+                node.database_type.path_key(),
+                node.connection_id.clone(),
+                node.get_database_name().unwrap_or_default(),
+            );
+            append_query_rows(&default_query_directory(&scope).ok()?, 0, &mut rows).ok()?;
+            append_added_query_root_rows(added_query_directories(&scope).ok()?, &mut rows).ok()?;
         }
-
-        rows.sort_by(|a, b| a[0].cmp(&b[0]));
 
         Some(ObjectView {
             db_node_type: DbNodeType::NamedQuery,
@@ -726,13 +757,21 @@ impl DatabaseObjects {
                 };
                 (node_id, DbNodeType::View)
             }
-            DbNodeType::QueriesFolder | DbNodeType::NamedQuery => {
-                let query_id = row_data.get(1).cloned().unwrap_or_default();
-                metadata.insert("query_name".to_string(), name.clone());
-                metadata.insert("query_id".to_string(), query_id.clone());
+            DbNodeType::QueriesFolder | DbNodeType::QueryFolder | DbNodeType::NamedQuery => {
+                let path = row_data.get(QUERY_ROW_PATH_INDEX)?.clone();
+                let row_kind = row_data.get(QUERY_ROW_KIND_INDEX).map(String::as_str);
+                let target_node_type = if row_kind == Some(QUERY_ROW_KIND_DIRECTORY) {
+                    metadata.insert("directory_path".to_string(), path.clone());
+                    DbNodeType::QueryFolder
+                } else {
+                    metadata.insert("file_path".to_string(), path.clone());
+                    metadata.insert("query_name".to_string(), name.clone());
+                    metadata.insert("query_id".to_string(), path.clone());
+                    DbNodeType::NamedQuery
+                };
                 (
-                    format!("{}:queries:{}", connection_id, query_id),
-                    DbNodeType::NamedQuery,
+                    format!("{}:queries:{}", connection_id, path),
+                    target_node_type,
                 )
             }
             _ => return None,
@@ -1027,6 +1066,20 @@ impl DatabaseObjects {
     }
 
     fn render_row(&self, args: ObjectRowRenderArgs<'_>, cx: &App) -> impl IntoElement {
+        let row_node_type = match args
+            .row_values
+            .get(QUERY_ROW_KIND_INDEX)
+            .map(String::as_str)
+        {
+            Some(QUERY_ROW_KIND_DIRECTORY) => DbNodeType::QueryFolder,
+            Some(QUERY_ROW_KIND_SQL) => DbNodeType::NamedQuery,
+            _ => args.db_node_type,
+        };
+        let query_depth = args
+            .row_values
+            .get(QUERY_ROW_DEPTH_INDEX)
+            .and_then(|depth| depth.parse::<f32>().ok())
+            .unwrap_or(0.0);
         let mut row = h_flex()
             .w_full()
             .h(one_ui::table_row_height(cx))
@@ -1049,10 +1102,11 @@ impl DatabaseObjects {
             let cell_value = args.row_values.get(col_ix).cloned().unwrap_or_default();
             let tooltip_text = cell_value.clone();
             let cell = if col_ix == 0 {
-                let icon = get_icon_for_node_type(&args.db_node_type, cx.theme()).color();
+                let icon = get_icon_for_node_type(&row_node_type, cx.theme());
                 h_flex()
                     .gap_2()
                     .items_center()
+                    .pl(px(query_depth * 18.0))
                     .child(icon)
                     .child(render_object_name_text(cell_value, args.search_query, cx))
                     .into_any_element()
@@ -1439,6 +1493,17 @@ impl TabContent for DatabaseObjectsPanel {
 mod tests {
     use super::*;
 
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "navop-database-objects-{name}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
     fn database_node() -> DbNode {
         let mut metadata = HashMap::new();
         metadata.insert("database".to_string(), "app_db".to_string());
@@ -1561,6 +1626,130 @@ mod tests {
             DatabaseObjectsEvent::AddDatabaseToTree { node }
                 if node.node_type == DbNodeType::Schema && node.name == "public"
         ));
+    }
+
+    #[test]
+    fn query_sql_row_builds_named_query_with_real_file_path() {
+        let current_node = DbNode::new(
+            "conn1:app_db:queries",
+            "Queries",
+            DbNodeType::QueriesFolder,
+            "conn1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(HashMap::from([(
+            "database".to_string(),
+            "app_db".to_string(),
+        )]));
+        let path = "/tmp/queries/reports/report.sql";
+        let row = vec![
+            "report.sql".to_string(),
+            String::new(),
+            String::new(),
+            QUERY_ROW_KIND_SQL.to_string(),
+            path.to_string(),
+            "1".to_string(),
+        ];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::NamedQuery,
+            Some(&current_node),
+            &row,
+        )
+        .expect("SQL row should produce a named query");
+
+        assert_eq!(DbNodeType::NamedQuery, node.node_type);
+        assert_eq!(
+            Some(path),
+            node.metadata.get("file_path").map(String::as_str)
+        );
+        assert!(node.id.contains(path));
+    }
+
+    #[test]
+    fn query_directory_row_builds_query_folder_with_real_directory_path() {
+        let current_node = DbNode::new(
+            "conn1:app_db:queries",
+            "Queries",
+            DbNodeType::QueriesFolder,
+            "conn1".to_string(),
+            DatabaseType::PostgreSQL,
+        );
+        let path = "/tmp/queries/reports";
+        let row = vec![
+            "reports".to_string(),
+            String::new(),
+            String::new(),
+            QUERY_ROW_KIND_DIRECTORY.to_string(),
+            path.to_string(),
+            "0".to_string(),
+        ];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::NamedQuery,
+            Some(&current_node),
+            &row,
+        )
+        .expect("directory row should produce a query folder");
+
+        assert_eq!(DbNodeType::QueryFolder, node.node_type);
+        assert_eq!(
+            Some(path),
+            node.metadata.get("directory_path").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn query_rows_preserve_directory_tree_order_and_depth() {
+        let root = temp_test_dir("query-tree");
+        let reports = root.join("reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        std::fs::write(reports.join("monthly.sql"), "select 1;").unwrap();
+        std::fs::write(root.join("root.sql"), "select 2;").unwrap();
+        std::fs::write(root.join("ignored.txt"), "ignored").unwrap();
+
+        let mut rows = Vec::new();
+        append_query_rows(&root, 0, &mut rows).unwrap();
+
+        assert_eq!(3, rows.len());
+        assert_eq!("reports", rows[0][0]);
+        assert_eq!(QUERY_ROW_KIND_DIRECTORY, rows[0][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("0", rows[0][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!("monthly", rows[1][0]);
+        assert_eq!(QUERY_ROW_KIND_SQL, rows[1][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("1", rows[1][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!("root", rows[2][0]);
+        assert_eq!("0", rows[2][QUERY_ROW_DEPTH_INDEX]);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn added_query_directory_is_appended_as_a_root_without_hiding_default_rows() {
+        let default_root = temp_test_dir("default-query-root");
+        let added_root = temp_test_dir("added-query-root");
+        std::fs::create_dir_all(&default_root).unwrap();
+        std::fs::create_dir_all(&added_root).unwrap();
+        std::fs::write(default_root.join("default.sql"), "select 1;").unwrap();
+        std::fs::write(added_root.join("external.sql"), "select 2;").unwrap();
+
+        let mut rows = Vec::new();
+        append_query_rows(&default_root, 0, &mut rows).unwrap();
+        append_added_query_root_rows(vec![added_root.clone()], &mut rows).unwrap();
+
+        assert_eq!(3, rows.len());
+        assert_eq!("default", rows[0][0]);
+        assert_eq!(QUERY_ROW_KIND_SQL, rows[0][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("0", rows[0][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!(query_directory_display_name(&added_root), rows[1][0]);
+        assert_eq!(QUERY_ROW_KIND_DIRECTORY, rows[1][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("0", rows[1][QUERY_ROW_DEPTH_INDEX]);
+        assert_eq!("external", rows[2][0]);
+        assert_eq!(QUERY_ROW_KIND_SQL, rows[2][QUERY_ROW_KIND_INDEX]);
+        assert_eq!("1", rows[2][QUERY_ROW_DEPTH_INDEX]);
+
+        std::fs::remove_dir_all(default_root).unwrap();
+        std::fs::remove_dir_all(added_root).unwrap();
     }
 }
 

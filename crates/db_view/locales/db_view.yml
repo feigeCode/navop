@@ -1113,6 +1113,54 @@ Query:
     en: New Query
     zh-CN: 新建查询
     zh-HK: 新建查詢
+  new_folder:
+    en: New Folder
+    zh-CN: 新建目录
+    zh-HK: 新增目錄
+  folder_name:
+    en: Folder name
+    zh-CN: 目录名称
+    zh-HK: 目錄名稱
+  add_sql_directory:
+    en: Add SQL Directory…
+    zh-CN: 添加 SQL 文件目录…
+    zh-HK: 新增 SQL 檔案目錄…
+  import_sql:
+    en: Import SQL…
+    zh-CN: 导入 SQL…
+    zh-HK: 匯入 SQL…
+  select_sql_directory:
+    en: Select SQL Directory
+    zh-CN: 选择 SQL 文件目录
+    zh-HK: 選擇 SQL 檔案目錄
+  select_sql_files_to_import:
+    en: Select SQL Files to Import
+    zh-CN: 选择要导入的 SQL 文件
+    zh-HK: 選擇要匯入的 SQL 檔案
+  sql_directory_added:
+    en: SQL directory added
+    zh-CN: SQL 文件目录已添加
+    zh-HK: SQL 檔案目錄已新增
+  add_sql_directory_failed:
+    en: "Failed to add SQL directory: %{error}"
+    zh-CN: "添加 SQL 文件目录失败：%{error}"
+    zh-HK: "新增 SQL 檔案目錄失敗：%{error}"
+  query_folder_created:
+    en: Query folder created
+    zh-CN: 查询目录已创建
+    zh-HK: 查詢目錄已建立
+  import_sql_success:
+    en: "Imported %{count} SQL file(s)"
+    zh-CN: "已导入 %{count} 个 SQL 文件"
+    zh-HK: "已匯入 %{count} 個 SQL 檔案"
+  import_sql_failed:
+    en: "Failed to import SQL: %{error}"
+    zh-CN: "导入 SQL 失败：%{error}"
+    zh-HK: "匯入 SQL 失敗：%{error}"
+  create_folder_failed:
+    en: "Failed to create query folder: %{error}"
+    zh-CN: "新建查询目录失败：%{error}"
+    zh-HK: "新增查詢目錄失敗：%{error}"
   query_table:
     en: Query Table
     zh-CN: 查询表
@@ -2176,6 +2224,34 @@ TableData:
     en: Please select a cell
     zh-CN: 请选择一个单元格
     zh-HK: 請選擇一個儲存格
+  binary_value:
+    en: "Binary · %{size} B"
+    zh-CN: "二进制 · %{size} B"
+    zh-HK: "二進制 · %{size} B"
+  copy_binary_base64:
+    en: Copy binary as Base64
+    zh-CN: 复制二进制为 Base64
+    zh-HK: 複製二進制為 Base64
+  download_binary:
+    en: Download original binary
+    zh-CN: 下载原始二进制
+    zh-HK: 下載原始二進制
+  preview_binary_image:
+    en: Preview image
+    zh-CN: 预览图片
+    zh-HK: 預覽圖片
+  select_binary_download_directory:
+    en: Select binary download directory
+    zh-CN: 选择二进制下载目录
+    zh-HK: 選擇二進制下載目錄
+  binary_download_complete:
+    en: "Binary saved to %{path}"
+    zh-CN: "二进制已保存到 %{path}"
+    zh-HK: "二進制已儲存到 %{path}"
+  binary_download_failed:
+    en: "Failed to save binary: %{error}"
+    zh-CN: "二进制保存失败: %{error}"
+    zh-HK: "二進制儲存失敗: %{error}"
   uuid_standard:
     en: "UUID (standard)"
     zh-CN: UUID (标准)

@@ -183,8 +183,8 @@ llm-connector = { version = "1.4.0", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
 
 # SSH and SFTP
-russh = "0.60.3"
-russh-sftp = "2.1.2"
+russh = "0.62.4"
+russh-sftp = "2.3.0"
 tokio-socks = "0.5"
 
 # Encryption

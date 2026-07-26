@@ -6,8 +6,8 @@ use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
+    Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
     ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
@@ -15,10 +15,12 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _, DropdownButton},
     checkbox::Checkbox,
+    dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
     menu::{DropdownMenu as _, PopupMenuItem},
+    notification::Notification,
     popover::Popover,
     tooltip::Tooltip,
     v_flex,
@@ -172,6 +174,25 @@ pub struct HomePage {
     pub(crate) team_options: Vec<TeamOption>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConnectionCredentialExportIdentity {
+    team_id: Option<String>,
+    owner_id: Option<String>,
+}
+
+impl ConnectionCredentialExportIdentity {
+    fn from_connection(connection: &StoredConnection) -> Self {
+        Self {
+            team_id: connection.team_id.clone(),
+            owner_id: connection.owner_id.clone(),
+        }
+    }
+
+    fn matches(&self, connection: &StoredConnection) -> bool {
+        self.team_id == connection.team_id && self.owner_id == connection.owner_id
+    }
 }
 
 mod auth;

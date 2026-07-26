@@ -17,7 +17,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, text::TextView, v_flex,
 };
 use rust_i18n::t;
 
@@ -197,6 +197,7 @@ fn render_user_message_themed<E: MessageExtension>(
     theme: &AgentChatTheme,
 ) -> AnyElement {
     let bubble_width = user_message_bubble_width(&msg.content);
+    let plain_text_html = user_plain_text_html(&msg.content);
 
     h_flex()
         .debug_selector(|| "ai-chat-user-row".to_string())
@@ -222,10 +223,42 @@ fn render_user_message_themed<E: MessageExtension>(
                         .w_full()
                         .min_w_0()
                         .whitespace_normal()
-                        .child(msg.content.clone()),
+                        .child(
+                            TextView::html(
+                                SharedString::from(format!("user-msg-{}", msg.id)),
+                                plain_text_html,
+                            )
+                            .selectable(true)
+                            .w_full(),
+                        ),
                 ),
         )
         .into_any_element()
+}
+
+fn user_plain_text_html(text: &str) -> String {
+    let mut html = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        match character {
+            '&' => html.push_str("&amp;"),
+            '<' => html.push_str("&lt;"),
+            '>' => html.push_str("&gt;"),
+            '"' => html.push_str("&quot;"),
+            '\'' => html.push_str("&#39;"),
+            '\r' => {
+                if characters.peek() == Some(&'\n') {
+                    characters.next();
+                }
+                html.push_str("<br>");
+            }
+            '\n' => html.push_str("<br>"),
+            _ => html.push(character),
+        }
+    }
+
+    html
 }
 
 fn user_message_bubble_width(content: &str) -> gpui::Pixels {
@@ -463,4 +496,17 @@ fn render_placeholder_themed(text: impl Into<String>, theme: &AgentChatTheme) ->
                 .child(text.into()),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_plain_text_html_escapes_markup_and_preserves_lines() {
+        assert_eq!(
+            "**保持** &lt;tag&gt; &amp; &quot;quoted&quot; &#39;value&#39;<br>下一行",
+            user_plain_text_html("**保持** <tag> & \"quoted\" 'value'\n下一行")
+        );
+    }
 }

@@ -255,6 +255,17 @@ impl QueryColumnMeta {
 }
 
 /// Query result with data
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BinaryCell {
+    /// Zero-based row index in [`QueryResult::rows`].
+    pub row_index: usize,
+    /// Zero-based column index in [`QueryResult::columns`].
+    pub column_index: usize,
+    /// Exact bytes returned by the database driver.
+    pub bytes: Vec<u8>,
+}
+
+/// Query result with data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryResult {
     /// Original SQL statement
@@ -265,6 +276,12 @@ pub struct QueryResult {
     pub column_meta: Vec<QueryColumnMeta>,
     /// Row data (each row is a vector of optional strings)
     pub rows: Vec<Vec<Option<String>>>,
+    /// Lossless binary values keyed by their row and column coordinates.
+    ///
+    /// `rows` remains string-based for compatibility with existing consumers; UI clients should
+    /// prefer this sidecar whenever a matching cell exists.
+    #[serde(default)]
+    pub binary_cells: Vec<BinaryCell>,
     /// Execution time in milliseconds
     #[serde(with = "elapsed_ms_serde")]
     pub elapsed_ms: u128,
@@ -381,6 +398,40 @@ mod tests {
             true,
         );
         assert_eq!("select 'limit 1' as text from users LIMIT 25", sql);
+    }
+
+    #[test]
+    fn query_result_deserializes_legacy_payload_without_binary_cells() {
+        let result: QueryResult = serde_json::from_value(serde_json::json!({
+            "sql": "select payload from files",
+            "columns": ["payload"],
+            "column_meta": [{
+                "name": "payload",
+                "db_type": "BLOB",
+                "field_type": "Binary",
+                "nullable": true
+            }],
+            "rows": [["0x010203"]],
+            "elapsed_ms": 1
+        }))
+        .expect("legacy query result should remain compatible");
+
+        assert!(result.binary_cells.is_empty());
+    }
+
+    #[test]
+    fn binary_cell_roundtrips_exact_bytes() {
+        let cell = BinaryCell {
+            row_index: 2,
+            column_index: 3,
+            bytes: vec![0, 1, 2, 0xff],
+        };
+
+        let encoded = serde_json::to_string(&cell).expect("binary cell should serialize");
+        let decoded: BinaryCell =
+            serde_json::from_str(&encoded).expect("binary cell should deserialize");
+
+        assert_eq!(decoded, cell);
     }
 }
 

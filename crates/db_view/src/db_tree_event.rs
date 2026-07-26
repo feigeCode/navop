@@ -19,6 +19,10 @@ use gpui::{
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::{WindowExt, h_flex, notification::Notification, v_flex};
 use one_core::gpui_tokio::Tokio;
+use one_core::storage::{
+    QueryDirectoryScope, add_query_directory, create_query_subdirectory, default_query_directory,
+    import_query_sql_files,
+};
 use one_core::{
     popup_window::{PopupWindowOptions, open_popup_window},
     tab_container::{TabContainer, TabItem},
@@ -195,6 +199,40 @@ impl DatabaseEventHandler {
                     DbTreeViewEvent::CreateNewQuery { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_create_new_query(node, tab_container, window, cx);
+                        }
+                    }
+                    DbTreeViewEvent::AddQueryDirectory { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_add_query_directory(
+                                node,
+                                tree_view,
+                                objects_panel,
+                                global_state,
+                                cx,
+                            );
+                        }
+                    }
+                    DbTreeViewEvent::ImportQuerySql { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_import_query_sql(
+                                node,
+                                tree_view,
+                                objects_panel,
+                                global_state,
+                                cx,
+                            );
+                        }
+                    }
+                    DbTreeViewEvent::CreateQueryFolder { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_create_query_folder(
+                                node,
+                                tree_view,
+                                objects_panel,
+                                global_state,
+                                window,
+                                cx,
+                            );
                         }
                     }
                     DbTreeViewEvent::OpenErDiagram { node_id } => {
@@ -727,6 +765,13 @@ impl DatabaseEventHandler {
         let title = Self::query_title_for_node(&node, database.as_deref());
         let initial_sql = Self::format_query_table_reference(&node, cx.global::<GlobalDbState>())
             .map(|table_reference| Self::build_select_all_sql(&table_reference));
+        let new_file_directory = if node.node_type == DbNodeType::QueryFolder {
+            node.metadata
+                .get("directory_path")
+                .map(std::path::PathBuf::from)
+        } else {
+            None
+        };
 
         let tab_id = format!(
             "query-{}-{}",
@@ -747,6 +792,7 @@ impl DatabaseEventHandler {
                                 connection_id: connection_id.clone(),
                                 database_type,
                                 file_path: None,
+                                new_file_directory: new_file_directory.clone(),
                                 initial_database: database.clone(),
                                 initial_schema: schema.clone(),
                             },
@@ -764,6 +810,249 @@ impl DatabaseEventHandler {
                 cx,
             );
         });
+    }
+
+    fn query_directory_scope(node: &DbNode) -> QueryDirectoryScope {
+        QueryDirectoryScope::new(
+            node.database_type.path_key(),
+            node.connection_id.clone(),
+            node.get_database_name().unwrap_or_default(),
+        )
+    }
+
+    fn query_target_directory(node: &DbNode) -> anyhow::Result<std::path::PathBuf> {
+        if node.node_type == DbNodeType::QueryFolder {
+            return node
+                .metadata
+                .get("directory_path")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| anyhow::anyhow!("query folder has no directory path"));
+        }
+        default_query_directory(&Self::query_directory_scope(node))
+    }
+
+    fn refresh_query_views(
+        node_id: String,
+        tree_view: Entity<DbTreeView>,
+        objects_panel: Entity<DatabaseObjectsPanel>,
+        global_state: GlobalDbState,
+        cx: &mut App,
+    ) {
+        tree_view.update(cx, |tree, cx| {
+            tree.refresh_tree(node_id, cx);
+        });
+        objects_panel.update(cx, |panel, cx| {
+            panel.refresh(global_state, cx);
+        });
+    }
+
+    fn handle_add_query_directory(
+        node: DbNode,
+        tree_view: Entity<DbTreeView>,
+        objects_panel: Entity<DatabaseObjectsPanel>,
+        global_state: GlobalDbState,
+        cx: &mut App,
+    ) {
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: false,
+            directories: true,
+            prompt: Some(t!("Query.select_sql_directory").into()),
+        });
+        let scope = Self::query_directory_scope(&node);
+        let node_id = node.id.clone();
+        let root_node = node;
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let Some(directory) = paths.into_iter().next() else {
+                return;
+            };
+            let task = cx.background_spawn(async move { add_query_directory(&scope, &directory) });
+            match task.await {
+                Ok(_) => {
+                    let _ = cx.update(|cx| {
+                        tree_view.update(cx, |tree, cx| {
+                            tree.refresh_tree(node_id, cx);
+                        });
+                        Self::handle_node_selected(root_node, global_state, objects_panel, cx);
+                        Self::show_success_async(cx, t!("Query.sql_directory_added").to_string());
+                    });
+                }
+                Err(error) => {
+                    let _ = cx.update(|cx| {
+                        Self::show_error_async(
+                            cx,
+                            t!("Query.add_sql_directory_failed", error = error).to_string(),
+                        );
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn handle_import_query_sql(
+        node: DbNode,
+        tree_view: Entity<DbTreeView>,
+        objects_panel: Entity<DatabaseObjectsPanel>,
+        global_state: GlobalDbState,
+        cx: &mut App,
+    ) {
+        let target = match Self::query_target_directory(&node) {
+            Ok(target) => target,
+            Err(error) => {
+                Self::show_error_async(
+                    cx,
+                    t!("Query.import_sql_failed", error = error).to_string(),
+                );
+                return;
+            }
+        };
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            multiple: true,
+            directories: false,
+            prompt: Some(t!("Query.select_sql_files_to_import").into()),
+        });
+        let node_id = node.id;
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            let task = cx.background_spawn(async move { import_query_sql_files(&target, paths) });
+            match task.await {
+                Ok(report) => {
+                    let _ = cx.update(|cx| {
+                        if !report.imported.is_empty() {
+                            Self::refresh_query_views(
+                                node_id,
+                                tree_view,
+                                objects_panel,
+                                global_state,
+                                cx,
+                            );
+                        }
+
+                        if report.failures.is_empty() {
+                            Self::show_success_async(
+                                cx,
+                                t!("Query.import_sql_success", count = report.imported.len())
+                                    .to_string(),
+                            );
+                        } else {
+                            let errors = report
+                                .failures
+                                .into_iter()
+                                .map(|failure| {
+                                    format!("{}: {}", failure.source.display(), failure.error)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            Self::show_error_async(
+                                cx,
+                                t!("Query.import_sql_failed", error = errors).to_string(),
+                            );
+                        }
+                    });
+                }
+                Err(error) => {
+                    let _ = cx.update(|cx| {
+                        Self::show_error_async(
+                            cx,
+                            t!("Query.import_sql_failed", error = error).to_string(),
+                        );
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn handle_create_query_folder(
+        node: DbNode,
+        tree_view: Entity<DbTreeView>,
+        objects_panel: Entity<DatabaseObjectsPanel>,
+        global_state: GlobalDbState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        use gpui_component::input::{Input, InputState};
+
+        let target = match Self::query_target_directory(&node) {
+            Ok(target) => target,
+            Err(error) => {
+                Self::show_error(
+                    window,
+                    t!("Query.create_folder_failed", error = error).to_string(),
+                    cx,
+                );
+                return;
+            }
+        };
+        let input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("Query.folder_name").to_string()));
+        let input_for_focus = input.clone();
+        let node_id = node.id;
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let input = input.clone();
+            let input_for_ok = input.clone();
+            let target = target.clone();
+            let tree_view = tree_view.clone();
+            let objects_panel = objects_panel.clone();
+            let global_state = global_state.clone();
+            let node_id = node_id.clone();
+            dialog
+                .title(t!("Query.new_folder").to_string())
+                .w(px(380.0))
+                .confirm()
+                .on_ok(move |_, _, cx| {
+                    let name = input_for_ok.read(cx).value().trim().to_string();
+                    if name.is_empty() {
+                        return false;
+                    }
+                    let target = target.clone();
+                    let node_id = node_id.clone();
+                    let tree_view = tree_view.clone();
+                    let objects_panel = objects_panel.clone();
+                    let global_state = global_state.clone();
+                    let task = cx
+                        .background_spawn(async move { create_query_subdirectory(&target, &name) });
+                    cx.spawn(async move |cx: &mut AsyncApp| match task.await {
+                        Ok(_) => {
+                            let _ = cx.update(|cx| {
+                                Self::refresh_query_views(
+                                    node_id,
+                                    tree_view,
+                                    objects_panel,
+                                    global_state,
+                                    cx,
+                                );
+                                Self::show_success_async(
+                                    cx,
+                                    t!("Query.query_folder_created").to_string(),
+                                );
+                            });
+                        }
+                        Err(error) => {
+                            let _ = cx.update(|cx| {
+                                Self::show_error_async(
+                                    cx,
+                                    t!("Query.create_folder_failed", error = error).to_string(),
+                                );
+                            });
+                        }
+                    })
+                    .detach();
+                    true
+                })
+                .child(v_flex().p_4().child(Input::new(&input)))
+        });
+        input_for_focus.update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn handle_open_er_diagram(
@@ -3450,6 +3739,7 @@ impl DatabaseEventHandler {
                                     connection_id: connection_id.clone(),
                                     database_type,
                                     file_path: Some(path.clone()),
+                                    new_file_directory: None,
                                     initial_database: database.clone(),
                                     initial_schema: schema.clone(),
                                 },
