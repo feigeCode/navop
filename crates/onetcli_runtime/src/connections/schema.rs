@@ -44,8 +44,8 @@ pub(super) fn schema_for_with_registry(
         "mongodb" => mongodb_schema(),
         "serial" => serial_schema(),
         "port_forwarding" => port_forwarding_schema(),
-        "rdp" => remote_desktop_schema(3389),
-        "vnc" => remote_desktop_schema(5900),
+        "rdp" => remote_desktop_schema(3389, true),
+        "vnc" => remote_desktop_schema(5900, false),
         other => {
             return Err(ToolError::Failed {
                 message: format!("unknown connection kind: {other}"),
@@ -459,16 +459,20 @@ fn port_forwarding_schema() -> Value {
     ])
 }
 
-fn remote_desktop_schema(default_port: u16) -> Value {
-    json!([
+fn remote_desktop_schema(default_port: u16, supports_audio_playback: bool) -> Value {
+    let mut fields = vec![
         field("name", "string", true, Value::Null),
         field("host", "string", true, Value::Null),
         field("port", "integer", false, json!(default_port)),
         field("username", "string", false, Value::Null),
         secret_field("password"),
         field("domain", "string", false, Value::Null),
-        field("read_only", "boolean", false, json!(false))
-    ])
+        field("read_only", "boolean", false, json!(false)),
+    ];
+    if supports_audio_playback {
+        fields.push(field("audio_playback", "boolean", false, json!(false)));
+    }
+    Value::Array(fields)
 }
 
 fn field(name: &str, field_type: &str, required: bool, default: Value) -> Value {

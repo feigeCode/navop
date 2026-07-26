@@ -69,6 +69,7 @@ impl RemoteDesktopBackend for RdpBackend {
             .spawn(move || {
                 let _proxy_guard = proxy_guard;
                 let mut latest_clipboard_text = None;
+                let mut latest_clipboard_files = None;
                 let mut reconnect_attempt = 0usize;
                 loop {
                     let session_output_tx = output_tx.begin_session();
@@ -76,6 +77,7 @@ impl RemoteDesktopBackend for RdpBackend {
                         &helper,
                         &mut connect,
                         &mut latest_clipboard_text,
+                        &mut latest_clipboard_files,
                         &mut input_rx,
                         &session_output_tx,
                         protocol,
@@ -114,8 +116,10 @@ impl RemoteDesktopBackend for RdpBackend {
                             if !input::wait_before_reconnect(
                                 &mut connect,
                                 &mut latest_clipboard_text,
+                                &mut latest_clipboard_files,
                                 &mut input_rx,
                                 delay,
+                                protocol,
                             ) {
                                 break;
                             }
@@ -145,6 +149,7 @@ fn run_helper_session(
     helper: &HelperProcessConfig,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
+    latest_clipboard_files: &mut Option<Vec<String>>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
@@ -153,6 +158,7 @@ fn run_helper_session(
         helper,
         connect,
         latest_clipboard_text,
+        latest_clipboard_files,
         output_tx,
         protocol,
     ) else {
@@ -178,6 +184,7 @@ fn run_helper_session(
         let mut input_context = input::RemoteInputContext {
             connect,
             latest_clipboard_text,
+            latest_clipboard_files,
             helper: &mut helper,
             stdin: &mut stdin,
             output_tx,

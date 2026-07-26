@@ -82,9 +82,15 @@ impl RemoteDesktopView {
         cx.stop_propagation();
     }
 
-    pub(super) fn remote_paste(&mut self, _: &RemotePaste, _: &mut Window, cx: &mut Context<Self>) {
-        self.send_local_clipboard_to_remote(cx);
-        self.send_clipboard_shortcut(ClipboardShortcut::Paste);
+    pub(super) fn remote_paste(
+        &mut self,
+        _: &RemotePaste,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.send_local_clipboard_to_remote(window, cx) {
+            self.send_clipboard_shortcut(ClipboardShortcut::Paste);
+        }
         cx.stop_propagation();
     }
 
@@ -105,13 +111,37 @@ impl RemoteDesktopView {
         }
     }
 
-    fn send_local_clipboard_to_remote(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
+    fn send_local_clipboard_to_remote(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(item) = cx.read_from_clipboard() else {
+            return true;
         };
-        self.last_clipboard_text = Some(text.clone());
         self.last_clipboard_sync_at = Some(Instant::now());
-        self.send_input(RemoteDesktopInput::ClipboardText { text });
+        match classify_local_clipboard(&item) {
+            LocalClipboardContent::Files(paths) => {
+                self.last_clipboard_files = Some(paths.clone());
+                self.last_clipboard_text = None;
+                if !clipboard_files_supported(self.options.protocol) {
+                    return false;
+                }
+                self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
+                true
+            }
+            LocalClipboardContent::Text(text) => {
+                self.last_clipboard_text = Some(text.clone());
+                self.last_clipboard_files = None;
+                if !clipboard_text_supported(self.options.protocol, &text) {
+                    self.notify_vnc_clipboard_ascii_warning(window, cx);
+                    return false;
+                }
+                self.send_input(RemoteDesktopInput::ClipboardText { text });
+                true
+            }
+            LocalClipboardContent::Other => true,
+        }
     }
 
     pub(super) fn handle_modifiers_changed(
