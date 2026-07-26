@@ -3,6 +3,7 @@ use super::{MarkdownEditor, MarkdownEditorError};
 use gpui::{Context, ScrollStrategy, Window};
 use markdown_source::{BlockMoveDirection, SourceSelection, SourceTransaction, TableCellAddress};
 use markdown_source::{InlineFormat, ListFormat};
+use std::ops::Range;
 
 impl MarkdownEditor {
     pub fn active_block(&self) -> Option<markdown_source::SourceNodeId> {
@@ -135,6 +136,17 @@ impl MarkdownEditor {
             .toggle_list_format(block_id, format)?;
         let cursor = transaction.edits[0].range.start + transaction.edits[0].replacement.len();
         self.apply_block_transaction(transaction, cursor, window, cx)
+    }
+
+    pub(super) fn toggle_task_marker(
+        &mut self,
+        source_range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, MarkdownEditorError> {
+        let selection = self.source_selection(cx);
+        let transaction = self.history.document().toggle_task_checked(source_range)?;
+        self.apply_editor_transaction(transaction, selection, window, cx)
     }
 
     pub fn duplicate_active_block(

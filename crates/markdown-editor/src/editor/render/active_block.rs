@@ -57,7 +57,7 @@ impl MarkdownEditor {
             .children(self.inline_math_overlays(key))
             .when_some(list_gutter, |this, gutter| {
                 this.pl(px(gutter))
-                    .child(self.list_marker_overlay(key, block, active))
+                    .child(self.list_marker_overlay(key, block, active, cx))
             });
         v_flex()
             .id(("markdown-edit-surface", block.id.0))

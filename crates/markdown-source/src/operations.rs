@@ -38,6 +38,8 @@ pub enum SourceOperationError {
     CannotSplitBlock,
     #[error("Markdown selection cannot be formatted")]
     CannotFormatSelection,
+    #[error("Markdown source range is not a task-list checkbox")]
+    NotTaskMarker,
 }
 
 impl SourceMarkdownDocument {

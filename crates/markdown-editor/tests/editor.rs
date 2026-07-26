@@ -1486,6 +1486,140 @@ fn active_task_list_lays_out_every_marker_anchor(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn clicking_task_checkboxes_toggles_source_without_replacing_the_input(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "- [ ] Todo\n- [x] Done";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let list_id = document.blocks[0].id;
+    let (window, editor) = open_editor_with_size(source, size(px(800.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(list_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let input_id = input.entity_id();
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_selected_range(2..2, false, window, cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let first_anchor = input
+        .read_with(&cx, |input, _| input.range_to_bounds(&(0..0)))
+        .expect("the first task marker anchor must be laid out");
+    cx.simulate_click(
+        point(
+            first_anchor.left() - px(13.),
+            first_anchor.top() + px(12.),
+        ),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        "- [x] Todo\n- [x] Done",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id())
+    );
+    assert_eq!(
+        2..2,
+        input.read_with(&cx, |input, _| input.selected_range())
+    );
+
+    let second_anchor = input
+        .read_with(&cx, |input, _| input.range_to_bounds(&(5..5)))
+        .expect("the second task marker anchor must be laid out");
+    cx.simulate_click(
+        point(
+            second_anchor.left() - px(13.),
+            second_anchor.top() + px(12.),
+        ),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        "- [x] Todo\n- [ ] Done",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.undo(window, cx).unwrap());
+    });
+    assert_eq!(
+        "- [x] Todo\n- [x] Done",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.redo(window, cx).unwrap());
+    });
+    assert_eq!(
+        "- [x] Todo\n- [ ] Done",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+}
+
+#[gpui::test]
+fn clicking_an_inactive_task_checkbox_preserves_the_active_surface(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "Paragraph\n\n- [ ] Todo";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let paragraph_id = document.blocks[0].id;
+    let list_id = document.blocks[1].id;
+    let (window, editor) = open_editor_with_size(source, size(px(800.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(paragraph_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let paragraph_input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let paragraph_input_id = paragraph_input.entity_id();
+    paragraph_input.update_in(&mut cx, |input, window, cx| {
+        input.set_selected_range(4..4, false, window, cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let list_input = cx
+        .debug_bounds(Box::leak(
+            format!("markdown-block-input-slot-{}", list_id.0).into_boxed_str(),
+        ))
+        .expect("the inactive task-list input must remain mounted");
+    cx.simulate_click(
+        point(list_input.left() - px(13.), list_input.top() + px(12.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+
+    assert_eq!(
+        "Paragraph\n\n- [x] Todo",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        Some(paragraph_id),
+        editor.read_with(&cx, |editor, _| editor.active_block())
+    );
+    assert_eq!(
+        paragraph_input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id())
+    );
+    assert_eq!(
+        4..4,
+        paragraph_input.read_with(&cx, |input, _| input.selected_range())
+    );
+}
+
+#[gpui::test]
 fn clicking_code_content_maps_to_content_lines_not_fence_lines(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "```rust\nfirst();\nsecond();\n```";

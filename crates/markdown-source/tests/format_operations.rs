@@ -1,4 +1,6 @@
-use markdown_source::{InlineFormat, ListFormat, SourceMarkdownDocument};
+use markdown_source::{
+    InlineFormat, ListFormat, SourceHistory, SourceMarkdownDocument, SourceOperationError,
+};
 
 #[test]
 fn inline_formats_wrap_and_unwrap_exact_source_ranges() {
@@ -53,4 +55,57 @@ fn duplicate_block_preserves_original_spelling() {
     let transaction = document.duplicate_block(document.blocks[0].id).unwrap();
     let duplicated = document.apply_transaction(&transaction).unwrap().document;
     assert_eq!("_value_\n\n_value_", duplicated.source);
+}
+
+#[test]
+fn task_checkbox_toggle_replaces_only_the_marker_state() {
+    for (source, range, expected) in [
+        ("- [ ] Todo", 3..4, "- [x] Todo"),
+        ("* [x] Done", 3..4, "* [ ] Done"),
+        ("+ [X] Done", 3..4, "+ [ ] Done"),
+        ("  - [ ] Nested", 5..6, "  - [x] Nested"),
+    ] {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        let transaction = document.toggle_task_checked(range.clone()).unwrap();
+
+        assert_eq!(range, transaction.edits[0].range);
+        assert_eq!(
+            expected,
+            document
+                .apply_transaction(&transaction)
+                .unwrap()
+                .document
+                .source
+        );
+    }
+}
+
+#[test]
+fn task_checkbox_toggle_rejects_non_marker_brackets() {
+    for (source, range) in [
+        ("paragraph [ ] text", 11..12),
+        ("- body [ ] text", 8..9),
+        ("- [no] text", 3..4),
+        ("- [ ]text", 3..4),
+    ] {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        assert_eq!(
+            SourceOperationError::NotTaskMarker,
+            document.toggle_task_checked(range).unwrap_err()
+        );
+    }
+}
+
+#[test]
+fn task_checkbox_toggle_is_one_undoable_transaction() {
+    let document = SourceMarkdownDocument::parse("- [ ] Todo").unwrap();
+    let transaction = document.toggle_task_checked(3..4).unwrap();
+    let mut history = SourceHistory::new(document);
+
+    history.apply(&transaction).unwrap();
+    assert_eq!("- [x] Todo", history.document().source);
+    history.undo().unwrap().unwrap();
+    assert_eq!("- [ ] Todo", history.document().source);
+    history.redo().unwrap().unwrap();
+    assert_eq!("- [x] Todo", history.document().source);
 }
