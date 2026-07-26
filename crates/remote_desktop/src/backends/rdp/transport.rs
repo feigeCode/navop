@@ -16,6 +16,7 @@ pub(super) fn start_helper_session(
     connect: &HelperRequest,
     latest_clipboard_text: &Option<String>,
     output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
 ) -> Result<
     (
         std::process::Child,
@@ -24,26 +25,33 @@ pub(super) fn start_helper_session(
     ),
     (),
 > {
-    send_status(output_tx, "starting remote desktop helper");
-    let Some(mut helper) = spawn_helper(helper, output_tx.clone()) else {
+    send_status(output_tx, &format!("starting {} helper", protocol.label()));
+    let Some(mut helper) = spawn_helper(helper, output_tx.clone(), protocol) else {
         return Err(());
     };
     let Some(stdout) = helper.stdout.take() else {
-        send_failure(output_tx, "remote desktop helper stdout unavailable");
+        send_failure(
+            output_tx,
+            &format!("{} helper stdout unavailable", protocol.label()),
+        );
         return Err(());
     };
     let Some(mut stdin) = helper.stdin.take() else {
-        send_failure(output_tx, "remote desktop helper stdin unavailable");
+        send_failure(
+            output_tx,
+            &format!("{} helper stdin unavailable", protocol.label()),
+        );
         return Err(());
     };
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
-    spawn_output_reader(stdout, output_tx.clone(), signal_tx);
-    write_request(&mut stdin, connect, output_tx).map_err(|_| ())?;
+    spawn_output_reader(stdout, output_tx.clone(), signal_tx, protocol);
+    write_request(&mut stdin, connect, output_tx, protocol).map_err(|_| ())?;
     if let Some(text) = latest_clipboard_text.clone() {
         let _ = write_request(
             &mut stdin,
             &HelperRequest::ClipboardText { text },
             output_tx,
+            protocol,
         );
     }
     Ok((helper, stdin, signal_rx))
@@ -52,6 +60,7 @@ pub(super) fn start_helper_session(
 fn spawn_helper(
     helper: &HelperProcessConfig,
     output_tx: OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
 ) -> Option<std::process::Child> {
     let mut command = Command::new(&helper.command);
     process_util::configure_background_child(&mut command);
@@ -68,7 +77,8 @@ fn spawn_helper(
             send_failure(
                 &output_tx,
                 &format!(
-                    "failed to start remote desktop helper {}: {error}",
+                    "failed to start {} helper {}: {error}",
+                    protocol.label(),
                     helper.command.display()
                 ),
             );
@@ -81,19 +91,20 @@ fn spawn_output_reader(
     stdout: std::process::ChildStdout,
     output_tx: OutputMailboxSender,
     signal_tx: std::sync::mpsc::Sender<BackendSignal>,
+    protocol: RemoteDesktopProtocol,
 ) {
     let _ = std::thread::Builder::new()
-        .name("remote-desktop-rdp-output".to_string())
+        .name(format!("remote-desktop-{}-output", protocol.provider_id()))
         .spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
-                match read_helper_output(&mut reader) {
+                match read_helper_output(&mut reader, protocol) {
                     Ok(Some(output)) => forward_helper_output(output, &output_tx, &signal_tx),
                     Ok(None) => break,
                     Err(error) => {
                         send_failure(
                             &output_tx,
-                            &format!("failed to read remote desktop helper: {error}"),
+                            &format!("failed to read {} helper: {error}", protocol.label()),
                         );
                         break;
                     }
@@ -111,6 +122,7 @@ pub(super) struct HelperOutput {
 
 pub(super) fn read_helper_output(
     reader: &mut impl BufRead,
+    protocol: RemoteDesktopProtocol,
 ) -> anyhow::Result<Option<HelperOutput>> {
     let mut line = Vec::new();
     let header_bytes = reader.read_until(b'\n', &mut line)?;
@@ -138,7 +150,7 @@ pub(super) fn read_helper_output(
             bgra_len,
         } => read_binary_bgra_rects_output(reader, width, height, rects, bgra_len).map(Some),
         event => Ok(Some(HelperOutput {
-            output: helper_event_to_output(event)?,
+            output: helper_event_to_output(event, protocol)?,
             connected,
             disconnect_message,
         })),
@@ -277,25 +289,32 @@ pub(super) fn write_request(
     stdin: &mut std::process::ChildStdin,
     request: &HelperRequest,
     output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
 ) -> anyhow::Result<()> {
     let line = encode_request_line(request)?;
     if let Err(error) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
         send_failure(
             output_tx,
-            &format!("failed to write RDP helper request: {error}"),
+            &format!(
+                "failed to write {} helper request: {error}",
+                protocol.label()
+            ),
         );
         anyhow::bail!(error);
     }
     Ok(())
 }
 
-pub(super) fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<RemoteDesktopOutput> {
+pub(super) fn helper_event_to_output(
+    event: HelperEvent,
+    protocol: RemoteDesktopProtocol,
+) -> anyhow::Result<RemoteDesktopOutput> {
     Ok(match event {
         HelperEvent::Status { message } => RemoteDesktopOutput::Status(message),
         HelperEvent::Connected { width, height } => RemoteDesktopOutput::Connected {
             width,
             height,
-            capabilities: rdp_capabilities(),
+            capabilities: capabilities_for_protocol(protocol),
         },
         HelperEvent::Frame { width, height, .. } => RemoteDesktopOutput::Frame {
             width,
@@ -318,11 +337,14 @@ pub(super) fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<Remot
     })
 }
 
-fn rdp_capabilities() -> RemoteDesktopCapabilities {
-    RemoteDesktopCapabilities {
-        clipboard_text: true,
-        file_transfer: true,
-        ..RemoteDesktopCapabilities::rdp_mvp()
+fn capabilities_for_protocol(protocol: RemoteDesktopProtocol) -> RemoteDesktopCapabilities {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => RemoteDesktopCapabilities {
+            clipboard_text: true,
+            file_transfer: true,
+            ..RemoteDesktopCapabilities::rdp_mvp()
+        },
+        RemoteDesktopProtocol::Vnc => RemoteDesktopCapabilities::vnc_mvp(),
     }
 }
 
@@ -339,8 +361,11 @@ pub(super) fn send_status(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::Status(message.to_string()));
 }
 
-pub(super) fn send_reconnecting(output_tx: &OutputMailboxSender, message: &str) {
-    let _ = output_tx.send(RemoteDesktopOutput::Reconnecting(message.to_string()));
+pub(super) fn send_reconnecting(
+    output_tx: &OutputMailboxSender,
+    reconnect: RemoteDesktopReconnect,
+) {
+    let _ = output_tx.send(RemoteDesktopOutput::Reconnecting(reconnect));
 }
 
 pub(super) fn send_failure(output_tx: &OutputMailboxSender, message: &str) {

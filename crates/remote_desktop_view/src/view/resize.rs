@@ -82,8 +82,30 @@ pub(super) fn is_meaningful_delta(previous: Option<(u16, u16)>, next: (u16, u16)
         || previous.1.abs_diff(next.1) >= RESIZE_DELTA_THRESHOLD
 }
 
-pub(super) fn can_flush_pending_resize(connected: bool, remote_size: Option<(u16, u16)>) -> bool {
-    connected && remote_size.is_some()
+pub(super) fn can_flush_pending_resize(
+    connected: bool,
+    remote_size: Option<(u16, u16)>,
+    capabilities: Option<RemoteDesktopCapabilities>,
+) -> bool {
+    connected
+        && remote_size.is_some()
+        && capabilities
+            .is_some_and(|capabilities| capabilities.resize == ResizeSupport::RemoteResize)
+}
+
+pub(super) fn should_consume_local_resize(
+    connected: bool,
+    remote_size: Option<(u16, u16)>,
+    capabilities: Option<RemoteDesktopCapabilities>,
+) -> bool {
+    connected
+        && remote_size.is_some()
+        && capabilities.is_some_and(|capabilities| {
+            matches!(
+                capabilities.resize,
+                ResizeSupport::Unsupported | ResizeSupport::LocalScaleOnly
+            )
+        })
 }
 
 pub(super) fn scale_factor_percent(display_scale_factor: f32) -> u32 {
@@ -103,7 +125,11 @@ mod tests {
 
     use gpui::{Bounds, point, px, size};
 
-    use super::{InitialSize, can_flush_pending_resize, is_meaningful_delta, resize_dimensions};
+    use super::{
+        InitialSize, can_flush_pending_resize, is_meaningful_delta, resize_dimensions,
+        should_consume_local_resize,
+    };
+    use remote_desktop::{RemoteDesktopCapabilities, ResizeSupport};
 
     #[test]
     fn waits_for_initial_size_to_stabilize() {
@@ -177,9 +203,46 @@ mod tests {
 
     #[test]
     fn does_not_flush_resize_while_reconnecting() {
-        assert!(!can_flush_pending_resize(false, Some((1920, 1080))));
-        assert!(can_flush_pending_resize(true, Some((1920, 1080))));
-        assert!(!can_flush_pending_resize(true, None));
+        let remote_resize = Some(RemoteDesktopCapabilities::rdp_mvp());
+        assert!(!can_flush_pending_resize(
+            false,
+            Some((1920, 1080)),
+            remote_resize
+        ));
+        assert!(can_flush_pending_resize(
+            true,
+            Some((1920, 1080)),
+            remote_resize
+        ));
+        assert!(!can_flush_pending_resize(true, None, remote_resize));
+    }
+
+    #[test]
+    fn local_only_resize_is_consumed_without_remote_request() {
+        let local_scale = Some(RemoteDesktopCapabilities::vnc_mvp());
+        assert!(!can_flush_pending_resize(
+            true,
+            Some((1920, 1080)),
+            local_scale
+        ));
+        assert!(should_consume_local_resize(
+            true,
+            Some((1920, 1080)),
+            local_scale
+        ));
+        assert!(should_consume_local_resize(
+            true,
+            Some((1920, 1080)),
+            Some(RemoteDesktopCapabilities {
+                resize: ResizeSupport::Unsupported,
+                ..RemoteDesktopCapabilities::vnc_mvp()
+            })
+        ));
+        assert!(!should_consume_local_resize(
+            true,
+            Some((1920, 1080)),
+            Some(RemoteDesktopCapabilities::rdp_mvp())
+        ));
     }
 
     #[test]

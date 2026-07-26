@@ -14,9 +14,29 @@ RemoteDesktop:
     zh-CN: 已连接
     zh-HK: 已連線
   status_reconnecting:
-    en: Reconnecting RDP session
-    zh-CN: 正在重新连接 RDP 会话
-    zh-HK: 正在重新連線 RDP 工作階段
+    en: "Reconnecting %{protocol} session"
+    zh-CN: "正在重新连接 %{protocol} 会话"
+    zh-HK: "正在重新連線 %{protocol} 工作階段"
+  reconnect_notification:
+    en: "%{protocol} disconnected: %{reason}. Reconnecting in %{seconds}s"
+    zh-CN: "%{protocol} 连接已断开：%{reason}。将在 %{seconds} 秒后重新连接"
+    zh-HK: "%{protocol} 連線已中斷：%{reason}。將於 %{seconds} 秒後重新連線"
+  reconnect_notification_manual:
+    en: "Reconnecting %{protocol} session"
+    zh-CN: "正在重新连接 %{protocol} 会话"
+    zh-HK: "正在重新連線 %{protocol} 工作階段"
+  reconnect_reason_display_update:
+    en: display update error
+    zh-CN: 显示更新错误
+    zh-HK: 顯示更新錯誤
+  reconnect_reason_session_error:
+    en: session error
+    zh-CN: 会话错误
+    zh-HK: 工作階段錯誤
+  reconnect_reason_connection_lost:
+    en: connection lost
+    zh-CN: 连接丢失
+    zh-HK: 連線遺失
   provider_version_too_old:
     en: "%{protocol} provider version %{installed} is too old. Please update the provider to %{required} or newer."
     zh-CN: "%{protocol} 扩展版本 %{installed} 过低，请更新到 %{required} 或更高版本。"

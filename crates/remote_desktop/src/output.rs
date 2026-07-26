@@ -33,12 +33,26 @@ pub enum RemoteDesktopOutput {
         text: String,
     },
     /// The backend is tearing down the current helper session and will start
-    /// another one. This is distinct from a human-readable status string so
-    /// views can reset session-bound state without parsing text.
-    Reconnecting(String),
+    /// another one. The event is deliberately structured so the view can
+    /// localize it without parsing or exposing backend error text.
+    Reconnecting(RemoteDesktopReconnect),
     Status(String),
     ConnectionFailure(String),
     Terminated(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemoteDesktopReconnect {
+    pub reason: RemoteDesktopReconnectReason,
+    pub delay_secs: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteDesktopReconnectReason {
+    DisplayUpdate,
+    SessionError,
+    ConnectionLost,
+    Manual,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

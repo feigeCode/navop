@@ -1,7 +1,7 @@
 use crate::helper_protocol::HelperEvent;
 use crate::{RemoteDesktopFrameRect, ResizeSupport};
 
-use super::input::{coalesce_remote_inputs, reconnect_delay, reconnect_status_message};
+use super::input::{coalesce_remote_inputs, reconnect_delay, reconnect_event};
 use super::transport::{
     HelperOutput, forward_helper_output, helper_disconnect_message, helper_event_to_output,
     read_helper_output,
@@ -10,10 +10,13 @@ use super::*;
 
 #[test]
 fn converts_helper_connected_event_to_rdp_capabilities() {
-    let output = helper_event_to_output(HelperEvent::Connected {
-        width: 1280,
-        height: 720,
-    })
+    let output = helper_event_to_output(
+        HelperEvent::Connected {
+            width: 1280,
+            height: 720,
+        },
+        RemoteDesktopProtocol::Rdp,
+    )
     .expect("event converts");
 
     assert_eq!(
@@ -33,10 +36,34 @@ fn converts_helper_connected_event_to_rdp_capabilities() {
 }
 
 #[test]
+fn converts_helper_connected_event_to_vnc_capabilities() {
+    let output = helper_event_to_output(
+        HelperEvent::Connected {
+            width: 1280,
+            height: 720,
+        },
+        RemoteDesktopProtocol::Vnc,
+    )
+    .expect("event converts");
+
+    assert_eq!(
+        output,
+        RemoteDesktopOutput::Connected {
+            width: 1280,
+            height: 720,
+            capabilities: crate::RemoteDesktopCapabilities::vnc_mvp(),
+        }
+    );
+}
+
+#[test]
 fn converts_helper_clipboard_text_event_to_output() {
-    let output = helper_event_to_output(HelperEvent::ClipboardText {
-        text: "remote 中文".to_string(),
-    })
+    let output = helper_event_to_output(
+        HelperEvent::ClipboardText {
+            text: "remote 中文".to_string(),
+        },
+        RemoteDesktopProtocol::Rdp,
+    )
     .expect("event converts");
 
     assert_eq!(
@@ -87,7 +114,7 @@ fn reads_binary_frame_event_from_helper_stream() {
             .to_vec(),
     );
 
-    let output = read_helper_output(&mut input)
+    let output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
         .expect("helper output reads")
         .expect("helper output exists")
         .output;
@@ -110,7 +137,7 @@ fn reads_bgra_frame_event_from_helper_stream() {
             .to_vec(),
     );
 
-    let output = read_helper_output(&mut input)
+    let output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
         .expect("helper output reads")
         .expect("helper output exists")
         .output;
@@ -133,7 +160,7 @@ fn reads_bgra_rectangles_from_helper_stream() {
             .to_vec(),
     );
 
-    let output = read_helper_output(&mut input)
+    let output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
         .expect("helper output reads")
         .expect("helper output exists")
         .output;
@@ -162,7 +189,7 @@ fn reads_legacy_base64_frame_event_from_helper_stream() {
             .to_vec(),
     );
 
-    let output = read_helper_output(&mut input)
+    let output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
         .expect("helper output reads")
         .expect("helper output exists")
         .output;
@@ -189,15 +216,31 @@ fn forwarded_frames_keep_only_latest_pending_output() {
 }
 
 #[test]
-fn reconnect_status_hides_internal_fast_path_error() {
-    let status = reconnect_status_message(
+fn reconnect_event_classifies_fast_path_without_exposing_internal_details() {
+    let reconnect = reconnect_event(
         "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",
         std::time::Duration::from_secs(1),
     );
 
     assert_eq!(
-        "RDP disconnected: display update error. Reconnecting in 1s",
-        status
+        RemoteDesktopReconnect {
+            reason: RemoteDesktopReconnectReason::DisplayUpdate,
+            delay_secs: Some(1),
+        },
+        reconnect
+    );
+    assert!(!format!("{reconnect:?}").contains("/Users/"));
+    assert!(!format!("{reconnect:?}").contains(".cargo/git/checkouts"));
+}
+
+#[test]
+fn reconnect_event_uses_a_protocol_neutral_connection_lost_reason() {
+    assert_eq!(
+        RemoteDesktopReconnect {
+            reason: RemoteDesktopReconnectReason::ConnectionLost,
+            delay_secs: Some(2),
+        },
+        reconnect_event("socket closed", std::time::Duration::from_secs(2),)
     );
 }
 

@@ -5,6 +5,10 @@ impl RemoteDesktopView {
         if self.input_tx.is_some() {
             return;
         }
+        self.frame_sync.reset_session();
+        self.capabilities = None;
+        self.framebuffer = None;
+        self.remote_size = None;
         let runtime = create_backend(self.options.clone())
             .start(RemoteDesktopSize {
                 width: size.0,
@@ -41,9 +45,15 @@ impl RemoteDesktopView {
         cx: &mut Context<Self>,
     ) {
         match output {
-            RemoteDesktopOutput::Connected { width, height, .. } => {
+            RemoteDesktopOutput::Connected {
+                width,
+                height,
+                capabilities,
+            } => {
                 self.remote_size = Some((width, height));
+                self.capabilities = Some(capabilities);
                 self.connected = true;
+                self.frame_sync.connected();
                 self.status = SharedString::from(t!("RemoteDesktop.status_connected").to_string());
             }
             RemoteDesktopOutput::Frame {
@@ -54,8 +64,10 @@ impl RemoteDesktopView {
                 if !self.connected {
                     return;
                 }
-                self.remote_size = Some((width, height));
-                self.install_frame(rgba_to_render_image(width, height, rgba));
+                if self.install_rgba_frame(width, height, rgba) {
+                    self.remote_size = Some((width, height));
+                    self.frame_sync.accept_base((width, height));
+                }
             }
             RemoteDesktopOutput::FrameBgra {
                 width,
@@ -65,8 +77,10 @@ impl RemoteDesktopView {
                 if !self.connected {
                     return;
                 }
-                self.remote_size = Some((width, height));
-                self.install_bgra_frame(width, height, bgra);
+                if self.install_bgra_frame(width, height, bgra) {
+                    self.remote_size = Some((width, height));
+                    self.frame_sync.accept_base((width, height));
+                }
             }
             RemoteDesktopOutput::FrameBgraRects {
                 width,
@@ -77,16 +91,22 @@ impl RemoteDesktopView {
                 if !self.connected {
                     return;
                 }
-                self.remote_size = Some((width, height));
                 self.apply_bgra_rects(width, height, &rects, bgra);
             }
-            RemoteDesktopOutput::Reconnecting(message) => {
-                self.reset_session_state(message.clone());
-                self.notify_reconnecting(message, window, cx);
+            RemoteDesktopOutput::Reconnecting(reconnect) => {
+                let status = localized_reconnect_status(self.options.protocol);
+                let notification =
+                    localized_reconnect_notification(self.options.protocol, reconnect);
+                self.reset_session_state(status, SessionResetReason::Reconnecting);
+                self.notify_reconnecting(notification, window, cx);
             }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
-            RemoteDesktopOutput::ConnectionFailure(message)
-            | RemoteDesktopOutput::Terminated(message) => self.reset_session_state(message),
+            RemoteDesktopOutput::ConnectionFailure(message) => {
+                self.reset_session_state(message, SessionResetReason::ConnectionFailure)
+            }
+            RemoteDesktopOutput::Terminated(message) => {
+                self.reset_session_state(message, SessionResetReason::Terminated)
+            }
             RemoteDesktopOutput::CursorDefault
             | RemoteDesktopOutput::CursorHidden
             | RemoteDesktopOutput::CursorPosition { .. } => {}
@@ -106,22 +126,40 @@ impl RemoteDesktopView {
         });
     }
 
-    fn install_frame(&mut self, image: anyhow::Result<RenderImage>) {
+    fn install_frame(&mut self, image: anyhow::Result<RenderImage>) -> bool {
         match image {
-            Ok(image) => self.latest_frame = Some(Arc::new(image)),
-            Err(error) => self.status = SharedString::from(error.to_string()),
+            Ok(image) => {
+                self.latest_frame = Some(Arc::new(image));
+                true
+            }
+            Err(error) => {
+                self.status = SharedString::from(error.to_string());
+                false
+            }
         }
     }
 
-    fn install_bgra_frame(&mut self, width: u16, height: u16, bgra: Vec<u8>) {
-        match RgbaFramebuffer::from_bgra(width, height, bgra) {
-            Ok(framebuffer) => {
-                let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
-                self.framebuffer = Some(framebuffer);
-                self.install_frame(image);
+    fn install_rgba_frame(&mut self, width: u16, height: u16, rgba: Vec<u8>) -> bool {
+        self.install_bgra_frame(width, height, crate::pixels::rgba_to_bgra(rgba))
+    }
+
+    fn install_bgra_frame(&mut self, width: u16, height: u16, bgra: Vec<u8>) -> bool {
+        let framebuffer = match RgbaFramebuffer::from_bgra(width, height, bgra) {
+            Ok(framebuffer) => framebuffer,
+            Err(error) => {
+                self.status = SharedString::from(error.to_string());
+                return false;
             }
-            Err(error) => self.status = SharedString::from(error.to_string()),
-        }
+        };
+        let image = match bgra_to_render_image(width, height, framebuffer.clone_rgba()) {
+            Ok(image) => image,
+            Err(error) => {
+                self.status = SharedString::from(error.to_string());
+                return false;
+            }
+        };
+        self.framebuffer = Some(framebuffer);
+        self.install_frame(Ok(image))
     }
 
     fn apply_bgra_rects(
@@ -131,29 +169,103 @@ impl RemoteDesktopView {
         rects: &[RemoteDesktopFrameRect],
         bgra: Vec<u8>,
     ) {
-        let Some(framebuffer) = self.framebuffer.as_mut() else {
+        if !self.frame_sync.can_apply_delta((width, height)) {
+            self.record_rejected_delta(width, height, "delta has no matching base frame");
+            return;
+        }
+        let Some(framebuffer) = self.framebuffer.as_ref() else {
+            self.record_rejected_delta(width, height, "missing base framebuffer");
             return;
         };
-        if framebuffer.width() != width || framebuffer.height() != height {
-            return;
-        }
-        let mut offset: usize = 0;
-        for rect in rects {
-            let end = offset.saturating_add(rect.byte_len);
-            if end > bgra.len()
-                || framebuffer
-                    .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])
-                    .is_err()
-            {
+        let patched = match patched_bgra_framebuffer(framebuffer, width, height, rects, &bgra) {
+            Ok(patched) => patched,
+            Err(error) => {
+                let reason = error.to_string();
+                self.record_rejected_delta(width, height, &reason);
                 return;
             }
-            offset = end;
+        };
+        let image = match bgra_to_render_image(width, height, patched.clone_rgba()) {
+            Ok(image) => image,
+            Err(error) => {
+                self.record_rejected_delta(width, height, "failed to build delta frame");
+                self.status = SharedString::from(error.to_string());
+                return;
+            }
+        };
+        match self.frame_sync.accept_delta((width, height)) {
+            frame_sync::DeltaDisposition::Applied => {
+                self.framebuffer = Some(patched);
+                self.latest_frame = Some(Arc::new(image));
+                self.remote_size = Some((width, height));
+            }
+            disposition @ frame_sync::DeltaDisposition::Rejected { .. } => {
+                // All presentation state is owned by this `&mut self`, so the
+                // preflight above should make this unreachable. Keep the
+                // branch defensive and, critically, do not install `patched`.
+                self.log_rejected_delta(
+                    width,
+                    height,
+                    "delta synchronization changed before commit",
+                    disposition,
+                );
+            }
         }
-        if offset != bgra.len() {
-            return;
+    }
+
+    fn record_rejected_delta(&mut self, width: u16, height: u16, reason: &str) {
+        let disposition = self.frame_sync.reject_delta();
+        self.log_rejected_delta(width, height, reason, disposition);
+    }
+
+    fn log_rejected_delta(
+        &self,
+        width: u16,
+        height: u16,
+        reason: &str,
+        disposition: frame_sync::DeltaDisposition,
+    ) {
+        if let frame_sync::DeltaDisposition::Rejected { recovery_started } = disposition {
+            let snapshot = self.frame_sync.snapshot();
+            let resize_capability = self.capabilities.map(|capabilities| capabilities.resize);
+            if recovery_started {
+                tracing::warn!(
+                    protocol = self.options.protocol.label(),
+                    session_generation = snapshot.session_generation,
+                    phase = ?snapshot.phase,
+                    base_size = ?snapshot.base_size,
+                    remote_size = ?self.remote_size,
+                    viewport_size = ?self.last_resize_size,
+                    resize_capability = ?resize_capability,
+                    width,
+                    height,
+                    full_frames = snapshot.full_frames,
+                    deltas = snapshot.deltas,
+                    dropped_deltas = snapshot.dropped_deltas,
+                    recoveries = snapshot.recoveries,
+                    reason,
+                    "remote desktop frame recovery required"
+                );
+            } else {
+                tracing::debug!(
+                    protocol = self.options.protocol.label(),
+                    session_generation = snapshot.session_generation,
+                    phase = ?snapshot.phase,
+                    base_size = ?snapshot.base_size,
+                    remote_size = ?self.remote_size,
+                    viewport_size = ?self.last_resize_size,
+                    resize_capability = ?resize_capability,
+                    width,
+                    height,
+                    full_frames = snapshot.full_frames,
+                    deltas = snapshot.deltas,
+                    dropped_deltas = snapshot.dropped_deltas,
+                    recoveries = snapshot.recoveries,
+                    reason,
+                    "dropping remote desktop delta while awaiting a base frame"
+                );
+            }
         }
-        let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
-        self.install_frame(image);
     }
 
     fn apply_remote_clipboard(&mut self, text: String, cx: &mut Context<Self>) {
@@ -211,13 +323,15 @@ impl RemoteDesktopView {
         self.send_input(RemoteDesktopInput::ClipboardText { text });
     }
 
-    fn reset_session_state(&mut self, message: String) {
+    fn reset_session_state(&mut self, message: String, reason: SessionResetReason) {
         self.modifiers = Modifiers::default();
         self.connected = false;
         self.status = SharedString::from(message);
+        self.capabilities = None;
+        self.frame_sync.reset_session();
         self.remote_size = None;
         self.framebuffer = None;
-        if !preserve_presented_frame_during_session_reset(self.options.protocol) {
+        if !preserve_presented_frame_during_session_reset(reason) {
             self.pending_frame_drops.extend(
                 self.rendered_frames
                     .take_all_distinct(self.latest_frame.take()),
@@ -269,7 +383,22 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn flush_pending_resize(&mut self) {
-        if !resize::can_flush_pending_resize(self.connected, self.remote_size) {
+        if !resize::can_flush_pending_resize(self.connected, self.remote_size, self.capabilities) {
+            if resize::should_consume_local_resize(
+                self.connected,
+                self.remote_size,
+                self.capabilities,
+            ) {
+                if let (Some(size), Some(updated_at)) =
+                    (self.pending_resize_size, self.pending_resize_updated_at)
+                {
+                    if updated_at.elapsed() >= RESIZE_DEBOUNCE {
+                        self.pending_resize_size = None;
+                        self.pending_resize_updated_at = None;
+                        self.last_resize_size = Some(size);
+                    }
+                }
+            }
             return;
         }
         let (Some(size), Some(updated_at)) =
@@ -293,5 +422,275 @@ impl RemoteDesktopView {
             height: size.1,
             scale_factor: self.display_scale_factor,
         });
+    }
+}
+
+fn localized_reconnect_status(protocol: RemoteDesktopProtocol) -> String {
+    let locale = rust_i18n::locale();
+    localized_reconnect_status_for_locale(locale.as_ref(), protocol)
+}
+
+fn localized_reconnect_status_for_locale(locale: &str, protocol: RemoteDesktopProtocol) -> String {
+    t!(
+        "RemoteDesktop.status_reconnecting",
+        locale = locale,
+        protocol = protocol.label()
+    )
+    .to_string()
+}
+
+fn localized_reconnect_notification(
+    protocol: RemoteDesktopProtocol,
+    reconnect: RemoteDesktopReconnect,
+) -> String {
+    let locale = rust_i18n::locale();
+    localized_reconnect_notification_for_locale(locale.as_ref(), protocol, reconnect)
+}
+
+fn localized_reconnect_notification_for_locale(
+    locale: &str,
+    protocol: RemoteDesktopProtocol,
+    reconnect: RemoteDesktopReconnect,
+) -> String {
+    let reason = match reconnect.reason {
+        RemoteDesktopReconnectReason::DisplayUpdate => t!(
+            "RemoteDesktop.reconnect_reason_display_update",
+            locale = locale
+        ),
+        RemoteDesktopReconnectReason::SessionError => t!(
+            "RemoteDesktop.reconnect_reason_session_error",
+            locale = locale
+        ),
+        RemoteDesktopReconnectReason::ConnectionLost => t!(
+            "RemoteDesktop.reconnect_reason_connection_lost",
+            locale = locale
+        ),
+        RemoteDesktopReconnectReason::Manual => {
+            return t!(
+                "RemoteDesktop.reconnect_notification_manual",
+                locale = locale,
+                protocol = protocol.label()
+            )
+            .to_string();
+        }
+    };
+    let Some(seconds) = reconnect.delay_secs else {
+        return t!(
+            "RemoteDesktop.reconnect_notification_manual",
+            locale = locale,
+            protocol = protocol.label()
+        )
+        .to_string();
+    };
+
+    t!(
+        "RemoteDesktop.reconnect_notification",
+        locale = locale,
+        protocol = protocol.label(),
+        reason = reason,
+        seconds = seconds
+    )
+    .to_string()
+}
+
+fn patched_bgra_framebuffer(
+    framebuffer: &RgbaFramebuffer,
+    width: u16,
+    height: u16,
+    rects: &[RemoteDesktopFrameRect],
+    bgra: &[u8],
+) -> anyhow::Result<RgbaFramebuffer> {
+    anyhow::ensure!(
+        framebuffer.width() == width && framebuffer.height() == height,
+        "base framebuffer dimensions changed"
+    );
+
+    let mut patched = framebuffer.clone();
+    let mut offset = 0usize;
+    for rect in rects {
+        anyhow::ensure!(
+            rect.width > 0 && rect.height > 0,
+            "dirty rectangle is empty"
+        );
+        let end = offset
+            .checked_add(rect.byte_len)
+            .ok_or_else(|| anyhow::anyhow!("dirty rectangle payload length overflow"))?;
+        anyhow::ensure!(end <= bgra.len(), "dirty rectangle payload is truncated");
+        patched
+            .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])
+            .map_err(|_| anyhow::anyhow!("invalid dirty rectangle"))?;
+        offset = end;
+    }
+    anyhow::ensure!(
+        offset == bgra.len(),
+        "dirty rectangle payload has trailing bytes"
+    );
+    Ok(patched)
+}
+
+#[cfg(test)]
+mod tests {
+    use remote_desktop::{
+        RemoteDesktopFrameRect, RemoteDesktopProtocol, RemoteDesktopReconnect,
+        RemoteDesktopReconnectReason, RgbaFramebuffer,
+    };
+
+    use super::{
+        localized_reconnect_notification_for_locale, localized_reconnect_status_for_locale,
+        patched_bgra_framebuffer,
+    };
+
+    #[test]
+    fn localizes_rdp_reconnect_notification_in_english() {
+        let notification = localized_reconnect_notification_for_locale(
+            "en",
+            RemoteDesktopProtocol::Rdp,
+            RemoteDesktopReconnect {
+                reason: RemoteDesktopReconnectReason::DisplayUpdate,
+                delay_secs: Some(1),
+            },
+        );
+
+        assert_eq!(
+            "RDP disconnected: display update error. Reconnecting in 1s",
+            notification
+        );
+        assert!(!notification.contains("VNC"));
+    }
+
+    #[test]
+    fn localizes_vnc_reconnect_notification_in_simplified_chinese() {
+        let notification = localized_reconnect_notification_for_locale(
+            "zh-CN",
+            RemoteDesktopProtocol::Vnc,
+            RemoteDesktopReconnect {
+                reason: RemoteDesktopReconnectReason::ConnectionLost,
+                delay_secs: Some(2),
+            },
+        );
+
+        assert_eq!(
+            "VNC 连接已断开：连接丢失。将在 2 秒后重新连接",
+            notification
+        );
+        assert!(!notification.contains("RDP"));
+    }
+
+    #[test]
+    fn localizes_manual_reconnect_and_status_in_traditional_chinese() {
+        let reconnect = RemoteDesktopReconnect {
+            reason: RemoteDesktopReconnectReason::Manual,
+            delay_secs: None,
+        };
+
+        assert_eq!(
+            "正在重新連線 RDP 工作階段",
+            localized_reconnect_notification_for_locale(
+                "zh-HK",
+                RemoteDesktopProtocol::Rdp,
+                reconnect
+            )
+        );
+        assert_eq!(
+            "正在重新連線 VNC 工作階段",
+            localized_reconnect_status_for_locale("zh-HK", RemoteDesktopProtocol::Vnc)
+        );
+    }
+
+    #[test]
+    fn localizes_session_error_without_accepting_backend_details() {
+        let notification = localized_reconnect_notification_for_locale(
+            "zh-CN",
+            RemoteDesktopProtocol::Rdp,
+            RemoteDesktopReconnect {
+                reason: RemoteDesktopReconnectReason::SessionError,
+                delay_secs: Some(5),
+            },
+        );
+
+        assert_eq!(
+            "RDP 连接已断开：会话错误。将在 5 秒后重新连接",
+            notification
+        );
+        assert!(!notification.contains("/Users/"));
+        assert!(!notification.contains(".cargo/git/checkouts"));
+    }
+
+    #[test]
+    fn patches_dirty_rectangles_without_mutating_the_base() {
+        let base =
+            RgbaFramebuffer::from_bgra(2, 1, vec![0x03, 0x02, 0x01, 0xff, 0x06, 0x05, 0x04, 0xff])
+                .unwrap();
+        let rects = [RemoteDesktopFrameRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 1,
+            byte_len: 4,
+        }];
+
+        let patched =
+            patched_bgra_framebuffer(&base, 2, 1, &rects, &[0x30, 0x20, 0x10, 0xff]).unwrap();
+
+        assert_eq!(
+            base.as_rgba(),
+            &[0x03, 0x02, 0x01, 0xff, 0x06, 0x05, 0x04, 0xff]
+        );
+        assert_eq!(
+            patched.as_rgba(),
+            &[0x03, 0x02, 0x01, 0xff, 0x30, 0x20, 0x10, 0xff]
+        );
+    }
+
+    #[test]
+    fn rejects_an_invalid_delta_atomically() {
+        let base =
+            RgbaFramebuffer::from_bgra(2, 1, vec![0x03, 0x02, 0x01, 0xff, 0, 0, 0, 0]).unwrap();
+        let rects = [
+            RemoteDesktopFrameRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                byte_len: 4,
+            },
+            RemoteDesktopFrameRect {
+                x: 2,
+                y: 0,
+                width: 1,
+                height: 1,
+                byte_len: 4,
+            },
+        ];
+
+        let result = patched_bgra_framebuffer(
+            &base,
+            2,
+            1,
+            &rects,
+            &[0x30, 0x20, 0x10, 0xff, 0x60, 0x50, 0x40, 0xff],
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            base.as_rgba(),
+            &[0x03, 0x02, 0x01, 0xff, 0, 0, 0, 0],
+            "a rejected delta must not partially patch its base"
+        );
+    }
+
+    #[test]
+    fn rejects_delta_payload_with_trailing_bytes() {
+        let base = RgbaFramebuffer::from_bgra(1, 1, vec![0, 0, 0, 0]).unwrap();
+        let rects = [RemoteDesktopFrameRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            byte_len: 4,
+        }];
+
+        assert!(patched_bgra_framebuffer(&base, 1, 1, &rects, &[1, 2, 3, 4, 5]).is_err());
+        assert_eq!(base.as_rgba(), &[0, 0, 0, 0]);
     }
 }

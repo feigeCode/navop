@@ -23,18 +23,19 @@ pub(super) fn handle_backend_signals(
     stdin: &mut std::process::ChildStdin,
     output_tx: &OutputMailboxSender,
     was_connected: &mut bool,
+    protocol: RemoteDesktopProtocol,
 ) -> Option<HelperRunResult> {
     while let Ok(signal) = signal_rx.try_recv() {
         match signal {
             BackendSignal::Connected => *was_connected = true,
             BackendSignal::Disconnected(reason) => {
-                close_helper(helper, stdin, output_tx);
+                close_helper(helper, stdin, output_tx, protocol);
                 return Some(reconnect_result(reason, false, *was_connected));
             }
             BackendSignal::OutputEnded => {
-                close_helper(helper, stdin, output_tx);
+                close_helper(helper, stdin, output_tx, protocol);
                 return Some(reconnect_result(
-                    "remote desktop helper output ended".to_string(),
+                    format!("{} helper output ended", protocol.label()),
                     false,
                     *was_connected,
                 ));
@@ -52,7 +53,12 @@ pub(super) fn handle_remote_input(
     let inputs = match drain_remote_inputs(input_rx) {
         RemoteInputBatch::Inputs(inputs) => inputs,
         RemoteInputBatch::Disconnected => {
-            close_helper(context.helper, context.stdin, context.output_tx);
+            close_helper(
+                context.helper,
+                context.stdin,
+                context.output_tx,
+                context.protocol,
+            );
             return Some(HelperRunResult::InputClosed);
         }
     };
@@ -60,11 +66,21 @@ pub(super) fn handle_remote_input(
     for input in inputs {
         match input {
             RemoteDesktopInput::Close => {
-                close_helper(context.helper, context.stdin, context.output_tx);
+                close_helper(
+                    context.helper,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                );
                 return Some(HelperRunResult::Closed);
             }
             RemoteDesktopInput::Reconnect => {
-                close_helper(context.helper, context.stdin, context.output_tx);
+                close_helper(
+                    context.helper,
+                    context.stdin,
+                    context.output_tx,
+                    context.protocol,
+                );
                 return Some(reconnect_result(
                     "manual reconnect".to_string(),
                     true,
@@ -76,7 +92,12 @@ pub(super) fn handle_remote_input(
                 if let Some(reason) =
                     forward_remote_input(input, context.stdin, context.output_tx, context.protocol)
                 {
-                    close_helper(context.helper, context.stdin, context.output_tx);
+                    close_helper(
+                        context.helper,
+                        context.stdin,
+                        context.output_tx,
+                        context.protocol,
+                    );
                     return Some(reconnect_result(reason, false, was_connected));
                 }
             }
@@ -135,24 +156,25 @@ fn forward_remote_input(
     protocol: RemoteDesktopProtocol,
 ) -> Option<String> {
     let request = HelperRequest::from_remote_input_for_protocol(&input, protocol)?;
-    write_request(stdin, &request, output_tx)
+    write_request(stdin, &request, output_tx, protocol)
         .err()
-        .map(|_| "failed to send RDP helper request".to_string())
+        .map(|_| format!("failed to send {} helper request", protocol.label()))
 }
 
 pub(super) fn poll_helper_exit(
     helper: &mut std::process::Child,
     was_connected: bool,
+    protocol: RemoteDesktopProtocol,
 ) -> Option<HelperRunResult> {
     match helper.try_wait() {
         Ok(Some(status)) => Some(reconnect_result(
-            format!("RDP helper exited with {status}"),
+            format!("{} helper exited with {status}", protocol.label()),
             false,
             was_connected,
         )),
         Ok(None) => None,
         Err(error) => Some(reconnect_result(
-            format!("failed to poll RDP helper: {error}"),
+            format!("failed to poll {} helper: {error}", protocol.label()),
             false,
             was_connected,
         )),
@@ -223,10 +245,14 @@ fn close_helper(
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
     output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
 ) {
-    let _ = write_request(stdin, &HelperRequest::Close, output_tx);
+    let _ = write_request(stdin, &HelperRequest::Close, output_tx, protocol);
     if let Err(error) = helper.wait() {
-        send_failure(output_tx, &format!("failed to wait RDP helper: {error}"));
+        send_failure(
+            output_tx,
+            &format!("failed to wait {} helper: {error}", protocol.label()),
+        );
     }
 }
 
@@ -239,23 +265,19 @@ pub(super) fn reconnect_delay(attempt: usize) -> Duration {
     }
 }
 
-pub(super) fn reconnect_status_message(reason: &str, delay: Duration) -> String {
-    format!(
-        "RDP disconnected: {}. Reconnecting in {}s",
-        user_facing_disconnect_reason(reason),
-        delay.as_secs()
-    )
+pub(super) fn reconnect_event(reason: &str, delay: Duration) -> RemoteDesktopReconnect {
+    RemoteDesktopReconnect {
+        reason: classify_disconnect_reason(reason),
+        delay_secs: Some(delay.as_secs()),
+    }
 }
 
-fn user_facing_disconnect_reason(reason: &str) -> &'static str {
+fn classify_disconnect_reason(reason: &str) -> RemoteDesktopReconnectReason {
     if reason.contains("Fast-Path") {
-        return "display update error";
+        return RemoteDesktopReconnectReason::DisplayUpdate;
     }
     if reason.contains("/Users/") || reason.contains(".cargo/git/checkouts") {
-        return "session error";
+        return RemoteDesktopReconnectReason::SessionError;
     }
-    if reason.trim().is_empty() {
-        return "connection lost";
-    }
-    "connection lost"
+    RemoteDesktopReconnectReason::ConnectionLost
 }
