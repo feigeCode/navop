@@ -1,28 +1,35 @@
 //! Application-level single-flight slots and leases for shared SSH session
 //! managers.
 //!
-//! This module deliberately stops before idle eviction, transport shutdown, a
-//! GPUI global owner, or migration of existing consumers.  Those lifecycle
-//! policies build on top of the guarantees here:
+//! This module deliberately stops before transport health, graceful
+//! application shutdown, a GPUI global owner, or migration of existing
+//! consumers.  Those lifecycle policies build on top of the guarantees here:
 //!
 //! - one in-flight manager creation per [`ConnectionKey`];
 //! - unrelated keys can make progress independently;
 //! - manager creation never runs while the registry state lock is held;
 //! - a result from a retired slot can never replace a newer generation;
 //! - lease checkout/release is bound to the exact slot generation;
-//! - the last release only marks an idle candidate and never disconnects.
+//! - the last release only marks an idle candidate and never disconnects;
+//! - one registry-owned task reaps expired generations and disconnects them
+//!   outside the registry lock.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::{Instant, sleep_until};
 
 use crate::{ConnectionKey, SshConnectConfig, SshSessionManager};
+
+const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SlotGeneration(u64);
@@ -46,6 +53,28 @@ impl CreationToken {
     }
 }
 
+#[derive(Clone)]
+struct IdleCandidate {
+    deadline: Instant,
+    identity: Arc<()>,
+}
+
+impl IdleCandidate {
+    fn new(idle_timeout: Duration) -> Self {
+        let now = Instant::now();
+        Self {
+            deadline: now
+                .checked_add(idle_timeout)
+                .expect("idle timeout was validated when the SSH registry was constructed"),
+            identity: Arc::new(()),
+        }
+    }
+
+    fn is_same_candidate(&self, other: &Self) -> bool {
+        self.deadline == other.deadline && Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
 enum FlightOutcome {
     Published,
     Failed(Arc<str>),
@@ -62,7 +91,7 @@ enum RegistrySlot<M> {
         token: CreationToken,
         manager: Arc<M>,
         lease_count: usize,
-        idle_since: Option<Instant>,
+        idle_candidate: Option<IdleCandidate>,
     },
 }
 
@@ -110,19 +139,42 @@ impl<M> RegistryState<M> {
 
 struct RegistryShared<M> {
     state: StdMutex<RegistryState<M>>,
+    idle_timeout: Duration,
+    reaper_notify: Notify,
+    reaper_started: AtomicBool,
+    reaper_running: AtomicBool,
+    reaper_shutdown: AtomicBool,
+    reaper_start_count: AtomicUsize,
+    reaper_stop_count: AtomicUsize,
 }
 
-impl<M> Default for RegistryShared<M> {
-    fn default() -> Self {
+impl<M> RegistryShared<M> {
+    fn new(idle_timeout: Duration) -> Self {
         Self {
             state: StdMutex::new(RegistryState::default()),
+            idle_timeout,
+            reaper_notify: Notify::new(),
+            reaper_started: AtomicBool::new(false),
+            reaper_running: AtomicBool::new(false),
+            reaper_shutdown: AtomicBool::new(false),
+            reaper_start_count: AtomicUsize::new(0),
+            reaper_stop_count: AtomicUsize::new(0),
         }
+    }
+
+    fn idle_timeout(&self) -> Duration {
+        self.idle_timeout
     }
 }
 
 #[async_trait]
 trait SessionManagerFactory<M>: Send + Sync + 'static {
     async fn create(&self, config: SshConnectConfig) -> Result<M>;
+}
+
+#[async_trait]
+trait RegistryManagedSession: Send + Sync + 'static {
+    async fn disconnect_for_registry(&self) -> Result<()>;
 }
 
 enum AcquirePhase<M> {
@@ -159,34 +211,43 @@ impl<M> RegistryLease<M> {
         // idempotent and `Drop` never attempts a second decrement.
         self.counted = false;
 
-        let mut state = self
-            .shared
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let Some(RegistrySlot::Ready {
-            token,
-            lease_count,
-            idle_since,
-            ..
-        }) = state.slots.get_mut(self.key.as_ref())
-        else {
-            return;
-        };
-        if !token.is_same_flight(&self.token) || *lease_count == 0 {
-            return;
-        }
+        let became_idle = {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some(RegistrySlot::Ready {
+                token,
+                lease_count,
+                idle_candidate,
+                ..
+            }) = state.slots.get_mut(self.key.as_ref())
+            else {
+                return;
+            };
+            if !token.is_same_flight(&self.token) || *lease_count == 0 {
+                return;
+            }
 
-        *lease_count -= 1;
-        if *lease_count == 0 {
-            *idle_since = Some(Instant::now());
+            *lease_count -= 1;
+            if *lease_count == 0 {
+                *idle_candidate = Some(IdleCandidate::new(self.shared.idle_timeout()));
+                true
+            } else {
+                false
+            }
+        };
+
+        if became_idle {
+            self.shared.reaper_notify.notify_one();
         }
     }
 }
 
 impl<M> Clone for RegistryLease<M> {
     fn clone(&self) -> Self {
-        let counted = if self.counted {
+        let (counted, cancelled_idle) = if self.counted {
             let mut state = self
                 .shared
                 .state
@@ -196,22 +257,25 @@ impl<M> Clone for RegistryLease<M> {
                 Some(RegistrySlot::Ready {
                     token,
                     lease_count,
-                    idle_since,
+                    idle_candidate,
                     ..
                 }) if token.is_same_flight(&self.token) => {
                     *lease_count = lease_count
                         .checked_add(1)
                         .expect("SSH session lease count overflow");
-                    *idle_since = None;
-                    true
+                    (true, idle_candidate.take().is_some())
                 }
                 Some(RegistrySlot::Creating { .. }) | Some(RegistrySlot::Ready { .. }) | None => {
-                    false
+                    (false, false)
                 }
             }
         } else {
-            false
+            (false, false)
         };
+
+        if cancelled_idle {
+            self.shared.reaper_notify.notify_one();
+        }
 
         Self {
             shared: self.shared.clone(),
@@ -255,12 +319,24 @@ struct SessionRegistryCore<M, F> {
 
 impl<M, F> SessionRegistryCore<M, F>
 where
-    M: Send + Sync + 'static,
+    M: RegistryManagedSession,
     F: SessionManagerFactory<M>,
 {
     fn new(factory: F) -> Self {
+        Self::with_idle_timeout(factory, DEFAULT_SESSION_IDLE_TIMEOUT)
+    }
+
+    fn with_idle_timeout(factory: F, idle_timeout: Duration) -> Self {
+        assert!(
+            !idle_timeout.is_zero(),
+            "SSH session idle timeout must be greater than zero"
+        );
+        assert!(
+            Instant::now().checked_add(idle_timeout).is_some(),
+            "SSH session idle timeout must fit in a Tokio Instant"
+        );
         Self {
-            shared: Arc::new(RegistryShared::default()),
+            shared: Arc::new(RegistryShared::new(idle_timeout)),
             factory,
         }
     }
@@ -275,8 +351,10 @@ where
         key: &ConnectionKey,
         config: SshConnectConfig,
     ) -> Result<RegistryLease<M>> {
+        self.ensure_reaper_started();
+
         loop {
-            let phase = {
+            let (phase, cancelled_idle) = {
                 let mut state = self
                     .shared
                     .state
@@ -288,24 +366,27 @@ where
                         token,
                         manager,
                         lease_count,
-                        idle_since,
+                        idle_candidate,
                     }) => {
                         *lease_count = lease_count
                             .checked_add(1)
                             .ok_or_else(|| anyhow!("SSH session lease count overflow"))?;
-                        *idle_since = None;
-                        AcquirePhase::Ready(RegistryLease {
-                            shared: self.shared.clone(),
-                            key: slot_key.clone(),
-                            token: token.clone(),
-                            manager: manager.clone(),
-                            counted: true,
-                        })
+                        let cancelled_idle = idle_candidate.take().is_some();
+                        (
+                            AcquirePhase::Ready(RegistryLease {
+                                shared: self.shared.clone(),
+                                key: slot_key.clone(),
+                                token: token.clone(),
+                                manager: manager.clone(),
+                                counted: true,
+                            }),
+                            cancelled_idle,
+                        )
                     }
                     Some(RegistrySlot::Creating { waiters, .. }) => {
                         let (sender, receiver) = oneshot::channel();
                         waiters.push(sender);
-                        AcquirePhase::Wait(receiver)
+                        (AcquirePhase::Wait(receiver), false)
                     }
                     None => {
                         let token = state.next_token();
@@ -317,10 +398,14 @@ where
                                 waiters: vec![sender],
                             },
                         );
-                        AcquirePhase::Start { token, receiver }
+                        (AcquirePhase::Start { token, receiver }, false)
                     }
                 }
             };
+
+            if cancelled_idle {
+                self.shared.reaper_notify.notify_one();
+            }
 
             let receiver = match phase {
                 AcquirePhase::Ready(lease) => return Ok(lease),
@@ -349,6 +434,23 @@ where
         }
     }
 
+    fn ensure_reaper_started(self: &Arc<Self>) {
+        if self
+            .shared
+            .reaper_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        self.shared
+            .reaper_start_count
+            .fetch_add(1, Ordering::Relaxed);
+        let shared = self.shared.clone();
+        tokio::spawn(run_idle_reaper(shared));
+    }
+
     fn spawn_creation(
         self: &Arc<Self>,
         key: ConnectionKey,
@@ -366,7 +468,7 @@ where
     }
 
     fn finish_creation(&self, key: &ConnectionKey, token: &CreationToken, result: Result<M>) {
-        let (waiters, outcome) = {
+        let (waiters, outcome, published_idle) = {
             let mut state = self
                 .shared
                 .state
@@ -391,42 +493,222 @@ where
                             lease_count: 0,
                             // Every waiter performs its own counted checkout.
                             // If all waiters were cancelled, the newly created
-                            // manager is immediately eligible for the future
-                            // idle policy instead of being leaked as "busy".
-                            idle_since: Some(Instant::now()),
+                            // manager immediately gets a real idle deadline
+                            // instead of being leaked as "busy".
+                            idle_candidate: Some(IdleCandidate::new(self.shared.idle_timeout())),
                         },
                     );
-                    (waiters, FlightOutcome::Published)
+                    (waiters, FlightOutcome::Published, true)
                 }
                 Err(error) => (
                     waiters,
                     FlightOutcome::Failed(Arc::from(format!("{error:#}"))),
+                    false,
                 ),
             }
         };
+        if published_idle {
+            self.shared.reaper_notify.notify_one();
+        }
         notify_waiters(waiters, outcome);
     }
 
     /// Retire only the currently published/in-flight slot.
     ///
-    /// Idle eviction and transport disconnect are intentionally left to a
-    /// later lifecycle layer.  Waiters on an in-flight generation retry
-    /// against the new map state instead of accepting its stale result.
+    /// Explicit retirement remains a visibility-only operation and returns a
+    /// published manager without disconnecting it.  Idle expiration is
+    /// handled separately by the registry-owned reaper.  Waiters on an
+    /// in-flight generation retry against the new map state instead of
+    /// accepting its stale result.
     fn retire(&self, key: &ConnectionKey) -> Option<Arc<M>> {
-        let (manager, waiters) = {
+        let (manager, waiters, removed_slot) = {
             let mut state = self
                 .shared
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             match state.slots.remove(key) {
-                Some(RegistrySlot::Ready { manager, .. }) => (Some(manager), Vec::new()),
-                Some(RegistrySlot::Creating { waiters, .. }) => (None, waiters),
-                None => (None, Vec::new()),
+                Some(RegistrySlot::Ready { manager, .. }) => (Some(manager), Vec::new(), true),
+                Some(RegistrySlot::Creating { waiters, .. }) => (None, waiters, true),
+                None => (None, Vec::new(), false),
             }
         };
+        if removed_slot {
+            self.shared.reaper_notify.notify_one();
+        }
         notify_waiters(waiters, FlightOutcome::Superseded);
         manager
+    }
+}
+
+impl<M, F> Drop for SessionRegistryCore<M, F> {
+    fn drop(&mut self) {
+        self.shared.reaper_shutdown.store(true, Ordering::Release);
+        self.shared.reaper_notify.notify_one();
+    }
+}
+
+#[derive(Clone)]
+struct ScheduledIdle {
+    key: Arc<ConnectionKey>,
+    creation_token: CreationToken,
+    idle_candidate: IdleCandidate,
+}
+
+impl<M> RegistryShared<M> {
+    fn next_idle_candidate(&self) -> Option<ScheduledIdle> {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .slots
+            .values()
+            .filter_map(|slot| match slot {
+                RegistrySlot::Ready {
+                    key,
+                    token,
+                    lease_count: 0,
+                    idle_candidate: Some(idle_candidate),
+                    ..
+                } => Some(ScheduledIdle {
+                    key: key.clone(),
+                    creation_token: token.clone(),
+                    idle_candidate: idle_candidate.clone(),
+                }),
+                RegistrySlot::Creating { .. } | RegistrySlot::Ready { .. } => None,
+            })
+            .min_by_key(|candidate| candidate.idle_candidate.deadline)
+    }
+
+    /// Remove only the exact idle generation selected by the reaper.
+    ///
+    /// The deadline check and all identity checks happen under the registry
+    /// lock.  The returned manager is disconnected later, outside this lock.
+    fn take_expired_manager(&self, scheduled: &ScheduledIdle, now: Instant) -> Option<Arc<M>> {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let is_current_expired = matches!(
+            state.slots.get(scheduled.key.as_ref()),
+            Some(RegistrySlot::Ready {
+                token,
+                lease_count: 0,
+                idle_candidate: Some(idle_candidate),
+                ..
+            }) if token.is_same_flight(&scheduled.creation_token)
+                && idle_candidate.is_same_candidate(&scheduled.idle_candidate)
+                && idle_candidate.deadline <= now
+        );
+        if !is_current_expired {
+            return None;
+        }
+
+        match state.slots.remove(scheduled.key.as_ref()) {
+            Some(RegistrySlot::Ready { manager, .. }) => Some(manager),
+            Some(RegistrySlot::Creating { .. }) | None => {
+                unreachable!("idle slot shape changed while the registry lock was held")
+            }
+        }
+    }
+}
+
+struct DisconnectReport {
+    connection: String,
+    result: Result<()>,
+}
+
+struct ReaperRunGuard<M> {
+    shared: Arc<RegistryShared<M>>,
+}
+
+impl<M> ReaperRunGuard<M> {
+    fn new(shared: Arc<RegistryShared<M>>) -> Self {
+        shared.reaper_running.store(true, Ordering::Release);
+        Self { shared }
+    }
+}
+
+impl<M> Drop for ReaperRunGuard<M> {
+    fn drop(&mut self) {
+        self.shared.reaper_running.store(false, Ordering::Release);
+        self.shared
+            .reaper_stop_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.shared.reaper_notify.notify_waiters();
+    }
+}
+
+async fn run_idle_reaper<M>(shared: Arc<RegistryShared<M>>)
+where
+    M: RegistryManagedSession,
+{
+    let _run_guard = ReaperRunGuard::new(shared.clone());
+    let mut disconnects = JoinSet::new();
+
+    loop {
+        if shared.reaper_shutdown.load(Ordering::Acquire) {
+            break;
+        }
+
+        if let Some(scheduled) = shared.next_idle_candidate() {
+            tokio::select! {
+                _ = shared.reaper_notify.notified() => {}
+                _ = sleep_until(scheduled.idle_candidate.deadline) => {
+                    if let Some(manager) =
+                        shared.take_expired_manager(&scheduled, Instant::now())
+                    {
+                        let connection = scheduled.key.label();
+                        disconnects.spawn(async move {
+                            DisconnectReport {
+                                connection,
+                                result: manager.disconnect_for_registry().await,
+                            }
+                        });
+                    }
+                }
+                completion = disconnects.join_next(), if !disconnects.is_empty() => {
+                    handle_disconnect_completion(completion);
+                }
+            }
+        } else if disconnects.is_empty() {
+            shared.reaper_notify.notified().await;
+        } else {
+            tokio::select! {
+                _ = shared.reaper_notify.notified() => {}
+                completion = disconnects.join_next() => {
+                    handle_disconnect_completion(completion);
+                }
+            }
+        }
+    }
+
+    disconnects.abort_all();
+    while disconnects.join_next().await.is_some() {}
+}
+
+fn handle_disconnect_completion(
+    completion: Option<std::result::Result<DisconnectReport, JoinError>>,
+) {
+    match completion {
+        Some(Ok(DisconnectReport {
+            connection,
+            result: Ok(()),
+        })) => {
+            tracing::debug!(%connection, "reaped idle SSH session generation");
+        }
+        Some(Ok(DisconnectReport {
+            connection,
+            result: Err(error),
+        })) => {
+            tracing::warn!(
+                %connection,
+                error = %error,
+                "failed to disconnect reaped idle SSH session generation"
+            );
+        }
+        Some(Err(error)) if !error.is_cancelled() => {
+            tracing::warn!(
+                error = %error,
+                "idle SSH session disconnect task did not complete"
+            );
+        }
+        Some(Err(_)) | None => {}
     }
 }
 
@@ -509,16 +791,24 @@ impl SessionManagerFactory<SshSessionManager> for DefaultSessionManagerFactory {
     }
 }
 
+#[async_trait]
+impl RegistryManagedSession for SshSessionManager {
+    async fn disconnect_for_registry(&self) -> Result<()> {
+        self.disconnect().await
+    }
+}
+
 /// A generation-bound use of a shared [`SshSessionManager`].
 ///
 /// Dropping or explicitly releasing this value synchronously decrements only
 /// the slot generation from which it was checked out.  The last release marks
-/// that slot as idle; it does not disconnect or remove the manager.  Cloning a
-/// lease while its generation is current atomically adds another counted use.
-/// A clone of an already retired lease can keep that retired manager alive but
-/// is never charged to a replacement generation.  The lease does not expose
-/// the registry-owned `Arc<SshSessionManager>`; consumers must retain a lease
-/// for the full lifetime of clients or channels obtained from its manager.
+/// that slot as idle and wakes the registry reaper; `Drop` itself never
+/// disconnects, blocks, or starts an async task.  Cloning a lease while its
+/// generation is current atomically adds another counted use.  A clone of an
+/// already retired lease can keep that retired manager alive but is never
+/// charged to a replacement generation.  The lease does not expose the
+/// registry-owned `Arc<SshSessionManager>`; consumers must retain a lease for
+/// the full lifetime of clients or channels obtained from its manager.
 #[must_use = "dropping the lease immediately releases the registry use"]
 pub struct SshSessionLease {
     inner: RegistryLease<SshSessionManager>,
@@ -537,8 +827,9 @@ impl SshSessionLease {
 
     /// Release this use before the end of its lexical scope.
     ///
-    /// This is equivalent to dropping the lease and never performs async I/O
-    /// or disconnects the underlying transport.
+    /// This is equivalent to dropping the lease.  It may mark a new idle
+    /// deadline and wake the registry reaper, but never performs async I/O or
+    /// disconnects the underlying transport itself.
     pub fn release(mut self) {
         self.inner.release();
     }
@@ -572,21 +863,42 @@ impl fmt::Debug for SshSessionLease {
 }
 
 /// In-memory registry that coalesces manager creation by [`ConnectionKey`] and
-/// returns generation-bound leases.
+/// returns generation-bound leases.  A single cancellable Tokio task reaps
+/// generations that remain unused for the configured idle timeout.
 ///
 /// This type is intentionally not a process-global singleton.  The future
-/// application service owns one registry instance and later adds shutdown,
-/// health and idle-eviction policy around it.
+/// application service owns one registry instance and later adds explicit
+/// graceful shutdown and health policy around it.
 #[derive(Clone)]
 pub struct SshSessionRegistry {
     inner: Arc<SessionRegistryCore<SshSessionManager, DefaultSessionManagerFactory>>,
 }
 
 impl SshSessionRegistry {
+    /// Default time a published generation may remain without a lease before
+    /// the registry removes and disconnects it.
+    pub const DEFAULT_IDLE_TIMEOUT: Duration = DEFAULT_SESSION_IDLE_TIMEOUT;
+
     #[must_use]
     pub fn new() -> Self {
         Self {
             inner: Arc::new(SessionRegistryCore::new(DefaultSessionManagerFactory)),
+        }
+    }
+
+    /// Create a registry with an explicit non-zero, representable idle
+    /// timeout.
+    ///
+    /// The timeout is fixed for the lifetime of this registry.  Changing
+    /// application policy should replace the application-owned registry
+    /// rather than silently changing deadlines already attached to slots.
+    #[must_use]
+    pub fn with_idle_timeout(idle_timeout: Duration) -> Self {
+        Self {
+            inner: Arc::new(SessionRegistryCore::with_idle_timeout(
+                DefaultSessionManagerFactory,
+                idle_timeout,
+            )),
         }
     }
 
@@ -626,7 +938,10 @@ impl Default for SshSessionRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{RegistrySlot, SessionManagerFactory, SessionRegistryCore, SshSessionRegistry};
+    use super::{
+        RegistryManagedSession, RegistrySlot, SessionManagerFactory, SessionRegistryCore,
+        SshSessionRegistry,
+    };
     use crate::{
         ConnectionCredentialRevisions, ConnectionKey, CredentialRevision, HostKeyVerifier,
         JumpServerConnectConfig, ProxyConnectConfig, SshAuth, SshConnectConfig,
@@ -634,15 +949,75 @@ mod tests {
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
     use tokio::sync::Semaphore;
-    use tokio::time::{Duration, timeout};
+    use tokio::time::{Duration, advance, timeout};
 
     #[derive(Debug)]
     struct FakeManager {
         id: usize,
         host: String,
+        disconnect: Arc<FakeDisconnect>,
+    }
+
+    impl FakeManager {
+        fn new(id: usize, host: String) -> Self {
+            Self {
+                id,
+                host,
+                disconnect: Arc::new(FakeDisconnect::default()),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeDisconnect {
+        attempts: AtomicUsize,
+        should_fail: AtomicBool,
+        blocked: AtomicBool,
+        permits: Semaphore,
+    }
+
+    impl Default for FakeDisconnect {
+        fn default() -> Self {
+            Self {
+                attempts: AtomicUsize::new(0),
+                should_fail: AtomicBool::new(false),
+                blocked: AtomicBool::new(false),
+                permits: Semaphore::new(0),
+            }
+        }
+    }
+
+    impl FakeDisconnect {
+        fn block(&self) {
+            self.blocked.store(true, Ordering::SeqCst);
+        }
+
+        fn unblock(&self) {
+            self.permits.add_permits(1);
+        }
+    }
+
+    #[async_trait]
+    impl RegistryManagedSession for FakeManager {
+        async fn disconnect_for_registry(&self) -> Result<()> {
+            self.disconnect.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.disconnect.blocked.load(Ordering::SeqCst) {
+                self.disconnect
+                    .permits
+                    .acquire()
+                    .await
+                    .expect("fake disconnect semaphore should remain open")
+                    .forget();
+            }
+            if self.disconnect.should_fail.load(Ordering::SeqCst) {
+                Err(anyhow!("fake disconnect failure"))
+            } else {
+                Ok(())
+            }
+        }
     }
 
     #[derive(Default)]
@@ -654,10 +1029,7 @@ mod tests {
     impl SessionManagerFactory<FakeManager> for Arc<CountingFactory> {
         async fn create(&self, config: SshConnectConfig) -> Result<FakeManager> {
             let id = self.create_count.fetch_add(1, Ordering::SeqCst) + 1;
-            Ok(FakeManager {
-                id,
-                host: config.host,
-            })
+            Ok(FakeManager::new(id, config.host))
         }
     }
 
@@ -695,10 +1067,7 @@ mod tests {
                     .forget();
             }
             self.completed_count.fetch_add(1, Ordering::SeqCst);
-            Ok(FakeManager {
-                id,
-                host: config.host,
-            })
+            Ok(FakeManager::new(id, config.host))
         }
     }
 
@@ -746,10 +1115,7 @@ mod tests {
                     .forget();
                 return Err(anyhow!("shared fake creation failure"));
             }
-            Ok(FakeManager {
-                id,
-                host: config.host,
-            })
+            Ok(FakeManager::new(id, config.host))
         }
     }
 
@@ -769,10 +1135,7 @@ mod tests {
                 .expect("created ids lock should not be poisoned")
                 .push(id);
             self.completed_count.fetch_add(1, Ordering::SeqCst);
-            Ok(FakeManager {
-                id,
-                host: config.host,
-            })
+            Ok(FakeManager::new(id, config.host))
         }
     }
 
@@ -809,6 +1172,33 @@ mod tests {
         })
         .await
         .expect("counter should reach expected value");
+    }
+
+    async fn yield_until_count(counter: &AtomicUsize, expected: usize) {
+        for _ in 0..100 {
+            if counter.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            expected,
+            "counter should reach expected value"
+        );
+    }
+
+    async fn yield_until_true(flag: &AtomicBool) {
+        for _ in 0..100 {
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "flag should become true before the yield budget is exhausted"
+        );
     }
 
     async fn wait_for_waiter_count<M, F>(
@@ -851,12 +1241,22 @@ mod tests {
         match state.slots.get(key) {
             Some(RegistrySlot::Ready {
                 lease_count,
-                idle_since,
+                idle_candidate,
                 ..
-            }) => (*lease_count, idle_since.is_some()),
+            }) => (*lease_count, idle_candidate.is_some()),
             Some(RegistrySlot::Creating { .. }) => panic!("slot is still being created"),
             None => panic!("slot is not present"),
         }
+    }
+
+    fn slot_is_present<M, F>(registry: &SessionRegistryCore<M, F>, key: &ConnectionKey) -> bool {
+        registry
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .slots
+            .contains_key(key)
     }
 
     async fn wait_for_ready<M, F>(registry: &SessionRegistryCore<M, F>, key: &ConnectionKey) {
@@ -1144,6 +1544,357 @@ mod tests {
 
         second.release();
         assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+    }
+
+    #[tokio::test]
+    async fn lease_can_be_released_from_a_non_runtime_thread() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(60),
+        ));
+        let config = test_config("cross-thread-release.example");
+        let key = test_key(&config, 1);
+
+        let lease = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("manager should be created");
+        let manager_id = lease.id;
+        yield_until_true(&registry.shared.reaper_running).await;
+
+        std::thread::spawn(move || drop(lease))
+            .join()
+            .expect("lease Drop must not panic outside the Tokio runtime");
+
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+        assert_eq!(
+            registry.shared.reaper_start_count.load(Ordering::SeqCst),
+            1,
+            "cross-thread release must only wake the registry-owned reaper"
+        );
+
+        let reacquired = registry
+            .acquire(&key, config)
+            .await
+            .expect("cross-thread release should leave an idle reusable slot");
+        assert_eq!(reacquired.id, manager_id);
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "SSH session idle timeout must fit in a Tokio Instant")]
+    fn registry_rejects_an_unrepresentable_idle_timeout() {
+        let _registry = SshSessionRegistry::with_idle_timeout(Duration::MAX);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_generation_is_disconnected_only_after_its_timeout() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory,
+            Duration::from_secs(10),
+        ));
+        let config = test_config("idle-timeout.example");
+        let key = test_key(&config, 1);
+
+        let lease = registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        drop(lease);
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+
+        advance(Duration::from_secs(9)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(disconnect.attempts.load(Ordering::SeqCst), 0);
+        assert!(slot_is_present(&registry, &key));
+
+        advance(Duration::from_secs(1)).await;
+        yield_until_count(&disconnect.attempts, 1).await;
+        assert!(!slot_is_present(&registry, &key));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reacquire_invalidates_old_idle_work_and_resets_the_deadline() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(10),
+        ));
+        let config = test_config("idle-reacquire.example");
+        let key = test_key(&config, 1);
+
+        let first = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("first lease should be created");
+        let manager_id = first.id;
+        let disconnect = first.disconnect.clone();
+        drop(first);
+
+        advance(Duration::from_secs(4)).await;
+        let second = registry
+            .acquire(&key, config)
+            .await
+            .expect("idle generation should be reused");
+        assert_eq!(second.id, manager_id);
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+
+        advance(Duration::from_secs(6)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            disconnect.attempts.load(Ordering::SeqCst),
+            0,
+            "the invalidated first deadline must not disconnect an active lease"
+        );
+
+        drop(second);
+        advance(Duration::from_secs(9)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            disconnect.attempts.load(Ordering::SeqCst),
+            0,
+            "the second idle period gets a fresh full timeout"
+        );
+
+        advance(Duration::from_secs(1)).await;
+        yield_until_count(&disconnect.attempts, 1).await;
+        assert!(!slot_is_present(&registry, &key));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reaper_tracks_the_earliest_deadline_across_different_keys() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory,
+            Duration::from_secs(10),
+        ));
+        let first_config = test_config("first-idle.example");
+        let second_config = test_config("second-idle.example");
+        let first_key = test_key(&first_config, 1);
+        let second_key = test_key(&second_config, 2);
+
+        let first = registry
+            .acquire(&first_key, first_config)
+            .await
+            .expect("first manager should be created");
+        let second = registry
+            .acquire(&second_key, second_config)
+            .await
+            .expect("second manager should be created");
+        let first_disconnect = first.disconnect.clone();
+        let second_disconnect = second.disconnect.clone();
+
+        drop(first);
+        advance(Duration::from_secs(4)).await;
+        drop(second);
+
+        advance(Duration::from_secs(6)).await;
+        yield_until_count(&first_disconnect.attempts, 1).await;
+        assert_eq!(second_disconnect.attempts.load(Ordering::SeqCst), 0);
+        assert!(!slot_is_present(&registry, &first_key));
+        assert!(slot_is_present(&registry, &second_key));
+
+        advance(Duration::from_secs(4)).await;
+        yield_until_count(&second_disconnect.attempts, 1).await;
+        assert!(!slot_is_present(&registry, &second_key));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retired_idle_work_cannot_touch_a_replacement_generation() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(10),
+        ));
+        let config = test_config("idle-retire.example");
+        let key = test_key(&config, 1);
+
+        let old = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("old generation should be created");
+        let old_disconnect = old.disconnect.clone();
+        drop(old);
+        advance(Duration::from_secs(4)).await;
+
+        let retired = registry
+            .retire(&key)
+            .expect("idle generation should be retired");
+        let replacement = registry
+            .acquire(&key, config)
+            .await
+            .expect("replacement generation should be created");
+        let replacement_disconnect = replacement.disconnect.clone();
+        assert_eq!(replacement.id, 2);
+
+        advance(Duration::from_secs(6)).await;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(old_disconnect.attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            replacement_disconnect.attempts.load(Ordering::SeqCst),
+            0,
+            "the stale deadline must not disconnect the active replacement"
+        );
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+
+        drop(retired);
+        drop(replacement);
+        advance(Duration::from_secs(10)).await;
+        yield_until_count(&replacement_disconnect.attempts, 1).await;
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn slow_disconnect_runs_outside_the_registry_lock() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(10),
+        ));
+        let config = test_config("slow-disconnect.example");
+        let key = test_key(&config, 1);
+
+        let old = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("old generation should be created");
+        let old_disconnect = old.disconnect.clone();
+        old_disconnect.block();
+        drop(old);
+
+        advance(Duration::from_secs(10)).await;
+        yield_until_count(&old_disconnect.attempts, 1).await;
+        assert!(!slot_is_present(&registry, &key));
+
+        let replacement = registry
+            .acquire(&key, config)
+            .await
+            .expect("a blocked disconnect must not hold the registry lock");
+        assert_eq!(replacement.id, 2);
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 2);
+
+        old_disconnect.unblock();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        drop(replacement);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn disconnect_failure_is_diagnostic_and_does_not_restore_the_slot() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(10),
+        ));
+        let config = test_config("failed-disconnect.example");
+        let key = test_key(&config, 1);
+
+        let failed = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("first generation should be created");
+        let failed_disconnect = failed.disconnect.clone();
+        failed_disconnect.should_fail.store(true, Ordering::SeqCst);
+        drop(failed);
+
+        advance(Duration::from_secs(10)).await;
+        yield_until_count(&failed_disconnect.attempts, 1).await;
+        assert!(
+            !slot_is_present(&registry, &key),
+            "disconnect failure must not resurrect an expired registry slot"
+        );
+
+        let replacement = registry
+            .acquire(&key, config)
+            .await
+            .expect("a later acquire should create a clean generation");
+        assert_eq!(replacement.id, 2);
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_idle_reacquire_uses_one_reaper_task() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory.clone(),
+            Duration::from_secs(10),
+        ));
+        let config = test_config("single-reaper.example");
+        let key = test_key(&config, 1);
+
+        let mut lease = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("manager should be created");
+        let manager_id = lease.id;
+        let disconnect = lease.disconnect.clone();
+
+        for _ in 0..20 {
+            drop(lease);
+            advance(Duration::from_secs(1)).await;
+            lease = registry
+                .acquire(&key, config.clone())
+                .await
+                .expect("manager should be reacquired before its deadline");
+            assert_eq!(lease.id, manager_id);
+        }
+
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(disconnect.attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            registry.shared.reaper_start_count.load(Ordering::SeqCst),
+            1,
+            "idle churn must not spawn per-release sleeping tasks"
+        );
+
+        drop(lease);
+        advance(Duration::from_secs(10)).await;
+        yield_until_count(&disconnect.attempts, 1).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_registry_cancels_and_converges_the_reaper() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::with_idle_timeout(
+            factory,
+            Duration::from_secs(10),
+        ));
+        let config = test_config("reaper-shutdown.example");
+        let key = test_key(&config, 1);
+
+        let lease = registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        drop(lease);
+
+        let shared = registry.shared.clone();
+        yield_until_true(&shared.reaper_running).await;
+        assert_eq!(shared.reaper_start_count.load(Ordering::SeqCst), 1);
+
+        drop(registry);
+        yield_until_count(&shared.reaper_stop_count, 1).await;
+        assert!(shared.reaper_shutdown.load(Ordering::SeqCst));
+        assert!(!shared.reaper_running.load(Ordering::SeqCst));
+        assert_eq!(
+            disconnect.attempts.load(Ordering::SeqCst),
+            0,
+            "registry drop cancels the timer rather than doing async I/O in Drop"
+        );
     }
 
     #[tokio::test]

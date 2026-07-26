@@ -25,6 +25,7 @@ tokio-socks.workspace = true
 
 [dev-dependencies]
 rand_010 = { package = "rand", version = "0.10" }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
