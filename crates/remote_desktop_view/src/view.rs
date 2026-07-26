@@ -5,17 +5,18 @@ use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
-    RemoteDesktopConnectionOptions, RemoteDesktopFrameRect, RemoteDesktopInput,
-    RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
+    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopFrameRect,
+    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
+    RemoteDesktopProviderVersionError, RemoteDesktopReconnect, RemoteDesktopReconnectReason,
     RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
-    RgbaFramebuffer, create_backend,
+    ResizeSupport, RgbaFramebuffer, create_backend,
 };
 use rust_i18n::t;
 
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::modifier_inputs;
-use crate::pixels::{bgra_to_render_image, rgba_to_render_image};
+use crate::pixels::bgra_to_render_image;
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
 use crate::shortcuts::{
     ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
@@ -23,6 +24,7 @@ use crate::shortcuts::{
 use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 
 mod frame_lifecycle;
+mod frame_sync;
 mod input;
 mod output;
 mod render;
@@ -59,8 +61,15 @@ fn remote_desktop_tab_title(title: &str, tab_index: Option<usize>) -> String {
     }
 }
 
-fn preserve_presented_frame_during_session_reset(protocol: RemoteDesktopProtocol) -> bool {
-    protocol == RemoteDesktopProtocol::Rdp
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionResetReason {
+    Reconnecting,
+    ConnectionFailure,
+    Terminated,
+}
+
+fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
+    matches!(reason, SessionResetReason::Reconnecting)
 }
 
 pub struct RemoteDesktopViewConfig {
@@ -79,6 +88,8 @@ pub struct RemoteDesktopView {
     framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
     pending_frame_drops: Vec<Arc<RenderImage>>,
+    frame_sync: frame_sync::FrameSyncTracker,
+    capabilities: Option<RemoteDesktopCapabilities>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
     initial_size: resize::InitialSize,
@@ -142,6 +153,8 @@ impl RemoteDesktopView {
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
             pending_frame_drops: Vec::new(),
+            frame_sync: frame_sync::FrameSyncTracker::default(),
+            capabilities: None,
             remote_size: None,
             content_bounds: None,
             initial_size: resize::InitialSize::default(),
@@ -223,7 +236,9 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 mod tests {
     use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
 
-    use super::{close_runtime_once, preserve_presented_frame_during_session_reset};
+    use super::{
+        SessionResetReason, close_runtime_once, preserve_presented_frame_during_session_reset,
+    };
 
     #[test]
     fn closes_runtime_only_once() {
@@ -340,12 +355,15 @@ mod tests {
     }
 
     #[test]
-    fn only_rdp_preserves_the_presented_frame_during_session_reset() {
+    fn only_transient_reconnect_preserves_the_presented_frame() {
         assert!(preserve_presented_frame_during_session_reset(
-            RemoteDesktopProtocol::Rdp
+            SessionResetReason::Reconnecting
         ));
         assert!(!preserve_presented_frame_during_session_reset(
-            RemoteDesktopProtocol::Vnc
+            SessionResetReason::ConnectionFailure
+        ));
+        assert!(!preserve_presented_frame_during_session_reset(
+            SessionResetReason::Terminated
         ));
     }
 
@@ -370,6 +388,9 @@ mod tests {
 
         assert!(output.contains("window.defer(cx"));
         assert!(output.contains("Notification::info(message)"));
+        assert!(output.contains("localized_reconnect_notification("));
+        assert!(output.contains("localized_reconnect_status("));
+        assert!(!output.contains("RemoteDesktopOutput::Reconnecting(message)"));
         assert!(output.contains(".id1::<RemoteDesktopReconnectNotification>("));
         assert!(output.contains(".autohide(true)"));
         assert!(!render.contains("show_status_overlay"));

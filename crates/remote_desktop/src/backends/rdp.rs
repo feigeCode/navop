@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
-    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopRuntime,
-    RemoteDesktopSize,
+    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
     helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
     output_mailbox::{OutputMailboxSender, output_mailbox},
 };
@@ -14,7 +14,7 @@ mod input;
 mod tests;
 mod transport;
 
-const RDP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
+const REMOTE_DESKTOP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const MAX_INPUTS_PER_POLL: usize = 256;
 
 pub struct RdpBackend {
@@ -65,7 +65,7 @@ impl RemoteDesktopBackend for RdpBackend {
         let protocol = options.protocol;
 
         std::thread::Builder::new()
-            .name("remote-desktop-rdp".to_string())
+            .name(format!("remote-desktop-{}", protocol.provider_id()))
             .spawn(move || {
                 let _proxy_guard = proxy_guard;
                 let mut latest_clipboard_text = None;
@@ -98,7 +98,10 @@ impl RemoteDesktopBackend for RdpBackend {
                             if manual {
                                 transport::send_reconnecting(
                                     &output_tx,
-                                    "reconnecting remote desktop session",
+                                    RemoteDesktopReconnect {
+                                        reason: RemoteDesktopReconnectReason::Manual,
+                                        delay_secs: None,
+                                    },
                                 );
                                 continue;
                             }
@@ -106,7 +109,7 @@ impl RemoteDesktopBackend for RdpBackend {
                             reconnect_attempt = reconnect_attempt.saturating_add(1);
                             transport::send_reconnecting(
                                 &output_tx,
-                                &input::reconnect_status_message(&reason, delay),
+                                input::reconnect_event(&reason, delay),
                             );
                             if !input::wait_before_reconnect(
                                 &mut connect,
@@ -146,9 +149,13 @@ fn run_helper_session(
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> HelperRunResult {
-    let Ok((mut helper, mut stdin, signal_rx)) =
-        transport::start_helper_session(helper, connect, latest_clipboard_text, output_tx)
-    else {
+    let Ok((mut helper, mut stdin, signal_rx)) = transport::start_helper_session(
+        helper,
+        connect,
+        latest_clipboard_text,
+        output_tx,
+        protocol,
+    ) else {
         return HelperRunResult::Reconnect {
             reason: "failed to start remote desktop helper".to_string(),
             manual: false,
@@ -164,6 +171,7 @@ fn run_helper_session(
             &mut stdin,
             output_tx,
             &mut was_connected,
+            protocol,
         ) {
             return result;
         }
@@ -180,9 +188,9 @@ fn run_helper_session(
         {
             return result;
         }
-        if let Some(result) = input::poll_helper_exit(&mut helper, was_connected) {
+        if let Some(result) = input::poll_helper_exit(&mut helper, was_connected, protocol) {
             return result;
         }
-        std::thread::sleep(RDP_BACKEND_POLL_INTERVAL);
+        std::thread::sleep(REMOTE_DESKTOP_BACKEND_POLL_INTERVAL);
     }
 }

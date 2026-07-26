@@ -212,7 +212,7 @@ fn lock(shared: &Mutex<State>) -> MutexGuard<'_, State> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RemoteDesktopFrameRect;
+    use crate::{RemoteDesktopFrameRect, RemoteDesktopReconnect, RemoteDesktopReconnectReason};
 
     #[test]
     fn keeps_only_latest_pending_frame() {
@@ -281,24 +281,19 @@ mod tests {
             bgra: vec![1, 2, 3, 255],
         })
         .unwrap();
-        tx.send(RemoteDesktopOutput::Reconnecting("network lost".into()))
-            .unwrap();
+        tx.send(reconnecting()).unwrap();
 
         let batch = rx.drain();
 
         assert_eq!(None, batch.latest_frame);
         assert_eq!(None, batch.latest_delta);
-        assert_eq!(
-            vec![RemoteDesktopOutput::Reconnecting("network lost".into())],
-            batch.control
-        );
+        assert_eq!(vec![reconnecting()], batch.control);
     }
 
     #[test]
     fn drops_late_frames_until_the_next_session_connects() {
         let (tx, rx) = output_mailbox();
-        tx.send(RemoteDesktopOutput::Reconnecting("network lost".into()))
-            .unwrap();
+        tx.send(reconnecting()).unwrap();
         tx.send(frame(7)).unwrap();
         tx.send(RemoteDesktopOutput::FrameBgraRects {
             width: 1,
@@ -350,9 +345,7 @@ mod tests {
         assert_eq!(Some(frame(1)), first_batch.latest_frame);
 
         first_session.end_session();
-        root_tx
-            .send(RemoteDesktopOutput::Reconnecting("network lost".into()))
-            .unwrap();
+        root_tx.send(reconnecting()).unwrap();
         let second_session = root_tx.begin_session();
         second_session
             .send(RemoteDesktopOutput::Connected {
@@ -374,7 +367,7 @@ mod tests {
         assert_eq!(Some(frame(2)), second_batch.latest_frame);
         assert_eq!(
             vec![
-                RemoteDesktopOutput::Reconnecting("network lost".into()),
+                reconnecting(),
                 RemoteDesktopOutput::Connected {
                     width: 2,
                     height: 2,
@@ -433,5 +426,12 @@ mod tests {
             height: 1,
             bgra: vec![value, 0, 0, 255],
         }
+    }
+
+    fn reconnecting() -> RemoteDesktopOutput {
+        RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
+            reason: RemoteDesktopReconnectReason::ConnectionLost,
+            delay_secs: Some(1),
+        })
     }
 }
