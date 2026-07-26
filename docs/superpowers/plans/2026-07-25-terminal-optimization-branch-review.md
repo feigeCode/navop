@@ -519,6 +519,93 @@ application-level service 或任何生产 consumer 迁移。完整状态机、�
 reconnect、snapshot/observer 和生产 consumer 迁移仍是后续独立切片。完整状态机、
 20 项 registry 测试、74 项 SSH 全量回归和既有 Clippy 阻塞见 `12.13`。
 
+### 2026-07-27：切片 14，SSH application session service
+
+状态：**实现完成并通过 SSH crate 与主要下游验证，已独立提交。**
+
+代码提交：
+
+```text
+a29a0f04 feat(ssh): add application session service
+```
+
+本切片在 `ssh` crate 内建立与 GPUI 无关的应用级生命周期 service：
+
+- `SshSessionService` 是 shared SSH registry 的可 clone facade；clone 共享同一个
+  lifecycle、registry、shutdown driver 和最终 report；
+- `acquire()` 继续只返回 generation-bound `SshSessionLease`，没有为了方便应用接线
+  重新公开裸 `Arc<SshSessionManager>`；
+- service lifecycle 明确为 `Running -> ShuttingDown -> Stopped`；shutdown
+  线性化后 admission 永久关闭，创建任务的迟到结果不能重新发布 generation；
+- shutdown 先同步关闭所有已发布 manager 的 reconnect gate，再在一个固定的总
+  deadline 内取消 registry-owned work、等待 transport cleanup 并生成稳定 report；
+- `snapshot()` 与 `subscribe()` 只暴露 lifecycle、slot、lease 和 task 计数，不暴露
+  `ConnectionKey`、config、host、用户名、密码、私钥、passphrase、MFA 内容或
+  credential revision；
+- 并发或重复 `shutdown()` 调用共享一次 teardown 和同一个 sticky report；首个
+  waiter 被取消不会取消 service-owned shutdown driver；
+- manager connector panic/cancellation、in-flight creation cancellation、stuck
+  disconnect 和 disconnect failure 均有恢复或有界收敛测试；
+- `Drop` 只同步关闭 admission/reconnect gate 并请求取消，不启动、不阻塞等待任何
+  async I/O；正常应用退出必须显式 await `shutdown()`。
+
+本切片的默认总 shutdown deadline 是 5 秒。SSH 全量回归为 90 项通过，并完成
+`terminal`、`sftp`、`sftp_view`、`remote_file_editor` 和 `port_forwarding` 下游
+编译验证。该提交边界内**尚未**创建 GPUI Global，也没有迁移任何生产 consumer；
+完整 contract 与命令见 `12.14`。
+
+### 2026-07-27：切片 15，GPUI application Global owner and explicit quit shutdown
+
+状态：**实现完成并通过 main 定向、模块回归和编译验证，已独立提交。**
+
+代码提交：
+
+```text
+5b11e09c feat(app): own and shut down shared ssh sessions
+```
+
+本切片把切片 14 的 GPUI-independent service 接到唯一应用 owner 与正常退出路径：
+
+- `GlobalSshSessionService` 在应用初始化时恰好安装一次；初始化顺序为
+  `one_core::init(cx) -> init_ssh_session_service(cx) -> ai_chat_view::init(cx)`，
+  确保先安装 Tokio runtime，再创建 shared SSH service；
+- 正常退出统一走 `shutdown_ssh_sessions_and_quit()`：在 Tokio runtime 上等待
+  service 的有界 shutdown，记录不含凭据的 report，随后才调用 `cx.quit()`；
+- 用户确认退出保持 `close_all_tabs -> service.shutdown -> cx.quit` 顺序；tab
+  关闭失败时不会错误关闭 shared SSH service；
+- 没有 active window、缺少 application entity 和 update installer 要求退出的路径
+  也复用同一个 helper，不再各自绕过 shared transport teardown；
+- GPUI `on_app_quit` observer 只保留为平台驱动退出的幂等 fallback。当前 GPUI
+  revision 对所有 quit observer 总共只等待 200ms，短于 service 默认 5 秒 deadline，
+  因此 observer 不能替代正常路径中的显式 await；
+- shutdown 日志只包含 reason、deadline/完成状态和 manager/task 计数，不记录连接
+  identity、host、用户名或认证材料。
+
+定向测试证明应用 Global 的多个 service clone 共享同一生命周期，并静态守护确认
+退出与 updater 路径都先调用 shared shutdown helper；`onetcli_app` 模块 28 项回归和
+`cargo check -p main` 均通过。该切片仍然只建立 owner 和退出边界，Terminal、SFTP、
+Remote File Editor、forwarding/SOCKS 与 server-copy 仍未迁移到 service/lease；
+完整验证见 `12.15`。
+
+### 当前后续实施边界
+
+完成切片 15 不表示整个 terminal optimization 目标完成。仍需按独立小提交继续：
+
+1. 定义 SSH transport health、invalidation 和 reconnect policy；
+2. 依次迁移 Terminal、SFTP、Remote File Editor、forwarding/SOCKS 与 server-copy，
+   并收口生产路径直接 `SshSessionManager::new()` 或绕过 lease 的 manager clone；
+3. 依据已有测量结果为 Local PTY capture/OSC relay 建立 bounded budget，并将 Serial
+   write command channel 有界化；
+4. 完成 Local/SSH/Serial 的 flood、slow consumer、abort、reconnect、hash 和 control
+   latency 压力验收；
+5. 实现真实 recorder 状态机、版本化 durable recording format 与崩溃恢复，然后才
+   在**每个 terminal pane 底部** footer/status bar 接入开始、暂停/继续、停止按钮；
+   控件不能覆盖 terminal viewport，也不能在 recorder 尚不存在时先放空壳 UI；
+6. 实现与活动 backend 强隔离的只读 playback；
+7. 实现 versioned reconnect operation journal、crash-safe checkpoint、历史展示和
+   用户显式 retry；任何重连或恢复路径都**绝不自动重放**历史命令、输入、文件操作
+   或控制序列。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1266,7 +1353,7 @@ backend 中已经存在 input/output 接线：
 - 不含认证材料的会话元数据，例如 `recording_id`、逻辑 `session_id`、
   backend 类型、初始终端尺寸、应用版本和录制格式版本；
 - 用户可见的开始、暂停、继续和停止操作；
-- 录制控制按钮固定放在当前终端 pane 底部的 footer/status bar，不覆盖 terminal
+- 录制控制按钮固定放在每个 terminal pane 底部的 footer/status bar，不覆盖 terminal
   内容；按钮应能清楚显示 `recording`、`paused`、`stopping`、`failed` 等状态，
   并为键盘和辅助功能提供等价操作；
 - 录制完成后的只读回放、暂停、seek、倍速和搜索；
@@ -3268,3 +3355,452 @@ consumer。至少需要先证明：
    `Drop`；
 4. registry lifecycle 可以通过不包含 secret 的 snapshot/observer 观察；
 5. owner/service 与后续 Terminal、SFTP、forwarding 迁移之间有清晰兼容边界。
+
+### 12.14 切片 14：SSH application session service
+
+代码提交：
+
+```text
+a29a0f04 feat(ssh): add application session service
+```
+
+#### 12.14.1 GPUI-independent service contract
+
+`ssh` crate 新增公开 application facade：
+
+```rust
+#[derive(Clone)]
+pub struct SshSessionService { /* shared core */ }
+
+impl SshSessionService {
+    pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+    pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    pub async fn acquire(
+        &self,
+        key: &ConnectionKey,
+        config: SshConnectConfig,
+    ) -> Result<SshSessionLease>;
+
+    pub fn snapshot(&self) -> SshSessionServiceSnapshot;
+    pub fn subscribe(&self) -> watch::Receiver<SshSessionServiceSnapshot>;
+    pub async fn shutdown(&self) -> SshSessionShutdownReport;
+}
+```
+
+service clone 只增加 shared core 的引用，不创建新的 registry 或独立 shutdown
+lifecycle。`acquire()` 继续返回切片 12 定义的 generation-bound
+`SshSessionLease`；应用接线不能借 service 重新获得裸 manager 所有权。
+
+显式 lifecycle 为：
+
+```text
+Running
+  -> ShuttingDown
+  -> Stopped
+```
+
+只有 `Running` 接受 acquire 和 manager publication。一旦任意 caller 线性化
+shutdown：
+
+1. 在第一次 `.await` 之前同步把 lifecycle 改为 `ShuttingDown`；
+2. 永久关闭 registry admission；
+3. 取消所有 creating slot 并唤醒 waiter；
+4. 从 registry 取走所有已发布 generation；
+5. 对每个 manager 同步关闭 reconnect gate；
+6. 迟到的 connector/client 结果只能清理，不能重新 publish 或 checkout；
+7. 在同一个总 deadline 内执行 manager cleanup 和 registry task convergence；
+8. 发布一个 sticky report，再进入 `Stopped`。
+
+因此 shutdown 不是“清空当前 map 后仍允许下次 acquire 重建”的 reconnectable
+disconnect，也不是依靠最后一个 view/lease `Drop` 猜测应用是否退出。
+
+#### 12.14.2 Single total deadline 与稳定 shutdown report
+
+默认 total deadline 为 5 秒；显式 `with_timeouts()` 会在构造阶段拒绝 zero 和无法由
+Tokio `Instant` 表示的 deadline。第一次 shutdown caller 建立唯一 deadline，driver
+调度延迟也计入该预算，不会为每个 manager 或每个 cleanup phase 重置 timeout。
+
+公开 report 只包含：
+
+```rust
+pub struct SshSessionShutdownReport {
+    pub timed_out: bool,
+    pub managers_requested: usize,
+    pub managers_completed: usize,
+    pub manager_failures: usize,
+    pub managers_remaining: usize,
+    pub registry_tasks_remaining: usize,
+}
+```
+
+并发、重复和迟到的 caller 都读取同一个 report。service 自己持有 detached shutdown
+driver；某一个等待 future 被取消不会取消底层 teardown，也不会让下一 caller 启动
+第二次 cleanup。deadline 到期后，剩余 manager cleanup task 被 abort 并 drain，
+report 真实标记 timeout、remaining 和 failure，而不是无限等待或伪报成功。
+
+#### 12.14.3 Manager reconnect shutdown gate
+
+为支持 registry/service shutdown，`SshSessionManager` 增加与普通 invalidation
+不同的永久 shutdown gate：
+
+- 普通 invalidation 只使当前 cached client 失效，后续 checkout 可以 reconnect；
+- shutdown 先同步拒绝新 checkout 和 reconnect，再取消正在进行的 single-flight
+  connector；
+- connector 在 shutdown 后才返回 client 时，该 client 会被断开而不能缓存或交给
+  caller；
+- cached-client ping、integration write 或其他跨 generation 的迟到结果不能重新
+  激活 manager；
+- manager shutdown 幂等，完成后后续 client 请求稳定失败。
+
+connector task panic 不再永久卡住 single-flight 状态；等待者会收到失败并可在正常
+lifecycle 中重试。shutdown 与 connector cancellation 竞态也会使 waiter 收敛，而
+不是遗留永不完成的 acquire。
+
+#### 12.14.4 Credential-free snapshot/observer
+
+`SshSessionServiceSnapshot` 只暴露：
+
+- monotonic-within-service revision；
+- lifecycle state；
+- slot / creating / ready 数量；
+- 当前 generation 的 active lease 数量；
+- idle generation 数量；
+- registry-owned task 数量。
+
+它明确不包含：
+
+- `ConnectionKey`；
+- `SshConnectConfig`；
+- host 或 username；
+- password、private key、passphrase、MFA response；
+- credential revision；
+- connector error 中可能携带的认证内容。
+
+`subscribe()` 使用 sticky `watch` snapshot。observer 可以看到
+`Running -> ShuttingDown -> Stopped`，但 snapshot 是可观测性接口，不用于反向驱动
+correctness-sensitive registry 决策。
+
+#### 12.14.5 Drop 与显式应用退出边界
+
+`SessionServiceCore::Drop` 不启动 async work，也不等待 network I/O。它只同步：
+
+```text
+begin_shutdown()
+  -> close admission
+  -> close published manager reconnect gates
+finish_shutdown()
+```
+
+这只是异常 owner 丢失时的安全 gate，不承诺 transport 已优雅断开。正常应用退出
+必须由 application owner 显式 await `SshSessionService::shutdown()`；该 owner 在本
+切片尚未接入，留给切片 15。
+
+#### 12.14.6 验证
+
+SSH crate 全量回归：
+
+```text
+cargo test -p ssh --lib
+90 passed; 0 failed
+```
+
+新增 service/manager contract 覆盖：
+
+1. public service acquire、snapshot、observer 和 shutdown；
+2. snapshot 精确追踪 lease 且不含连接数据；
+3. shutdown 后拒绝 acquire 并关闭 retained generation；
+4. 并发和重复 shutdown 共享 report；
+5. 首个 shutdown waiter 被取消后 driver 仍完成；
+6. in-flight creation、waiter 和 registry task 在 shutdown 时收敛；
+7. stuck disconnect 由总 deadline 截断并报告 remaining；
+8. disconnect failure 可诊断且 generation 不恢复；
+9. observer 可见 `Running`、`ShuttingDown` 和 `Stopped`；
+10. service `Drop` 只触发同步 gate，不发起 async I/O；
+11. manager shutdown 永久禁止 reconnect 且保持幂等；
+12. connector panic/cancellation 和 cached ping 迟到结果不会遗留 single-flight 或
+    在 shutdown 后发布 client。
+
+编译、格式和下游验证：
+
+```text
+cargo check -p ssh
+通过
+
+cargo check -p terminal -p sftp -p sftp_view \
+  -p remote_file_editor -p port_forwarding
+通过
+
+cargo fmt -p ssh -- --check
+通过
+
+git diff --check
+通过
+```
+
+严格 Clippy：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- -D warnings
+```
+
+仍只被本切片未修改的：
+
+```text
+crates/ssh/src/host_key.rs
+HostKeyVerifier::verify()
+clippy::result_large_err
+```
+
+阻塞。隔离该既有 lint 后：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- \
+  -D warnings -A clippy::result_large_err
+通过
+```
+
+本实现先于本轮补写的跟踪文档，因此不虚构 TDD Red 记录。
+
+#### 12.14.7 切片边界
+
+该提交明确尚未实现：
+
+- GPUI Global/application owner；
+- 正常退出路径显式 await service shutdown；
+- transport health/invalidation/reconnect 的完整应用 policy；
+- Terminal、SFTP、Remote File Editor、forwarding/SOCKS 和 server-copy consumer
+  迁移；
+- 生产路径直接 `SshSessionManager::new()` 或裸 manager clone 的收口；
+- recorder、pane 底部录制按钮、playback；
+- reconnect operation journal 和历史展示。
+
+### 12.15 切片 15：GPUI application owner and explicit shutdown
+
+代码提交：
+
+```text
+5b11e09c feat(app): own and shut down shared ssh sessions
+```
+
+#### 12.15.1 唯一应用 owner 与初始化顺序
+
+`main/src/onetcli_app.rs` 新增窄 GPUI wrapper：
+
+```rust
+#[derive(Clone)]
+pub(crate) struct GlobalSshSessionService {
+    service: SshSessionService,
+}
+
+impl gpui::Global for GlobalSshSessionService {}
+```
+
+应用初始化顺序为：
+
+```text
+one_core::init(cx)
+  -> init_ssh_session_service(cx)
+  -> ai_chat_view::init(cx)
+```
+
+`one_core::init` 先安装应用 Tokio global；随后才创建唯一
+`SshSessionService::new()` 并放入 GPUI Global。初始化函数断言同类型 Global 尚不
+存在，避免无声覆盖一个仍持有 transport 的旧 owner。
+
+Global 只向调用方提供 service clone。clone 共享切片 14 的 registry/lifecycle，
+不会让某个 view、pane 或后台任务成为 shared transport 的最终 owner。
+
+#### 12.15.2 正常退出显式 await 顺序
+
+新增统一 helper：
+
+```rust
+pub(crate) fn shutdown_ssh_sessions_and_quit(
+    cx: &mut App,
+    reason: &'static str,
+)
+```
+
+其生产顺序为：
+
+```text
+clone application-owned service
+  -> Tokio::spawn(service.shutdown())
+  -> await bounded shutdown task
+  -> log credential-free report
+  -> cx.quit()
+```
+
+以下路径已经接入：
+
+- 没有 active window 的应用退出；
+- 缺少 `GlobalOnetCliApp` entity 的应用退出；
+- 用户确认退出且 `close_all_tabs` 成功；
+- update installer 返回 `UpdateInstallAction::Quit`。
+
+用户确认退出的顺序保持为：
+
+```text
+await close_all_tabs
+  -> if can_quit:
+       await shared SSH shutdown
+       cx.quit
+     else:
+       reset quit state
+```
+
+因此尚未关闭成功或拒绝关闭的 tab 不会被 shared transport teardown 抢先打断。
+updater 也不再直接 `cx.quit()` 绕过应用 owner。
+
+正常生产路径中的 `cx.quit()` 已收口到该 helper。Global 缺失表示启动不变量已经
+损坏，此时 helper 记录 error 后使用 bounded emergency fallback 退出，避免应用永久
+卡死；这不是正常 teardown contract。
+
+#### 12.15.3 `on_app_quit` 只是幂等 fallback
+
+应用初始化还注册 `cx.on_app_quit(...)`，但它只调用同一个幂等 service shutdown，
+用于平台驱动或未经过正常 helper 的退出。
+
+当前 workspace 锁定的 GPUI revision：
+
+```text
+23bb2fc135a69492847c3aa68444a7d14cc282f6
+```
+
+其 `App::shutdown()` 对所有 quit observer 的总等待常量为：
+
+```text
+SHUTDOWN_TIMEOUT = 200ms
+```
+
+该预算明显短于 SSH service 默认 5 秒总 deadline。因此 `on_app_quit` 不可能承担
+“必须等待 transport cleanup”的主所有权；主路径必须在调用平台 `quit` 之前显式
+await。fallback 的作用只是再次关闭 admission/reconnect gate，并在 GPUI 给出的短
+预算内尽可能加入相同 teardown。
+
+#### 12.15.4 日志安全边界
+
+应用 shutdown 日志只记录：
+
+- 非敏感静态 reason；
+- `timed_out`；
+- manager requested/completed/failure/remaining 计数；
+- registry task remaining；
+- Tokio `JoinError`。
+
+它不记录 `ConnectionKey`、`SshConnectConfig`、host、username、password、private
+key、passphrase、credential revision 或 MFA 内容。service report 本身也不持有这些
+数据，因此调用方无法因为格式化整个 report 而意外泄密。
+
+#### 12.15.5 定向与回归验证
+
+退出顺序守护：
+
+```text
+cargo test -p main \
+  confirmed_and_update_quit_paths_await_shared_ssh_shutdown \
+  -- --nocapture
+
+1 passed; 0 failed
+```
+
+该测试确认用户确认退出和 update installer 都调用 shared shutdown helper，并守护
+生产 `cx.quit()` 不重新散落到这些路径。
+
+唯一 Global owner 与共享 lifecycle：
+
+```text
+cargo test -p main \
+  ssh_session_service_has_one_application_global_owner \
+  -- --nocapture
+
+1 passed; 0 failed
+```
+
+测试从同一个 GPUI Global 取得两个 service clone，shutdown 第一个后，第二个的
+snapshot 必须是 `SshSessionServiceState::Stopped`，证明它们不是两个独立 registry。
+
+模块回归和编译：
+
+```text
+cargo test -p main onetcli_app::tests -- --nocapture
+28 passed; 0 failed
+
+cargo check -p main
+通过
+
+cargo fmt -p main -- --check
+通过
+
+git diff --check
+通过
+```
+
+严格 Clippy：
+
+```text
+cargo clippy -p main --bin navop --no-deps -- -D warnings
+```
+
+被本切片未修改代码中的 7 个既有 lint 阻塞：
+
+```text
+main/src/home_tab/modern_home.rs
+  clippy::too_many_arguments
+
+main/src/new_connection/connection_window.rs
+  2 x clippy::iter_overeager_cloned
+
+main/src/personal_sync_status.rs
+  clippy::derivable_impls
+
+main/src/public_mcp_runtime/status.rs
+  clippy::derivable_impls
+
+main/src/settings/tool_exposure_settings.rs
+  2 x clippy::needless_lifetimes
+```
+
+隔离这些既有 lint 后：
+
+```text
+cargo clippy -p main --bin navop --no-deps -- \
+  -D warnings \
+  -A clippy::too_many_arguments \
+  -A clippy::iter_overeager_cloned \
+  -A clippy::derivable_impls \
+  -A clippy::needless_lifetimes
+通过
+```
+
+测试链接阶段出现既有 macOS linker warning：
+
+```text
+__eh_frame section too large
+```
+
+不影响测试结果，也不是本切片引入的 Rust 编译错误。本实现先于本轮补写的跟踪文档，
+因此不虚构 TDD Red 记录。
+
+#### 12.15.6 未覆盖范围与后续顺序
+
+切片 15 只建立 application owner 和显式退出 linearization point，仍未迁移生产
+consumer。后续必须保持独立小提交：
+
+1. SSH transport health、invalidation 和 reconnect policy；
+2. Terminal consumer 持有 application service / generation-bound lease；
+3. SFTP 和 Remote File Editor 迁移；
+4. forwarding/SOCKS 和 server-copy 迁移；
+5. 收口直接 manager construction 与绕过 lease 的 clone；
+6. Local PTY capture/OSC relay bounded budget；
+7. Serial write command channel bounded 化；
+8. Local/SSH/Serial 真实 backend 压力与数据完整性验收；
+9. recorder 状态机、versioned durable format、资源上限和 `.partial` 恢复；
+10. 只有 recorder 可用后，才在每个 terminal pane **底部 footer/status bar** 接入
+    真实开始、暂停/继续、停止按钮，且不得覆盖 viewport；
+11. readonly playback 与活动 backend 强隔离；
+12. versioned reconnect operation journal、crash-safe checkpoint、历史展示与用户
+    显式 retry；
+13. 自动化证明 reconnect、restore 和 retry UI 初始化都不会自动重放任何历史命令、
+    输入、文件操作或控制序列。
