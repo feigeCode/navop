@@ -419,6 +419,40 @@ crate 建立脱敏、不可序列化、可单独测试的 `ConnectionKey` domain
 SFTP、forwarding 或 server-copy consumer。验证和已知 workspace 范围外格式/lint
 阻塞见 `12.10`。
 
+### 2026-07-26：切片 11，SSH registry single-flight slot contract
+
+状态：**实现完成并通过 SSH crate 与主要下游编译验证，已独立提交。**
+
+代码提交：
+
+```text
+bae3832e feat(ssh): add single-flight session registry
+```
+
+本切片在 `ConnectionKey` 上建立应用级 registry 的第一个生命周期原语：
+
+- 同一个 key 只有一个 `Creating` 或 `Ready` slot；
+- 第一个 acquire 启动 detached manager creation，后续 acquire 使用各自的
+  `oneshot` waiter 加入同一 flight；
+- registry map 使用只保护短临界区的同步 mutex，factory/create 不在锁内执行，也不
+  跨 `.await` 持锁，因此一个 key 的慢创建不会阻塞其他 key；
+- 首个 acquire caller 被取消不会取消共享创建，仍存活的 waiter 可以取得同一
+  manager；
+- factory 失败会通知同一 flight 的所有 waiter，失败 slot 被移除，后续 acquire
+  可以建立新 generation；
+- generation 除了单调计数，还带不可复用的 `Arc` identity；retire 后旧 flight
+  即使晚完成，也不能覆盖新 slot；
+- detached creation 被取消或 panic 时，RAII cleanup 会同步移除仍属于自己的 slot
+  并唤醒 waiter，避免永久留下 `Creating`；
+- 公开 `retire()` 只改变 registry visibility；它不会断开返回的 manager，也不把
+  “没有 consumer”错误表达为 transport disconnected。
+
+本切片仍然没有实现 lease/refcount、idle reaper、GPUI Global/application service、
+health/shutdown policy，也没有迁移 Terminal、SFTP、remote file editor、
+forwarding/SOCKS 或 server-copy consumer。完整测试、编译和既有 Clippy 阻塞见
+`12.11`。下一切片只建立 generation-bound lease/release contract，不提前混入 timer
+或 consumer 迁移。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -2579,3 +2613,144 @@ contract，先用 fake connector/manager 验证：
 - dial/connect 期间不持有全局 registry lock；
 - stale generation 结果不能覆盖新 slot；
 - 此阶段仍不迁移生产 consumer，lease、idle reaper 和应用级 owner 分开提交。
+
+### 12.11 切片 11：SSH registry single-flight slot contract
+
+#### 12.11.1 实现范围与并发边界
+
+新增：
+
+```text
+crates/ssh/src/session_registry.rs
+```
+
+并从 `crates/ssh/src/lib.rs` 公开：
+
+```rust
+SshSessionRegistry
+```
+
+registry 内部状态为：
+
+```text
+ConnectionKey
+  -> Creating { creation token, independent oneshot waiters }
+  -> Ready(Arc<SshSessionManager>)
+```
+
+实现刻意把 map 所有权和 manager transport 生命周期分开：
+
+- map mutex 只覆盖 slot 查找、插入、替换和移除；
+- manager factory 始终在锁外的 detached Tokio task 中运行；
+- 创建成功只有在 key 当前 slot 的 generation 与不可复用 identity 都匹配时才能
+  publish；
+- 创建失败先原子移除当前 flight，再在锁外通知全部 waiter；
+- `retire()` 会移除 `Ready` 或 `Creating` slot；对 `Creating` waiter 发送
+  `Superseded`，waiter 随后重新进入 map 并加入或创建当前 generation；
+- 被 retire 的旧 factory result 只会被 drop，不能重新插回 map；
+- 首个 acquire future drop 不拥有 detached creation 的生死；
+- creation task 在完成 publish 前取消或 panic 时，`CreationCleanup::drop()` 只清理
+  token 仍匹配的旧 slot，不会误删 replacement generation；
+- waiter 通知均在 state lock 外执行，不在临界区中 poll 或唤醒下游任务；
+- registry 不对 `ConnectionKey` 或 `SshConnectConfig` 调用 `Debug`/`Display`，也不
+  记录它们；它只把 factory 已生成的错误文本共享给 waiter，后续真实 factory 仍必须
+  保证自己的错误不包含认证材料。
+
+公开 API 当前只有：
+
+```rust
+SshSessionRegistry::new()
+SshSessionRegistry::acquire(...)
+SshSessionRegistry::retire(...)
+```
+
+其中 `retire()` 返回当前已发布的 `Arc<SshSessionManager>`，将最终 disconnect 决策
+明确留给后续 lifecycle owner。当前不能把它解释为“最后一个 consumer 已释放”，也
+不能据此宣称共享 transport 生命周期已经完成。
+
+#### 12.11.2 Contract 测试
+
+定向测试：
+
+```text
+cargo test -p ssh session_registry --lib
+6 passed; 0 failed
+```
+
+六项测试覆盖：
+
+- 同 key 的 12 个并发 acquire 只调用一次 factory，并取得同一个 `Arc`；
+- 不同 key 创建并返回不同 manager；
+- 一个 key 的 blocked creation 不持有 registry lock，另一个 key 可独立完成；
+- 两个并发 waiter 共享同一次 factory failure，失败后下一次 acquire 建立新 flight；
+- retire 后新 generation 先完成、旧 generation 后完成时，旧结果不能覆盖新 manager，
+  原 waiter 会转入 replacement generation；
+- 首个 acquire caller 取消后 detached creation 继续运行，后续 waiter 和 cached
+  acquire 仍取得同一个 manager。
+
+SSH crate 全量回归：
+
+```text
+cargo test -p ssh --lib
+60 passed; 0 failed
+```
+
+#### 12.11.3 编译、格式与下游验证
+
+```text
+cargo check -p ssh
+通过
+
+cargo check -p terminal -p sftp -p sftp_view -p remote_file_editor \
+  -p port_forwarding
+通过
+```
+
+下游检查只报告 `extension-runtime` 中 5 个既有 unused/dead-code warning，以及
+workspace 的 future-incompatibility 提示；没有 registry 或 SSH 新错误。
+
+```text
+rustfmt --edition 2021 \
+  crates/ssh/src/session_registry.rs \
+  crates/ssh/src/lib.rs
+通过
+
+git diff --check
+通过
+```
+
+严格 Clippy：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- -D warnings
+```
+
+仍然只在本切片未修改的 `crates/ssh/src/host_key.rs:399`
+`HostKeyVerifier::verify()` 处因 `clippy::result_large_err` 失败。registry 新代码
+没有新增 Clippy 报告；本切片没有为了通过门禁而装箱 `HostKeyRejection` 或改变既有
+公共错误 API。
+
+#### 12.11.4 未覆盖范围与下一切片
+
+本切片明确未实现：
+
+- lease/refcount 和 double-release 防护；
+- last-release 到 idle 的状态转换；
+- reacquire 取消 idle retirement；
+- registry-owned cancellable reaper；
+- transport health、disconnect 和 application shutdown；
+- snapshot/lifecycle observer；
+- GPUI application-level owner；
+- Terminal、SFTP、remote file editor、forwarding/SOCKS 和 server-copy 迁移。
+
+下一独立切片应只实现 generation-bound lease contract，并用 fake manager 验证：
+
+1. acquire 返回 lease，clone/drop 精确增加和减少当前 generation 的 consumer 数；
+2. 最后一个 lease 释放只进入 idle candidate，不立即断开 manager；
+3. replacement generation 的 stale lease drop 不能减少新 slot 的 consumer 数；
+4. 重复 release 或复杂 drop 顺序不能 underflow；
+5. reacquire idle slot 复用同一个 manager，并取消该 generation 的 idle candidate；
+6. lease 的 `Debug`、snapshot 和错误不暴露 `SshConnectConfig` 或认证信息。
+
+idle timer、application owner 和生产 consumer 迁移继续保留为后续独立提交，避免把
+slot、lease、timer、disconnect 和调用方改造重新合成一个不可验证的大切片。
