@@ -4,8 +4,9 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::ingress_queue::{
-    BoundedTerminalSender, TerminalControlSendError, TerminalDataSendError, TerminalIngressBudget,
-    TerminalIngressBudgetError, TerminalIngressItem, bounded_terminal_queue,
+    BoundedTerminalSender, ReservedTerminalIngressItem, TerminalControlSendError,
+    TerminalDataSendError, TerminalIngressBudget, TerminalIngressBudgetError, TerminalIngressItem,
+    bounded_terminal_queue,
 };
 
 fn budget(bytes: u64, chunks: usize, controls: usize) -> TerminalIngressBudget {
@@ -135,6 +136,86 @@ async fn accounts_exact_bytes_and_releases_before_delivery() {
     assert_eq!(sender.pending_bytes(), 0);
     assert_eq!(receiver.pending_bytes(), 0);
     assert_eq!(receiver.peak_pending_bytes(), 3);
+}
+
+#[tokio::test]
+async fn reserved_delivery_holds_bytes_until_consumer_drops_guard() {
+    let (sender, mut receiver) = bounded_terminal_queue::<()>(budget(8, 2, 1));
+    sender
+        .send_data(b"secret".to_vec())
+        .await
+        .expect("data should be accepted");
+
+    let blocked = tokio::spawn({
+        let sender = sender.clone();
+        async move { sender.send_data(vec![9, 10, 11]).await }
+    });
+    assert_blocked(&blocked).await;
+
+    let item = receiver
+        .recv_reserved()
+        .await
+        .expect("reserved item should be available");
+    let ReservedTerminalIngressItem::Data(data) = item else {
+        panic!("expected data item");
+    };
+    assert_eq!(data.as_slice(), b"secret");
+    assert_eq!(data.len(), 6);
+    assert!(!format!("{data:?}").contains("secret"));
+    assert_eq!(receiver.pending_bytes(), 6);
+    assert_blocked(&blocked).await;
+
+    drop(data);
+    blocked
+        .await
+        .expect("sender task should finish")
+        .expect("data should be accepted after parser consumption");
+    assert_eq!(sender.pending_bytes(), 3);
+}
+
+#[tokio::test]
+async fn reserved_guard_into_vec_releases_bytes_before_returning() {
+    let (sender, mut receiver) = bounded_terminal_queue::<()>(budget(4, 1, 1));
+    sender
+        .send_data(vec![7, 8, 9])
+        .await
+        .expect("data should be accepted");
+
+    let item = receiver
+        .recv_reserved()
+        .await
+        .expect("reserved item should be available");
+    let ReservedTerminalIngressItem::Data(data) = item else {
+        panic!("expected data item");
+    };
+    let bytes = data.into_vec();
+
+    assert_eq!(bytes, vec![7, 8, 9]);
+    assert_eq!(sender.pending_bytes(), 0);
+    assert_eq!(receiver.pending_bytes(), 0);
+}
+
+#[tokio::test]
+async fn abort_does_not_double_release_a_consuming_guard() {
+    let (sender, mut receiver) = bounded_terminal_queue::<()>(budget(4, 1, 1));
+    sender
+        .send_data(vec![1, 2])
+        .await
+        .expect("data should be accepted");
+
+    let item = receiver
+        .recv_reserved()
+        .await
+        .expect("reserved item should be available");
+    let ReservedTerminalIngressItem::Data(data) = item else {
+        panic!("expected data item");
+    };
+    receiver.abort();
+
+    assert!(receiver.recv_reserved().await.is_none());
+    assert_eq!(sender.pending_bytes(), 2);
+    drop(data);
+    assert_eq!(sender.pending_bytes(), 0);
 }
 
 #[tokio::test]

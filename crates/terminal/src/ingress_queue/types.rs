@@ -150,3 +150,56 @@ impl<C> fmt::Debug for TerminalIngressItem<C> {
         }
     }
 }
+
+/// A data payload whose byte budget remains reserved until it is dropped.
+///
+/// The parser should hold this guard for the entire synchronous consumption
+/// of the payload. This keeps the queue's byte budget aligned with the real
+/// parser boundary instead of only the channel receive boundary.
+pub struct TerminalIngressDataGuard {
+    data: Vec<u8>,
+    reservation: super::ByteReservation,
+}
+
+impl TerminalIngressDataGuard {
+    pub(super) fn new(data: Vec<u8>, reservation: super::ByteReservation) -> Self {
+        Self { data, reservation }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn into_vec(self) -> Vec<u8> {
+        let Self { data, reservation } = self;
+        drop(reservation);
+        data
+    }
+}
+
+impl fmt::Debug for TerminalIngressDataGuard {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TerminalIngressDataGuard")
+            .field("bytes", &self.data.len())
+            .finish()
+    }
+}
+
+pub enum ReservedTerminalIngressItem<C> {
+    Data(TerminalIngressDataGuard),
+    Control(C),
+}
+
+impl<C> fmt::Debug for ReservedTerminalIngressItem<C> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Data(data) => formatter.debug_tuple("Data").field(data).finish(),
+            Self::Control(_) => formatter.write_str("Control(<redacted>)"),
+        }
+    }
+}

@@ -245,6 +245,27 @@ decision gate / integration，不在本切片提前扩大范围。
 
 完整 Red/Green 与回归命令见 `12.7`。
 
+### 2026-07-26：切片 7.5，保留 ingress reservation 至消费边界
+
+状态：**实现完成并通过 queue contract 验证，作为独立的 reservation 小切片。**
+
+本切片不接入任何 backend，只补齐切片 7 的端到端预算语义：
+
+- 新增 `recv_reserved()`，返回带 `ByteReservation` 的
+  `TerminalIngressDataGuard`；
+- guard 的 reservation 在 `as_slice()`/`len()` 使用期间保持有效，只有
+  `drop` 或显式 `into_vec()` 才释放；
+- 旧 `recv()` 通过 `into_vec()` 保持“交付前释放”的兼容语义；
+- guard 和 reserved item 的 `Debug` 只暴露字节数，不输出 terminal payload；
+- receiver abort/drop 可以丢弃队列 backlog，但不会重复释放仍由 parser 持有的
+  guard；消费方释放 guard 后 pending bytes 才归零。
+
+这样，后续 parser worker 可以把 reservation 覆盖到真正的
+`Processor::advance()` 消费边界，而不是仅覆盖 channel dequeue 边界。本切片仍未
+接入 SSH、Serial、Local、GPUI wakeup 或其他 unbounded stage。
+
+完整 Red/Green 与回归命令见 `12.7.5`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1730,7 +1751,7 @@ git diff --check
 `crates/terminal/src/ingress_queue.rs` 为 298 行，保持在历史计划对 primitive 主文件
 `< 300 lines` 的范围内。最终点验确认 `send_data` 的顺序是完整 byte reservation
 先于 chunk slot，control 不获取 data permit，receiver 的 select 顺序为
-abort/control/data，`QueuedData::into_data` 在返回 payload 前显式 drop reservation，
+abort/control/data，旧 `recv()` 兼容路径在返回 payload 前显式释放 reservation，
 receiver drop 会 abort、close 并 drain；模块中没有 backend 或 metrics 引用。
 
 补充静态检查：
@@ -1754,3 +1775,49 @@ cargo clippy -p terminal --lib --no-deps -- -D warnings
 因此本切片的 contract、terminal 回归、baseline、跨 crate 编译、格式和 whitespace
 检查均通过；严格 Clippy 门禁仍被范围外既有 lint 阻塞，本切片不顺手修改无关代码。
 下一步保持为 SSH ingress decision gate / integration。
+
+### 12.7.5 切片 7.5：保留 ingress reservation 至消费边界
+
+TDD Red 证据：
+
+```text
+cargo test -p terminal ingress_queue --lib
+未通过，退出码 101：
+ReservedTerminalIngressItem 未导出，且 BoundedTerminalReceiver 没有
+recv_reserved() 方法
+```
+
+Green 与回归验证：
+
+```text
+cargo test -p terminal ingress_queue --lib
+16 passed，0 failed
+
+cargo check -p terminal
+未通过，退出码 101；错误位于本切片未修改的 SSH WIP：
+crates/terminal/src/ssh_ingress.rs:96 的 SshParserIngress::sender() 调用
+```
+
+queue 小切片自身的格式与 whitespace 检查通过：
+
+```text
+rustfmt --edition 2021 --check \
+  crates/terminal/src/ingress_queue.rs \
+  crates/terminal/src/ingress_queue/types.rs \
+  crates/terminal/src/ingress_queue_tests.rs
+通过
+
+git diff --check
+通过
+```
+
+新增 contract 覆盖：
+
+- reserved receive 返回时 pending bytes 仍包含 parser 尚未消费的 payload；
+- guard drop 后 sender 才能越过 byte backpressure；
+- `into_vec()` 返回完整字节并在返回前释放 reservation；
+- abort 与仍存活 guard 的生命周期不会 double release；
+- guard `Debug` 不泄露 payload。
+
+本切片没有修改 SSH actor 接线；`cargo check -p terminal` 的阻塞项留给后续
+SSH ingress 切片修复。

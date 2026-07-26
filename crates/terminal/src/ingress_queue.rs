@@ -217,10 +217,9 @@ impl QueuedData {
         Self { data, reservation }
     }
 
-    fn into_data(self) -> Vec<u8> {
+    fn into_reserved(self) -> TerminalIngressDataGuard {
         let Self { data, reservation } = self;
-        drop(reservation);
-        data
+        TerminalIngressDataGuard::new(data, reservation)
     }
 }
 
@@ -235,6 +234,13 @@ pub struct BoundedTerminalReceiver<C> {
 
 impl<C> BoundedTerminalReceiver<C> {
     pub async fn recv(&mut self) -> Option<TerminalIngressItem<C>> {
+        self.recv_reserved().await.map(|item| match item {
+            ReservedTerminalIngressItem::Data(data) => TerminalIngressItem::Data(data.into_vec()),
+            ReservedTerminalIngressItem::Control(control) => TerminalIngressItem::Control(control),
+        })
+    }
+
+    pub async fn recv_reserved(&mut self) -> Option<ReservedTerminalIngressItem<C>> {
         loop {
             if self.aborted || self.state.abort.is_cancelled() {
                 self.finish_abort();
@@ -253,13 +259,15 @@ impl<C> BoundedTerminalReceiver<C> {
                 }
                 control = self.control_rx.recv(), if !self.control_closed => {
                     match control {
-                        Some(control) => return Some(TerminalIngressItem::Control(control)),
+                        Some(control) => return Some(ReservedTerminalIngressItem::Control(control)),
                         None => self.control_closed = true,
                     }
                 }
                 data = self.data_rx.recv(), if !self.data_closed => {
                     match data {
-                        Some(data) => return Some(TerminalIngressItem::Data(data.into_data())),
+                        Some(data) => {
+                            return Some(ReservedTerminalIngressItem::Data(data.into_reserved()));
+                        }
                         None => self.data_closed = true,
                     }
                 }
