@@ -136,7 +136,9 @@ fn heading_level(block: &SourceBlock) -> Option<u8> {
 fn is_source_code(block: &SourceBlock) -> bool {
     matches!(
         block.kind,
-        SourceBlockKind::CodeFence { .. } | SourceBlockKind::MathBlock { .. }
+        SourceBlockKind::CodeFence { .. }
+            | SourceBlockKind::MathBlock { .. }
+            | SourceBlockKind::Html
     )
 }
 

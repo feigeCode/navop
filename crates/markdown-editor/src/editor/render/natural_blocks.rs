@@ -26,6 +26,9 @@ impl MarkdownEditor {
         if let SourceBlockKind::Table(table) = &block.kind {
             return self.render_table(block, table, cx);
         }
+        if matches!(block.kind, SourceBlockKind::Html) {
+            return self.render_html_shell(block, cx);
+        }
         if let Some(rendered) = self.render_block_output(block, cx) {
             return self.render_artifact_shell(block, rendered, cx);
         }

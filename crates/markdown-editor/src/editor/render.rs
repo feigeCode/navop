@@ -13,6 +13,7 @@ mod active_inline_math;
 mod active_list_markers;
 pub(super) mod block_renderer;
 mod blocks;
+mod html;
 pub(super) mod layout_metrics;
 mod list_marker_source;
 mod natural_blocks;
