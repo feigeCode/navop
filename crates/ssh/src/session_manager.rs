@@ -1,9 +1,11 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::{RusshChannel, RusshClient, ShellIntegrationSetup, SshClient, SshConnectConfig};
 
@@ -26,8 +28,9 @@ struct SessionState<C> {
     client: Option<Arc<Mutex<C>>>,
     /// 与 `client` 同生命周期的 shell integration 结果缓存。`invalidate`/`disconnect` 会一并清空。
     shell_integration: Option<ShellIntegrationSetup>,
-    /// 正在进行的 connect 协程会登记一个 Notify，其他等待者订阅它以避免并发 connect。
-    connecting: Option<Arc<Notify>>,
+    /// 正在进行的 connect 协程会登记一个 sticky completion token，其他等待者订阅它以避免并发
+    /// connect。CancellationToken 的完成信号不会像一次性 Notify wakeup 那样丢失。
+    connecting: Option<Arc<ConnectionFlight>>,
     /// 最后一次 ping 探活成功时间。节流用，避免 terminal 每次 write 都触发 ping。
     last_ping: Option<Instant>,
 }
@@ -43,10 +46,72 @@ impl<C> Default for SessionState<C> {
     }
 }
 
+struct ConnectionFlight {
+    completion: CancellationToken,
+    abandoned: AtomicBool,
+}
+
+impl ConnectionFlight {
+    fn new() -> Self {
+        Self {
+            completion: CancellationToken::new(),
+            abandoned: AtomicBool::new(false),
+        }
+    }
+
+    fn complete(&self) {
+        self.completion.cancel();
+    }
+
+    fn abandon(&self) {
+        self.abandoned.store(true, Ordering::Release);
+        self.complete();
+    }
+
+    fn is_abandoned(&self) -> bool {
+        self.abandoned.load(Ordering::Acquire)
+    }
+}
+
+/// Ensures a cancelled or panicking connection owner cannot strand the
+/// single-flight slot.  State cleanup is performed by the next waiter (or
+/// shutdown) because `Drop` cannot acquire the asynchronous state mutex.
+struct ConnectionFlightGuard {
+    flight: Arc<ConnectionFlight>,
+    armed: bool,
+}
+
+impl ConnectionFlightGuard {
+    fn new(flight: Arc<ConnectionFlight>) -> Self {
+        Self {
+            flight,
+            armed: true,
+        }
+    }
+
+    fn complete(&mut self) {
+        self.flight.complete();
+        self.armed = false;
+    }
+}
+
+impl Drop for ConnectionFlightGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flight.abandon();
+        }
+    }
+}
+
 struct SessionPool<C, K> {
     config: RwLock<SessionConfig>,
     connector: K,
     state: Mutex<SessionState<C>>,
+    shutdown: CancellationToken,
+    /// Serializes successful client checkout/publication with the synchronous
+    /// shutdown gate.  Once `request_shutdown()` returns, no connection can
+    /// subsequently be published or checked out successfully.
+    shutdown_publication: RwLock<()>,
 }
 
 struct SessionConfig {
@@ -67,6 +132,8 @@ where
             }),
             connector,
             state: Mutex::new(SessionState::default()),
+            shutdown: CancellationToken::new(),
+            shutdown_publication: RwLock::new(()),
         }
     }
 
@@ -94,12 +161,21 @@ where
     }
 
     /// 获取一个"活着"的 client。命中缓存会做节流 ping 验真；失败或未命中走 connect 分支，
-    /// 在 connect 期间**不持有 state 锁**，并通过 Notify 让并发等待者共享同一次连接。
+    /// 在 connect 期间**不持有 state 锁**，并通过 sticky completion signal 让并发等待者
+    /// 共享同一次连接。
     async fn client(&self) -> Result<Arc<Mutex<C>>> {
         loop {
+            if self.shutdown.is_cancelled() {
+                return Err(anyhow!("SSH session manager is shut down"));
+            }
+
             // Phase 1: 检查缓存与并发连接状态，尽快释放锁。
             let outcome = {
                 let mut state = self.state.lock().await;
+
+                if self.shutdown.is_cancelled() {
+                    return Err(anyhow!("SSH session manager is shut down"));
+                }
 
                 if let Some(client) = state.client.clone() {
                     // client 本身的 is_connected 是本地判定，ping 才是真实探活。
@@ -111,14 +187,14 @@ where
                         client,
                         recently_pinged,
                     }
-                } else if let Some(notify) = state.connecting.clone() {
-                    Phase1::Wait(notify)
+                } else if let Some(completion) = state.connecting.clone() {
+                    Phase1::Wait(completion)
                 } else {
-                    let notify = Arc::new(Notify::new());
-                    state.connecting = Some(notify.clone());
+                    let completion = Arc::new(ConnectionFlight::new());
+                    state.connecting = Some(completion.clone());
                     let (config, generation) = self.config_snapshot();
                     Phase1::Connect {
-                        notify,
+                        completion,
                         config: Box::new(config),
                         generation,
                     }
@@ -138,62 +214,148 @@ where
                     }
 
                     if recently_pinged {
-                        return Ok(client);
+                        if self.can_checkout(&client).await {
+                            return Ok(client);
+                        }
+                        continue;
                     }
 
                     // ping 带 3s 超时（RusshClient::ping 内实现），不持 state 锁。
                     let ping_ok = client.lock().await.ping().await.is_ok();
                     if ping_ok {
-                        let mut state = self.state.lock().await;
-                        if let Some(current) = &state.client {
-                            if Arc::ptr_eq(current, &client) {
-                                state.last_ping = Some(Instant::now());
-                            }
+                        if self.refresh_ping_and_checkout(&client).await {
+                            return Ok(client);
                         }
-                        return Ok(client);
+                        continue;
                     }
 
                     self.clear_dead_client(&client).await;
                     // 落到下轮循环重连。
                 }
-                Phase1::Wait(notify) => {
-                    notify.notified().await;
+                Phase1::Wait(completion) => {
+                    tokio::select! {
+                        biased;
+                        _ = self.shutdown.cancelled() => {
+                            return Err(anyhow!("SSH session manager is shut down"));
+                        }
+                        _ = completion.completion.cancelled() => {
+                            if completion.is_abandoned() {
+                                self.clear_connection_flight(&completion).await;
+                            }
+                        }
+                    }
                 }
                 Phase1::Connect {
-                    notify,
+                    completion,
                     config,
                     generation,
                 } => {
+                    let mut flight_guard = ConnectionFlightGuard::new(completion.clone());
                     // connect 期间不持 state 锁，别的调用者可以继续 inspect/wait。
-                    let result = self.connector.connect(*config).await;
+                    let result = tokio::select! {
+                        biased;
+                        _ = self.shutdown.cancelled() => {
+                            self.clear_connection_flight(&completion).await;
+                            flight_guard.complete();
+                            return Err(anyhow!("SSH session manager is shut down"));
+                        }
+                        result = self.connector.connect(*config) => result,
+                    };
                     let mut state = self.state.lock().await;
-                    state.connecting = None;
+                    let publication = self
+                        .shutdown_publication
+                        .read()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if self.shutdown.is_cancelled() {
+                        state.client = None;
+                        state.shell_integration = None;
+                        state.last_ping = None;
+                        drop(publication);
+                        drop(state);
+                        if let Ok(mut client) = result {
+                            let _ = client.disconnect().await;
+                        }
+                        self.clear_connection_flight(&completion).await;
+                        flight_guard.complete();
+                        return Err(anyhow!("SSH session manager is shut down"));
+                    }
                     if !self.is_current_config_generation(generation) {
-                        notify.notify_waiters();
+                        drop(publication);
                         drop(state);
                         if let Ok(mut stale_client) = result {
                             let _ = stale_client.disconnect().await;
                         }
+                        self.clear_connection_flight(&completion).await;
+                        flight_guard.complete();
                         continue;
                     }
                     match result {
                         Ok(new_client) => {
                             let arc = Arc::new(Mutex::new(new_client));
+                            state.connecting = None;
                             state.client = Some(arc.clone());
                             state.shell_integration = None;
                             state.last_ping = Some(Instant::now());
-                            notify.notify_waiters();
+                            flight_guard.complete();
                             return Ok(arc);
                         }
                         Err(err) => {
                             // 只清 connecting，等待者重跑一轮循环继续尝试（会再次走 Connect 分支）。
-                            notify.notify_waiters();
+                            state.connecting = None;
+                            flight_guard.complete();
                             return Err(err);
                         }
                     }
                 }
             }
         }
+    }
+
+    async fn clear_connection_flight(&self, expected: &Arc<ConnectionFlight>) {
+        let mut state = self.state.lock().await;
+        if state
+            .connecting
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
+        {
+            state.connecting = None;
+        }
+    }
+
+    /// Validate a cached checkout while holding the read side of the
+    /// publication gate.  A concurrent shutdown therefore linearizes either
+    /// before this successful checkout or after it, never in the middle.
+    async fn can_checkout(&self, candidate: &Arc<Mutex<C>>) -> bool {
+        let state = self.state.lock().await;
+        let publication = self
+            .shutdown_publication
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let can_checkout = !self.shutdown.is_cancelled()
+            && state
+                .client
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, candidate));
+        drop(publication);
+        can_checkout
+    }
+
+    async fn refresh_ping_and_checkout(&self, candidate: &Arc<Mutex<C>>) -> bool {
+        let mut state = self.state.lock().await;
+        let publication = self
+            .shutdown_publication
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let can_checkout = !self.shutdown.is_cancelled()
+            && state
+                .client
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, candidate));
+        if can_checkout {
+            state.last_ping = Some(Instant::now());
+        }
+        drop(publication);
+        can_checkout
     }
 
     /// 如果死 client 仍挂在 state 上，清掉它（同时丢弃配套的 integration 缓存 / 探活时间）。
@@ -229,6 +391,52 @@ where
         Ok(())
     }
 
+    /// Close the reconnect gate synchronously.
+    ///
+    /// The application service calls this for every published manager before
+    /// it starts awaiting transport cleanup, so a retained lease cannot race
+    /// the shutdown driver and create a new client.
+    fn request_shutdown(&self) {
+        let _publication = self
+            .shutdown_publication
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        self.shutdown.cancel();
+    }
+
+    /// Permanently close this manager and wait for both its cached client and
+    /// any connection already in flight to finish disconnecting.
+    ///
+    /// Unlike [`Self::disconnect`], this is terminal: all later calls to
+    /// [`Self::client`] fail without invoking the connector.
+    async fn shutdown(&self) -> Result<()> {
+        self.request_shutdown();
+
+        let (client, connecting) = {
+            let mut state = self.state.lock().await;
+            state.shell_integration = None;
+            state.last_ping = None;
+            let connecting = state.connecting.clone();
+            (state.client.take(), connecting)
+        };
+
+        let disconnect_result = if let Some(client) = client {
+            client.lock().await.disconnect().await
+        } else {
+            Ok(())
+        };
+
+        // A connect that observed the pre-shutdown state checks the
+        // cancellation/publication gate before publication, disconnects its
+        // result when necessary, then completes this sticky signal.
+        if let Some(connecting) = connecting {
+            connecting.completion.cancelled().await;
+            self.clear_connection_flight(&connecting).await;
+        }
+
+        disconnect_result
+    }
+
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
         self.state.lock().await.shell_integration.clone()
     }
@@ -254,9 +462,9 @@ enum Phase1<C> {
         client: Arc<Mutex<C>>,
         recently_pinged: bool,
     },
-    Wait(Arc<Notify>),
+    Wait(Arc<ConnectionFlight>),
     Connect {
-        notify: Arc<Notify>,
+        completion: Arc<ConnectionFlight>,
         config: Box<SshConnectConfig>,
         generation: u64,
     },
@@ -334,6 +542,19 @@ impl SshSessionManager {
         self.inner.disconnect().await
     }
 
+    /// Permanently stop this manager.
+    ///
+    /// This is reserved for application/service teardown.  Ordinary health
+    /// invalidation and idle eviction use [`Self::disconnect`] so a later
+    /// checkout may reconnect.
+    pub async fn shutdown(&self) -> Result<()> {
+        self.inner.shutdown().await
+    }
+
+    pub(crate) fn request_shutdown(&self) {
+        self.inner.request_shutdown();
+    }
+
     /// 读取已缓存的 shell integration 结果；缓存会跟随当前 session 生命周期一起失效。
     pub async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
         self.inner.cached_shell_integration().await
@@ -361,7 +582,7 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::Notify;
+    use tokio::sync::{Notify, Semaphore};
     use tokio::time::{Duration, sleep};
 
     #[derive(Default)]
@@ -382,6 +603,53 @@ mod tests {
         connect_count: AtomicUsize,
         connect_started: Notify,
         connected_hosts: StdMutex<Vec<String>>,
+    }
+
+    struct BlockingFakeConnector {
+        connect_count: AtomicUsize,
+        connect_started: Notify,
+        connect_permit: Semaphore,
+        disconnect_count: Arc<AtomicUsize>,
+    }
+
+    struct PanicOnceConnector {
+        connect_count: AtomicUsize,
+        first_connect_started: Semaphore,
+        panic_permit: Semaphore,
+    }
+
+    struct BlockingDisconnectControls {
+        connect_started: Semaphore,
+        connect_permit: Semaphore,
+        connect_returned: Semaphore,
+        disconnect_started: Semaphore,
+        disconnect_permit: Semaphore,
+        disconnect_count: AtomicUsize,
+    }
+
+    struct BlockingDisconnectClient {
+        connected: AtomicBool,
+        controls: Arc<BlockingDisconnectControls>,
+    }
+
+    struct BlockingDisconnectConnector {
+        controls: Arc<BlockingDisconnectControls>,
+    }
+
+    struct BlockingPingControls {
+        ping_started: Semaphore,
+        ping_permit: Semaphore,
+        disconnect_count: AtomicUsize,
+    }
+
+    struct BlockingPingClient {
+        connected: AtomicBool,
+        controls: Arc<BlockingPingControls>,
+    }
+
+    struct BlockingPingConnector {
+        connect_count: AtomicUsize,
+        controls: Arc<BlockingPingControls>,
     }
 
     #[async_trait]
@@ -445,6 +713,129 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl SharedSessionConnector<FakeClient> for Arc<BlockingFakeConnector> {
+        async fn connect(&self, _config: SshConnectConfig) -> Result<FakeClient> {
+            self.connect_count.fetch_add(1, Ordering::SeqCst);
+            self.connect_started.notify_waiters();
+            self.connect_permit
+                .acquire()
+                .await
+                .expect("test connector semaphore should remain open")
+                .forget();
+            Ok(FakeClient {
+                connected: AtomicBool::new(true),
+                disconnect_count: self.disconnect_count.clone(),
+                ping_count: Arc::new(AtomicUsize::new(0)),
+                ping_fails: AtomicBool::new(false),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SharedSessionConnector<FakeClient> for Arc<PanicOnceConnector> {
+        async fn connect(&self, _config: SshConnectConfig) -> Result<FakeClient> {
+            let attempt = self.connect_count.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                self.first_connect_started.add_permits(1);
+                self.panic_permit
+                    .acquire()
+                    .await
+                    .expect("test panic semaphore should remain open")
+                    .forget();
+                panic!("intentional connector panic");
+            }
+
+            Ok(FakeClient {
+                connected: AtomicBool::new(true),
+                disconnect_count: Arc::new(AtomicUsize::new(0)),
+                ping_count: Arc::new(AtomicUsize::new(0)),
+                ping_fails: AtomicBool::new(false),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SharedSessionClient for BlockingDisconnectClient {
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+
+        async fn ping(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<()> {
+            self.controls.disconnect_started.add_permits(1);
+            self.controls
+                .disconnect_permit
+                .acquire()
+                .await
+                .expect("test disconnect semaphore should remain open")
+                .forget();
+            self.connected.store(false, Ordering::SeqCst);
+            self.controls
+                .disconnect_count
+                .fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SharedSessionConnector<BlockingDisconnectClient> for Arc<BlockingDisconnectConnector> {
+        async fn connect(&self, _config: SshConnectConfig) -> Result<BlockingDisconnectClient> {
+            self.controls.connect_started.add_permits(1);
+            self.controls
+                .connect_permit
+                .acquire()
+                .await
+                .expect("test connect semaphore should remain open")
+                .forget();
+            self.controls.connect_returned.add_permits(1);
+            Ok(BlockingDisconnectClient {
+                connected: AtomicBool::new(true),
+                controls: self.controls.clone(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SharedSessionClient for BlockingPingClient {
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+
+        async fn ping(&self) -> Result<()> {
+            self.controls.ping_started.add_permits(1);
+            self.controls
+                .ping_permit
+                .acquire()
+                .await
+                .expect("test ping semaphore should remain open")
+                .forget();
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<()> {
+            self.connected.store(false, Ordering::SeqCst);
+            self.controls
+                .disconnect_count
+                .fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SharedSessionConnector<BlockingPingClient> for Arc<BlockingPingConnector> {
+        async fn connect(&self, _config: SshConnectConfig) -> Result<BlockingPingClient> {
+            self.connect_count.fetch_add(1, Ordering::SeqCst);
+            Ok(BlockingPingClient {
+                connected: AtomicBool::new(true),
+                controls: self.controls.clone(),
+            })
+        }
+    }
+
     fn test_config() -> SshConnectConfig {
         SshConnectConfig {
             host: "example.com".to_string(),
@@ -501,6 +892,206 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &second));
         assert_eq!(disconnect_count.load(Ordering::SeqCst), 1);
         assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn shutdown_permanently_rejects_new_clients_and_is_idempotent() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+
+        let first = pool.client().await.expect("first client should connect");
+        let disconnect_count = first.lock().await.disconnect_count.clone();
+
+        pool.shutdown().await.expect("shutdown should succeed");
+        pool.shutdown()
+            .await
+            .expect("repeated shutdown should remain successful");
+
+        let error = match pool.client().await {
+            Ok(_) => panic!("shutdown manager must never reconnect"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "SSH session manager is shut down");
+        assert_eq!(disconnect_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            connector.connect_count.load(Ordering::SeqCst),
+            1,
+            "shutdown must be distinct from a reconnectable disconnect"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_connect_cancels_the_unpublished_client() {
+        let connector = Arc::new(BlockingFakeConnector {
+            connect_count: AtomicUsize::new(0),
+            connect_started: Notify::new(),
+            connect_permit: Semaphore::new(0),
+            disconnect_count: Arc::new(AtomicUsize::new(0)),
+        });
+        let pool = Arc::new(SessionPool::new(test_config(), connector.clone()));
+
+        let started = connector.connect_started.notified();
+        let connecting_pool = pool.clone();
+        let connecting = tokio::spawn(async move { connecting_pool.client().await });
+        started.await;
+
+        pool.request_shutdown();
+        pool.shutdown().await.expect("shutdown should finish");
+        let error = match connecting.await.expect("connect task should not panic") {
+            Ok(_) => panic!("the in-flight client must not be published"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.to_string(), "SSH session manager is shut down");
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            connector.disconnect_count.load(Ordering::SeqCst),
+            0,
+            "connector future was cancelled before it could construct a client"
+        );
+    }
+
+    #[tokio::test]
+    async fn connector_panic_does_not_strand_the_single_flight_slot() {
+        let connector = Arc::new(PanicOnceConnector {
+            connect_count: AtomicUsize::new(0),
+            first_connect_started: Semaphore::new(0),
+            panic_permit: Semaphore::new(0),
+        });
+        let pool = Arc::new(SessionPool::new(test_config(), connector.clone()));
+
+        let first_pool = pool.clone();
+        let first = tokio::spawn(async move { first_pool.client().await });
+        connector
+            .first_connect_started
+            .acquire()
+            .await
+            .expect("test start semaphore should remain open")
+            .forget();
+
+        let waiting_pool = pool.clone();
+        let waiting = tokio::spawn(async move { waiting_pool.client().await });
+        tokio::task::yield_now().await;
+        connector.panic_permit.add_permits(1);
+
+        let first_error = match first.await {
+            Ok(_) => panic!("the first connector task should panic"),
+            Err(error) => error,
+        };
+        assert!(first_error.is_panic());
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("a waiter must recover the abandoned connection flight")
+            .expect("the waiting task should not panic")
+            .expect("the retry should connect successfully");
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_an_unpublished_client_to_disconnect() {
+        let controls = Arc::new(BlockingDisconnectControls {
+            connect_started: Semaphore::new(0),
+            connect_permit: Semaphore::new(0),
+            connect_returned: Semaphore::new(0),
+            disconnect_started: Semaphore::new(0),
+            disconnect_permit: Semaphore::new(0),
+            disconnect_count: AtomicUsize::new(0),
+        });
+        let connector = Arc::new(BlockingDisconnectConnector {
+            controls: controls.clone(),
+        });
+        let pool = Arc::new(SessionPool::new(test_config(), connector));
+
+        let connecting_pool = pool.clone();
+        let connecting = tokio::spawn(async move { connecting_pool.client().await });
+        controls
+            .connect_started
+            .acquire()
+            .await
+            .expect("test start semaphore should remain open")
+            .forget();
+
+        // Hold the state lock so the connector can return but cannot yet
+        // publish.  This makes shutdown race the post-connect cleanup path.
+        let state = pool.state.lock().await;
+        controls.connect_permit.add_permits(1);
+        controls
+            .connect_returned
+            .acquire()
+            .await
+            .expect("test return semaphore should remain open")
+            .forget();
+        pool.request_shutdown();
+
+        let shutdown_pool = pool.clone();
+        let mut shutdown = tokio::spawn(async move { shutdown_pool.shutdown().await });
+        drop(state);
+        controls
+            .disconnect_started
+            .acquire()
+            .await
+            .expect("test disconnect semaphore should remain open")
+            .forget();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut shutdown)
+                .await
+                .is_err(),
+            "shutdown must retain the connection flight until cleanup finishes"
+        );
+        controls.disconnect_permit.add_permits(1);
+
+        shutdown
+            .await
+            .expect("shutdown task should not panic")
+            .expect("shutdown should finish after cleanup");
+        let error = match connecting.await.expect("connect task should not panic") {
+            Ok(_) => panic!("the post-shutdown client must not be published"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "SSH session manager is shut down");
+        assert_eq!(controls.disconnect_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_cached_ping_prevents_a_late_checkout() {
+        let controls = Arc::new(BlockingPingControls {
+            ping_started: Semaphore::new(0),
+            ping_permit: Semaphore::new(0),
+            disconnect_count: AtomicUsize::new(0),
+        });
+        let connector = Arc::new(BlockingPingConnector {
+            connect_count: AtomicUsize::new(0),
+            controls: controls.clone(),
+        });
+        let pool = Arc::new(SessionPool::new(test_config(), connector.clone()));
+
+        pool.client()
+            .await
+            .expect("initial client should be published");
+        pool.state.lock().await.last_ping = None;
+
+        let inspecting_pool = pool.clone();
+        let inspecting = tokio::spawn(async move { inspecting_pool.client().await });
+        controls
+            .ping_started
+            .acquire()
+            .await
+            .expect("test ping semaphore should remain open")
+            .forget();
+
+        pool.request_shutdown();
+        controls.ping_permit.add_permits(1);
+
+        let error = match inspecting.await.expect("client task should not panic") {
+            Ok(_) => panic!("a checkout that finishes after shutdown must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.to_string(), "SSH session manager is shut down");
+
+        pool.shutdown().await.expect("shutdown should finish");
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 1);
+        assert_eq!(controls.disconnect_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

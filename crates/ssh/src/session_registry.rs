@@ -1,9 +1,10 @@
 //! Application-level single-flight slots and leases for shared SSH session
 //! managers.
 //!
-//! This module deliberately stops before transport health, graceful
-//! application shutdown, a GPUI global owner, or migration of existing
-//! consumers.  Those lifecycle policies build on top of the guarantees here:
+//! This module deliberately stops before transport health, a GPUI global
+//! owner, or migration of existing consumers.  It provides the
+//! GPUI-independent application service and graceful-shutdown contract that
+//! those later integrations build on:
 //!
 //! - one in-flight manager creation per [`ConnectionKey`];
 //! - unrelated keys can make progress independently;
@@ -23,13 +24,88 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, oneshot, watch};
 use tokio::task::{JoinError, JoinSet};
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep_until, timeout_at};
+use tokio_util::sync::CancellationToken;
 
 use crate::{ConnectionKey, SshConnectConfig, SshSessionManager};
 
 const DEFAULT_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_SERVICE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Lifecycle of the application-owned SSH session service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SshSessionServiceState {
+    /// New leases and manager creation are admitted.
+    Running,
+    /// Admission is closed and registry-owned work is converging.
+    ShuttingDown,
+    /// The single shutdown attempt has produced its stable report.
+    Stopped,
+}
+
+/// Credential-free lifecycle and capacity view of the SSH session service.
+///
+/// This intentionally contains only counters and the lifecycle state.  It
+/// never exposes a [`ConnectionKey`], [`SshConnectConfig`], host path,
+/// credential revision, password, private key, passphrase, or MFA response.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SshSessionServiceSnapshot {
+    /// Monotonic-within-this-service change counter (wrapping at `u64::MAX`).
+    pub revision: u64,
+    /// Current service lifecycle.
+    pub state: SshSessionServiceState,
+    /// Number of current creating and ready generations.
+    pub slot_count: usize,
+    /// Number of manager creation flights owned by current slots.
+    pub creating_count: usize,
+    /// Number of published manager generations owned by current slots.
+    pub ready_count: usize,
+    /// Leases charged to current published generations.
+    ///
+    /// Leases retained after a generation is retired or shutdown begins are
+    /// intentionally not counted because they can no longer mutate registry
+    /// accounting or reconnect their permanently gated manager.
+    pub active_lease_count: usize,
+    /// Ready generations with no active lease and an idle deadline.
+    pub idle_count: usize,
+    /// Registry-owned creation and reaper tasks that have not converged.
+    pub registry_task_count: usize,
+}
+
+impl Default for SshSessionServiceSnapshot {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            state: SshSessionServiceState::Running,
+            slot_count: 0,
+            creating_count: 0,
+            ready_count: 0,
+            active_lease_count: 0,
+            idle_count: 0,
+            registry_task_count: 0,
+        }
+    }
+}
+
+/// Stable, credential-free result of application SSH service shutdown.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SshSessionShutdownReport {
+    /// Whether the single total deadline elapsed before full convergence.
+    pub timed_out: bool,
+    /// Published manager generations whose reconnect gates were closed.
+    pub managers_requested: usize,
+    /// Manager cleanup futures completed before the deadline, including
+    /// futures that completed with an error.
+    pub managers_completed: usize,
+    /// Completed manager cleanup futures that failed or whose task panicked.
+    pub manager_failures: usize,
+    /// Manager cleanup futures still pending when the deadline elapsed.
+    pub managers_remaining: usize,
+    /// Registry-owned creation/reaper tasks still pending at report time.
+    pub registry_tasks_remaining: usize,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SlotGeneration(u64);
@@ -98,6 +174,8 @@ enum RegistrySlot<M> {
 struct RegistryState<M> {
     slots: HashMap<ConnectionKey, RegistrySlot<M>>,
     next_generation: u64,
+    lifecycle: SshSessionServiceState,
+    snapshot_revision: u64,
 }
 
 impl<M> Default for RegistryState<M> {
@@ -105,6 +183,8 @@ impl<M> Default for RegistryState<M> {
         Self {
             slots: HashMap::new(),
             next_generation: 0,
+            lifecycle: SshSessionServiceState::Running,
+            snapshot_revision: 0,
         }
     }
 }
@@ -146,12 +226,18 @@ struct RegistryShared<M> {
     reaper_shutdown: AtomicBool,
     reaper_start_count: AtomicUsize,
     reaper_stop_count: AtomicUsize,
+    task_cancellation: CancellationToken,
+    task_count: AtomicUsize,
+    task_notify: Notify,
+    snapshot_tx: watch::Sender<SshSessionServiceSnapshot>,
 }
 
 impl<M> RegistryShared<M> {
     fn new(idle_timeout: Duration) -> Self {
+        let state = RegistryState::default();
+        let (snapshot_tx, _) = watch::channel(SshSessionServiceSnapshot::default());
         Self {
-            state: StdMutex::new(RegistryState::default()),
+            state: StdMutex::new(state),
             idle_timeout,
             reaper_notify: Notify::new(),
             reaper_started: AtomicBool::new(false),
@@ -159,11 +245,110 @@ impl<M> RegistryShared<M> {
             reaper_shutdown: AtomicBool::new(false),
             reaper_start_count: AtomicUsize::new(0),
             reaper_stop_count: AtomicUsize::new(0),
+            task_cancellation: CancellationToken::new(),
+            task_count: AtomicUsize::new(0),
+            task_notify: Notify::new(),
+            snapshot_tx,
         }
     }
 
     fn idle_timeout(&self) -> Duration {
         self.idle_timeout
+    }
+
+    fn snapshot_from_state(&self, state: &RegistryState<M>) -> SshSessionServiceSnapshot {
+        let mut creating_count = 0;
+        let mut ready_count = 0;
+        let mut active_lease_count = 0;
+        let mut idle_count = 0;
+
+        for slot in state.slots.values() {
+            match slot {
+                RegistrySlot::Creating { .. } => creating_count += 1,
+                RegistrySlot::Ready {
+                    lease_count,
+                    idle_candidate,
+                    ..
+                } => {
+                    ready_count += 1;
+                    active_lease_count += *lease_count;
+                    if *lease_count == 0 && idle_candidate.is_some() {
+                        idle_count += 1;
+                    }
+                }
+            }
+        }
+
+        SshSessionServiceSnapshot {
+            revision: state.snapshot_revision,
+            state: state.lifecycle,
+            slot_count: state.slots.len(),
+            creating_count,
+            ready_count,
+            active_lease_count,
+            idle_count,
+            registry_task_count: self.task_count.load(Ordering::Acquire),
+        }
+    }
+
+    fn publish_snapshot_locked(&self, state: &mut RegistryState<M>) {
+        state.snapshot_revision = state.snapshot_revision.wrapping_add(1);
+        self.snapshot_tx
+            .send_replace(self.snapshot_from_state(state));
+    }
+
+    fn snapshot(&self) -> SshSessionServiceSnapshot {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        self.snapshot_from_state(&state)
+    }
+
+    fn subscribe(&self) -> watch::Receiver<SshSessionServiceSnapshot> {
+        self.snapshot_tx.subscribe()
+    }
+
+    fn register_task_locked(self: &Arc<Self>) -> RegistryTaskGuard<M> {
+        self.task_count.fetch_add(1, Ordering::AcqRel);
+        RegistryTaskGuard {
+            shared: self.clone(),
+            active: true,
+        }
+    }
+
+    async fn wait_for_tasks(&self) {
+        loop {
+            let notified = self.task_notify.notified();
+            if self.task_count.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+struct RegistryTaskGuard<M> {
+    shared: Arc<RegistryShared<M>>,
+    active: bool,
+}
+
+impl<M> Drop for RegistryTaskGuard<M> {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = self.shared.task_count.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "SSH registry task count underflow");
+        self.shared.publish_snapshot_locked(&mut state);
+        drop(state);
+        // There is one shutdown driver waiting for registry convergence.
+        // `notify_one` retains a permit if completion races its next await,
+        // unlike `notify_waiters`, whose edge can be lost without a waiter.
+        self.shared.task_notify.notify_one();
     }
 }
 
@@ -174,7 +359,13 @@ trait SessionManagerFactory<M>: Send + Sync + 'static {
 
 #[async_trait]
 trait RegistryManagedSession: Send + Sync + 'static {
+    fn request_shutdown_for_registry(&self) {}
+
     async fn disconnect_for_registry(&self) -> Result<()>;
+
+    async fn shutdown_for_registry(&self) -> Result<()> {
+        self.disconnect_for_registry().await
+    }
 }
 
 enum AcquirePhase<M> {
@@ -183,6 +374,7 @@ enum AcquirePhase<M> {
     Start {
         token: CreationToken,
         receiver: oneshot::Receiver<FlightOutcome>,
+        task_guard: RegistryTaskGuard<M>,
     },
 }
 
@@ -231,12 +423,14 @@ impl<M> RegistryLease<M> {
             }
 
             *lease_count -= 1;
-            if *lease_count == 0 {
+            let became_idle = if *lease_count == 0 {
                 *idle_candidate = Some(IdleCandidate::new(self.shared.idle_timeout()));
                 true
             } else {
                 false
-            }
+            };
+            self.shared.publish_snapshot_locked(&mut state);
+            became_idle
         };
 
         if became_idle {
@@ -263,7 +457,9 @@ impl<M> Clone for RegistryLease<M> {
                     *lease_count = lease_count
                         .checked_add(1)
                         .expect("SSH session lease count overflow");
-                    (true, idle_candidate.take().is_some())
+                    let cancelled_idle = idle_candidate.take().is_some();
+                    self.shared.publish_snapshot_locked(&mut state);
+                    (true, cancelled_idle)
                 }
                 Some(RegistrySlot::Creating { .. }) | Some(RegistrySlot::Ready { .. }) | None => {
                     (false, false)
@@ -314,7 +510,7 @@ impl<M> fmt::Debug for RegistryLease<M> {
 
 struct SessionRegistryCore<M, F> {
     shared: Arc<RegistryShared<M>>,
-    factory: F,
+    factory: Arc<F>,
 }
 
 impl<M, F> SessionRegistryCore<M, F>
@@ -337,7 +533,7 @@ where
         );
         Self {
             shared: Arc::new(RegistryShared::new(idle_timeout)),
-            factory,
+            factory: Arc::new(factory),
         }
     }
 
@@ -351,16 +547,18 @@ where
         key: &ConnectionKey,
         config: SshConnectConfig,
     ) -> Result<RegistryLease<M>> {
-        self.ensure_reaper_started();
-
         loop {
-            let (phase, cancelled_idle) = {
+            let (phase, cancelled_idle, reaper_task) = {
                 let mut state = self
                     .shared
                     .state
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
-                match state.slots.get_mut(key) {
+                if state.lifecycle != SshSessionServiceState::Running {
+                    return Err(anyhow!("SSH session service is shutting down"));
+                }
+
+                let (phase, cancelled_idle, changed) = match state.slots.get_mut(key) {
                     Some(RegistrySlot::Ready {
                         key: slot_key,
                         token,
@@ -381,12 +579,13 @@ where
                                 counted: true,
                             }),
                             cancelled_idle,
+                            true,
                         )
                     }
                     Some(RegistrySlot::Creating { waiters, .. }) => {
                         let (sender, receiver) = oneshot::channel();
                         waiters.push(sender);
-                        (AcquirePhase::Wait(receiver), false)
+                        (AcquirePhase::Wait(receiver), false, false)
                     }
                     None => {
                         let token = state.next_token();
@@ -398,11 +597,44 @@ where
                                 waiters: vec![sender],
                             },
                         );
-                        (AcquirePhase::Start { token, receiver }, false)
+                        (
+                            AcquirePhase::Start {
+                                token,
+                                receiver,
+                                task_guard: self.shared.register_task_locked(),
+                            },
+                            false,
+                            true,
+                        )
                     }
+                };
+                // Register the long-lived reaper only after all fallible lease
+                // accounting above has completed.  A task guard's Drop takes
+                // the state lock to publish its final snapshot, so it must
+                // never be unwound while this same lock is still held.
+                let reaper_task = if self
+                    .shared
+                    .reaper_started
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+                {
+                    self.shared
+                        .reaper_start_count
+                        .fetch_add(1, Ordering::Relaxed);
+                    Some(self.shared.register_task_locked())
+                } else {
+                    None
+                };
+                if changed || reaper_task.is_some() {
+                    self.shared.publish_snapshot_locked(&mut state);
                 }
+                (phase, cancelled_idle, reaper_task)
             };
 
+            if let Some(task_guard) = reaper_task {
+                let shared = self.shared.clone();
+                tokio::spawn(run_idle_reaper(shared, task_guard));
+            }
             if cancelled_idle {
                 self.shared.reaper_notify.notify_one();
             }
@@ -410,8 +642,12 @@ where
             let receiver = match phase {
                 AcquirePhase::Ready(lease) => return Ok(lease),
                 AcquirePhase::Wait(receiver) => receiver,
-                AcquirePhase::Start { token, receiver } => {
-                    self.spawn_creation(key.clone(), token, config.clone());
+                AcquirePhase::Start {
+                    token,
+                    receiver,
+                    task_guard,
+                } => {
+                    self.spawn_creation(key.clone(), token, config.clone(), task_guard);
                     receiver
                 }
             };
@@ -434,83 +670,27 @@ where
         }
     }
 
-    fn ensure_reaper_started(self: &Arc<Self>) {
-        if self
-            .shared
-            .reaper_started
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
-        }
-
-        self.shared
-            .reaper_start_count
-            .fetch_add(1, Ordering::Relaxed);
-        let shared = self.shared.clone();
-        tokio::spawn(run_idle_reaper(shared));
-    }
-
     fn spawn_creation(
-        self: &Arc<Self>,
+        &self,
         key: ConnectionKey,
         token: CreationToken,
         config: SshConnectConfig,
+        task_guard: RegistryTaskGuard<M>,
     ) {
-        let registry = self.clone();
+        let shared = self.shared.clone();
+        let factory = self.factory.clone();
+        let cancellation = shared.task_cancellation.clone();
         tokio::spawn(async move {
-            let mut cleanup =
-                CreationCleanup::new(registry.shared.clone(), key.clone(), token.clone());
-            let result = registry.factory.create(config).await;
-            registry.finish_creation(&key, &token, result);
+            let _task_guard = task_guard;
+            let mut cleanup = CreationCleanup::new(shared.clone(), key.clone(), token.clone());
+            let result = tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return,
+                result = factory.create(config) => result,
+            };
+            shared.finish_creation(&key, &token, result);
             cleanup.disarm();
         });
-    }
-
-    fn finish_creation(&self, key: &ConnectionKey, token: &CreationToken, result: Result<M>) {
-        let (waiters, outcome, published_idle) = {
-            let mut state = self
-                .shared
-                .state
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some(waiters) = state.take_current_creation(key, token) else {
-                // The slot was retired or a newer generation already owns the
-                // key.  Dropping `result` here prevents a stale manager from
-                // becoming visible.
-                return;
-            };
-
-            match result {
-                Ok(manager) => {
-                    let manager = Arc::new(manager);
-                    state.slots.insert(
-                        key.clone(),
-                        RegistrySlot::Ready {
-                            key: Arc::new(key.clone()),
-                            token: token.clone(),
-                            manager,
-                            lease_count: 0,
-                            // Every waiter performs its own counted checkout.
-                            // If all waiters were cancelled, the newly created
-                            // manager immediately gets a real idle deadline
-                            // instead of being leaked as "busy".
-                            idle_candidate: Some(IdleCandidate::new(self.shared.idle_timeout())),
-                        },
-                    );
-                    (waiters, FlightOutcome::Published, true)
-                }
-                Err(error) => (
-                    waiters,
-                    FlightOutcome::Failed(Arc::from(format!("{error:#}"))),
-                    false,
-                ),
-            }
-        };
-        if published_idle {
-            self.shared.reaper_notify.notify_one();
-        }
-        notify_waiters(waiters, outcome);
     }
 
     /// Retire only the currently published/in-flight slot.
@@ -527,11 +707,15 @@ where
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            match state.slots.remove(key) {
+            let removed = match state.slots.remove(key) {
                 Some(RegistrySlot::Ready { manager, .. }) => (Some(manager), Vec::new(), true),
                 Some(RegistrySlot::Creating { waiters, .. }) => (None, waiters, true),
                 None => (None, Vec::new(), false),
+            };
+            if removed.2 {
+                self.shared.publish_snapshot_locked(&mut state);
             }
+            removed
         };
         if removed_slot {
             self.shared.reaper_notify.notify_one();
@@ -539,12 +723,148 @@ where
         notify_waiters(waiters, FlightOutcome::Superseded);
         manager
     }
+
+    fn begin_shutdown(&self) -> Vec<Arc<M>> {
+        let (managers, waiters, started) = {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if state.lifecycle != SshSessionServiceState::Running {
+                (Vec::new(), Vec::new(), false)
+            } else {
+                state.lifecycle = SshSessionServiceState::ShuttingDown;
+                let mut managers = Vec::new();
+                let mut waiters = Vec::new();
+                for (_, slot) in state.slots.drain() {
+                    match slot {
+                        RegistrySlot::Creating {
+                            waiters: slot_waiters,
+                            ..
+                        } => waiters.extend(slot_waiters),
+                        RegistrySlot::Ready { manager, .. } => {
+                            // Close every reconnect gate before releasing the
+                            // registry state lock.  Acquire and retained-lease
+                            // client checkout therefore have one synchronous
+                            // shutdown linearization point.
+                            manager.request_shutdown_for_registry();
+                            managers.push(manager);
+                        }
+                    }
+                }
+                self.shared.publish_snapshot_locked(&mut state);
+                (managers, waiters, true)
+            }
+        };
+        if started {
+            self.shared.reaper_shutdown.store(true, Ordering::Release);
+            self.shared.task_cancellation.cancel();
+            self.shared.reaper_notify.notify_waiters();
+            notify_waiters(
+                waiters,
+                FlightOutcome::Failed(Arc::from("SSH session service is shutting down")),
+            );
+        }
+        managers
+    }
+
+    fn finish_shutdown(&self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.lifecycle != SshSessionServiceState::Stopped {
+            state.lifecycle = SshSessionServiceState::Stopped;
+            self.shared.publish_snapshot_locked(&mut state);
+        }
+    }
+
+    fn snapshot(&self) -> SshSessionServiceSnapshot {
+        self.shared.snapshot()
+    }
+
+    fn subscribe(&self) -> watch::Receiver<SshSessionServiceSnapshot> {
+        self.shared.subscribe()
+    }
 }
 
 impl<M, F> Drop for SessionRegistryCore<M, F> {
     fn drop(&mut self) {
+        let waiters = {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.lifecycle = SshSessionServiceState::Stopped;
+            let mut waiters = Vec::new();
+            for (_, slot) in state.slots.drain() {
+                if let RegistrySlot::Creating {
+                    waiters: slot_waiters,
+                    ..
+                } = slot
+                {
+                    waiters.extend(slot_waiters);
+                }
+            }
+            self.shared.publish_snapshot_locked(&mut state);
+            waiters
+        };
         self.shared.reaper_shutdown.store(true, Ordering::Release);
-        self.shared.reaper_notify.notify_one();
+        self.shared.task_cancellation.cancel();
+        self.shared.reaper_notify.notify_waiters();
+        notify_waiters(
+            waiters,
+            FlightOutcome::Failed(Arc::from("SSH session registry was dropped")),
+        );
+    }
+}
+
+impl<M> RegistryShared<M> {
+    fn finish_creation(&self, key: &ConnectionKey, token: &CreationToken, result: Result<M>) {
+        let (waiters, outcome, published_idle) = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(waiters) = state.take_current_creation(key, token) else {
+                // The slot was retired, shutdown drained it, or a newer
+                // generation owns the key.  Dropping `result` prevents stale
+                // publication.
+                return;
+            };
+
+            let outcome = match result {
+                Ok(manager) if state.lifecycle == SshSessionServiceState::Running => {
+                    state.slots.insert(
+                        key.clone(),
+                        RegistrySlot::Ready {
+                            key: Arc::new(key.clone()),
+                            token: token.clone(),
+                            manager: Arc::new(manager),
+                            lease_count: 0,
+                            idle_candidate: Some(IdleCandidate::new(self.idle_timeout())),
+                        },
+                    );
+                    (waiters, FlightOutcome::Published, true)
+                }
+                Ok(_) => (
+                    waiters,
+                    FlightOutcome::Failed(Arc::from("SSH session service is shutting down")),
+                    false,
+                ),
+                Err(error) => (
+                    waiters,
+                    FlightOutcome::Failed(Arc::from(format!("{error:#}"))),
+                    false,
+                ),
+            };
+            self.publish_snapshot_locked(&mut state);
+            outcome
+        };
+        if published_idle {
+            self.reaper_notify.notify_one();
+        }
+        notify_waiters(waiters, outcome);
     }
 }
 
@@ -600,7 +920,10 @@ impl<M> RegistryShared<M> {
         }
 
         match state.slots.remove(scheduled.key.as_ref()) {
-            Some(RegistrySlot::Ready { manager, .. }) => Some(manager),
+            Some(RegistrySlot::Ready { manager, .. }) => {
+                self.publish_snapshot_locked(&mut state);
+                Some(manager)
+            }
             Some(RegistrySlot::Creating { .. }) | None => {
                 unreachable!("idle slot shape changed while the registry lock was held")
             }
@@ -634,7 +957,7 @@ impl<M> Drop for ReaperRunGuard<M> {
     }
 }
 
-async fn run_idle_reaper<M>(shared: Arc<RegistryShared<M>>)
+async fn run_idle_reaper<M>(shared: Arc<RegistryShared<M>>, _task_guard: RegistryTaskGuard<M>)
 where
     M: RegistryManagedSession,
 {
@@ -648,6 +971,8 @@ where
 
         if let Some(scheduled) = shared.next_idle_candidate() {
             tokio::select! {
+                biased;
+                _ = shared.task_cancellation.cancelled() => break,
                 _ = shared.reaper_notify.notified() => {}
                 _ = sleep_until(scheduled.idle_candidate.deadline) => {
                     if let Some(manager) =
@@ -667,9 +992,15 @@ where
                 }
             }
         } else if disconnects.is_empty() {
-            shared.reaper_notify.notified().await;
+            tokio::select! {
+                biased;
+                _ = shared.task_cancellation.cancelled() => break,
+                _ = shared.reaper_notify.notified() => {}
+            }
         } else {
             tokio::select! {
+                biased;
+                _ = shared.task_cancellation.cancelled() => break,
                 _ = shared.reaper_notify.notified() => {}
                 completion = disconnects.join_next() => {
                     handle_disconnect_completion(completion);
@@ -750,9 +1081,11 @@ impl<M> Drop for CreationCleanup<M> {
                 .state
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            state
-                .take_current_creation(&self.key, &self.token)
-                .unwrap_or_default()
+            let current = state.take_current_creation(&self.key, &self.token);
+            if current.is_some() {
+                self.shared.publish_snapshot_locked(&mut state);
+            }
+            current.unwrap_or_default()
         };
         notify_waiters(
             waiters,
@@ -793,8 +1126,16 @@ impl SessionManagerFactory<SshSessionManager> for DefaultSessionManagerFactory {
 
 #[async_trait]
 impl RegistryManagedSession for SshSessionManager {
+    fn request_shutdown_for_registry(&self) {
+        self.request_shutdown();
+    }
+
     async fn disconnect_for_registry(&self) -> Result<()> {
         self.disconnect().await
+    }
+
+    async fn shutdown_for_registry(&self) -> Result<()> {
+        self.shutdown().await
     }
 }
 
@@ -866,9 +1207,9 @@ impl fmt::Debug for SshSessionLease {
 /// returns generation-bound leases.  A single cancellable Tokio task reaps
 /// generations that remain unused for the configured idle timeout.
 ///
-/// This type is intentionally not a process-global singleton.  The future
-/// application service owns one registry instance and later adds explicit
-/// graceful shutdown and health policy around it.
+/// This low-level type is intentionally not a process-global singleton.
+/// Application consumers should use one [`SshSessionService`], which adds
+/// admission closure, snapshots, task convergence, and explicit shutdown.
 #[derive(Clone)]
 pub struct SshSessionRegistry {
     inner: Arc<SessionRegistryCore<SshSessionManager, DefaultSessionManagerFactory>>,
@@ -936,15 +1277,246 @@ impl Default for SshSessionRegistry {
     }
 }
 
+#[derive(Default)]
+struct ServiceShutdownState {
+    started: bool,
+    report: Option<SshSessionShutdownReport>,
+}
+
+struct SessionServiceCore<M, F>
+where
+    M: RegistryManagedSession,
+    F: SessionManagerFactory<M>,
+{
+    registry: Arc<SessionRegistryCore<M, F>>,
+    shutdown_timeout: Duration,
+    shutdown_state: StdMutex<ServiceShutdownState>,
+    shutdown_complete: CancellationToken,
+}
+
+impl<M, F> SessionServiceCore<M, F>
+where
+    M: RegistryManagedSession,
+    F: SessionManagerFactory<M>,
+{
+    fn new(factory: F, idle_timeout: Duration, shutdown_timeout: Duration) -> Self {
+        assert!(
+            !shutdown_timeout.is_zero(),
+            "SSH service shutdown timeout must be greater than zero"
+        );
+        assert!(
+            Instant::now().checked_add(shutdown_timeout).is_some(),
+            "SSH service shutdown timeout must fit in a Tokio Instant"
+        );
+        Self {
+            registry: Arc::new(SessionRegistryCore::with_idle_timeout(
+                factory,
+                idle_timeout,
+            )),
+            shutdown_timeout,
+            shutdown_state: StdMutex::new(ServiceShutdownState::default()),
+            shutdown_complete: CancellationToken::new(),
+        }
+    }
+
+    async fn shutdown(self: &Arc<Self>) -> SshSessionShutdownReport {
+        let should_start = {
+            let mut shutdown = self
+                .shutdown_state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(report) = &shutdown.report {
+                return report.clone();
+            }
+            if shutdown.started {
+                false
+            } else {
+                shutdown.started = true;
+                true
+            }
+        };
+
+        if should_start {
+            // Establish the one total deadline and synchronously close
+            // registry admission/reconnect gates before yielding to the
+            // detached driver.  Driver scheduling latency is therefore part
+            // of the configured shutdown budget.
+            let deadline = Instant::now()
+                .checked_add(self.shutdown_timeout)
+                .expect("shutdown timeout was validated when the SSH service was constructed");
+            let managers = self.registry.begin_shutdown();
+            let service = self.clone();
+            tokio::spawn(async move {
+                service.run_shutdown(deadline, managers).await;
+            });
+        }
+
+        loop {
+            if let Some(report) = self
+                .shutdown_state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .report
+                .clone()
+            {
+                return report;
+            }
+            // CancellationToken is a sticky completion signal: a report
+            // published between the check above and this await cannot be
+            // missed by a concurrent or late shutdown caller.
+            self.shutdown_complete.cancelled().await;
+        }
+    }
+
+    async fn run_shutdown(self: Arc<Self>, deadline: Instant, managers: Vec<Arc<M>>) {
+        let managers_requested = managers.len();
+        let mut shutdowns = JoinSet::new();
+        for manager in managers {
+            shutdowns.spawn(async move { manager.shutdown_for_registry().await });
+        }
+
+        let mut managers_completed = 0;
+        let mut manager_failures = 0;
+        let convergence = timeout_at(deadline, async {
+            while let Some(completion) = shutdowns.join_next().await {
+                match completion {
+                    Ok(Ok(())) => managers_completed += 1,
+                    Ok(Err(_)) | Err(_) => {
+                        managers_completed += 1;
+                        manager_failures += 1;
+                    }
+                }
+            }
+            self.registry.shared.wait_for_tasks().await;
+        })
+        .await;
+
+        let timed_out = convergence.is_err();
+        let managers_remaining = shutdowns.len();
+        if timed_out {
+            shutdowns.abort_all();
+            while shutdowns.join_next().await.is_some() {}
+        }
+        let registry_tasks_remaining = self.registry.shared.task_count.load(Ordering::Acquire);
+        self.registry.finish_shutdown();
+
+        let report = SshSessionShutdownReport {
+            timed_out,
+            managers_requested,
+            managers_completed,
+            manager_failures,
+            managers_remaining,
+            registry_tasks_remaining,
+        };
+        {
+            let mut shutdown = self
+                .shutdown_state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            shutdown.report = Some(report.clone());
+        }
+        self.shutdown_complete.cancel();
+    }
+}
+
+impl<M, F> Drop for SessionServiceCore<M, F>
+where
+    M: RegistryManagedSession,
+    F: SessionManagerFactory<M>,
+{
+    fn drop(&mut self) {
+        // No async work is launched from Drop.  Closing admission and each
+        // manager's reconnect gate is synchronous; the application exit path
+        // is responsible for awaiting `shutdown()` before releasing its owner.
+        drop(self.registry.begin_shutdown());
+        self.registry.finish_shutdown();
+    }
+}
+
+/// Application-level owner for shared SSH session managers.
+///
+/// The application creates exactly one instance and installs a separate GPUI
+/// `Global` wrapper around it.  Consumers receive generation-bound
+/// [`SshSessionLease`] values rather than a bare manager.  Clones of this
+/// service share one lifecycle and one idempotent shutdown result.
+#[derive(Clone)]
+pub struct SshSessionService {
+    inner: Arc<SessionServiceCore<SshSessionManager, DefaultSessionManagerFactory>>,
+}
+
+impl SshSessionService {
+    pub const DEFAULT_IDLE_TIMEOUT: Duration = DEFAULT_SESSION_IDLE_TIMEOUT;
+    pub const DEFAULT_SHUTDOWN_TIMEOUT: Duration = DEFAULT_SERVICE_SHUTDOWN_TIMEOUT;
+
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_timeouts(Self::DEFAULT_IDLE_TIMEOUT, Self::DEFAULT_SHUTDOWN_TIMEOUT)
+    }
+
+    /// Construct a service with fixed, non-zero idle and total-shutdown
+    /// deadlines.
+    #[must_use]
+    pub fn with_timeouts(idle_timeout: Duration, shutdown_timeout: Duration) -> Self {
+        Self {
+            inner: Arc::new(SessionServiceCore::new(
+                DefaultSessionManagerFactory,
+                idle_timeout,
+                shutdown_timeout,
+            )),
+        }
+    }
+
+    /// Acquire one generation-bound use of the manager for `key`.
+    ///
+    /// Once shutdown starts this fails deterministically and can never create
+    /// or publish another manager generation.
+    pub async fn acquire(
+        &self,
+        key: &ConnectionKey,
+        config: SshConnectConfig,
+    ) -> Result<SshSessionLease> {
+        self.inner
+            .registry
+            .acquire(key, config)
+            .await
+            .map(|inner| SshSessionLease { inner })
+    }
+
+    /// Return the current credential-free service snapshot.
+    #[must_use]
+    pub fn snapshot(&self) -> SshSessionServiceSnapshot {
+        self.inner.registry.snapshot()
+    }
+
+    /// Subscribe to credential-free lifecycle and capacity snapshots.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<SshSessionServiceSnapshot> {
+        self.inner.registry.subscribe()
+    }
+
+    /// Close admission, permanently stop every published manager, cancel all
+    /// registry-owned work, and return one stable result for every concurrent
+    /// or repeated caller.
+    pub async fn shutdown(&self) -> SshSessionShutdownReport {
+        self.inner.shutdown().await
+    }
+}
+
+impl Default for SshSessionService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         RegistryManagedSession, RegistrySlot, SessionManagerFactory, SessionRegistryCore,
-        SshSessionRegistry,
+        SessionServiceCore, SshSessionRegistry, SshSessionServiceState,
     };
     use crate::{
         ConnectionCredentialRevisions, ConnectionKey, CredentialRevision, HostKeyVerifier,
-        JumpServerConnectConfig, ProxyConnectConfig, SshAuth, SshConnectConfig,
+        JumpServerConnectConfig, ProxyConnectConfig, SshAuth, SshConnectConfig, SshSessionService,
     };
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -974,6 +1546,7 @@ mod tests {
     #[derive(Debug)]
     struct FakeDisconnect {
         attempts: AtomicUsize,
+        shutdown_requested: AtomicBool,
         should_fail: AtomicBool,
         blocked: AtomicBool,
         permits: Semaphore,
@@ -983,6 +1556,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 attempts: AtomicUsize::new(0),
+                shutdown_requested: AtomicBool::new(false),
                 should_fail: AtomicBool::new(false),
                 blocked: AtomicBool::new(false),
                 permits: Semaphore::new(0),
@@ -1002,6 +1576,12 @@ mod tests {
 
     #[async_trait]
     impl RegistryManagedSession for FakeManager {
+        fn request_shutdown_for_registry(&self) {
+            self.disconnect
+                .shutdown_requested
+                .store(true, Ordering::SeqCst);
+        }
+
         async fn disconnect_for_registry(&self) -> Result<()> {
             self.disconnect.attempts.fetch_add(1, Ordering::SeqCst);
             if self.disconnect.blocked.load(Ordering::SeqCst) {
@@ -1588,6 +2168,18 @@ mod tests {
         let _registry = SshSessionRegistry::with_idle_timeout(Duration::MAX);
     }
 
+    #[test]
+    #[should_panic(expected = "SSH service shutdown timeout must be greater than zero")]
+    fn service_rejects_a_zero_shutdown_timeout() {
+        let _service = SshSessionService::with_timeouts(Duration::from_secs(60), Duration::ZERO);
+    }
+
+    #[test]
+    #[should_panic(expected = "SSH service shutdown timeout must fit in a Tokio Instant")]
+    fn service_rejects_an_unrepresentable_shutdown_timeout() {
+        let _service = SshSessionService::with_timeouts(Duration::from_secs(60), Duration::MAX);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn idle_generation_is_disconnected_only_after_its_timeout() {
         let factory = Arc::new(CountingFactory::default());
@@ -2009,5 +2601,370 @@ mod tests {
                 "lease debug leaked {secret}: {debug}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn public_service_api_acquires_observes_and_shuts_down() {
+        let service =
+            SshSessionService::with_timeouts(Duration::from_secs(60), Duration::from_secs(2));
+        let mut observer = service.subscribe();
+        assert_eq!(observer.borrow().state, SshSessionServiceState::Running);
+
+        let config = test_config("public-service.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .acquire(&key, config.clone())
+            .await
+            .expect("public service should return a generation-bound lease");
+        assert_eq!(lease.manager().config().host, "public-service.example");
+        assert_eq!(service.snapshot().active_lease_count, 1);
+
+        observer
+            .changed()
+            .await
+            .expect("public observer should remain connected");
+        assert!(observer.borrow_and_update().revision > 0);
+        drop(lease);
+
+        let report = service.shutdown().await;
+        assert!(!report.timed_out);
+        assert_eq!(report.managers_requested, 1);
+        assert_eq!(report.managers_completed, 1);
+        assert_eq!(service.snapshot().state, SshSessionServiceState::Stopped);
+
+        let error = service
+            .acquire(&key, config)
+            .await
+            .expect_err("stopped public service must reject acquire");
+        assert_eq!(error.to_string(), "SSH session service is shutting down");
+        assert_eq!(service.shutdown().await, report);
+    }
+
+    #[tokio::test]
+    async fn service_snapshot_tracks_leases_without_exposing_connection_data() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let mut config = test_config("snapshot-secret.example");
+        config.auth = SshAuth::PrivateKeyContent {
+            private_key: "SNAPSHOT-PRIVATE-KEY-SECRET".to_owned(),
+            passphrase: Some("SNAPSHOT-PASSPHRASE-SECRET".to_owned()),
+            certificate_path: Some("/secret/snapshot-certificate.pub".to_owned()),
+        };
+        let key = test_key(&config, 1);
+
+        let initial = service.registry.snapshot();
+        assert_eq!(initial.state, SshSessionServiceState::Running);
+        assert_eq!(initial.slot_count, 0);
+
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("service acquire should create a lease");
+        let active = service.registry.snapshot();
+        assert_eq!(active.state, SshSessionServiceState::Running);
+        assert_eq!(active.slot_count, 1);
+        assert_eq!(active.creating_count, 0);
+        assert_eq!(active.ready_count, 1);
+        assert_eq!(active.active_lease_count, 1);
+        assert_eq!(active.idle_count, 0);
+        assert_eq!(active.registry_task_count, 1);
+        assert!(active.revision > initial.revision);
+
+        let debug = format!("{active:?}");
+        for secret in [
+            "snapshot-secret.example",
+            "SNAPSHOT-PRIVATE-KEY-SECRET",
+            "SNAPSHOT-PASSPHRASE-SECRET",
+            "/secret/snapshot-certificate.pub",
+            "SshConnectConfig",
+            "ConnectionKey",
+        ] {
+            assert!(
+                !debug.contains(secret),
+                "service snapshot leaked {secret}: {debug}"
+            );
+        }
+
+        drop(lease);
+        let idle = service.registry.snapshot();
+        assert_eq!(idle.active_lease_count, 0);
+        assert_eq!(idle.idle_count, 1);
+
+        let report = service.shutdown().await;
+        assert!(!report.timed_out);
+        assert_eq!(report.registry_tasks_remaining, 0);
+        assert_eq!(
+            service.registry.snapshot().state,
+            SshSessionServiceState::Stopped
+        );
+    }
+
+    #[tokio::test]
+    async fn service_shutdown_rejects_acquire_and_closes_retained_generations() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("service-shutdown.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        disconnect.block();
+
+        let shutdown_service = service.clone();
+        let shutdown = tokio::spawn(async move { shutdown_service.shutdown().await });
+        yield_until_true(&disconnect.shutdown_requested).await;
+
+        let error = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect_err("shutdown must close acquire admission");
+        assert_eq!(error.to_string(), "SSH session service is shutting down");
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            service.registry.snapshot().state,
+            SshSessionServiceState::ShuttingDown
+        );
+
+        let stale_clone = lease.clone();
+        assert!(
+            !stale_clone.counted,
+            "a lease retained past shutdown cannot revive registry accounting"
+        );
+        disconnect.unblock();
+        let report = shutdown.await.expect("shutdown task should not panic");
+        assert!(!report.timed_out);
+        assert_eq!(report.managers_requested, 1);
+        assert_eq!(report.managers_completed, 1);
+        assert_eq!(report.manager_failures, 0);
+        assert_eq!(disconnect.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(service.registry.snapshot().slot_count, 0);
+
+        drop(stale_clone);
+        drop(lease);
+        assert_eq!(service.registry.snapshot().slot_count, 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_and_repeated_service_shutdown_share_one_result() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("concurrent-shutdown.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        disconnect.block();
+
+        let mut shutdowns = Vec::new();
+        for _ in 0..8 {
+            let service = service.clone();
+            shutdowns.push(tokio::spawn(async move { service.shutdown().await }));
+        }
+        yield_until_true(&disconnect.shutdown_requested).await;
+        yield_until_count(&disconnect.attempts, 1).await;
+        disconnect.unblock();
+
+        let mut reports = Vec::new();
+        for shutdown in shutdowns {
+            reports.push(shutdown.await.expect("shutdown caller should not panic"));
+        }
+        assert!(reports.iter().all(|report| report == &reports[0]));
+        assert_eq!(disconnect.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(service.shutdown().await, reports[0]);
+        assert_eq!(disconnect.attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn service_shutdown_cancels_an_inflight_creation_and_its_waiters() {
+        let factory = Arc::new(BlockingFactory::new(["creating-shutdown.example"]));
+        let service = Arc::new(SessionServiceCore::new(
+            factory.clone(),
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("creating-shutdown.example");
+        let key = test_key(&config, 1);
+
+        let acquire_service = service.clone();
+        let acquire =
+            tokio::spawn(async move { acquire_service.registry.acquire(&key, config).await });
+        wait_for_count(&factory.create_count, 1).await;
+
+        let report = service.shutdown().await;
+        let error = acquire
+            .await
+            .expect("acquire task should not panic")
+            .expect_err("creation waiter should observe shutdown");
+
+        assert_eq!(error.to_string(), "SSH session service is shutting down");
+        assert!(!report.timed_out);
+        assert_eq!(report.managers_requested, 0);
+        assert_eq!(report.registry_tasks_remaining, 0);
+        assert_eq!(factory.completed_count.load(Ordering::SeqCst), 0);
+        let snapshot = service.registry.snapshot();
+        assert_eq!(snapshot.state, SshSessionServiceState::Stopped);
+        assert_eq!(snapshot.slot_count, 0);
+        assert_eq!(snapshot.registry_task_count, 0);
+    }
+
+    #[tokio::test]
+    async fn service_shutdown_deadline_bounds_a_stuck_disconnect() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_millis(20),
+        ));
+        let config = test_config("shutdown-deadline.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        disconnect.block();
+
+        let report = timeout(Duration::from_secs(1), service.shutdown())
+            .await
+            .expect("service shutdown must have a hard upper bound");
+
+        assert!(report.timed_out);
+        assert_eq!(report.managers_requested, 1);
+        assert_eq!(report.managers_completed, 0);
+        assert_eq!(report.managers_remaining, 1);
+        assert_eq!(report.registry_tasks_remaining, 0);
+        assert!(disconnect.shutdown_requested.load(Ordering::SeqCst));
+        assert_eq!(
+            service.registry.snapshot().state,
+            SshSessionServiceState::Stopped
+        );
+        assert_eq!(service.shutdown().await, report);
+    }
+
+    #[tokio::test]
+    async fn service_shutdown_reports_disconnect_failure_without_restoring_slots() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("shutdown-failure.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        lease.disconnect.should_fail.store(true, Ordering::SeqCst);
+
+        let report = service.shutdown().await;
+
+        assert!(!report.timed_out);
+        assert_eq!(report.managers_requested, 1);
+        assert_eq!(report.managers_completed, 1);
+        assert_eq!(report.manager_failures, 1);
+        assert_eq!(report.managers_remaining, 0);
+        assert_eq!(service.registry.snapshot().slot_count, 0);
+    }
+
+    #[tokio::test]
+    async fn service_observer_sees_running_shutting_down_and_stopped() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("observer.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+        disconnect.block();
+        let mut observer = service.registry.subscribe();
+        assert_eq!(observer.borrow().state, SshSessionServiceState::Running);
+
+        let shutdown_service = service.clone();
+        let shutdown = tokio::spawn(async move { shutdown_service.shutdown().await });
+        timeout(Duration::from_secs(1), observer.changed())
+            .await
+            .expect("observer should change")
+            .expect("snapshot sender should remain alive");
+        assert_eq!(
+            observer.borrow_and_update().state,
+            SshSessionServiceState::ShuttingDown
+        );
+
+        disconnect.unblock();
+        shutdown.await.expect("shutdown task should not panic");
+        timeout(Duration::from_secs(1), async {
+            loop {
+                observer
+                    .changed()
+                    .await
+                    .expect("snapshot sender should remain alive");
+                if observer.borrow_and_update().state == SshSessionServiceState::Stopped {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("observer should see the stopped state");
+    }
+
+    #[tokio::test]
+    async fn dropping_service_only_requests_synchronous_cleanup() {
+        let factory = Arc::new(CountingFactory::default());
+        let service = Arc::new(SessionServiceCore::new(
+            factory,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        ));
+        let config = test_config("service-drop.example");
+        let key = test_key(&config, 1);
+        let lease = service
+            .registry
+            .acquire(&key, config)
+            .await
+            .expect("manager should be created");
+        let disconnect = lease.disconnect.clone();
+
+        drop(service);
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+
+        assert!(disconnect.shutdown_requested.load(Ordering::SeqCst));
+        assert_eq!(
+            disconnect.attempts.load(Ordering::SeqCst),
+            0,
+            "Drop must not launch or await transport I/O"
+        );
+        drop(lease);
     }
 }

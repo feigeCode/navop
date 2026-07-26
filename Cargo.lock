@@ -11595,6 +11595,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-socks",
+ "tokio-util",
  "tracing",
  "x11_forwarding",
 ]
