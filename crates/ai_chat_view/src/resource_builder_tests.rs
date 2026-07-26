@@ -18,6 +18,7 @@ fn stored_connection(
 ) -> StoredConnection {
     StoredConnection {
         id: Some(id),
+        credential_revision: None,
         name: name.to_string(),
         connection_type,
         params: params.to_string(),

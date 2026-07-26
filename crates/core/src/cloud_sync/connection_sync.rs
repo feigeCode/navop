@@ -1221,6 +1221,7 @@ mod tests {
     fn stored_connection(updated_at: i64) -> StoredConnection {
         StoredConnection {
             id: Some(1),
+            credential_revision: Some(1),
             name: "local".to_string(),
             connection_type: ConnectionType::Database,
             params: "{}".to_string(),

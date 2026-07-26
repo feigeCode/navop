@@ -1628,6 +1628,7 @@ mod tests {
     fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
         StoredConnection {
             id: Some(id),
+            credential_revision: None,
             name: name.to_string(),
             connection_type,
             params: "{}".to_string(),

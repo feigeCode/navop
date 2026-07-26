@@ -16,6 +16,7 @@ use crate::storage::{ConnectionType, StoredConnection, Workspace};
 
 struct ConnectionRow {
     id: i64,
+    credential_revision: i64,
     name: String,
     connection_type: String,
     params: String,
@@ -37,6 +38,7 @@ impl FromSqliteRow for ConnectionRow {
     fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(ConnectionRow {
             id: row.get("id")?,
+            credential_revision: row.get("credential_revision")?,
             name: row.get("name")?,
             connection_type: row.get("connection_type")?,
             params: row.get("params")?,
@@ -63,6 +65,7 @@ impl From<ConnectionRow> for StoredConnection {
     fn from(row: ConnectionRow) -> Self {
         let mut conn = StoredConnection {
             id: Some(row.id),
+            credential_revision: Some(row.credential_revision),
             name: row.name,
             connection_type: ConnectionType::from_str(&row.connection_type),
             params: row.params,
@@ -150,7 +153,7 @@ impl ConnectionRepository {
     ) -> Result<Option<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
                  FROM connections
                  WHERE id = ?1
                    AND ((team_id = ?2) OR (team_id IS NULL AND ?2 IS NULL))
@@ -181,7 +184,7 @@ impl ConnectionRepository {
         let encrypted_params = item.encrypt_params();
         let sync_enabled = i64::from(item.sync_enabled);
         let ts = now();
-        let id = self.conn.with_connection(|conn| {
+        let (id, credential_revision) = self.conn.with_connection(|conn| {
             let tx = rusqlite::Transaction::new_unchecked(
                 conn,
                 TransactionBehavior::Immediate,
@@ -194,10 +197,14 @@ impl ConnectionRepository {
                 )
                 .optional()?;
             let id = if let Some(id) = existing_id {
-                tx.execute(
-                    "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12 WHERE id = ?13",
-                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, id],
+                let updated = tx.execute(
+                    "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12, credential_revision = credential_revision + 1 WHERE id = ?13 AND credential_revision < ?14",
+                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, id, i64::MAX],
                 )?;
+                anyhow::ensure!(
+                    updated == 1,
+                    "Connection {id} credential revision is exhausted"
+                );
                 id
             } else {
                 tx.execute(
@@ -206,10 +213,16 @@ impl ConnectionRepository {
                 )?;
                 tx.last_insert_rowid()
             };
+            let credential_revision = tx.query_row(
+                "SELECT credential_revision FROM connections WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )?;
             tx.commit()?;
-            Ok(id)
+            Ok((id, credential_revision))
         })?;
         item.id = Some(id);
+        item.credential_revision = Some(credential_revision);
         item.created_at.get_or_insert(ts);
         item.updated_at = Some(ts);
         Ok(())
@@ -259,6 +272,7 @@ impl Repository for ConnectionRepository {
         })?;
 
         item.id = Some(id);
+        item.credential_revision = Some(1);
         item.created_at = Some(ts);
         item.updated_at = Some(ts);
 
@@ -283,10 +297,14 @@ impl Repository for ConnectionRepository {
         let ts = now();
 
         self.conn.with_connection(|conn| {
-            conn.execute(
-                "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12 WHERE id = ?13",
-                params![name, connection_type, params_str, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, id],
+            let updated = conn.execute(
+                "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12, credential_revision = credential_revision + 1 WHERE id = ?13 AND credential_revision < ?14",
+                params![name, connection_type, params_str, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, ts, id, i64::MAX],
             )?;
+            anyhow::ensure!(
+                updated == 1,
+                "Connection {id} not found or credential revision exhausted"
+            );
             Ok(())
         })
     }
@@ -301,7 +319,7 @@ impl Repository for ConnectionRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -315,7 +333,7 @@ impl Repository for ConnectionRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -350,9 +368,9 @@ impl ConnectionRepository {
     pub fn list_by_workspace(&self, workspace_id: Option<i64>) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let sql = if workspace_id.is_some() {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             } else {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             };
             let mut stmt = conn.prepare(sql)?;
 
@@ -436,7 +454,7 @@ impl ConnectionRepository {
     pub fn list_pending_sync(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
                  FROM connections
                  WHERE sync_enabled = 1 AND (cloud_id IS NULL OR updated_at > COALESCE(last_synced_at, 0))
                  ORDER BY updated_at DESC",
@@ -454,7 +472,7 @@ impl ConnectionRepository {
     pub fn get_by_cloud_id(&self, cloud_id: &str) -> Result<Option<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id
                  FROM connections WHERE cloud_id = ?1",
             )?;
             let mut rows = stmt.query(params![cloud_id])?;
@@ -496,7 +514,7 @@ impl ConnectionRepository {
     pub fn list_by_team(&self, team_id: &str) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map(params![team_id], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -511,7 +529,7 @@ impl ConnectionRepository {
     pub fn list_personal(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, credential_revision, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -1065,6 +1083,138 @@ mod tests {
             .expect("clear workspace");
         let unassigned = repo.get(connection_id).expect("read").expect("connection");
         assert_eq!(None, unassigned.workspace_id);
+    }
+
+    #[test]
+    fn connection_revision_advances_only_for_full_record_rewrites() {
+        let (_, repo) = test_repository();
+        let mut connection = ssh_connection("revisioned");
+        assert_eq!(None, connection.credential_revision);
+
+        let connection_id = repo.insert(&mut connection).expect("insert connection");
+        assert_eq!(Some(1), connection.credential_revision);
+        assert_eq!(
+            Some(1),
+            repo.get(connection_id)
+                .expect("read inserted connection")
+                .expect("inserted connection")
+                .credential_revision
+        );
+
+        repo.update_workspace(connection_id, None)
+            .expect("metadata-only workspace update");
+        repo.touch_last_used(connection_id)
+            .expect("metadata-only last-used update");
+        repo.update_sync_status(
+            connection_id,
+            Some("cloud-revisioned".to_string()),
+            Some(100),
+        )
+        .expect("metadata-only sync update");
+        repo.update_sync_status_with_updated_at(
+            connection_id,
+            Some("cloud-revisioned".to_string()),
+            Some(101),
+            101,
+        )
+        .expect("metadata-only sync bookkeeping update");
+        repo.update_sort_orders(&[(connection_id, 9)])
+            .expect("metadata-only sort update");
+
+        let mut first_rewrite = repo
+            .get(connection_id)
+            .expect("read before first rewrite")
+            .expect("connection before first rewrite");
+        assert_eq!(Some(1), first_rewrite.credential_revision);
+        first_rewrite.name = "revisioned-v2".to_string();
+        repo.update(&first_rewrite).expect("first full rewrite");
+        assert_eq!(
+            Some(2),
+            repo.get(connection_id)
+                .expect("read after first rewrite")
+                .expect("connection after first rewrite")
+                .credential_revision
+        );
+
+        let mut second_rewrite = repo
+            .get(connection_id)
+            .expect("read before second rewrite")
+            .expect("connection before second rewrite");
+        second_rewrite.name = "revisioned-v3".to_string();
+        repo.update(&second_rewrite).expect("second full rewrite");
+        let stored = repo
+            .get(connection_id)
+            .expect("read after second rewrite")
+            .expect("connection after second rewrite");
+        assert_eq!(Some(3), stored.credential_revision);
+        assert_eq!("revisioned-v3", stored.name);
+    }
+
+    #[test]
+    fn cloud_upsert_advances_connection_revision_on_existing_record() {
+        let (_, repo) = test_repository();
+        let mut initial = ssh_connection("cloud-initial");
+        initial.cloud_id = Some("cloud-revision".to_string());
+        repo.upsert_cloud_connection(&mut initial)
+            .expect("insert cloud connection");
+        let connection_id = initial.id.expect("inserted cloud connection ID");
+        assert_eq!(Some(1), initial.credential_revision);
+
+        let mut replacement = ssh_connection("cloud-replacement");
+        replacement.cloud_id = Some("cloud-revision".to_string());
+        replacement.last_synced_at = Some(200);
+        repo.upsert_cloud_connection(&mut replacement)
+            .expect("rewrite existing cloud connection");
+
+        assert_eq!(Some(connection_id), replacement.id);
+        assert_eq!(Some(2), replacement.credential_revision);
+        let stored = repo
+            .get(connection_id)
+            .expect("read cloud replacement")
+            .expect("cloud replacement");
+        assert_eq!(Some(2), stored.credential_revision);
+        assert_eq!("cloud-replacement", stored.name);
+    }
+
+    #[test]
+    fn exhausted_connection_revision_fails_without_rewriting_record() {
+        let (conn, repo) = test_repository();
+        let mut connection = ssh_connection("revision-exhausted");
+        let connection_id = repo.insert(&mut connection).expect("insert connection");
+        let original_params = raw_connection_params(&conn, connection_id);
+
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections
+                 SET credential_revision = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![i64::MAX, 4242i64, connection_id],
+            )?;
+            Ok(())
+        })
+        .expect("exhaust revision");
+
+        let mut attempted_rewrite = repo
+            .get(connection_id)
+            .expect("read exhausted connection")
+            .expect("exhausted connection");
+        assert_eq!(Some(i64::MAX), attempted_rewrite.credential_revision);
+        attempted_rewrite.name = "must-not-be-written".to_string();
+
+        let error = repo
+            .update(&attempted_rewrite)
+            .expect_err("exhausted revision must fail closed")
+            .to_string();
+        assert!(error.contains("credential revision exhausted"));
+
+        let stored = repo
+            .get(connection_id)
+            .expect("read after rejected rewrite")
+            .expect("connection after rejected rewrite");
+        assert_eq!("revision-exhausted", stored.name);
+        assert_eq!(Some(i64::MAX), stored.credential_revision);
+        assert_eq!(Some(4242), stored.updated_at);
+        assert_eq!(original_params, raw_connection_params(&conn, connection_id));
     }
 
     #[test]
