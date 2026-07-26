@@ -4,6 +4,7 @@ mod connection_key;
 mod dynamic_socks;
 mod host_key;
 mod session_manager;
+mod session_registry;
 mod socks5;
 mod ssh;
 
@@ -17,6 +18,7 @@ pub use host_key::{
     HostKeyRejection, HostKeyRoute, HostKeyVerifier,
 };
 pub use session_manager::SshSessionManager;
+pub use session_registry::SshSessionRegistry;
 pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
     KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
