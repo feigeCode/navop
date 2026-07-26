@@ -19,18 +19,123 @@ use ssh::{
     defaults,
 };
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::fs::File;
+use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
 const PIPELINE_CHUNK_SIZE: u32 = 61440; // 60 KB per read request (within 65535 packet limit)
 const MAX_INFLIGHT_REQUESTS: usize = 64; // 最多 64 个并发请求
 const PIPELINE_THRESHOLD: u64 = 512 * 1024; // 超过 512 KB 的文件才走流水线
+
+/// A downloaded file is written beside its destination and becomes visible
+/// only after the complete byte range has been verified and synced.
+struct LocalDownloadTemp {
+    path: PathBuf,
+    committed: bool,
+}
+
+impl LocalDownloadTemp {
+    async fn create(target: &Path) -> Result<(Self, File)> {
+        let parent = target.parent().unwrap_or_else(|| Path::new("."));
+        let name = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("download");
+
+        // `create_new` prevents a concurrent transfer from accidentally
+        // opening another transfer's partial file.
+        for _ in 0..8 {
+            let path = parent.join(format!(".{name}.navop-part-{}", uuid::Uuid::new_v4()));
+            match OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .open(&path)
+                .await
+            {
+                Ok(file) => {
+                    return Ok((
+                        Self {
+                            path,
+                            committed: false,
+                        },
+                        file,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(anyhow!(
+                        "Failed to create temporary local file beside {}: {}",
+                        target.display(),
+                        error
+                    ));
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Failed to allocate a unique temporary local file beside {}",
+            target.display()
+        ))
+    }
+
+    async fn commit(mut self, target: &Path) -> Result<()> {
+        fs::rename(&self.path, target).await.map_err(|error| {
+            anyhow!(
+                "Failed to atomically commit downloaded file {}: {}",
+                target.display(),
+                error
+            )
+        })?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for LocalDownloadTemp {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn expected_chunk_len(offset: u64, total_size: u64) -> Result<usize> {
+    if offset >= total_size {
+        return Err(anyhow!(
+            "SFTP pipeline scheduled an out-of-range chunk at offset {} for {} bytes",
+            offset,
+            total_size
+        ));
+    }
+    Ok(std::cmp::min(PIPELINE_CHUNK_SIZE as u64, total_size - offset) as usize)
+}
+
+fn validate_chunk_len(offset: u64, total_size: u64, actual_len: usize) -> Result<()> {
+    let expected = expected_chunk_len(offset, total_size)?;
+    if actual_len != expected {
+        return Err(anyhow!(
+            "SFTP short read at offset {}: received {} bytes, expected {}",
+            offset,
+            actual_len,
+            expected
+        ));
+    }
+    Ok(())
+}
+
+async fn abort_pipeline_reads<T: 'static>(reads: &mut JoinSet<T>) {
+    reads.abort_all();
+    while reads.join_next().await.is_some() {}
+}
 
 fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::Relaxed) {
@@ -302,6 +407,144 @@ impl RusshSftpClient {
         Ok(raw)
     }
 
+    /// Read a remote file in bounded parallel chunks and write only contiguous,
+    /// exactly-sized chunks to the caller's temporary file.
+    async fn pipelined_read_into_writer<F>(
+        raw_session: Arc<RawSftpSession>,
+        remote_path: &str,
+        total_size: u64,
+        cancelled: &AtomicBool,
+        writer: &mut BufWriter<File>,
+        mut on_progress: F,
+    ) -> Result<u64>
+    where
+        F: FnMut(u64),
+    {
+        let handle_result = raw_session
+            .open(remote_path, OpenFlags::READ, FileAttributes::default())
+            .await
+            .map_err(|error| anyhow!("Failed to open remote file {}: {}", remote_path, error))?;
+        let file_handle = handle_result.handle;
+        let chunk_size = PIPELINE_CHUNK_SIZE as u64;
+        let total_chunks = total_size.div_ceil(chunk_size);
+        let mut reads = JoinSet::new();
+        let mut next_request = 0u64;
+        let mut pending: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
+        let mut next_offset = 0u64;
+        let mut transferred = 0u64;
+        let mut result = Ok(());
+
+        while next_request < total_chunks || !reads.is_empty() {
+            if let Err(error) = ensure_not_cancelled(cancelled) {
+                result = Err(error);
+                break;
+            }
+
+            while next_request < total_chunks && reads.len() < MAX_INFLIGHT_REQUESTS {
+                let offset = next_request * chunk_size;
+                let expected_len = expected_chunk_len(offset, total_size)?;
+                let raw = Arc::clone(&raw_session);
+                let handle = file_handle.clone();
+                reads.spawn(async move {
+                    match raw
+                        .read(handle, offset, expected_len as u32)
+                        .await
+                    {
+                        Ok(data) => {
+                            validate_chunk_len(offset, total_size, data.data.len())?;
+                            Ok::<_, anyhow::Error>((offset, data.data))
+                        }
+                        Err(SftpError::Status(status))
+                            if status.status_code == StatusCode::Eof =>
+                        {
+                            Err(anyhow!(
+                                "Unexpected EOF while reading remote file at offset {}: expected {} bytes",
+                                offset,
+                                expected_len
+                            ))
+                        }
+                        Err(error) => Err(anyhow!(
+                            "SFTP read failed at offset {} ({} bytes): {}",
+                            offset,
+                            expected_len,
+                            error
+                        )),
+                    }
+                });
+                next_request += 1;
+            }
+
+            let Some(joined) = reads.join_next().await else {
+                result = Err(anyhow!(
+                    "SFTP pipeline ended before all chunks were received"
+                ));
+                break;
+            };
+            let chunk = match joined {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(error)) => {
+                    result = Err(error);
+                    break;
+                }
+                Err(error) => {
+                    result = Err(anyhow!("SFTP read task failed: {}", error));
+                    break;
+                }
+            };
+
+            if pending.insert(chunk.0, chunk.1).is_some() {
+                result = Err(anyhow!(
+                    "SFTP pipeline returned duplicate chunk at offset {}",
+                    chunk.0
+                ));
+                break;
+            }
+
+            let drain_result: Result<()> = async {
+                while let Some(data) = pending.remove(&next_offset) {
+                    validate_chunk_len(next_offset, total_size, data.len())?;
+                    writer
+                        .write_all(&data)
+                        .await
+                        .map_err(|error| anyhow!("Failed to write to local file: {}", error))?;
+                    let bytes = data.len() as u64;
+                    transferred += bytes;
+                    next_offset += bytes;
+                    on_progress(transferred);
+                }
+                Ok(())
+            }
+            .await;
+            if let Err(error) = drain_result {
+                result = Err(error);
+                break;
+            }
+        }
+
+        if result.is_ok() {
+            if next_offset != total_size || transferred != total_size || !pending.is_empty() {
+                result = Err(anyhow!(
+                    "SFTP pipeline did not cover the complete remote file: wrote {} of {} bytes (next offset {}, pending chunks {})",
+                    transferred,
+                    total_size,
+                    next_offset,
+                    pending.len()
+                ));
+            }
+        }
+
+        if result.is_err() {
+            abort_pipeline_reads(&mut reads).await;
+        }
+
+        let close_result = raw_session.close(file_handle).await;
+        match (result, close_result) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(anyhow!("Failed to close remote file: {}", error)),
+            (Ok(()), Ok(_)) => Ok(transferred),
+        }
+    }
+
     /// 流水线下载：通过 RawSftpSession 发起多个并发读请求
     async fn pipelined_download(
         raw_session: Arc<RawSftpSession>,
@@ -311,122 +554,41 @@ impl RusshSftpClient {
         cancelled: &AtomicBool,
         progress: &(dyn Fn(TransferProgress) + Send + Sync),
     ) -> Result<()> {
-        // 打开远程文件
-        let handle_result = raw_session
-            .open(remote_path, OpenFlags::READ, FileAttributes::default())
-            .await
-            .map_err(|e| anyhow!("Failed to open remote file {}: {}", remote_path, e))?;
-        let file_handle = handle_result.handle;
-
-        let local_file = File::create(local_path)
-            .await
-            .map_err(|e| anyhow!("Failed to create local file {}: {}", local_path, e))?;
+        let target = Path::new(local_path);
+        let (temporary, local_file) = LocalDownloadTemp::create(target).await?;
         let mut writer = BufWriter::with_capacity(BUFFER_SIZE, local_file);
-
-        let chunk_size = PIPELINE_CHUNK_SIZE as u64;
-        let total_chunks = total_size.div_ceil(chunk_size);
-
-        let semaphore = Arc::new(Semaphore::new(MAX_INFLIGHT_REQUESTS));
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(MAX_INFLIGHT_REQUESTS);
-
-        // 生产者：发起所有并发读请求
-        let raw_for_producer = Arc::clone(&raw_session);
-        let handle_for_producer = file_handle.clone();
-        let producer = tokio::spawn(async move {
-            for i in 0..total_chunks {
-                let offset = i * chunk_size;
-                let len = std::cmp::min(PIPELINE_CHUNK_SIZE, (total_size - offset) as u32);
-
-                let permit = semaphore.clone().acquire_owned().await;
-                if permit.is_err() {
-                    break;
-                }
-                let permit = permit.unwrap();
-
-                let raw = Arc::clone(&raw_for_producer);
-                let handle = handle_for_producer.clone();
-                let tx = tx.clone();
-
-                tokio::spawn(async move {
-                    let result = raw.read(handle, offset, len).await;
-                    drop(permit);
-
-                    match result {
-                        Ok(data) => {
-                            let _ = tx.send((offset, data.data)).await;
-                        }
-                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
-                            // EOF 表示文件读完，发送空数据标记此 offset
-                            let _ = tx.send((offset, Vec::new())).await;
-                        }
-                        Err(_e) => {
-                            // 读取错误，发送空数据让 writer 侧处理
-                            let _ = tx.send((offset, Vec::new())).await;
-                        }
-                    }
-                });
-            }
-            // 丢弃 producer 持有的 tx，让 rx 能在所有 spawn 的任务完成后结束
-            drop(tx);
-        });
-
-        // 消费者：按顺序写入本地文件
-        let mut pending: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        let mut next_offset: u64 = 0;
-        let mut transferred: u64 = 0;
-        let mut last_update = Instant::now();
         let start_time = Instant::now();
+        let mut last_update = Instant::now();
 
-        while let Some((offset, data)) = rx.recv().await {
-            ensure_not_cancelled(cancelled)?;
-
-            if !data.is_empty() {
-                pending.insert(offset, data);
-            } else if offset >= total_size {
-                // EOF 超出文件范围，忽略
-            } else {
-                // 空数据但在范围内 — 可能是 EOF 在最后一个 chunk
-                pending.insert(offset, Vec::new());
-            }
-
-            // 按顺序写入已就绪的 chunks
-            while let Some(data) = pending.remove(&next_offset) {
-                if !data.is_empty() {
-                    writer
-                        .write_all(&data)
-                        .await
-                        .map_err(|e| anyhow!("Failed to write to local file: {}", e))?;
-                    transferred += data.len() as u64;
+        let result = Self::pipelined_read_into_writer(
+            raw_session,
+            remote_path,
+            total_size,
+            cancelled,
+            &mut writer,
+            |transferred| {
+                let now = Instant::now();
+                if now.duration_since(last_update).as_millis() >= 100 {
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    progress(TransferProgress {
+                        transferred,
+                        total: total_size,
+                        speed: if elapsed > 0.0 {
+                            transferred as f64 / elapsed
+                        } else {
+                            0.0
+                        },
+                        current_file: None,
+                        current_file_transferred: 0,
+                        current_file_total: 0,
+                    });
+                    last_update = now;
                 }
-                next_offset += chunk_size;
-            }
+            },
+        )
+        .await;
 
-            // 限制进度更新频率
-            let now = Instant::now();
-            if now.duration_since(last_update).as_millis() >= 100 {
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 {
-                    transferred as f64 / elapsed
-                } else {
-                    0.0
-                };
-
-                progress(TransferProgress {
-                    transferred,
-                    total: total_size,
-                    speed,
-                    current_file: None,
-                    current_file_transferred: 0,
-                    current_file_total: 0,
-                });
-                last_update = now;
-            }
-        }
-
-        // 等待 producer 完成
-        let _ = producer.await;
-
-        // 最终进度回调
+        let transferred = result?;
         progress(TransferProgress {
             transferred,
             total: total_size,
@@ -435,21 +597,16 @@ impl RusshSftpClient {
             current_file_transferred: 0,
             current_file_total: 0,
         });
-
         writer
             .flush()
             .await
-            .map_err(|e| anyhow!("Failed to flush local file: {}", e))?;
+            .map_err(|error| anyhow!("Failed to flush local file: {}", error))?;
         writer
             .into_inner()
             .sync_all()
             .await
-            .map_err(|e| anyhow!("Failed to sync local file: {}", e))?;
-
-        // 关闭远程文件 handle
-        let _ = raw_session.close(file_handle).await;
-
-        Ok(())
+            .map_err(|error| anyhow!("Failed to sync local file: {}", error))?;
+        temporary.commit(target).await
     }
 
     /// 流水线下载（目录内文件），带 current_file 进度信息
@@ -467,118 +624,50 @@ impl RusshSftpClient {
         cancelled: &AtomicBool,
         progress: &(dyn Fn(TransferProgress) + Send + Sync),
     ) -> Result<()> {
-        let handle_result = raw_session
-            .open(remote_path, OpenFlags::READ, FileAttributes::default())
-            .await
-            .map_err(|e| anyhow!("Failed to open remote file {}: {}", remote_path, e))?;
-        let file_handle = handle_result.handle;
-
-        let local_file = File::create(local_path)
-            .await
-            .map_err(|e| anyhow!("Failed to create local file {}: {}", local_path, e))?;
+        let target = Path::new(local_path);
+        let (temporary, local_file) = LocalDownloadTemp::create(target).await?;
         let mut writer = BufWriter::with_capacity(BUFFER_SIZE, local_file);
+        let base_transferred = *dir_transferred;
+        let mut current_file_transferred = 0u64;
 
-        let chunk_size = PIPELINE_CHUNK_SIZE as u64;
-        let total_chunks = total_size.div_ceil(chunk_size);
-
-        let semaphore = Arc::new(Semaphore::new(MAX_INFLIGHT_REQUESTS));
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(u64, Vec<u8>)>(MAX_INFLIGHT_REQUESTS);
-
-        let raw_for_producer = Arc::clone(&raw_session);
-        let handle_for_producer = file_handle.clone();
-
-        let producer = tokio::spawn(async move {
-            for i in 0..total_chunks {
-                let offset = i * chunk_size;
-                let len = std::cmp::min(PIPELINE_CHUNK_SIZE, (total_size - offset) as u32);
-
-                let permit = semaphore.clone().acquire_owned().await;
-                if permit.is_err() {
-                    break;
-                }
-                let permit = permit.unwrap();
-
-                let raw = Arc::clone(&raw_for_producer);
-                let handle = handle_for_producer.clone();
-                let tx = tx.clone();
-
-                tokio::spawn(async move {
-                    let result = raw.read(handle, offset, len).await;
-                    drop(permit);
-
-                    match result {
-                        Ok(data) => {
-                            let _ = tx.send((offset, data.data)).await;
-                        }
-                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
-                            let _ = tx.send((offset, Vec::new())).await;
-                        }
-                        Err(_e) => {
-                            let _ = tx.send((offset, Vec::new())).await;
-                        }
-                    }
+        let result = Self::pipelined_read_into_writer(
+            raw_session,
+            remote_path,
+            total_size,
+            cancelled,
+            &mut writer,
+            |transferred| {
+                current_file_transferred = transferred;
+                let total_transferred = base_transferred + transferred;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                progress(TransferProgress {
+                    transferred: total_transferred,
+                    total: dir_total,
+                    speed: if elapsed > 0.0 {
+                        total_transferred as f64 / elapsed
+                    } else {
+                        0.0
+                    },
+                    current_file: Some(file_name.to_owned()),
+                    current_file_transferred,
+                    current_file_total: file_total,
                 });
-            }
-            drop(tx);
-        });
+            },
+        )
+        .await;
 
-        let mut pending: BTreeMap<u64, Vec<u8>> = BTreeMap::new();
-        let mut next_offset: u64 = 0;
-        let mut current_file_transferred: u64 = 0;
-
-        while let Some((offset, data)) = rx.recv().await {
-            ensure_not_cancelled(cancelled)?;
-
-            if !data.is_empty() {
-                pending.insert(offset, data);
-            } else {
-                pending.insert(offset, Vec::new());
-            }
-
-            while let Some(data) = pending.remove(&next_offset) {
-                if !data.is_empty() {
-                    writer
-                        .write_all(&data)
-                        .await
-                        .map_err(|e| anyhow!("Failed to write to local file: {}", e))?;
-                    let bytes = data.len() as u64;
-                    *dir_transferred += bytes;
-                    current_file_transferred += bytes;
-                }
-                next_offset += chunk_size;
-            }
-
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let speed = if elapsed > 0.0 {
-                *dir_transferred as f64 / elapsed
-            } else {
-                0.0
-            };
-
-            progress(TransferProgress {
-                transferred: *dir_transferred,
-                total: dir_total,
-                speed,
-                current_file: Some(file_name.to_string()),
-                current_file_transferred,
-                current_file_total: file_total,
-            });
-        }
-
-        let _ = producer.await;
-
+        let transferred = result?;
         writer
             .flush()
             .await
-            .map_err(|e| anyhow!("Failed to flush local file: {}", e))?;
+            .map_err(|error| anyhow!("Failed to flush local file: {}", error))?;
         writer
             .into_inner()
             .sync_all()
             .await
-            .map_err(|e| anyhow!("Failed to sync local file: {}", e))?;
-
-        let _ = raw_session.close(file_handle).await;
-
+            .map_err(|error| anyhow!("Failed to sync local file: {}", error))?;
+        temporary.commit(target).await?;
+        *dir_transferred = base_transferred + transferred;
         Ok(())
     }
 
@@ -597,9 +686,8 @@ impl RusshSftpClient {
             .await
             .map_err(|e| anyhow!("Failed to open remote file {}: {}", remote_path, e))?;
 
-        let local_file = File::create(local_path)
-            .await
-            .map_err(|e| anyhow!("Failed to create local file {}: {}", local_path, e))?;
+        let target = Path::new(local_path);
+        let (temporary, local_file) = LocalDownloadTemp::create(target).await?;
         let mut local_file = BufWriter::with_capacity(BUFFER_SIZE, local_file);
 
         let mut buffer = vec![0u8; BUFFER_SIZE];
@@ -616,6 +704,16 @@ impl RusshSftpClient {
 
             if bytes_read == 0 {
                 break;
+            }
+
+            let remaining = total_size.saturating_sub(transferred);
+            if bytes_read as u64 > remaining {
+                return Err(anyhow!(
+                    "Remote file {} changed during download: received {} bytes beyond expected size {}",
+                    remote_path,
+                    bytes_read,
+                    total_size
+                ));
             }
 
             local_file
@@ -650,6 +748,15 @@ impl RusshSftpClient {
             }
         }
 
+        if transferred != total_size {
+            return Err(anyhow!(
+                "Unexpected EOF while downloading {}: received {} of {} bytes",
+                remote_path,
+                transferred,
+                total_size
+            ));
+        }
+
         progress(TransferProgress {
             transferred,
             total: total_size,
@@ -669,7 +776,7 @@ impl RusshSftpClient {
             .await
             .map_err(|e| anyhow!("Failed to sync local file: {}", e))?;
 
-        Ok(())
+        temporary.commit(target).await
     }
 
     pub(crate) async fn copy_file_to(
@@ -721,6 +828,14 @@ impl RusshSftpClient {
                 current_file_transferred: file_transferred,
                 current_file_total: request.file_size,
             });
+        }
+        if file_transferred != request.file_size {
+            return Err(anyhow!(
+                "Unexpected EOF while copying {}: received {} of {} bytes",
+                request.source_path,
+                file_transferred,
+                request.file_size
+            ));
         }
         target_file.sync_all().await?;
         Ok(())
@@ -1219,6 +1334,15 @@ impl SftpClient for RusshSftpClient {
             validate_read_size(content.len(), max_bytes)?;
         }
 
+        if content.len() != total_size {
+            return Err(anyhow!(
+                "Unexpected EOF while reading remote file {}: received {} of {} bytes",
+                path,
+                content.len(),
+                total_size
+            ));
+        }
+
         Ok(content)
     }
 
@@ -1394,9 +1518,7 @@ impl SftpClient for RusshSftpClient {
                 .await
                 .map_err(|e| anyhow!("Failed to open remote file {}: {}", file_entry.path, e))?;
 
-            let local_file_handle = File::create(&local_file)
-                .await
-                .map_err(|e| anyhow!("Failed to create local file {:?}: {}", local_file, e))?;
+            let (temporary, local_file_handle) = LocalDownloadTemp::create(&local_file).await?;
             let mut local_file_handle = BufWriter::with_capacity(BUFFER_SIZE, local_file_handle);
 
             let mut buffer = vec![0u8; BUFFER_SIZE];
@@ -1411,6 +1533,15 @@ impl SftpClient for RusshSftpClient {
 
                 if bytes_read == 0 {
                     break;
+                }
+
+                let remaining = file_entry.size.saturating_sub(current_file_transferred);
+                if bytes_read as u64 > remaining {
+                    return Err(anyhow!(
+                        "Remote file {} changed during download: received bytes beyond expected size {}",
+                        file_entry.path,
+                        file_entry.size
+                    ));
                 }
 
                 local_file_handle
@@ -1438,6 +1569,15 @@ impl SftpClient for RusshSftpClient {
                 });
             }
 
+            if current_file_transferred != file_entry.size {
+                return Err(anyhow!(
+                    "Unexpected EOF while downloading {}: received {} of {} bytes",
+                    file_entry.path,
+                    current_file_transferred,
+                    file_entry.size
+                ));
+            }
+
             local_file_handle
                 .flush()
                 .await
@@ -1447,6 +1587,7 @@ impl SftpClient for RusshSftpClient {
                 .sync_all()
                 .await
                 .map_err(|e| anyhow!("Failed to sync local file: {}", e))?;
+            temporary.commit(&local_file).await?;
         }
 
         progress(TransferProgress {
@@ -1625,5 +1766,115 @@ impl SftpClient for RusshSftpClient {
             .await
             .map_err(|e| anyhow!("Failed to get realpath for {}: {}", path, e))?;
         Ok(real_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_chunk_length_covers_full_and_final_partial_chunks() {
+        let chunk_size = PIPELINE_CHUNK_SIZE as u64;
+        let total_size = chunk_size + 17;
+
+        assert_eq!(
+            expected_chunk_len(0, total_size).expect("first chunk must be valid"),
+            PIPELINE_CHUNK_SIZE as usize
+        );
+        assert_eq!(
+            expected_chunk_len(chunk_size, total_size).expect("final chunk must be valid"),
+            17
+        );
+    }
+
+    #[test]
+    fn pipeline_chunk_validation_rejects_short_and_out_of_range_reads() {
+        let short_read = validate_chunk_len(
+            0,
+            PIPELINE_CHUNK_SIZE as u64,
+            PIPELINE_CHUNK_SIZE as usize - 1,
+        )
+        .expect_err("short reads must fail");
+        assert!(short_read.to_string().contains("SFTP short read"));
+
+        let out_of_range =
+            expected_chunk_len(10, 10).expect_err("offset at EOF must not be scheduled");
+        assert!(out_of_range.to_string().contains("out-of-range chunk"));
+    }
+
+    #[tokio::test]
+    async fn local_download_temp_preserves_target_until_commit() {
+        let directory = tempfile::tempdir().expect("temporary directory must be created");
+        let target = directory.path().join("download.txt");
+        fs::write(&target, b"old")
+            .await
+            .expect("existing target must be written");
+
+        let (temporary, mut file) = LocalDownloadTemp::create(&target)
+            .await
+            .expect("download temporary file must be created");
+        file.write_all(b"partial")
+            .await
+            .expect("partial data must be writable");
+        file.flush().await.expect("partial data must flush");
+
+        assert_eq!(
+            fs::read(&target)
+                .await
+                .expect("existing target must remain readable"),
+            b"old"
+        );
+
+        let temporary_path = temporary.path.clone();
+        drop(file);
+        drop(temporary);
+
+        assert_eq!(
+            fs::read(&target)
+                .await
+                .expect("existing target must remain after failure"),
+            b"old"
+        );
+        assert!(
+            fs::metadata(temporary_path).await.is_err(),
+            "abandoned temporary file must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_download_temp_atomically_replaces_existing_target() {
+        let directory = tempfile::tempdir().expect("temporary directory must be created");
+        let target = directory.path().join("download.txt");
+        fs::write(&target, b"old")
+            .await
+            .expect("existing target must be written");
+
+        let (temporary, mut file) = LocalDownloadTemp::create(&target)
+            .await
+            .expect("download temporary file must be created");
+        let temporary_path = temporary.path.clone();
+        file.write_all(b"complete")
+            .await
+            .expect("complete data must be writable");
+        file.flush().await.expect("complete data must flush");
+        file.sync_all().await.expect("complete data must sync");
+        drop(file);
+
+        temporary
+            .commit(&target)
+            .await
+            .expect("verified download must replace target");
+
+        assert_eq!(
+            fs::read(&target)
+                .await
+                .expect("committed target must be readable"),
+            b"complete"
+        );
+        assert!(
+            fs::metadata(temporary_path).await.is_err(),
+            "temporary name must disappear after commit"
+        );
     }
 }
