@@ -20,6 +20,8 @@ pub enum HelperRequest {
         width: u16,
         height: u16,
         scale_factor: u32,
+        #[serde(default)]
+        audio_playback: bool,
     },
     Resize {
         width: u16,
@@ -72,6 +74,7 @@ impl HelperRequest {
             width: size.width,
             height: size.height,
             scale_factor: size.scale_factor,
+            audio_playback: options.audio_playback,
         }
     }
 
@@ -107,9 +110,14 @@ impl HelperRequest {
             RemoteDesktopInput::ClipboardText { text } => {
                 Self::ClipboardText { text: text.clone() }
             }
-            RemoteDesktopInput::ClipboardFiles { paths } => Self::ClipboardFiles {
-                paths: paths.clone(),
-            },
+            RemoteDesktopInput::ClipboardFiles { paths } => {
+                if protocol != RemoteDesktopProtocol::Rdp {
+                    return None;
+                }
+                Self::ClipboardFiles {
+                    paths: paths.clone(),
+                }
+            }
             RemoteDesktopInput::Reconnect => return None,
             RemoteDesktopInput::Close => Self::Close,
         })
@@ -127,6 +135,7 @@ impl fmt::Debug for HelperRequest {
                 width,
                 height,
                 scale_factor,
+                audio_playback,
             } => f
                 .debug_struct("Connect")
                 .field("destination", destination)
@@ -136,6 +145,7 @@ impl fmt::Debug for HelperRequest {
                 .field("width", width)
                 .field("height", height)
                 .field("scale_factor", scale_factor)
+                .field("audio_playback", audio_playback)
                 .finish(),
             Self::Resize {
                 width,
@@ -454,6 +464,7 @@ mod tests {
             password: Some("Seeyon123@cd".to_string()),
             domain: None,
             read_only: false,
+            audio_playback: true,
             proxy: None,
         }
     }
@@ -473,6 +484,53 @@ mod tests {
         assert!(debug.contains("10.2.178.12:3389"));
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("Seeyon123@cd"));
+    }
+
+    #[test]
+    fn connect_request_round_trips_audio_playback() {
+        let request: HelperRequest = serde_json::from_str(
+            r#"{
+                "type":"Connect",
+                "destination":"10.2.178.12:3389",
+                "username":"administrator",
+                "password":"secret",
+                "domain":null,
+                "width":1280,
+                "height":720,
+                "scale_factor":100,
+                "audio_playback":true
+            }"#,
+        )
+        .expect("connect request decodes");
+
+        let encoded = serde_json::to_value(request).expect("connect request encodes");
+        assert_eq!(
+            Some(&serde_json::Value::Bool(true)),
+            encoded.get("audio_playback")
+        );
+    }
+
+    #[test]
+    fn legacy_connect_request_defaults_audio_playback_to_false() {
+        let request: HelperRequest = serde_json::from_str(
+            r#"{
+                "type":"Connect",
+                "destination":"10.2.178.12:3389",
+                "username":"administrator",
+                "password":"secret",
+                "domain":null,
+                "width":1280,
+                "height":720,
+                "scale_factor":100
+            }"#,
+        )
+        .expect("legacy connect request decodes");
+
+        let encoded = serde_json::to_value(request).expect("connect request encodes");
+        assert_eq!(
+            Some(&serde_json::Value::Bool(false)),
+            encoded.get("audio_playback")
+        );
     }
 
     #[test]
@@ -580,6 +638,35 @@ mod tests {
                 text: "hello 中文".to_string()
             })
         );
+    }
+
+    #[test]
+    fn rdp_clipboard_files_convert_to_helper_request() {
+        let request = HelperRequest::from_remote_input_for_protocol(
+            &crate::RemoteDesktopInput::ClipboardFiles {
+                paths: vec!["C:\\tmp\\report.txt".to_string()],
+            },
+            RemoteDesktopProtocol::Rdp,
+        );
+
+        assert_eq!(
+            request,
+            Some(HelperRequest::ClipboardFiles {
+                paths: vec!["C:\\tmp\\report.txt".to_string()]
+            })
+        );
+    }
+
+    #[test]
+    fn vnc_clipboard_files_are_filtered_before_helper_ipc() {
+        let request = HelperRequest::from_remote_input_for_protocol(
+            &crate::RemoteDesktopInput::ClipboardFiles {
+                paths: vec!["C:\\tmp\\report.txt".to_string()],
+            },
+            RemoteDesktopProtocol::Vnc,
+        );
+
+        assert_eq!(None, request);
     }
 
     #[test]

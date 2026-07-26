@@ -5,7 +5,7 @@ use crate::{
 };
 use connection_tunnel::{TunnelGuard, start_proxy_tunnel};
 
-const MIN_RDP_PROVIDER_VERSION: &str = "0.2.0";
+const MIN_RDP_PROVIDER_VERSION: &str = "0.3.0";
 const MIN_VNC_PROVIDER_VERSION: &str = "0.2.0";
 
 pub trait RemoteDesktopBackend: Send + 'static {
@@ -230,7 +230,7 @@ mod tests {
             .expect("version error");
         assert_eq!(RemoteDesktopProtocol::Rdp, version_error.protocol);
         assert_eq!("0.1.3", version_error.installed);
-        assert_eq!("0.2.0", version_error.required);
+        assert_eq!("0.3.0", version_error.required);
         assert!(!version_error.invalid);
     }
 
@@ -299,6 +299,7 @@ mod tests {
             password: None,
             domain: None,
             read_only: false,
+            audio_playback: false,
             proxy: None,
         }
     }

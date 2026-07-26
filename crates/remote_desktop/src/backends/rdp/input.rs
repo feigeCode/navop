@@ -11,6 +11,7 @@ enum RemoteInputBatch {
 pub(super) struct RemoteInputContext<'a> {
     pub(super) connect: &'a mut HelperRequest,
     pub(super) latest_clipboard_text: &'a mut Option<String>,
+    pub(super) latest_clipboard_files: &'a mut Option<Vec<String>>,
     pub(super) helper: &'a mut std::process::Child,
     pub(super) stdin: &'a mut std::process::ChildStdin,
     pub(super) output_tx: &'a OutputMailboxSender,
@@ -88,7 +89,13 @@ pub(super) fn handle_remote_input(
                 ));
             }
             input => {
-                remember_reconnect_state(&input, context.connect, context.latest_clipboard_text);
+                remember_reconnect_state(
+                    &input,
+                    context.connect,
+                    context.latest_clipboard_text,
+                    context.latest_clipboard_files,
+                    context.protocol,
+                );
                 if let Some(reason) =
                     forward_remote_input(input, context.stdin, context.output_tx, context.protocol)
                 {
@@ -192,15 +199,23 @@ fn reconnect_result(reason: String, manual: bool, was_connected: bool) -> Helper
 pub(super) fn wait_before_reconnect(
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
+    latest_clipboard_files: &mut Option<Vec<String>>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     delay: Duration,
+    protocol: RemoteDesktopProtocol,
 ) -> bool {
     let deadline = Instant::now() + delay;
     loop {
         match input_rx.try_recv() {
             Ok(RemoteDesktopInput::Close) => return false,
             Ok(RemoteDesktopInput::Reconnect) => return true,
-            Ok(input) => remember_reconnect_state(&input, connect, latest_clipboard_text),
+            Ok(input) => remember_reconnect_state(
+                &input,
+                connect,
+                latest_clipboard_text,
+                latest_clipboard_files,
+                protocol,
+            ),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
         }
@@ -211,10 +226,12 @@ pub(super) fn wait_before_reconnect(
     }
 }
 
-fn remember_reconnect_state(
+pub(super) fn remember_reconnect_state(
     input: &RemoteDesktopInput,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
+    latest_clipboard_files: &mut Option<Vec<String>>,
+    protocol: RemoteDesktopProtocol,
 ) {
     match input {
         RemoteDesktopInput::Resize {
@@ -236,6 +253,15 @@ fn remember_reconnect_state(
         }
         RemoteDesktopInput::ClipboardText { text } => {
             *latest_clipboard_text = Some(text.clone());
+            *latest_clipboard_files = None;
+        }
+        RemoteDesktopInput::ClipboardFiles { paths } if protocol == RemoteDesktopProtocol::Rdp => {
+            tracing::debug!(
+                file_count = paths.len(),
+                "remembering RDP clipboard files for helper reconnect"
+            );
+            *latest_clipboard_text = None;
+            *latest_clipboard_files = Some(paths.clone());
         }
         _ => {}
     }

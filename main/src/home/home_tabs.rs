@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_desktop_options_maps_connection_proxy() {
+    fn remote_desktop_options_maps_connection_proxy_and_rdp_audio() {
         let connection = StoredConnection::new_remote_desktop(
             "rdp".to_string(),
             RemoteDesktopParams {
@@ -210,6 +210,7 @@ mod tests {
                 password: None,
                 domain: None,
                 read_only: false,
+                audio_playback: true,
                 proxy: Some(ProxyConfig {
                     proxy_type: ProxyType::Http,
                     host: "proxy.example.com".to_string(),
@@ -224,9 +225,33 @@ mod tests {
         let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Rdp).unwrap();
         let proxy = options.proxy.expect("proxy should be mapped");
 
+        assert!(options.audio_playback);
         assert!(proxy.proxy_type == remote_desktop::ProxyTunnelType::Http);
         assert_eq!("proxy.example.com", proxy.host);
         assert_eq!(Some("alice".to_string()), proxy.username);
+    }
+
+    #[test]
+    fn remote_desktop_options_never_enable_vnc_audio() {
+        let connection = StoredConnection::new_remote_desktop(
+            "vnc".to_string(),
+            RemoteDesktopParams {
+                protocol: StoredRemoteDesktopProtocol::Vnc,
+                host: "10.0.0.9".to_string(),
+                port: 5900,
+                username: None,
+                password: None,
+                domain: None,
+                read_only: false,
+                audio_playback: true,
+                proxy: None,
+            },
+            None,
+        );
+
+        let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Vnc).unwrap();
+
+        assert!(!options.audio_playback);
     }
 
     #[test]
@@ -1020,6 +1045,7 @@ pub(crate) fn remote_desktop_options(
         password: params.password,
         domain: params.domain,
         read_only: params.read_only,
+        audio_playback: protocol == RemoteDesktopProtocol::Rdp && params.audio_playback,
         proxy: params.proxy.map(remote_desktop_proxy_config),
     })
 }

@@ -82,7 +82,8 @@ fn create_rdp_connection_persists_remote_desktop_params() {
                 "username": "administrator",
                 "password": "secret",
                 "domain": "corp",
-                "read_only": true
+                "read_only": true,
+                "audio_playback": true
             }
         }),
     );
@@ -96,6 +97,7 @@ fn create_rdp_connection_persists_remote_desktop_params() {
     assert_eq!(3389, params.port);
     assert_eq!(Some("corp"), params.domain.as_deref());
     assert!(params.read_only);
+    assert!(params.audio_playback);
 }
 
 #[test]
@@ -110,7 +112,8 @@ fn create_vnc_connection_persists_remote_desktop_params() {
                 "name": "linux desktop",
                 "host": "10.0.1.31",
                 "port": 5901,
-                "password": "secret"
+                "password": "secret",
+                "audio_playback": true
             }
         }),
     );
@@ -123,4 +126,5 @@ fn create_vnc_connection_persists_remote_desktop_params() {
     assert_eq!(RemoteDesktopProtocol::Vnc, params.protocol);
     assert_eq!(5901, params.port);
     assert_eq!(None, params.username);
+    assert!(!params.audio_playback);
 }

@@ -382,6 +382,41 @@ fn mongodb_schema_exposes_explicit_driver_variants() {
 }
 
 #[test]
+fn only_rdp_schema_exposes_audio_playback() {
+    let registry = connection_tool_registry(repo());
+
+    let rdp = futures::executor::block_on(registry.call(
+        "connections.get_schema",
+        json!({ "kind": "rdp" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("RDP schema tool should run");
+    let rdp_fields = rdp.structured_content["fields"]
+        .as_array()
+        .expect("RDP fields should be an array");
+    let audio = field_by_name(rdp_fields, "audio_playback");
+
+    assert_eq!(json!("boolean"), audio["type"]);
+    assert_eq!(json!(false), audio["default"]);
+
+    let vnc = futures::executor::block_on(registry.call(
+        "connections.get_schema",
+        json!({ "kind": "vnc" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("VNC schema tool should run");
+    let vnc_fields = vnc.structured_content["fields"]
+        .as_array()
+        .expect("VNC fields should be an array");
+
+    assert!(
+        vnc_fields
+            .iter()
+            .all(|field| field["name"] != "audio_playback")
+    );
+}
+
+#[test]
 fn database_schema_uses_database_specific_connection_form() {
     let registry = connection_tool_registry(repo());
 

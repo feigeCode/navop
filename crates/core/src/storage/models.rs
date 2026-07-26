@@ -370,6 +370,8 @@ pub struct RemoteDesktopParams {
     pub domain: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub audio_playback: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
 }
@@ -1716,6 +1718,7 @@ mod tests {
             password: None,
             domain: None,
             read_only: false,
+            audio_playback: false,
             proxy: None,
         };
         assert_eq!(
@@ -2277,6 +2280,7 @@ mod serial_tests {
             password: Some("secret".to_string()),
             domain: Some("corp".to_string()),
             read_only: false,
+            audio_playback: false,
             proxy: None,
         };
 
@@ -2314,6 +2318,28 @@ mod serial_tests {
         let params: RemoteDesktopParams = serde_json::from_str(json).unwrap();
 
         assert!(params.proxy.is_none());
+        assert!(!params.audio_playback);
+    }
+
+    #[test]
+    fn remote_desktop_params_round_trip_preserves_audio_playback() {
+        let json = r#"{
+            "protocol":"Rdp",
+            "host":"10.0.0.8",
+            "port":3389,
+            "username":null,
+            "password":null,
+            "domain":null,
+            "read_only":false,
+            "audio_playback":true
+        }"#;
+
+        let params: RemoteDesktopParams = serde_json::from_str(json).unwrap();
+        assert!(params.audio_playback);
+
+        let restored: RemoteDesktopParams =
+            serde_json::from_str(&serde_json::to_string(&params).unwrap()).unwrap();
+        assert!(restored.audio_playback);
     }
 
     #[test]
@@ -2326,6 +2352,7 @@ mod serial_tests {
             password: Some("vnc-secret".to_string()),
             domain: None,
             read_only: true,
+            audio_playback: false,
             proxy: Some(ProxyConfig {
                 proxy_type: ProxyType::Socks5,
                 host: "proxy.example.com".to_string(),

@@ -94,18 +94,17 @@ impl RemoteDesktopView {
                 self.apply_bgra_rects(width, height, &rects, bgra);
             }
             RemoteDesktopOutput::Reconnecting(reconnect) => {
-                let status = localized_reconnect_status(self.options.protocol);
                 let notification =
                     localized_reconnect_notification(self.options.protocol, reconnect);
-                self.reset_session_state(status, SessionResetReason::Reconnecting);
+                self.reset_session_state(None, SessionResetReason::Reconnecting);
                 self.notify_reconnecting(notification, window, cx);
             }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
             RemoteDesktopOutput::ConnectionFailure(message) => {
-                self.reset_session_state(message, SessionResetReason::ConnectionFailure)
+                self.reset_session_state(Some(message), SessionResetReason::ConnectionFailure)
             }
             RemoteDesktopOutput::Terminated(message) => {
-                self.reset_session_state(message, SessionResetReason::Terminated)
+                self.reset_session_state(Some(message), SessionResetReason::Terminated)
             }
             RemoteDesktopOutput::CursorDefault
             | RemoteDesktopOutput::CursorHidden
@@ -120,6 +119,23 @@ impl RemoteDesktopView {
             window.push_notification(
                 Notification::info(message)
                     .id1::<RemoteDesktopReconnectNotification>(notification_id)
+                    .autohide(true),
+                cx,
+            );
+        });
+    }
+
+    pub(super) fn notify_vnc_clipboard_ascii_warning(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let message = localized_vnc_clipboard_ascii_warning();
+        let notification_id = ("remote-desktop-clipboard", cx.entity_id());
+        window.defer(cx, move |window, cx| {
+            window.push_notification(
+                Notification::warning(message)
+                    .id1::<RemoteDesktopClipboardNotification>(notification_id)
                     .autohide(true),
                 cx,
             );
@@ -292,41 +308,39 @@ impl RemoteDesktopView {
         let Some(item) = cx.read_from_clipboard() else {
             return;
         };
-        let files = item.entries().iter().find_map(|entry| match entry {
-            ClipboardEntry::ExternalPaths(paths) => {
-                let paths: Vec<String> = paths
-                    .paths()
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect();
-                (!paths.is_empty()).then_some(paths)
-            }
-            ClipboardEntry::Image(_) | ClipboardEntry::String(_) => None,
-        });
-        if let Some(paths) = files {
-            if self.last_clipboard_files.as_ref() == Some(&paths) {
+        let text = match classify_local_clipboard(&item) {
+            LocalClipboardContent::Files(paths) => {
+                if self.last_clipboard_files.as_ref() == Some(&paths) {
+                    return;
+                }
+                self.last_clipboard_files = Some(paths.clone());
+                self.last_clipboard_text = None;
+                if clipboard_files_supported(self.options.protocol) {
+                    self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
+                }
                 return;
             }
-            self.last_clipboard_files = Some(paths.clone());
-            self.last_clipboard_text = None;
-            self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
-            return;
-        }
-        let Some(text) = item.text() else {
-            return;
+            LocalClipboardContent::Text(text) => text,
+            LocalClipboardContent::Other => return,
         };
         if self.last_clipboard_text.as_deref() == Some(text.as_str()) {
             return;
         }
         self.last_clipboard_text = Some(text.clone());
         self.last_clipboard_files = None;
+        if !clipboard_text_supported(self.options.protocol, &text) {
+            self.notify_vnc_clipboard_ascii_warning(window, cx);
+            return;
+        }
         self.send_input(RemoteDesktopInput::ClipboardText { text });
     }
 
-    fn reset_session_state(&mut self, message: String, reason: SessionResetReason) {
+    fn reset_session_state(&mut self, message: Option<String>, reason: SessionResetReason) {
         self.modifiers = Modifiers::default();
         self.connected = false;
-        self.status = SharedString::from(message);
+        if let Some(message) = message {
+            self.status = SharedString::from(message);
+        }
         self.capabilities = None;
         self.frame_sync.reset_session();
         self.remote_size = None;
@@ -425,20 +439,6 @@ impl RemoteDesktopView {
     }
 }
 
-fn localized_reconnect_status(protocol: RemoteDesktopProtocol) -> String {
-    let locale = rust_i18n::locale();
-    localized_reconnect_status_for_locale(locale.as_ref(), protocol)
-}
-
-fn localized_reconnect_status_for_locale(locale: &str, protocol: RemoteDesktopProtocol) -> String {
-    t!(
-        "RemoteDesktop.status_reconnecting",
-        locale = locale,
-        protocol = protocol.label()
-    )
-    .to_string()
-}
-
 fn localized_reconnect_notification(
     protocol: RemoteDesktopProtocol,
     reconnect: RemoteDesktopReconnect,
@@ -493,6 +493,15 @@ fn localized_reconnect_notification_for_locale(
     .to_string()
 }
 
+fn localized_vnc_clipboard_ascii_warning() -> String {
+    let locale = rust_i18n::locale();
+    localized_vnc_clipboard_ascii_warning_for_locale(locale.as_ref())
+}
+
+fn localized_vnc_clipboard_ascii_warning_for_locale(locale: &str) -> String {
+    t!("RemoteDesktop.vnc_clipboard_ascii_only", locale = locale).to_string()
+}
+
 fn patched_bgra_framebuffer(
     framebuffer: &RgbaFramebuffer,
     width: u16,
@@ -536,8 +545,8 @@ mod tests {
     };
 
     use super::{
-        localized_reconnect_notification_for_locale, localized_reconnect_status_for_locale,
-        patched_bgra_framebuffer,
+        localized_reconnect_notification_for_locale,
+        localized_vnc_clipboard_ascii_warning_for_locale, patched_bgra_framebuffer,
     };
 
     #[test]
@@ -577,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn localizes_manual_reconnect_and_status_in_traditional_chinese() {
+    fn localizes_manual_reconnect_in_traditional_chinese() {
         let reconnect = RemoteDesktopReconnect {
             reason: RemoteDesktopReconnectReason::Manual,
             delay_secs: None,
@@ -591,9 +600,21 @@ mod tests {
                 reconnect
             )
         );
+    }
+
+    #[test]
+    fn localizes_vnc_ascii_clipboard_warning_in_all_supported_locales() {
         assert_eq!(
-            "正在重新連線 VNC 工作階段",
-            localized_reconnect_status_for_locale("zh-HK", RemoteDesktopProtocol::Vnc)
+            "VNC clipboard currently supports ASCII text only",
+            localized_vnc_clipboard_ascii_warning_for_locale("en")
+        );
+        assert_eq!(
+            "VNC 剪贴板当前仅支持 ASCII 文本",
+            localized_vnc_clipboard_ascii_warning_for_locale("zh-CN")
+        );
+        assert_eq!(
+            "VNC 剪貼簿目前僅支援 ASCII 文字",
+            localized_vnc_clipboard_ascii_warning_for_locale("zh-HK")
         );
     }
 

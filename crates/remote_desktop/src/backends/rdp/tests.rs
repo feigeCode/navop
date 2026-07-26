@@ -1,10 +1,12 @@
 use crate::helper_protocol::HelperEvent;
 use crate::{RemoteDesktopFrameRect, ResizeSupport};
 
-use super::input::{coalesce_remote_inputs, reconnect_delay, reconnect_event};
+use super::input::{
+    coalesce_remote_inputs, reconnect_delay, reconnect_event, remember_reconnect_state,
+};
 use super::transport::{
     HelperOutput, forward_helper_output, helper_disconnect_message, helper_event_to_output,
-    read_helper_output,
+    read_helper_output, reconnect_replay_requests,
 };
 use super::*;
 
@@ -28,7 +30,7 @@ fn converts_helper_connected_event_to_rdp_capabilities() {
                 resize: ResizeSupport::RemoteResize,
                 clipboard_text: true,
                 cursor_shape: false,
-                audio: false,
+                audio: true,
                 file_transfer: true,
             }
         }
@@ -276,6 +278,97 @@ fn coalesces_consecutive_mouse_moves_without_reordering_actions() {
         ],
         coalesce_remote_inputs(inputs)
     );
+}
+
+#[test]
+fn rdp_remembers_file_clipboard_for_reconnect() {
+    let mut connect = connect_request();
+    let mut latest_clipboard_text = None;
+    let mut latest_clipboard_files = None;
+
+    remember_reconnect_state(
+        &RemoteDesktopInput::ClipboardFiles {
+            paths: vec!["C:\\tmp\\report.txt".to_string()],
+        },
+        &mut connect,
+        &mut latest_clipboard_text,
+        &mut latest_clipboard_files,
+        RemoteDesktopProtocol::Rdp,
+    );
+
+    assert_eq!(
+        Some(vec!["C:\\tmp\\report.txt".to_string()]),
+        latest_clipboard_files
+    );
+}
+
+#[test]
+fn vnc_does_not_remember_file_clipboard_for_reconnect() {
+    let mut connect = connect_request();
+    let mut latest_clipboard_text = None;
+    let mut latest_clipboard_files = None;
+
+    remember_reconnect_state(
+        &RemoteDesktopInput::ClipboardFiles {
+            paths: vec!["C:\\tmp\\report.txt".to_string()],
+        },
+        &mut connect,
+        &mut latest_clipboard_text,
+        &mut latest_clipboard_files,
+        RemoteDesktopProtocol::Vnc,
+    );
+
+    assert_eq!(None, latest_clipboard_files);
+}
+
+#[test]
+fn reconnect_replay_sends_text_before_rdp_files() {
+    let requests = reconnect_replay_requests(
+        &Some("clipboard text".to_string()),
+        &Some(vec!["C:\\tmp\\report.txt".to_string()]),
+        RemoteDesktopProtocol::Rdp,
+    );
+
+    assert_eq!(
+        vec![
+            HelperRequest::ClipboardText {
+                text: "clipboard text".to_string(),
+            },
+            HelperRequest::ClipboardFiles {
+                paths: vec!["C:\\tmp\\report.txt".to_string()],
+            },
+        ],
+        requests
+    );
+}
+
+#[test]
+fn reconnect_replay_never_sends_files_to_vnc() {
+    let requests = reconnect_replay_requests(
+        &Some("clipboard text".to_string()),
+        &Some(vec!["C:\\tmp\\report.txt".to_string()]),
+        RemoteDesktopProtocol::Vnc,
+    );
+
+    assert_eq!(
+        vec![HelperRequest::ClipboardText {
+            text: "clipboard text".to_string(),
+        }],
+        requests
+    );
+}
+
+fn connect_request() -> HelperRequest {
+    HelperRequest::Connect {
+        destination: "127.0.0.1:3389".to_string(),
+        username: None,
+        password: None,
+        domain: None,
+        width: 1280,
+        height: 720,
+        scale_factor: 100,
+        audio_playback: false,
+    }
 }
 
 fn frame_output(value: u8) -> HelperOutput {

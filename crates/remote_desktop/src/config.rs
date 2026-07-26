@@ -35,6 +35,7 @@ pub struct RemoteDesktopConnectionOptions {
     pub password: Option<String>,
     pub domain: Option<String>,
     pub read_only: bool,
+    pub audio_playback: bool,
     pub proxy: Option<ProxyTunnelConfig>,
 }
 
@@ -54,6 +55,7 @@ impl fmt::Debug for RemoteDesktopConnectionOptions {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("domain", &self.domain)
             .field("read_only", &self.read_only)
+            .field("audio_playback", &self.audio_playback)
             .field("proxy", &proxy_debug_label(self.proxy.as_ref()))
             .finish()
     }
@@ -82,6 +84,7 @@ mod tests {
             password: Some("secret".to_string()),
             domain: None,
             read_only: false,
+            audio_playback: true,
             proxy: None,
         };
 
@@ -89,6 +92,7 @@ mod tests {
 
         assert!(debug.contains("administrator"));
         assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("audio_playback: true"));
         assert!(!debug.contains("secret"));
     }
 }

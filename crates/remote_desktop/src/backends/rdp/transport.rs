@@ -15,6 +15,7 @@ pub(super) fn start_helper_session(
     helper: &HelperProcessConfig,
     connect: &HelperRequest,
     latest_clipboard_text: &Option<String>,
+    latest_clipboard_files: &Option<Vec<String>>,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> Result<
@@ -46,15 +47,29 @@ pub(super) fn start_helper_session(
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
     spawn_output_reader(stdout, output_tx.clone(), signal_tx, protocol);
     write_request(&mut stdin, connect, output_tx, protocol).map_err(|_| ())?;
-    if let Some(text) = latest_clipboard_text.clone() {
-        let _ = write_request(
-            &mut stdin,
-            &HelperRequest::ClipboardText { text },
-            output_tx,
-            protocol,
-        );
+    for request in
+        reconnect_replay_requests(latest_clipboard_text, latest_clipboard_files, protocol)
+    {
+        let _ = write_request(&mut stdin, &request, output_tx, protocol);
     }
     Ok((helper, stdin, signal_rx))
+}
+
+pub(super) fn reconnect_replay_requests(
+    latest_clipboard_text: &Option<String>,
+    latest_clipboard_files: &Option<Vec<String>>,
+    protocol: RemoteDesktopProtocol,
+) -> Vec<HelperRequest> {
+    let mut requests = Vec::with_capacity(2);
+    if let Some(text) = latest_clipboard_text.clone() {
+        requests.push(HelperRequest::ClipboardText { text });
+    }
+    if protocol == RemoteDesktopProtocol::Rdp
+        && let Some(paths) = latest_clipboard_files.clone()
+    {
+        requests.push(HelperRequest::ClipboardFiles { paths });
+    }
+    requests
 }
 
 fn spawn_helper(

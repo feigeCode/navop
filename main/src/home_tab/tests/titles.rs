@@ -100,6 +100,7 @@ fn remote_desktop_connection_info_uses_remote_desktop_params() {
         password: None,
         domain: None,
         read_only: false,
+        audio_playback: false,
         proxy: None,
     };
 
@@ -119,6 +120,7 @@ fn remote_desktop_connection_info_omits_missing_username() {
         password: None,
         domain: None,
         read_only: false,
+        audio_playback: false,
         proxy: None,
     };
 

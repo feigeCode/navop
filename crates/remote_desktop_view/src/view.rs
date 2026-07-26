@@ -38,6 +38,7 @@ const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 
 struct RemoteDesktopReconnectNotification;
+struct RemoteDesktopClipboardNotification;
 
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
@@ -70,6 +71,41 @@ enum SessionResetReason {
 
 fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
     matches!(reason, SessionResetReason::Reconnecting)
+}
+
+fn clipboard_text_supported(protocol: RemoteDesktopProtocol, text: &str) -> bool {
+    protocol == RemoteDesktopProtocol::Rdp || text.is_ascii()
+}
+
+fn clipboard_files_supported(protocol: RemoteDesktopProtocol) -> bool {
+    protocol == RemoteDesktopProtocol::Rdp
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum LocalClipboardContent {
+    Files(Vec<String>),
+    Text(String),
+    Other,
+}
+
+fn classify_local_clipboard(item: &ClipboardItem) -> LocalClipboardContent {
+    if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::ExternalPaths(paths) => {
+            let paths: Vec<String> = paths
+                .paths()
+                .iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            (!paths.is_empty()).then_some(paths)
+        }
+        ClipboardEntry::Image(_) | ClipboardEntry::String(_) => None,
+    }) {
+        return LocalClipboardContent::Files(paths);
+    }
+
+    item.text()
+        .map(LocalClipboardContent::Text)
+        .unwrap_or(LocalClipboardContent::Other)
 }
 
 pub struct RemoteDesktopViewConfig {
@@ -234,10 +270,15 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
     use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
 
     use super::{
-        SessionResetReason, close_runtime_once, preserve_presented_frame_during_session_reset,
+        LocalClipboardContent, SessionResetReason, classify_local_clipboard,
+        clipboard_files_supported, clipboard_text_supported, close_runtime_once,
+        preserve_presented_frame_during_session_reset,
     };
 
     #[test]
@@ -389,11 +430,68 @@ mod tests {
         assert!(output.contains("window.defer(cx"));
         assert!(output.contains("Notification::info(message)"));
         assert!(output.contains("localized_reconnect_notification("));
-        assert!(output.contains("localized_reconnect_status("));
+        assert!(!output.contains("localized_reconnect_status("));
+        assert!(
+            output.contains("self.reset_session_state(None, SessionResetReason::Reconnecting)")
+        );
         assert!(!output.contains("RemoteDesktopOutput::Reconnecting(message)"));
         assert!(output.contains(".id1::<RemoteDesktopReconnectNotification>("));
         assert!(output.contains(".autohide(true)"));
         assert!(!render.contains("show_status_overlay"));
         assert!(!render.contains("remote-desktop-status-overlay"));
+    }
+
+    #[test]
+    fn clipboard_protocol_policy_keeps_vnc_to_ascii_text_only() {
+        assert!(clipboard_text_supported(
+            RemoteDesktopProtocol::Rdp,
+            "中文 clipboard"
+        ));
+        assert!(clipboard_text_supported(
+            RemoteDesktopProtocol::Vnc,
+            "ASCII clipboard"
+        ));
+        assert!(!clipboard_text_supported(
+            RemoteDesktopProtocol::Vnc,
+            "中文 clipboard"
+        ));
+        assert!(clipboard_files_supported(RemoteDesktopProtocol::Rdp));
+        assert!(!clipboard_files_supported(RemoteDesktopProtocol::Vnc));
+    }
+
+    #[test]
+    fn local_clipboard_classification_prioritizes_files_over_path_text_fallback() {
+        let files = ExternalPaths(
+            [
+                PathBuf::from("/tmp/report.txt"),
+                PathBuf::from("/tmp/data.csv"),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let item = ClipboardItem {
+            entries: vec![
+                ClipboardEntry::String(gpui::ClipboardString::new(
+                    "platform path fallback".to_string(),
+                )),
+                ClipboardEntry::ExternalPaths(files),
+            ],
+        };
+
+        assert_eq!(
+            LocalClipboardContent::Files(vec![
+                "/tmp/report.txt".to_string(),
+                "/tmp/data.csv".to_string(),
+            ]),
+            classify_local_clipboard(&item)
+        );
+        assert_eq!(
+            LocalClipboardContent::Text("ASCII clipboard".to_string()),
+            classify_local_clipboard(&ClipboardItem::new_string("ASCII clipboard".to_string()))
+        );
+        assert_eq!(
+            LocalClipboardContent::Other,
+            classify_local_clipboard(&ClipboardItem { entries: vec![] })
+        );
     }
 }
