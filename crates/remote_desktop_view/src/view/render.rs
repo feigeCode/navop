@@ -52,7 +52,7 @@ impl Render for RemoteDesktopView {
                 tracing::warn!(?error, "failed to release remote desktop frame");
             }
         }
-        self.drain_output(cx);
+        self.drain_output(window, cx);
         self.sync_local_clipboard(window, cx);
         self.flush_pending_start();
         self.flush_pending_resize();
@@ -62,13 +62,9 @@ impl Render for RemoteDesktopView {
         {
             tracing::warn!(?error, "failed to retire remote desktop frame");
         }
-        let rendered_frame = self
-            .connected
-            .then(|| self.rendered_frames.current().cloned())
-            .flatten();
+        let rendered_frame = self.rendered_frames.current().cloned();
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
-        let show_status_overlay = !self.connected;
 
         let content = div()
             .size_full()
@@ -192,40 +188,5 @@ impl Render for RemoteDesktopView {
                 }
             })
             .child(content)
-            .when(show_status_overlay, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .min_w_0()
-                        .min_h_0()
-                        .flex()
-                        .items_start()
-                        .overflow_hidden()
-                        .p_2()
-                        .child(
-                            div()
-                                .id("remote-desktop-status-overlay")
-                                .min_w_0()
-                                .max_w(px(520.0))
-                                .flex_shrink(1.0)
-                                .overflow_hidden()
-                                .px_3()
-                                .py_1()
-                                .border_1()
-                                .rounded_sm()
-                                .bg(cx.theme().background)
-                                .border_color(cx.theme().border)
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .cursor_pointer()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.request_reconnect();
-                                    cx.stop_propagation();
-                                }))
-                                .child(self.status.clone()),
-                        ),
-                )
-            })
     }
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use gpui_component::{ActiveTheme, Icon, IconName};
+use gpui_component::{ActiveTheme, Icon, IconName, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
     RemoteDesktopConnectionOptions, RemoteDesktopFrameRect, RemoteDesktopInput,
@@ -35,6 +35,8 @@ const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(800);
 const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 
+struct RemoteDesktopReconnectNotification;
+
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
 #[cfg(not(target_os = "macos"))]
@@ -55,6 +57,10 @@ fn remote_desktop_tab_title(title: &str, tab_index: Option<usize>) -> String {
     } else {
         title.to_string()
     }
+}
+
+fn preserve_presented_frame_during_session_reset(protocol: RemoteDesktopProtocol) -> bool {
+    protocol == RemoteDesktopProtocol::Rdp
 }
 
 pub struct RemoteDesktopViewConfig {
@@ -217,7 +223,7 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 mod tests {
     use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
 
-    use super::close_runtime_once;
+    use super::{close_runtime_once, preserve_presented_frame_during_session_reset};
 
     #[test]
     fn closes_runtime_only_once() {
@@ -304,28 +310,39 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_status_overlay_has_a_full_size_layout_boundary() {
-        let source = include_str!("view/render.rs");
-        let overlay_start = source
-            .find(".when(show_status_overlay")
-            .expect("reconnect overlay");
-        let overlay = &source[overlay_start..];
-        let badge_start = overlay
-            .find(".id(\"remote-desktop-status-overlay\")")
-            .expect("reconnect status badge");
-        let boundary = &overlay[..badge_start];
-        let badge = &overlay[badge_start..];
+    fn only_rdp_preserves_the_presented_frame_during_session_reset() {
+        assert!(preserve_presented_frame_during_session_reset(
+            RemoteDesktopProtocol::Rdp
+        ));
+        assert!(!preserve_presented_frame_during_session_reset(
+            RemoteDesktopProtocol::Vnc
+        ));
+    }
 
-        assert!(boundary.contains(".absolute()"));
-        assert!(boundary.contains(".inset_0()"));
-        assert!(boundary.contains(".min_w_0()"));
-        assert!(boundary.contains(".min_h_0()"));
-        assert!(boundary.contains(".flex()"));
-        assert!(boundary.contains(".overflow_hidden()"));
-        assert!(boundary.contains(".p_2()"));
-        assert!(badge.contains(".min_w_0()"));
-        assert!(badge.contains(".max_w(px(520.0))"));
-        assert!(badge.contains(".flex_shrink(1.0)"));
-        assert!(badge.contains(".overflow_hidden()"));
+    #[test]
+    fn reconnect_keeps_the_presented_frame_visible() {
+        let source = include_str!("view/render.rs");
+
+        assert!(
+            source.contains("let rendered_frame = self.rendered_frames.current().cloned();"),
+            "the presentation frame must not be gated by the transient connected flag"
+        );
+        assert!(
+            !source.contains(".then(|| self.rendered_frames.current().cloned())"),
+            "a reconnect must not blank the last frame"
+        );
+    }
+
+    #[test]
+    fn reconnect_status_uses_a_transient_notification_outside_tab_content() {
+        let output = include_str!("view/output.rs");
+        let render = include_str!("view/render.rs");
+
+        assert!(output.contains("window.defer(cx"));
+        assert!(output.contains("Notification::info(message)"));
+        assert!(output.contains(".id1::<RemoteDesktopReconnectNotification>("));
+        assert!(output.contains(".autohide(true)"));
+        assert!(!render.contains("show_status_overlay"));
+        assert!(!render.contains("remote-desktop-status-overlay"));
     }
 }

@@ -3881,7 +3881,6 @@ mod tests {
         focus_handle: FocusHandle,
         frame: Option<Arc<RenderImage>>,
         status: Option<SharedString>,
-        connected: bool,
     }
 
     impl TestTab {
@@ -3891,7 +3890,6 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: None,
-                connected: true,
             }
         }
 
@@ -3905,23 +3903,21 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: Some(status.into()),
-                connected: false,
             }
         }
 
         fn set_frame(&mut self, frame: Arc<RenderImage>, cx: &mut Context<Self>) {
             self.frame = Some(frame);
-            self.connected = true;
             cx.notify();
         }
 
         fn set_reconnecting(&mut self, cx: &mut Context<Self>) {
-            self.connected = false;
+            self.status = Some("reconnecting".into());
             cx.notify();
         }
 
         fn set_connected(&mut self, cx: &mut Context<Self>) {
-            self.connected = true;
+            self.status = None;
             cx.notify();
         }
     }
@@ -3969,20 +3965,6 @@ mod tests {
                                 .child(status),
                         )
                     })
-                })
-                .when(!self.connected, |root| {
-                    root.child(
-                        div()
-                            .id("test-rdp-status-overlay")
-                            .debug_selector(|| "test-rdp-status-overlay".to_owned())
-                            .absolute()
-                            .top_2()
-                            .left_2()
-                            .max_w(px(520.0))
-                            .px_3()
-                            .py_1()
-                            .child(self.status.clone().unwrap_or_else(|| "reconnecting".into())),
-                    )
                 })
         }
     }
@@ -4365,6 +4347,20 @@ mod tests {
         });
         cx.run_until_parked();
 
+        cx.update(|_, cx| {
+            let tabs = container.read(cx);
+            assert_eq!(
+                Some("rdp"),
+                tabs.tabs().last().map(TabItem::id).as_deref(),
+                "the RDP tab must be the last regular tab in this regression scenario"
+            );
+            assert_eq!(
+                Some("rdp"),
+                tabs.active_tab().map(TabItem::id).as_deref(),
+                "the last RDP tab must remain active"
+            );
+        });
+
         let after_open = window_chrome_bounds(&mut cx);
         assert_eq!(
             before_open, after_open,
@@ -4431,10 +4427,10 @@ mod tests {
         let while_reconnecting = window_chrome_bounds(&mut cx);
         assert_eq!(
             after_first_frame, while_reconnecting,
-            "RDP reconnecting overlay must not move window chrome"
+            "the last presented RDP frame must keep window chrome anchored while reconnecting"
         );
         assert!(cx.debug_bounds("test-rdp-frame").is_some());
-        assert!(cx.debug_bounds("test-rdp-status-overlay").is_some());
+        assert!(cx.debug_bounds("test-rdp-status-overlay").is_none());
 
         cx.update(|window, cx| {
             rdp.update(cx, |rdp, cx| {
