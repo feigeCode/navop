@@ -2,9 +2,7 @@ use crate::{
     MarkdownBlockRenderArtifact, MarkdownBlockRenderProvider, MarkdownEditorTheme,
     MarkdownProjection,
 };
-use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
-};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Window};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 use markdown_source::{
     PatchError, SourceEdit, SourceEditOrigin, SourceHistory, SourceMarkdownDocument,
@@ -19,12 +17,14 @@ mod operations;
 mod projection_styles;
 mod render;
 mod setup;
+mod surface;
 mod sync;
 mod table_operations;
 mod text_diff;
 mod types;
 use projection_styles::projection_highlights;
-use setup::{apply_projection_styles, create_input, create_property_input, subscribe_to_input};
+use setup::{apply_projection_styles, create_input, create_property_input};
+use surface::{MarkdownEditSurface, MarkdownSurfaceKey};
 use text_diff::{common_prefix, common_suffix};
 pub use types::{MarkdownEditorError, MarkdownEditorEvent};
 
@@ -40,8 +40,10 @@ pub struct MarkdownEditor {
     theme: MarkdownEditorTheme,
     dirty: bool,
     syncing_input: bool,
+    surfaces: HashMap<MarkdownSurfaceKey, MarkdownEditSurface>,
+    active_surface: Option<MarkdownSurfaceKey>,
     source_mode_selection: SourceSelection,
-    pending_newline: Option<usize>,
+    pending_newline: Option<(MarkdownSurfaceKey, usize)>,
     block_scroll: VirtualListScrollHandle,
     document_scroll: ScrollHandle,
     block_render_provider: Option<MarkdownBlockRenderProvider>,
@@ -58,7 +60,6 @@ pub struct MarkdownEditor {
     pending_inline_math_renders: HashSet<String>,
     failed_inline_math_renders: HashSet<String>,
     measured_block_heights: HashMap<markdown_source::SourceNodeId, gpui::Pixels>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl MarkdownEditor {
@@ -74,8 +75,7 @@ impl MarkdownEditor {
         let image_alt_input = create_property_input(window, cx);
         let image_destination_input = create_property_input(window, cx);
         apply_projection_styles(&input, &projection, &theme, cx);
-        let subscriptions = subscribe_to_input(&input, window, cx);
-        Ok(Self {
+        let mut editor = Self {
             input,
             image_alt_input,
             image_destination_input,
@@ -87,6 +87,8 @@ impl MarkdownEditor {
             theme,
             dirty: false,
             syncing_input: false,
+            surfaces: HashMap::new(),
+            active_surface: None,
             source_mode_selection: SourceSelection::default(),
             pending_newline: None,
             block_scroll: VirtualListScrollHandle::new(),
@@ -103,8 +105,9 @@ impl MarkdownEditor {
             pending_inline_math_renders: HashSet::new(),
             failed_inline_math_renders: HashSet::new(),
             measured_block_heights: HashMap::new(),
-            _subscriptions: subscriptions,
-        })
+        };
+        editor.initialize_surfaces(window, cx);
+        Ok(editor)
     }
 
     pub fn source(&self) -> &str {

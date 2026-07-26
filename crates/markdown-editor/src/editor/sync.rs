@@ -1,10 +1,15 @@
 use super::MarkdownEditor;
 use super::projection_styles::projection_highlights;
-use super::text_diff::minimal_text_patch;
+use super::surface::{MarkdownSurfaceKey, SurfaceProjectionUpdate, projection_for};
 use crate::{MarkdownEditorEvent, MarkdownProjection};
 use gpui::{App, Context, Window};
+#[cfg(test)]
 use gpui_component::input::Position;
-use markdown_source::{SourceInlineKind, SourceNodeId, SourceSelection, TableCellAddress};
+use markdown_source::{
+    SourceBlockKind, SourceInlineKind, SourceNodeId, SourceSelection, TableCellAddress,
+};
+
+mod events;
 
 impl MarkdownEditor {
     pub(super) fn refresh_projection_highlights(&self, cx: &mut Context<Self>) {
@@ -14,136 +19,27 @@ impl MarkdownEditor {
             .update(cx, |input, cx| input.set_text_highlights(highlights, cx));
     }
 
-    pub(super) fn input_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.syncing_input {
-            return;
-        }
-        let value = self.input.read(cx).value().to_string();
-        if value == self.projection.text {
-            return;
-        }
-        let source_cursor = self
-            .projection
-            .display_to_source(self.input.read(cx).selected_range().end);
-        if let Some(edit) = self.projection.edit_for_value(&value)
-            && !self.active_block_is_source_code()
-            && edit.source_range.is_empty()
-            && edit.replacement == "\n"
-        {
-            self.pending_newline = Some(edit.source_range.start);
-            cx.defer_in(window, |editor, window, cx| {
-                editor.flush_pending_newline(window, cx);
-            });
-            return;
-        }
-        if !matches!(self.edit_projected_value(&value, window, cx), Ok(true)) {
-            self.resync_active(source_cursor, window, cx);
-        }
-    }
-
-    pub(super) fn input_entered(
-        &mut self,
-        secondary: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.active_block_is_source_code() {
-            let value = self.input.read(cx).value().to_string();
-            let cursor = self
-                .projection
-                .display_end_to_source(self.input.read(cx).selected_range().end);
-            let edited = self.edit_projected_value(&value, window, cx);
-            if !matches!(edited, Ok(true)) {
-                self.resync_active(cursor, window, cx);
-            }
-            return;
-        }
-        let Some(source_offset) = self.pending_newline.take() else {
-            return;
-        };
-        if !secondary && matches!(self.split_active_block(source_offset, window, cx), Ok(true)) {
-            return;
-        }
-        let value = self.input.read(cx).value().to_string();
-        if !matches!(self.edit_projected_value(&value, window, cx), Ok(true)) {
-            self.resync_active(source_offset, window, cx);
-        }
-    }
-
-    fn flush_pending_newline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(source_offset) = self.pending_newline.take() else {
-            return;
-        };
-        let value = self.input.read(cx).value().to_string();
-        if !matches!(self.edit_projected_value(&value, window, cx), Ok(true)) {
-            self.resync_active(source_offset, window, cx);
-        }
-    }
-
-    pub(super) fn cursor_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.syncing_input {
-            return;
-        }
-        let display_cursor = self.input.read(cx).selected_range().end;
-        let selection = self.source_selection(cx);
-        let active_inline = self.active_inline_at_display(display_cursor);
-        if active_inline != self.projection.active_inline {
-            self.sync_selection(selection, window, cx);
-        }
-    }
-
-    fn active_inline_at_display(&self, display_offset: usize) -> Option<SourceNodeId> {
-        let document = self.history.document();
-        let direct = self.projection.display_to_source(display_offset);
-        document
-            .inline_node_at(direct)
-            .or_else(|| {
-                previous_char_offset(
-                    &document.source,
-                    self.projection.display_end_to_source(display_offset),
-                )
-                .and_then(|offset| document.inline_node_at(offset))
-            })
-            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
-            .filter(|node| {
-                self.projection.source_range.start <= node.source_range.start
-                    && node.source_range.end <= self.projection.source_range.end
-            })
-            .filter(|node| {
-                self.projection.source_to_display(node.source_range.start)
-                    < self.projection.source_to_display(node.source_range.end)
-            })
-            .map(|node| node.id)
-    }
-
     pub(super) fn sync_projection(
         &mut self,
         source_cursor: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let document = self.history.document();
-        let active_block = document.block_at(source_cursor).or_else(|| {
-            previous_char_offset(&document.source, source_cursor)
-                .and_then(|offset| document.block_at(offset))
-        });
-        let active = document
-            .inline_node_at(source_cursor)
-            .or_else(|| {
-                previous_char_offset(&document.source, source_cursor)
-                    .and_then(|offset| document.inline_node_at(offset))
-            })
-            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
-            .map(|node| node.id);
-        self.active_block = active_block.map(|block| block.id);
+        let (active_block, key) = self.block_surface_at(source_cursor);
+        self.active_block = active_block;
         self.active_table_cell = None;
-        self.projection = active_block.map_or_else(
-            || MarkdownProjection::build(document, active),
-            |block| MarkdownProjection::build_range(document, active, block.source_range.clone()),
+        self.active_surface = Some(key);
+        self.reconcile_surfaces(window, cx);
+        self.sync_surface_selection(
+            key,
+            SourceSelection {
+                anchor: source_cursor,
+                head: source_cursor,
+            },
+            window,
+            cx,
         );
-        self.sync_input_mode(window, cx);
         self.sync_image_property_inputs(window, cx);
-        self.sync_input(source_cursor, window, cx);
     }
 
     pub(super) fn sync_table_cell(
@@ -153,95 +49,115 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let document = self.history.document();
-        let Ok(cell) = document.table_cell(address) else {
+        if self.history.document().table_cell(address).is_err() {
             self.sync_projection(source_cursor, window, cx);
             return;
-        };
-        let active = document
-            .inline_node_at(source_cursor)
-            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
-            .map(|node| node.id);
+        }
+        let key = MarkdownSurfaceKey::table_cell(address);
         self.active_block = Some(address.block_id);
         self.active_table_cell = Some(address);
-        self.projection =
-            MarkdownProjection::build_range(document, active, cell.content_range.clone());
-        self.sync_input_mode(window, cx);
+        self.active_surface = Some(key);
+        self.reconcile_surfaces(window, cx);
+        self.sync_surface_selection(
+            key,
+            SourceSelection {
+                anchor: source_cursor,
+                head: source_cursor,
+            },
+            window,
+            cx,
+        );
         self.sync_image_property_inputs(window, cx);
-        self.sync_input(source_cursor, window, cx);
     }
 
-    fn resync_active(&mut self, source_cursor: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(address) = self.active_table_cell {
+    pub(super) fn resync_surface(
+        &mut self,
+        key: MarkdownSurfaceKey,
+        source_cursor: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(address) = key.table_address() {
             self.sync_table_cell(address, source_cursor, window, cx);
         } else {
             self.sync_projection(source_cursor, window, cx);
         }
     }
 
-    fn sync_input(&mut self, source_cursor: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let display_cursor = self.projection.source_to_display(source_cursor);
-        let position = position_for_offset(&self.projection.text, display_cursor);
-        let current = self.input.read(cx).value();
-        let patch = minimal_text_patch(&current, &self.projection.text);
-        self.syncing_input = true;
-        self.input.update(cx, |input, cx| {
-            if let Some((range, replacement)) = patch {
-                input.replace_text_range(range, &replacement, window, cx);
-            }
-            input.set_text_highlights(
-                projection_highlights(&self.projection, &self.theme, &self.inline_math_artifacts),
-                cx,
-            );
-            if input.selected_range() != (display_cursor..display_cursor) {
-                input.set_cursor_position(position, window, cx);
-            }
-        });
-        self.syncing_input = false;
-        cx.notify();
+    pub(super) fn surface_selection(
+        &self,
+        key: MarkdownSurfaceKey,
+        cx: &App,
+    ) -> Option<SourceSelection> {
+        let surface = self.surface(key)?;
+        let range = surface.input.read(cx).selected_range();
+        Some(SourceSelection {
+            anchor: surface.projection.display_to_source(range.start),
+            head: surface.projection.display_end_to_source(range.end),
+        })
     }
 
-    fn active_block_is_source_code(&self) -> bool {
-        self.active_block
-            .and_then(|id| self.history.document().block_by_id(id))
-            .is_some_and(|block| {
-                matches!(
-                    block.kind,
-                    markdown_source::SourceBlockKind::CodeFence { .. }
-                        | markdown_source::SourceBlockKind::MathBlock { .. }
-                )
+    pub(super) fn active_inline_at_display(
+        &self,
+        key: MarkdownSurfaceKey,
+        display_offset: usize,
+    ) -> Option<SourceNodeId> {
+        let projection = &self.surface(key)?.projection;
+        let source_offset = projection.display_to_source(display_offset);
+        self.inline_at_source(projection, source_offset)
+            .or_else(|| {
+                let end = projection.display_end_to_source(display_offset);
+                previous_char_offset(&self.history.document().source, end)
+                    .and_then(|offset| self.inline_at_source(projection, offset))
             })
     }
 
-    fn sync_input_mode(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let language = self.active_block.and_then(|id| {
-            let block = self.history.document().block_by_id(id)?;
-            match &block.kind {
-                markdown_source::SourceBlockKind::CodeFence { language_range, .. } => {
-                    language_range
-                        .as_ref()
-                        .map(|range| self.history.document().source[range.clone()].to_owned())
-                        .map(|language| {
-                            if language.eq_ignore_ascii_case("mermaid") {
-                                "text".to_owned()
-                            } else {
-                                language
-                            }
-                        })
-                        .or_else(|| Some("text".to_owned()))
-                }
-                markdown_source::SourceBlockKind::MathBlock { .. } => Some("latex".to_owned()),
-                _ => None,
-            }
-        });
-        self.input.update(cx, |input, cx| {
-            if let Some(language) = language {
-                input.set_code_editor_mode(language, window, cx);
-            } else {
-                input.set_rich_text_mode(window, cx);
-            }
-            input.set_auto_grow_mode(1, usize::MAX, window, cx);
-        });
+    pub(super) fn sync_surface_selection(
+        &mut self,
+        key: MarkdownSurfaceKey,
+        selection: SourceSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(base) = projection_for(self.history.document(), key, None) else {
+            return;
+        };
+        let active_inline = self.inline_at_source(&base, selection.head);
+        let Some(projection) = projection_for(self.history.document(), key, active_inline) else {
+            return;
+        };
+        self.update_surface_projection(
+            SurfaceProjectionUpdate {
+                key,
+                projection,
+                selection: Some(selection),
+            },
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(super) fn collapse_surface_projection(
+        &mut self,
+        key: MarkdownSurfaceKey,
+        selection: SourceSelection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(projection) = projection_for(self.history.document(), key, None) else {
+            return;
+        };
+        self.update_surface_projection(
+            SurfaceProjectionUpdate {
+                key,
+                projection,
+                selection: Some(selection),
+            },
+            window,
+            cx,
+        );
+        cx.notify();
     }
 
     fn sync_image_property_inputs(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -254,11 +170,8 @@ impl MarkdownEditor {
     }
 
     pub(super) fn source_selection(&self, cx: &App) -> SourceSelection {
-        let range = self.input.read(cx).selected_range();
-        SourceSelection {
-            anchor: self.projection.display_to_source(range.start),
-            head: self.projection.display_end_to_source(range.end),
-        }
+        self.surface_selection(self.active_surface_key(), cx)
+            .unwrap_or_default()
     }
 
     pub(super) fn sync_selection(
@@ -267,12 +180,12 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.resync_active(selection.head, window, cx);
-        let start = self.projection.source_to_display(selection.anchor);
-        let end = self.projection.source_to_display(selection.head);
-        self.input.update(cx, |input, cx| {
-            input.set_selected_range(start.min(end)..start.max(end), start > end, window, cx);
-        });
+        if let Some(address) = self.active_table_cell {
+            self.sync_table_cell(address, selection.head, window, cx);
+        } else {
+            self.sync_projection(selection.head, window, cx);
+        }
+        self.sync_surface_selection(self.active_surface_key(), selection, window, cx);
     }
 
     pub(super) fn emit_changed(&self, cx: &mut Context<Self>) {
@@ -281,8 +194,40 @@ impl MarkdownEditor {
             revision: self.revision(),
         });
     }
+
+    fn block_surface_at(&self, source_cursor: usize) -> (Option<SourceNodeId>, MarkdownSurfaceKey) {
+        let document = self.history.document();
+        let block = document.block_at(source_cursor).or_else(|| {
+            previous_char_offset(&document.source, source_cursor)
+                .and_then(|offset| document.block_at(offset))
+        });
+        let block_id = block.map(|block| block.id);
+        let key = block
+            .as_ref()
+            .filter(|block| !matches!(block.kind, SourceBlockKind::Table(_)))
+            .map(|block| MarkdownSurfaceKey::block(block.id))
+            .unwrap_or(MarkdownSurfaceKey::Empty);
+        (block_id, key)
+    }
+
+    fn inline_at_source(
+        &self,
+        projection: &MarkdownProjection,
+        source_offset: usize,
+    ) -> Option<SourceNodeId> {
+        self.history
+            .document()
+            .inline_node_at(source_offset)
+            .filter(|node| !matches!(node.kind, SourceInlineKind::RawMarkdown))
+            .filter(|node| {
+                projection.source_range.start <= node.source_range.start
+                    && node.source_range.end <= projection.source_range.end
+            })
+            .map(|node| node.id)
+    }
 }
 
+#[cfg(test)]
 fn position_for_offset(value: &str, offset: usize) -> Position {
     let prefix = &value[..crate::projection::floor_char_boundary(value, offset)];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
@@ -299,24 +244,4 @@ fn previous_char_offset(value: &str, offset: usize) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn position_for_offset_snaps_offsets_inside_multibyte_characters() {
-        // '新' occupies bytes 3..6; an offset inside it must not panic and
-        // resolves to the character start.
-        assert_eq!(position_for_offset("新新新", 4), Position::new(0, 1));
-        assert_eq!(position_for_offset("新新新", 5), Position::new(0, 1));
-        assert_eq!(position_for_offset("新新新", 6), Position::new(0, 2));
-        assert_eq!(
-            position_for_offset("第一行\n新段落", 11),
-            Position::new(1, 0)
-        );
-        assert_eq!(
-            position_for_offset("第一行\n新段落", 13),
-            Position::new(1, 1)
-        );
-        assert_eq!(position_for_offset("abc", usize::MAX), Position::new(0, 3));
-    }
-}
+mod tests;
