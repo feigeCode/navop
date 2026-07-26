@@ -213,7 +213,18 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<bool, PatchError> {
-        let Some(edit) = self.projection.edit_for_value(value) else {
+        let projection = self.projection.clone();
+        self.edit_value_with_projection(&projection, value, window, cx)
+    }
+
+    fn edit_value_with_projection(
+        &mut self,
+        projection: &MarkdownProjection,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, PatchError> {
+        let Some(edit) = projection.edit_for_value(value) else {
             return Ok(false);
         };
         let selection_before = self.source_selection(cx);

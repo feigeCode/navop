@@ -10,6 +10,7 @@ pub(super) fn hidden_syntax_ranges(
     active_inline: Option<SourceNodeId>,
     source_range: &Range<usize>,
     reveal_active: bool,
+    reserve_inline_math_markers: bool,
 ) -> Vec<Range<usize>> {
     let active_inline = reveal_active.then_some(active_inline).flatten();
     let active_range = active_inline.and_then(|id| active_inline_range(document, id));
@@ -28,7 +29,7 @@ pub(super) fn hidden_syntax_ranges(
                     .as_ref()
                     .is_none_or(|range| !range_contains(range, &node.source_range))
         })
-        .flat_map(node_hidden_ranges)
+        .flat_map(|node| node_hidden_ranges(node, reserve_inline_math_markers))
         .collect::<Vec<_>>();
     ranges.extend(
         document
@@ -79,8 +80,12 @@ fn active_image_range(document: &SourceMarkdownDocument, id: SourceNodeId) -> Op
         })
 }
 
-fn node_hidden_ranges(node: &SourceInlineNode) -> Vec<Range<usize>> {
+fn node_hidden_ranges(
+    node: &SourceInlineNode,
+    reserve_inline_math_markers: bool,
+) -> Vec<Range<usize>> {
     match &node.kind {
+        SourceInlineKind::InlineMath { .. } if reserve_inline_math_markers => Vec::new(),
         SourceInlineKind::Emphasis {
             opening_marker,
             closing_marker,

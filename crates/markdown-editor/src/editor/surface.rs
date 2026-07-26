@@ -128,7 +128,7 @@ pub(super) fn projection_for(
             .content_range
             .clone(),
     };
-    Some(crate::MarkdownProjection::build_range(
+    Some(crate::MarkdownProjection::build_surface_range(
         document,
         active_inline,
         range,

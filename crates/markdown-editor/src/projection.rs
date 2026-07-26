@@ -6,7 +6,9 @@ use block_syntax::block_hidden_ranges;
 mod syntax;
 use syntax::{block_inline_nodes, hidden_syntax_ranges};
 mod styles;
-use styles::{active_marker_style_spans, projection_style_spans};
+use styles::{
+    active_marker_style_spans, projection_style_spans, reserved_inline_math_marker_style_spans,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectionSegment {
@@ -63,14 +65,44 @@ impl MarkdownProjection {
         Self::build_range_with_reveal(document, active_inline, source_range, true)
     }
 
+    /// Builds the text that owns a mounted editor surface's physical layout.
+    ///
+    /// Inline-math delimiters stay in this projection even while the formula
+    /// is rendered as SVG. The overlay covers those reserved glyphs in preview
+    /// mode, and activation only changes their paint style/visibility instead
+    /// of inserting two new characters into the Input and reflowing the
+    /// paragraph.
+    pub(crate) fn build_surface_range(
+        document: &SourceMarkdownDocument,
+        active_inline: Option<SourceNodeId>,
+        source_range: Range<usize>,
+    ) -> Self {
+        Self::build_range_with_options(document, active_inline, source_range, true, true)
+    }
+
     fn build_range_with_reveal(
         document: &SourceMarkdownDocument,
         active_inline: Option<SourceNodeId>,
         source_range: Range<usize>,
         reveal_active: bool,
     ) -> Self {
-        let mut hidden =
-            hidden_syntax_ranges(document, active_inline, &source_range, reveal_active);
+        Self::build_range_with_options(document, active_inline, source_range, reveal_active, false)
+    }
+
+    fn build_range_with_options(
+        document: &SourceMarkdownDocument,
+        active_inline: Option<SourceNodeId>,
+        source_range: Range<usize>,
+        reveal_active: bool,
+        reserve_inline_math_markers: bool,
+    ) -> Self {
+        let mut hidden = hidden_syntax_ranges(
+            document,
+            active_inline,
+            &source_range,
+            reveal_active,
+            reserve_inline_math_markers,
+        );
         if source_range != (0..document.source.len())
             && let Some(separator) = trailing_line_ending(&document.source, &source_range)
         {
@@ -87,6 +119,15 @@ impl MarkdownProjection {
             active_inline,
             &projection,
         ));
+        if reserve_inline_math_markers {
+            projection
+                .styles
+                .extend(reserved_inline_math_marker_style_spans(
+                    document,
+                    active_inline,
+                    &projection,
+                ));
+        }
         projection.styles.sort_by_key(|span| span.range.start);
         projection
     }

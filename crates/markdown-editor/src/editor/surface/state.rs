@@ -120,10 +120,22 @@ impl MarkdownEditor {
     }
 
     pub(in crate::editor) fn sync_compatibility_alias(&mut self) {
-        if let Some(surface) = self.surfaces.get(&self.active_surface_key()) {
-            self.input = surface.input.clone();
-            self.projection = surface.projection.clone();
-        }
+        let Some((input, active_inline, source_range)) = self
+            .surfaces
+            .get(&self.active_surface_key())
+            .map(|surface| {
+                (
+                    surface.input.clone(),
+                    surface.projection.active_inline,
+                    surface.projection.source_range.clone(),
+                )
+            })
+        else {
+            return;
+        };
+        self.input = input;
+        self.projection =
+            MarkdownProjection::build_range(self.history.document(), active_inline, source_range);
     }
 
     fn desired_surface_specs(&self) -> Vec<SurfaceSpec> {
@@ -136,7 +148,7 @@ impl MarkdownEditor {
             .into_iter()
             .map(|(key, range)| SurfaceSpec {
                 key,
-                projection: MarkdownProjection::build_range(
+                projection: MarkdownProjection::build_surface_range(
                     document,
                     (active_key == Some(key)).then_some(active_inline).flatten(),
                     range,

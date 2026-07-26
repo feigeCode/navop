@@ -2534,6 +2534,70 @@ fn inline_math_uses_svg_preview_and_real_source_markers_when_activated(cx: &mut 
 }
 
 #[gpui::test]
+fn inline_math_activation_keeps_mounted_layout_text_and_wrapping_stable(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "正文包含 **粗体**、_强调_、`inline code` 与 $e^{i\\pi}+1=0$。这一段故意写得更长，用于观察自然换行、激活前后的基线、行高与后续块位置是否保持稳定。\n\n后续块必须保持原位。";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let paragraph_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(420.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(svg_render_provider()), cx);
+    });
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(paragraph_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let paragraph_selector =
+        Box::leak(format!("markdown-block-frame-{}", paragraph_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+    let paragraph_before = cx.debug_bounds(paragraph_selector).unwrap();
+    let following_before = cx.debug_bounds(following_selector).unwrap();
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let value_before = input.read_with(&cx, |input, _| input.value().to_owned());
+    let suffix_before = value_before.find("这一段").unwrap();
+    let suffix_bounds_before = input
+        .read_with(&cx, |input, _| {
+            input.range_to_bounds(&(suffix_before..suffix_before + "这".len()))
+        })
+        .expect("suffix must be laid out before inline math activation");
+    let math_cursor = value_before.find("e^").unwrap() + 1;
+    let math_column = value_before[..math_cursor].chars().count();
+
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_cursor_position(Position::new(0, math_column as u32), window, cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let value_after = input.read_with(&cx, |input, _| input.value().to_owned());
+    let suffix_after = value_after.find("这一段").unwrap();
+    let suffix_bounds_after = input
+        .read_with(&cx, |input, _| {
+            input.range_to_bounds(&(suffix_after..suffix_after + "这".len()))
+        })
+        .expect("suffix must remain laid out after inline math activation");
+    assert_eq!(
+        value_before, value_after,
+        "revealing real inline-math markers must not replace the mounted Input's layout text"
+    );
+    assert_eq!(suffix_bounds_before, suffix_bounds_after);
+    assert_eq!(paragraph_before, cx.debug_bounds(paragraph_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert!(
+        editor
+            .read_with(&cx, |editor, _| editor.projected_text().to_owned())
+            .contains("$e^{i\\pi}+1=0$")
+    );
+}
+
+#[gpui::test]
 fn active_paragraph_keeps_other_inline_math_rendered(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "First $one$ and second $two$.";

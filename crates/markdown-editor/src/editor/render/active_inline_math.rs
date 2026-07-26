@@ -44,10 +44,8 @@ impl MarkdownEditor {
                 let artifact = self.inline_math_artifacts.get(&source)?;
                 let range = surface
                     .projection
-                    .source_to_display(node.content_range.as_ref()?.start)
-                    ..surface
-                        .projection
-                        .source_to_display(node.content_range.as_ref()?.end);
+                    .source_to_display(node.source_range.start)
+                    ..surface.projection.source_to_display(node.source_range.end);
                 Some(inline_math_overlay(
                     surface.input.clone(),
                     range,

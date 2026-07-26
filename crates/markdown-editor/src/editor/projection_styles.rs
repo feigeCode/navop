@@ -9,12 +9,27 @@ pub(super) fn projection_highlights(
     projection
         .styles
         .iter()
-        .map(|span| (span.range.clone(), projection_style(span.style, theme)))
+        .map(|span| {
+            let reserved_marker = span.style == ProjectionStyle::Marker
+                && projection.active_inline != Some(span.node_id);
+            (
+                span.range.clone(),
+                projection_style(span.style, reserved_marker, theme),
+            )
+        })
         .collect()
 }
 
-fn projection_style(style: ProjectionStyle, theme: &MarkdownEditorTheme) -> HighlightStyle {
+fn projection_style(
+    style: ProjectionStyle,
+    reserved_marker: bool,
+    theme: &MarkdownEditorTheme,
+) -> HighlightStyle {
     match style {
+        ProjectionStyle::Marker if reserved_marker => HighlightStyle {
+            color: Some(theme.background),
+            ..Default::default()
+        },
         ProjectionStyle::Marker => HighlightStyle {
             color: Some(theme.muted_foreground),
             ..Default::default()
