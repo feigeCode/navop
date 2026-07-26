@@ -484,6 +484,41 @@ d98a0be6 feat(ssh): add generation-bound session leases
 application-level service 或任何生产 consumer 迁移。完整状态机、测试、下游验证
 与下一切片边界见 `12.12`。
 
+### 2026-07-26：切片 13，SSH registry-owned cancellable idle reaper
+
+状态：**实现完成并通过 SSH crate 与主要下游编译验证，已独立提交。**
+
+代码提交：
+
+```text
+25fbf085 feat(ssh): reap idle session generations
+```
+
+本切片在 generation-bound lease 之上增加 registry 自有的空闲回收生命周期：
+
+- 默认 idle timeout 为 60 秒，同时提供固定于 registry 生命周期的显式配置 API；
+  zero 或无法用 Tokio `Instant` 表示的 timeout 在构造阶段即被拒绝，避免 lease
+  `Drop` 到最后一刻才因 deadline 溢出 panic；
+- 每次进入 idle 都生成带不可复用 identity 的 `IdleCandidate`；reacquire 会清除旧
+  candidate，再次 release 会得到新的 identity 和完整 deadline；
+- 每个 registry 只在首次 async acquire 时启动一个 reaper task，使用 `Notify`
+  响应 acquire/release/publish/retire，并始终只等待当前最早 deadline；
+- lease release/drop 只在同步临界区更新计数和 candidate，再发送 `Notify`；不会
+  `tokio::spawn()`、await、disconnect 或执行阻塞 I/O，且已验证可从普通非 Tokio
+  线程安全 drop；
+- 到期后必须在 registry lock 内重新确认 key、creation token、idle candidate
+  identity、deadline 和 `lease_count == 0`，随后先从 map 移除 exact generation，
+  再在锁外异步 disconnect；
+- `JoinSet` 只追踪真正执行中的 disconnect job，不为每次 idle/reacquire 创建一个
+  长期 sleeping task；慢 disconnect 不阻塞 registry lock 或其他 deadline；
+- retire/replacement、reacquire、disconnect failure 和 registry drop 均有确定性
+  contract 测试；失败日志只使用脱敏 connection label，失败 slot 不会复活。
+
+当前 `SessionRegistryCore::Drop` 只同步请求 reaper 取消并使其收敛，不在 `Drop`
+中执行 async I/O；这不等价于应用级 graceful shutdown。application owner、health/
+reconnect、snapshot/observer 和生产 consumer 迁移仍是后续独立切片。完整状态机、
+20 项 registry 测试、74 项 SSH 全量回归和既有 Clippy 阻塞见 `12.13`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -2995,3 +3030,241 @@ clippy::result_large_err
 application-level owner、health policy 和生产 consumer 迁移继续拆成后续独立提交，
 避免把 lease、timer、disconnect、GPUI lifecycle 与调用方改造重新合并成一个难以
 证明的大切片。
+
+### 12.13 切片 13：SSH registry-owned cancellable idle reaper
+
+#### 12.13.1 Timeout、idle candidate 与单一 reaper
+
+`SshSessionRegistry` 新增公开默认值和显式构造入口：
+
+```rust
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub fn with_idle_timeout(idle_timeout: Duration) -> Self;
+```
+
+timeout 在 registry 构造时固定，不会静默修改已经绑定到 slot 的 deadline。构造阶段
+拒绝：
+
+- `Duration::ZERO`；
+- `Instant::now().checked_add(idle_timeout) == None` 的不可表示值。
+
+这使极端 timeout 不会延迟到最后一个 lease 的 `Drop` 路径中才通过裸
+`Instant + Duration` 触发溢出。创建 idle candidate 时仍使用 `checked_add()`，
+并明确依赖构造期已经验证的 contract。
+
+原来的：
+
+```text
+idle_since: Option<Instant>
+```
+
+替换为：
+
+```text
+IdleCandidate {
+  deadline: tokio::time::Instant,
+  identity: Arc<()>,
+}
+```
+
+identity 不序列化、不输出到 `Debug` 或日志，也不会复用。每次 generation 的最后
+一个 lease 从 1 降到 0 时都创建新的 candidate；timeout 前 reacquire 在同一
+registry lock 内取走 candidate；以后再次释放会创建全新的 identity 和完整 timeout。
+因此旧的 wakeup、已缓存 deadline 或 stale work 只能触发重新检查，不能命中新一轮
+idle。
+
+每个 registry 在首次 async `acquire()` 时通过 `AtomicBool::compare_exchange`
+只启动一个 reaper。reaper 的调度模型为：
+
+```text
+scan Ready slots under registry lock
+  -> select exact earliest IdleCandidate
+  -> release lock
+  -> select {
+       Notify from acquire/release/publish/retire
+       sleep_until(earliest deadline)
+       completion of a real disconnect job
+     }
+  -> recalculate
+```
+
+它不会为每次 last-release 创建 sleeping OS thread，也不会为每次 idle/reacquire
+保留一个长期 sleeping Tokio task。`JoinSet` 只容纳 timeout 已真实到期、slot 已经
+移除后的 disconnect job；一个慢 disconnect 不会阻止 reaper 继续处理其他 key 的
+deadline。
+
+#### 12.13.2 Release、到期核验与 disconnect 边界
+
+lease release/drop 路径保持同步、短临界区：
+
+```text
+mark this lease locally uncounted
+  -> lock registry
+  -> verify exact key + creation token
+  -> checked decrement
+  -> if last lease, publish a fresh IdleCandidate
+  -> unlock registry
+  -> Notify::notify_one()
+```
+
+该路径明确不执行：
+
+- `tokio::spawn()`；
+- `.await`；
+- transport disconnect；
+- filesystem/network I/O；
+- `std::thread::sleep()` 或其他阻塞等待。
+
+普通 `std::thread` 上 drop lease 的测试验证了 `tokio::time::Instant::now()` 与
+`Notify` 在该路径不依赖“当前线程正在进入 Tokio runtime”，不会 panic，也不会额外
+启动 reaper。
+
+deadline 到期并不直接信任此前缓存的 candidate。`take_expired_manager()` 必须在
+同一个 registry mutex 临界区内重新确认：
+
+1. map 中仍是相同 `ConnectionKey`；
+2. creation generation 与不可复用 token identity 都相同；
+3. `lease_count == 0`；
+4. 当前 slot 的 idle identity 与 scheduled candidate 完全相同；
+5. 当前 candidate deadline 已到。
+
+只有全部满足，才在锁内 remove 该 exact slot 并取得 manager。真正的
+`disconnect_for_registry().await` 始终在锁外的 `JoinSet` job 中执行。由此保证：
+
+- reacquire 在 deadline 前清除 candidate 后，旧 work 不能断开 active manager；
+- retire 后旧 candidate 不能命中 replacement generation；
+- slot remove 后同 key acquire 可以立即创建 replacement，不等待旧 transport 的
+  慢 disconnect；
+- disconnect failure 不会把已经过期并移除的 slot 重新插回 registry；
+- warning/debug 日志使用 `ConnectionKey::label()`，不输出 config、密码、私钥、
+  passphrase、certificate path 或 token identity。
+
+显式 `retire()` 的语义没有被 idle reaper 偷换：它仍然只是 visibility operation，
+对 Ready slot 返回 manager，不自动 disconnect；existing lease 可以继续保持旧
+generation 存活，而 stale lease drop 不能触碰 replacement。idle expiration 是与
+explicit retire 分离的另一条 lifecycle 路径。
+
+#### 12.13.3 Reaper 取消和当前 shutdown 边界
+
+`SessionRegistryCore::Drop` 只执行：
+
+```text
+reaper_shutdown.store(true)
+Notify::notify_one()
+```
+
+reaper 收到请求后：
+
+1. 停止选择新的 deadline；
+2. `abort_all()` 当前 registry-owned disconnect jobs；
+3. drain `JoinSet` 的取消结果；
+4. 退出并更新内部收敛状态。
+
+reaper task 只持有 `Arc<RegistryShared>`，不持有
+`Arc<SessionRegistryCore>`，因此不会反过来阻止 core 的最后一个 owner 进入
+`Drop`。取消中的 `JoinError::is_cancelled()` 不会产生误导性的 warning。
+
+这个行为只解决 registry 自有 task 的取消与资源收敛，**不是完整应用 shutdown
+协议**。`Drop` 不能 await，也不会尝试在同步析构路径中逐个优雅 disconnect。后续
+application-level owner 仍需提供显式 async graceful shutdown、拒绝新 acquire、
+处理 live lease、设置总 deadline，并把最终状态暴露给 observer/UI。
+
+#### 12.13.4 Contract 测试
+
+定向测试：
+
+```text
+cargo test -p ssh session_registry --lib
+20 passed; 0 failed
+```
+
+在切片 12 的 10 项 slot/lease 测试基础上，新增 10 项覆盖：
+
+1. timeout 前 generation 保持可见且不 disconnect，到期后才 remove/disconnect；
+2. reacquire 使旧 idle work 失效，再次 release 从新时间点取得完整 timeout；
+3. 多个不同 key 的 deadline 会持续重新选择真正最早项；
+4. retire/replacement 后旧 generation 的 scheduled work 不能触碰 replacement；
+5. 慢 disconnect 在 registry lock 外运行，同 key replacement acquire 可立即推进；
+6. disconnect failure 可诊断、不会恢复已移除 slot，后续 acquire 建立新 generation；
+7. 20 次 idle/reacquire churn 仍只启动一个 registry reaper；
+8. registry drop 会取消并收敛 reaper，且 `Drop` 本身不执行 disconnect I/O；
+9. lease 可移交给普通 `std::thread` drop，slot 正确变为 0/idle，reaper 数不增加；
+10. `Duration::MAX` 这类不可表示 timeout 在 registry 构造阶段被拒绝。
+
+SSH crate 全量回归：
+
+```text
+cargo test -p ssh --lib
+74 passed; 0 failed
+```
+
+#### 12.13.5 编译、格式、Clippy 与下游验证
+
+```text
+cargo check -p ssh
+通过
+
+cargo check -p terminal -p sftp -p sftp_view -p remote_file_editor \
+  -p port_forwarding
+通过
+
+rustfmt --edition 2021 \
+  crates/ssh/src/session_registry.rs \
+  crates/ssh/src/lib.rs
+通过
+
+git diff --check
+通过
+```
+
+下游检查只报告 `extension-runtime` 的 5 个既有 unused/dead-code warning，以及
+workspace future-incompatibility 提示；没有 idle reaper 或 SSH 新错误。
+
+严格 Clippy：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- -D warnings
+```
+
+仍然只在本切片未修改的：
+
+```text
+crates/ssh/src/host_key.rs:399
+HostKeyVerifier::verify()
+clippy::result_large_err
+```
+
+失败。为区分既有阻塞和本切片新增问题，补充运行：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- \
+  -D warnings -A clippy::result_large_err
+通过
+```
+
+因此本切片没有新增 Clippy 报告；没有为了通过门禁而顺手装箱
+`HostKeyRejection` 或改变既有公共错误 API。
+
+#### 12.13.6 未覆盖范围与下一切片
+
+本切片明确未实现：
+
+- GPUI/application-level SSH registry owner/service；
+- 拒绝新 acquire、等待/取消 live use、逐 transport disconnect 和总 deadline
+  组成的显式 graceful application shutdown；
+- transport health、失效检测和 reconnect policy；
+- registry lifecycle snapshot/observer 与 metrics；
+- Terminal consumer 对 `SshSessionLease` 的持有、channel generation 和重连移交；
+- SFTP、remote file editor、forwarding/SOCKS 与 server-copy consumer 迁移；
+- 生产路径中直接 `SshSessionManager::new()` 和绕过 lease 的 manager clone 收口。
+
+下一独立切片应建立 application-level registry owner/service，但仍不一次迁移所有
+consumer。至少需要先证明：
+
+1. 应用只创建一个 registry owner，view/pane 不决定共享 transport 生死；
+2. service 的公开 acquire 继续返回 generation-bound lease，不重新暴露裸 manager；
+3. application shutdown 有显式状态、幂等入口和总 deadline，不把异步关闭塞进
+   `Drop`；
+4. registry lifecycle 可以通过不包含 secret 的 snapshot/observer 观察；
+5. owner/service 与后续 Terminal、SFTP、forwarding 迁移之间有清晰兼容边界。
