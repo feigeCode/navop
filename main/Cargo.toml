@@ -43,6 +43,7 @@ tool_runtime = { workspace = true }
 port_forwarding = { workspace = true }
 port_forwarding_view = { workspace = true }
 sftp_view = { workspace = true }
+ssh.workspace = true
 redis_view = { workspace = true }
 redis-runtime.workspace = true
 mongodb_view = { workspace = true }

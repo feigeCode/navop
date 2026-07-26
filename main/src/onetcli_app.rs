@@ -10,11 +10,13 @@ use gpui::{
     ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
+use one_core::gpui_tokio::{JoinError, Tokio};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
 use rust_i18n::t;
+use ssh::{SshSessionService, SshSessionShutdownReport};
 #[cfg(not(target_os = "macos"))]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,6 +76,126 @@ pub struct GlobalOnetCliApp {
 }
 
 impl gpui::Global for GlobalOnetCliApp {}
+
+/// The application-owned SSH session lifecycle.
+///
+/// The `ssh` crate deliberately stays independent of GPUI. This narrow
+/// wrapper installs exactly one service in the application and lets app code
+/// pass service clones to consumers without making any terminal or file view
+/// the owner of shared transports.
+#[derive(Clone)]
+pub(crate) struct GlobalSshSessionService {
+    service: SshSessionService,
+}
+
+impl gpui::Global for GlobalSshSessionService {}
+
+impl GlobalSshSessionService {
+    fn new() -> Self {
+        Self {
+            service: SshSessionService::new(),
+        }
+    }
+
+    pub(crate) fn service(&self) -> SshSessionService {
+        self.service.clone()
+    }
+}
+
+fn init_ssh_session_service(cx: &mut App) {
+    assert!(
+        cx.try_global::<GlobalSshSessionService>().is_none(),
+        "SSH session service must have exactly one application owner"
+    );
+
+    let global = GlobalSshSessionService::new();
+    let fallback_service = global.service();
+    cx.set_global(global);
+
+    // Normal Navop quit paths await shutdown before asking GPUI to quit.
+    // This callback is an idempotent fallback for platform-driven quit paths.
+    // GPUI only gives quit callbacks a short fixed budget, so it must not be
+    // the primary owner shutdown path.
+    cx.on_app_quit(move |cx| {
+        let service = fallback_service.clone();
+        let shutdown_task = Tokio::spawn(cx, async move { service.shutdown().await });
+        async move {
+            log_ssh_session_shutdown("gpui quit fallback", shutdown_task.await);
+        }
+    })
+    .detach();
+}
+
+fn spawn_ssh_session_shutdown(
+    cx: &App,
+) -> Option<Task<Result<SshSessionShutdownReport, JoinError>>> {
+    let service = cx.try_global::<GlobalSshSessionService>()?.service();
+    Some(Tokio::spawn(cx, async move { service.shutdown().await }))
+}
+
+fn log_ssh_session_shutdown(
+    reason: &'static str,
+    result: Result<SshSessionShutdownReport, JoinError>,
+) {
+    match result {
+        Ok(report)
+            if report.timed_out
+                || report.manager_failures > 0
+                || report.managers_remaining > 0
+                || report.registry_tasks_remaining > 0 =>
+        {
+            tracing::warn!(
+                reason,
+                timed_out = report.timed_out,
+                managers_requested = report.managers_requested,
+                managers_completed = report.managers_completed,
+                manager_failures = report.manager_failures,
+                managers_remaining = report.managers_remaining,
+                registry_tasks_remaining = report.registry_tasks_remaining,
+                "SSH session service shutdown completed with incomplete cleanup"
+            );
+        }
+        Ok(report) => {
+            tracing::info!(
+                reason,
+                managers_requested = report.managers_requested,
+                managers_completed = report.managers_completed,
+                "SSH session service shutdown completed"
+            );
+        }
+        Err(error) => {
+            tracing::error!(
+                reason,
+                %error,
+                "SSH session service shutdown task failed"
+            );
+        }
+    }
+}
+
+/// Await the bounded application-owned SSH teardown before invoking GPUI's
+/// platform quit routine.
+///
+/// This is intentionally the only production helper that calls `cx.quit()`.
+/// Repeated callers join the same idempotent `SshSessionService::shutdown`
+/// lifecycle rather than creating an independent transport teardown.
+pub(crate) fn shutdown_ssh_sessions_and_quit(cx: &mut App, reason: &'static str) {
+    let Some(shutdown_task) = spawn_ssh_session_shutdown(cx) else {
+        tracing::error!(
+            reason,
+            "SSH session service global is missing; quitting without shared-session teardown"
+        );
+        cx.quit();
+        return;
+    };
+
+    cx.spawn(async move |cx| {
+        let shutdown_result = shutdown_task.await;
+        log_ssh_session_shutdown(reason, shutdown_result);
+        let _ = cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InitialPinnedTabLayout {
@@ -564,7 +686,7 @@ fn quit_app(cx: &mut App) {
 
 fn request_active_window_quit(cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
-        cx.quit();
+        shutdown_ssh_sessions_and_quit(cx, "quit without an active window");
         return;
     };
     cx.defer(move |cx| {
@@ -579,7 +701,7 @@ fn request_window_quit(window: &mut Window, cx: &mut App) {
         .try_global::<GlobalOnetCliApp>()
         .map(|global| global.app.clone())
     else {
-        cx.quit();
+        shutdown_ssh_sessions_and_quit(cx, "quit without the application entity");
         return;
     };
     app.update(cx, |app, cx| {
@@ -629,6 +751,7 @@ pub fn init(cx: &mut App) {
     one_core::themes::load_imported(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx);
+    init_ssh_session_service(cx);
     ai_chat_view::init(cx);
     crate::public_mcp_approval::init(cx);
     crate::ai_chat_acp::init(cx);
@@ -1327,7 +1450,7 @@ impl OnetCliApp {
             let _ = this.update(cx, |app, cx| {
                 app.quit_state.finish_close(can_quit);
                 if can_quit {
-                    cx.quit();
+                    shutdown_ssh_sessions_and_quit(cx, "confirmed application quit");
                 }
             });
         })
@@ -1338,9 +1461,12 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        configured_log_file_path, default_log_file_path, initial_home_tab_layout, log_file_appender,
+        GlobalSshSessionService, configured_log_file_path, default_log_file_path,
+        init_ssh_session_service, initial_home_tab_layout, log_file_appender,
     };
+    use one_core::gpui_tokio::Tokio;
     use one_core::settings::StartupDefaultPage;
+    use ssh::SshSessionServiceState;
     use std::io::Write;
 
     #[test]
@@ -1475,6 +1601,57 @@ mod tests {
 
         assert!(!quit_fn.contains("cx.quit()"));
         assert!(quit_fn.contains("request_active_window_quit(cx)"));
+    }
+
+    #[gpui::test]
+    fn ssh_session_service_has_one_application_global_owner(cx: &mut gpui::TestAppContext) {
+        let (first, second, runtime) = cx.update(|cx| {
+            one_core::gpui_tokio::init(cx);
+            init_ssh_session_service(cx);
+
+            let first = cx.global::<GlobalSshSessionService>().service();
+            let second = cx.global::<GlobalSshSessionService>().service();
+            (first, second, Tokio::handle(cx))
+        });
+
+        let report = runtime.block_on(first.shutdown());
+
+        assert!(!report.timed_out);
+        assert_eq!(SshSessionServiceState::Stopped, second.snapshot().state);
+    }
+
+    #[test]
+    fn confirmed_and_update_quit_paths_await_shared_ssh_shutdown() {
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+        let helper_start = source
+            .find("pub(crate) fn shutdown_ssh_sessions_and_quit")
+            .expect("shared SSH shutdown helper");
+        let helper_end = source[helper_start..]
+            .find("\n}\n\n#[derive(Clone, Copy")
+            .map(|offset| helper_start + offset)
+            .expect("shared SSH shutdown helper end");
+        let helper = &source[helper_start..helper_end];
+        let await_shutdown = helper
+            .find("let shutdown_result = shutdown_task.await;")
+            .expect("await SSH shutdown");
+        let platform_quit = helper
+            .find("cx.update(|cx| cx.quit())")
+            .expect("platform quit");
+
+        assert!(await_shutdown < platform_quit);
+
+        let confirm_start = source.find("fn confirm_quit").expect("confirm_quit");
+        let confirm_end = source[confirm_start..]
+            .find("\n    }\n}\n\n#[cfg(test)]")
+            .map(|offset| confirm_start + offset)
+            .expect("confirm_quit end");
+        let confirm_quit = &source[confirm_start..confirm_end];
+        assert!(confirm_quit.contains("shutdown_ssh_sessions_and_quit"));
+        assert!(!confirm_quit.contains("cx.quit()"));
+
+        let update_dialog = include_str!("update/dialog.rs");
+        assert!(update_dialog.contains("shutdown_ssh_sessions_and_quit"));
+        assert!(!update_dialog.contains("cx.quit()"));
     }
 
     #[test]
