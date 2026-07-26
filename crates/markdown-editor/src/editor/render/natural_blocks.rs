@@ -27,11 +27,8 @@ impl MarkdownEditor {
             return self.render_table(block, table, cx);
         }
         if let Some(rendered) = self.render_block_output(block, cx) {
-            if self.active_block == Some(block.id) {
-                return self.render_block_edit_surface(block, cx);
-            }
-            return self.render_artifact_preview(block, rendered, cx);
+            return self.render_artifact_shell(block, rendered, cx);
         }
-        self.render_block_edit_surface(block, cx)
+        self.render_block_edit_surface(block, true, cx)
     }
 }

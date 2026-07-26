@@ -1633,6 +1633,74 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
 }
 
 #[gpui::test]
+fn clicking_an_artifact_activates_its_mounted_input_without_moving_content(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "```mermaid\ngraph TD\nA --> B\n```\n\nFollowing paragraph";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let artifact_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(520.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(svg_render_provider_with_height(180.)), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let shell_selector =
+        Box::leak(format!("markdown-artifact-shell-{}", artifact_id.0).into_boxed_str());
+    let rendered_layer_selector =
+        Box::leak(format!("markdown-artifact-rendered-layer-{}", artifact_id.0).into_boxed_str());
+    let input_slot_selector =
+        Box::leak(format!("markdown-block-input-slot-{}", artifact_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+
+    let shell_before = cx
+        .debug_bounds(shell_selector)
+        .expect("artifact must render through a stable shell");
+    let rendered_layer = cx
+        .debug_bounds(rendered_layer_selector)
+        .expect("inactive artifact render layer must be visible");
+    assert!(
+        cx.debug_bounds(input_slot_selector).is_some(),
+        "artifact input must be laid out before its first activation"
+    );
+    let following_before = cx.debug_bounds(following_selector).unwrap();
+    let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+
+    cx.simulate_click(rendered_layer.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        Some(artifact_id),
+        editor.read_with(&cx, |editor, _| editor.active_block())
+    );
+    assert_eq!(
+        shell_before,
+        cx.debug_bounds(shell_selector)
+            .expect("artifact shell must remain mounted after activation")
+    );
+    assert_eq!(
+        following_before,
+        cx.debug_bounds(following_selector)
+            .expect("following block must remain in place")
+    );
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+    assert!(
+        cx.debug_bounds(input_slot_selector).is_some(),
+        "activation must reveal the input that was already mounted"
+    );
+}
+
+#[gpui::test]
 fn combined_document_keeps_every_preview_capability(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "# 组合回归\n\n正文包含 **粗体** 与 $e^{i\\pi}+1=0$ 行内公式。\n\n```mermaid\ngraph LR\n  A[输入] --> B[渲染]\n```\n\n$$\n\\frac{a+b}{c}\n$$\n\n![示例图片](missing-combination-regression.png)\n\n```rust\nfn main() {\n    println!(\"markdown\");\n}\n```\n\n| 名称 | 状态 |\n| :--- | ---: |\n| 数学公式 | 完成 |\n";

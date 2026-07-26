@@ -5,6 +5,7 @@ use super::{
         should_virtualize, virtual_item_sizes,
     },
 };
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
     prelude::FluentBuilder as _, px,
@@ -15,7 +16,6 @@ use gpui_component::{
     v_flex, v_virtual_list,
 };
 use markdown_source::SourceBlock;
-use std::cell::Cell;
 use std::rc::Rc;
 
 impl MarkdownEditor {
@@ -168,34 +168,64 @@ impl MarkdownEditor {
             .map_or(preview_height, |measured| preview_height.max(measured))
     }
 
-    pub(super) fn render_artifact_preview(
+    /// Keeps the rendered artifact and its source Input in one permanent grid
+    /// cell. Both layers participate in layout from the first render, so
+    /// activating the source can only change focus/visibility, never the
+    /// block's reserved geometry or InputState identity.
+    pub(super) fn render_artifact_shell(
         &self,
         block: &SourceBlock,
         rendered: gpui::AnyElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let key = MarkdownSurfaceKey::block(block.id);
+        let active = self.active_block == Some(block.id) && self.active_surface_key() == key;
         let editor = cx.entity();
+        let click_editor = editor.clone();
         let block_id = block.id;
-        let bounds = Rc::new(Cell::new(gpui::Bounds::default()));
-        let click_bounds = bounds.clone();
-        gpui::div()
-            .id(("markdown-preview-block", block.id.0))
-            .debug_selector(|| format!("markdown-preview-block-{}", block.id.0))
+        let input_layer = gpui::div()
+            .id(("markdown-artifact-input-layer", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-input-layer-{}", block_id.0))
+            .col_start(1)
+            .row_start(1)
+            .w_full()
+            .min_w_0()
+            .opacity(if active { 1. } else { 0. })
+            .child(self.render_block_edit_surface(block, false, cx));
+        let rendered_layer = gpui::div()
+            .id(("markdown-artifact-rendered-layer", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-rendered-layer-{}", block_id.0))
+            .col_start(1)
+            .row_start(1)
             .w_full()
             .min_w_0()
             .cursor_text()
-            .on_prepaint(move |value, _, _| bounds.set(value))
+            .when(active, |this| this.invisible())
             .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                let line = ((event.position.y - click_bounds.get().top())
-                    .as_f32()
-                    .max(0.)
-                    / 24.)
-                    .floor() as usize;
-                editor.update(cx, |editor, cx| {
-                    editor.activate_block_line(block_id, line, window, cx);
+                click_editor.update(cx, |editor, cx| {
+                    if event.click_count == 1 && !event.modifiers.shift {
+                        editor.activate_surface_at_position(key, event.position, window, cx);
+                    } else {
+                        editor.focus_surface(key, window, cx);
+                    }
                 });
             })
-            .child(rendered)
+            .child(rendered);
+        gpui::div()
+            .id(("markdown-artifact-shell", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-shell-{}", block_id.0))
+            .grid()
+            .grid_cols(1)
+            .grid_rows(1)
+            .w_full()
+            .min_w_0()
+            .on_prepaint(move |bounds, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.record_measured_block_height(block_id, bounds.size.height, cx);
+                });
+            })
+            .child(input_layer)
+            .child(rendered_layer)
             .into_any_element()
     }
 

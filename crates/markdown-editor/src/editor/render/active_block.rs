@@ -17,6 +17,7 @@ impl MarkdownEditor {
     pub(super) fn render_block_edit_surface(
         &self,
         block: &SourceBlock,
+        records_block_height: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let key = MarkdownSurfaceKey::block(block.id);
@@ -47,13 +48,7 @@ impl MarkdownEditor {
             .child(
                 gpui::div()
                     .id(("markdown-block-input-slot", block.id.0))
-                    .debug_selector(move || {
-                        if active {
-                            "markdown-active-input-slot".to_owned()
-                        } else {
-                            format!("markdown-block-input-slot-{}", block_id.0)
-                        }
-                    })
+                    .debug_selector(move || format!("markdown-block-input-slot-{}", block_id.0))
                     .flex()
                     .w_full()
                     .min_w_0()
@@ -88,10 +83,12 @@ impl MarkdownEditor {
                     }
                 });
             })
-            .on_prepaint(move |bounds, _, cx| {
-                editor.update(cx, |editor, cx| {
-                    editor.record_measured_block_height(block_id, bounds.size.height, cx);
-                });
+            .when(records_block_height, |this| {
+                this.on_prepaint(move |bounds, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                        editor.record_measured_block_height(block_id, bounds.size.height, cx);
+                    });
+                })
             })
             .child(content)
             .into_any_element()
