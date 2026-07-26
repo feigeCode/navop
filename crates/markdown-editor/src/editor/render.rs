@@ -5,7 +5,6 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
-    text::{MarkdownPalette, TextViewStyle},
 };
 
 mod action_handlers;
@@ -51,31 +50,6 @@ impl MarkdownEditor {
             muted_foreground: self.theme.muted_foreground,
             border: self.theme.border,
         }
-    }
-
-    fn text_view_style(&self) -> TextViewStyle {
-        TextViewStyle::default()
-            .paragraph_gap(rems(0.62))
-            .heading_font_size(|level, _| match level {
-                1 => gpui::px(30.),
-                2 => gpui::px(24.),
-                3 => gpui::px(20.),
-                4 => gpui::px(17.),
-                _ => gpui::px(16.),
-            })
-            .markdown_palette(MarkdownPalette {
-                is_dark: self.theme.background.l < 0.5,
-                foreground: self.theme.foreground,
-                muted_foreground: self.theme.muted_foreground,
-                border: self.theme.border,
-                code_background: self.theme.border.opacity(0.2),
-                code_foreground: self.theme.foreground,
-                table_header: self.theme.border.opacity(0.24),
-                table_row: self.theme.background,
-                table_row_alt: self.theme.border.opacity(0.1),
-                quote_border: self.theme.border,
-                link: self.theme.primary,
-            })
     }
 
     fn render_image_properties(&self, cx: &mut Context<Self>) -> gpui::AnyElement {

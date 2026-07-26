@@ -1,10 +1,11 @@
 use super::{MARKDOWN_BODY_FONT_SIZE, MARKDOWN_BODY_LINE_HEIGHT, MarkdownEditor};
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString, Styled,
     TextAlign, prelude::FluentBuilder, rems,
 };
-use gpui_component::{ElementExt, StyledExt, h_flex, input::Input, text::TextView, v_flex};
-use markdown_source::{SourceBlock, SourceTableCell, SourceTableMap, TableCellAddress};
+use gpui_component::{ElementExt, StyledExt, h_flex, input::Input, v_flex};
+use markdown_source::{SourceBlock, SourceTableMap, TableCellAddress};
 
 impl MarkdownEditor {
     pub(super) fn render_table(
@@ -23,14 +24,13 @@ impl MarkdownEditor {
             .filter(|(row, _)| *row != 1)
             .map(|(row, source_row)| {
                 h_flex().w_full().min_w_0().items_stretch().children(
-                    source_row.cells.iter().enumerate().map(|(column, cell)| {
+                    source_row.cells.iter().enumerate().map(|(column, _)| {
                         self.render_table_cell(
                             TableCellAddress {
                                 block_id: block.id,
                                 row,
                                 column,
                             },
-                            cell,
                             row == 0,
                             alignments.get(column).copied().unwrap_or(TextAlign::Left),
                             cx,
@@ -75,12 +75,17 @@ impl MarkdownEditor {
     fn render_table_cell(
         &self,
         address: TableCellAddress,
-        cell: &SourceTableCell,
         header: bool,
         alignment: TextAlign,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let active = self.active_table_cell == Some(address);
+        let key = MarkdownSurfaceKey::table_cell(address);
+        let surface = self
+            .surface(key)
+            .expect("every rendered table cell must own an edit surface");
+        let input = surface.input.clone();
+        let click_input = input.clone();
+        let active = self.active_table_cell == Some(address) && self.active_surface_key() == key;
         let editor = cx.entity();
         gpui::div()
             .id(table_cell_id(address))
@@ -99,69 +104,70 @@ impl MarkdownEditor {
             .when(header, |cell| {
                 cell.bg(self.theme.border.opacity(0.2)).font_semibold()
             })
-            .when(!active, |cell| {
-                cell.cursor_text()
-                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                        editor.update(cx, |editor, cx| {
-                            editor.activate_table_cell_at(address, event.position, window, cx);
-                        });
-                    })
+            .cursor_text()
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                editor.update(cx, |editor, cx| {
+                    let input_contains_click = click_input
+                        .read(cx)
+                        .laid_out_input_bounds()
+                        .contains(&event.position);
+                    if editor.active_table_cell == Some(address)
+                        && editor.active_surface_key() == key
+                        && input_contains_click
+                    {
+                        return;
+                    }
+                    if event.click_count == 1 && !event.modifiers.shift {
+                        editor.activate_table_cell_at(address, event.position, window, cx);
+                    } else {
+                        editor.focus_surface(key, window, cx);
+                    }
+                });
             })
-            .child(if active {
-                self.render_active_table_cell(address, cell, alignment)
-            } else {
-                self.render_table_cell_preview(address, cell, "preview")
-            })
-            .into_any_element()
-    }
-
-    fn render_active_table_cell(
-        &self,
-        _address: TableCellAddress,
-        _cell: &SourceTableCell,
-        alignment: TextAlign,
-    ) -> gpui::AnyElement {
-        gpui::div()
-            .debug_selector(|| "markdown-active-table-input-slot".to_owned())
-            .flex()
-            .flex_col()
-            .w_full()
-            .min_w_0()
-            .relative()
             .child(
-                Input::new(&self.input)
+                gpui::div()
+                    .id(table_cell_surface_id(address))
+                    .debug_selector(|| table_cell_surface_selector(address))
+                    .flex()
+                    .flex_col()
                     .w_full()
-                    .h_auto()
-                    .bare()
-                    .bordered(false)
-                    .focus_bordered(false)
-                    .local_style(self.input_style())
-                    .highlight_theme(self.theme.highlight_theme.clone())
-                    .editor_scrollbar(false)
-                    .text_layout_margin(false)
-                    .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-                    .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-                    .text_align(alignment)
-                    .caret_color(self.theme.primary),
+                    .min_w_0()
+                    .relative()
+                    .child(
+                        gpui::div()
+                            .id(table_cell_input_id(address))
+                            .debug_selector(move || {
+                                if active {
+                                    "markdown-active-table-input-slot".to_owned()
+                                } else {
+                                    table_cell_input_selector(address)
+                                }
+                            })
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .min_w_0()
+                            .child(
+                                Input::new(&input)
+                                    .w_full()
+                                    .h_auto()
+                                    .bare()
+                                    .bordered(false)
+                                    .focus_bordered(false)
+                                    .local_style(self.input_style())
+                                    .highlight_theme(self.theme.highlight_theme.clone())
+                                    .editor_scrollbar(false)
+                                    .text_layout_margin(false)
+                                    .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
+                                    .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
+                                    .text_align(alignment)
+                                    .caret_color(self.theme.primary)
+                                    .when(header, |input| input.font_semibold()),
+                            ),
+                    )
+                    .children(self.inline_math_overlays(key)),
             )
-            .children(self.active_inline_math_overlays())
             .into_any_element()
-    }
-
-    fn render_table_cell_preview(
-        &self,
-        address: TableCellAddress,
-        cell: &SourceTableCell,
-        variant: &'static str,
-    ) -> gpui::AnyElement {
-        TextView::markdown(
-            table_cell_content_id(address, variant),
-            cell.original_source.trim().to_owned(),
-        )
-        .style(self.text_view_style())
-        .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-        .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-        .into_any_element()
     }
 }
 
@@ -197,10 +203,24 @@ fn table_cell_selector(address: TableCellAddress) -> String {
     )
 }
 
-fn table_cell_content_id(address: TableCellAddress, variant: &str) -> SharedString {
+fn table_cell_surface_id(address: TableCellAddress) -> SharedString {
+    table_cell_surface_selector(address).into()
+}
+
+fn table_cell_surface_selector(address: TableCellAddress) -> String {
     format!(
-        "markdown-table-cell-content-{}-{}-{}-{variant}",
+        "markdown-table-cell-edit-surface-{}-{}-{}",
         address.block_id.0, address.row, address.column
     )
-    .into()
+}
+
+fn table_cell_input_id(address: TableCellAddress) -> SharedString {
+    table_cell_input_selector(address).into()
+}
+
+fn table_cell_input_selector(address: TableCellAddress) -> String {
+    format!(
+        "markdown-table-cell-input-slot-{}-{}-{}",
+        address.block_id.0, address.row, address.column
+    )
 }

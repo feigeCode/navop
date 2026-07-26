@@ -8,10 +8,6 @@ use markdown_source::SourceInlineKind;
 use std::{ops::Range, sync::Arc};
 
 impl MarkdownEditor {
-    pub(super) fn active_inline_math_overlays(&self) -> Vec<gpui::AnyElement> {
-        self.inline_math_overlays(self.active_surface_key())
-    }
-
     pub(super) fn inline_math_overlays(&self, key: MarkdownSurfaceKey) -> Vec<gpui::AnyElement> {
         let document = self.history.document();
         let nodes = match key {

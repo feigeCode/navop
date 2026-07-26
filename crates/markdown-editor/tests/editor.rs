@@ -464,10 +464,26 @@ fn clicking_a_table_cell_edits_only_its_mapped_content(cx: &mut TestAppContext) 
     let bounds = cx
         .debug_bounds(selector)
         .expect("table cell must be rendered");
+    let surface_selector = Box::leak(
+        format!("markdown-table-cell-edit-surface-{}-2-0", block_id.0).into_boxed_str(),
+    );
+    let surface_before = cx
+        .debug_bounds(surface_selector)
+        .expect("table cell edit surface must be mounted before activation");
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-table-cell-input-slot-{}-2-0", block_id.0).into_boxed_str(),
+        ))
+        .is_some(),
+        "table cell input must be mounted before activation"
+    );
     cx.simulate_click(
         point(bounds.left() + px(4.), bounds.top() + px(4.)),
         Modifiers::none(),
     );
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
     assert_eq!(
         Some(TableCellAddress {
             block_id,
@@ -475,6 +491,15 @@ fn clicking_a_table_cell_edits_only_its_mapped_content(cx: &mut TestAppContext) 
             column: 0,
         }),
         editor.read_with(&cx, |editor, _| editor.active_table_cell())
+    );
+    assert!(
+        cx.debug_bounds("markdown-active-table-input-slot").is_some(),
+        "activation must expose the already-mounted table cell input"
+    );
+    assert_eq!(
+        surface_before,
+        cx.debug_bounds(surface_selector)
+            .expect("table cell edit surface must remain mounted after activation")
     );
     editor.update_in(&mut cx, |editor, window, cx| {
         assert!(editor.edit_projected_value("changed", window, cx).unwrap());
