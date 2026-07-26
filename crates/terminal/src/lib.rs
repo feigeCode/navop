@@ -9,11 +9,9 @@ pub mod pty_backend;
 pub mod serial_backend;
 pub mod shell_integration;
 pub mod ssh_backend;
+mod ssh_ingress;
 pub mod terminal;
 pub mod types;
-
-#[cfg(test)]
-mod ingress_queue_tests;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_shell_integration;
 
@@ -38,4 +36,8 @@ pub use types::{
 };
 
 #[cfg(test)]
+mod ingress_queue_tests;
+#[cfg(test)]
 mod performance_metrics_tests;
+#[cfg(test)]
+mod ssh_ingress_tests;

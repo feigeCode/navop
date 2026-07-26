@@ -266,6 +266,44 @@ decision gate / integration，不在本切片提前扩大范围。
 
 完整 Red/Green 与回归命令见 `12.7.5`。
 
+### 2026-07-26：切片 8，SSH bounded parser ingress integration
+
+状态：**实现完成并通过 SSH ingress 定向、terminal 全量和跨 crate 回归验证，
+作为独立的 SSH 接入提交。**
+
+在本切片开始前，先执行 `git fetch origin dev`，并将最新 `origin/dev`
+（`5abc1f32`）以独立 merge commit `23da4ed7` 合入当前
+`feat/terminal-optimization-rework`。切片 7 的 queue contract 已由
+`4e5d3fb8` 独立提交，切片 7.5 的 reservation guard 已由 `d2a92d1e`
+独立提交；本切片只在其上接入 SSH，不覆盖已有 stash 或其他 backend 的 WIP。
+
+本切片新增 `SshParserIngress` 和 SSH actor scheduling gate：
+
+- SSH data 使用 byte/chunk/control 分离的 bounded queue（默认
+  `512 KiB / 16 chunks / 8 controls`），由独立 Tokio worker 串行持有
+  `Processor<StdSyncHandler>` 并同步更新 `Term`；
+- worker 使用 `recv_reserved()`，`TerminalIngressDataGuard` 一直持有到
+  `Processor::advance()` 返回并完成同步消费，之后才释放 byte reservation；
+- actor 同时最多保留一个尚未入队的 SSH source chunk；pending 时暂停后续
+  transport read，但 command 和 terminal response 仍可优先处理；
+- EOF、Close 和 `None` 走 graceful parser drain；shutdown、send/queue
+  error 和其他异常走 abortive discard；pending future 在等待 worker
+  完成前显式 drop，避免 sender clone 让 graceful finish 永久等待；
+- parser worker 复用现有 `GpuiEventProxy::queue_wakeup()` 及 wakeup
+  coalescing，不再创建 SSH 专用的 unbounded notify relay；
+- 空 SSH data event 被忽略；单个 source chunk 必须不超过
+  `SSH_PENDING_BYTES`，超大 chunk 由 queue 明确拒绝，actor 不隐式复制或
+  拆分，以保持 transport 的“一次最多一个 source chunk”内存契约；
+- ingress error 只记录字节数和预算的脱敏 warning，不记录 payload。
+
+当前接入范围明确只有 SSH。Serial、Local 尚未接入 bounded parser queue；
+command 和 terminal-response 路径仍沿用既有 unbounded channel，因此不能把
+本切片描述为整个 Terminal 或 GPUI 数据面的端到端 bounded 完成，也不能宣称
+整个 P1 已完成。OxideTerm 只作为 clean-room 的行为和架构参考，没有复制其
+源码、测试文本、注释、错误字符串或独特常量组合。
+
+完整 Red/Green、reservation 边界证据和回归命令见 `12.8`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1821,3 +1859,94 @@ git diff --check
 
 本切片没有修改 SSH actor 接线；`cargo check -p terminal` 的阻塞项留给后续
 SSH ingress 切片修复。
+
+### 12.8 切片 8：SSH bounded parser ingress integration
+
+实现范围与边界：
+
+- `origin/dev` 已在 `23da4ed7` 合入；queue contract
+  `4e5d3fb8` 与 reservation guard `d2a92d1e` 保持为先前的独立提交；
+- `SshParserIngress` 为每条 SSH 连接创建 byte/chunk/control bounded queue
+  （默认 `512 KiB / 16 / 8`）和独立 parser worker；
+- worker 串行持有 `Processor<StdSyncHandler>`，通过
+  `recv_reserved()` 接收 payload，并把 reservation 保留到
+  `Processor::advance()` 完成；
+- SSH actor 通过 `next_ssh_actor_input()` 先处理 actor command、terminal
+  response 和 pending ingress send，只有没有 pending source chunk 时才读取
+  transport；queue 满时最多额外持有一个 source chunk；
+- command/terminal response 继续走既有 unbounded channel，属于本切片明确的
+  未覆盖范围；不能据此宣称整个 Terminal 数据面已经端到端 bounded；
+- parser worker 的 repaint 使用既有 `GpuiEventProxy` wakeup gate，保持
+  “最多一个 pending edge”的 coalescing 语义；
+- EOF/Close/`None` 在 drop pending future 后 graceful drain；shutdown、
+  queue/send error 和其他异常 abort 并丢弃 backlog；
+- 空 `Data`/`ExtendedData` 不会制造误断线；超过
+  `SSH_PENDING_BYTES` 的 source chunk 采用“明确拒绝 + transport chunk
+  上界契约”，不在 actor 中隐式复制或拆分；`Display`/`Debug` warning
+  只包含长度和预算，不泄露 payload；
+- 当前只有 SSH 接入；Serial、Local 和其他 GPUI producer 尚未迁移。
+
+TDD/回归证据：
+
+```text
+旧 worker 使用 receiver.recv() 的 reservation boundary 临时回归：
+assertion `left == right` failed
+the dequeued payload must remain reserved while Processor::advance is blocked
+left: 0
+right: 3
+
+恢复 recv_reserved() 后：
+cargo test -p terminal \
+  ssh_ingress_tests::parser_worker_holds_byte_reservation_through_term_lock_and_parser_consumption \
+  --lib -- --exact
+1 passed，0 failed（重复运行 5 次）
+
+cargo test -p terminal ssh_ingress --lib -- --nocapture
+8 passed，0 failed
+
+cargo check -p terminal --lib
+通过
+
+cargo test -p terminal --lib
+208 passed，0 failed
+
+cargo test -p terminal
+208 passed，0 failed；throughput_baseline 的 5 个测试按设计 ignored
+
+rustfmt --edition 2021 --check \
+  crates/terminal/src/lib.rs \
+  crates/terminal/src/pty_backend.rs \
+  crates/terminal/src/ssh_backend.rs \
+  crates/terminal/src/ssh_ingress.rs \
+  crates/terminal/src/ssh_ingress_tests.rs \
+  crates/terminal/src/terminal.rs
+通过
+
+git diff --check
+通过
+```
+
+新增 SSH ingress contract 测试覆盖：
+
+- command 和 terminal response 在 data queue/backpressure 下仍可被 actor
+  处理，transport read 被暂停；
+- sustained transport 只保留一个 pending source chunk，pending/peak bytes
+  不超过预算；
+- oversized source chunk 立即拒绝、不入队、不触发 transport read，错误
+  debug/display 不包含 payload；
+- parser worker 保持输入顺序、graceful drain，并复用 wakeup coalescing；
+- parser worker 在 `Term` lock 和 `Processor::advance()` 阻塞期间保持 byte
+  reservation，释放 lock 后 blocked sender 才能继续；
+- abort 会丢弃尚未消费 backlog，不产生 parser metrics 或 wakeup，也不会
+  double release 仍由 consumer 持有的 guard。
+
+补充说明：
+
+- 现有 workspace 的严格 Clippy 仍被范围外既有问题
+  `crates/x11_forwarding/src/detect.rs:238`（以及 terminal 自身未修改的
+  lint）阻塞；本切片没有顺手改无关代码；
+- 本切片没有实现 SSH host-key policy、应用级 session registry、Serial/Local
+  ingress、unbounded command/response 重构或完整端到端压力验收；
+- 下一步应分别为 Local、Serial 接入同一 reservation-aware contract，并在
+  三条真实路径上补齐 flood、slow consumer、abort、reconnect 和 control
+  latency 验收，之后才能评估 P1 完成度。

@@ -1610,18 +1610,7 @@ impl Terminal {
         generation: u64,
         cx: &mut Context<Self>,
     ) {
-        // 创建 SSH 后端需要的通知通道（UnboundedSender<()>）
-        let (notify_tx, mut notify_rx) = unbounded_channel::<()>();
-
         let task = Tokio::spawn(cx, async move {
-            // 转发 SSH 通知到事件通道（必须在 tokio runtime 内部）
-            let event_tx_clone = event_tx.clone();
-            tokio::spawn(async move {
-                while notify_rx.recv().await.is_some() {
-                    let _ = event_tx_clone.send(TerminalEvent::Wakeup);
-                }
-            });
-
             let disconnect_tx = on_disconnect.map(|tx| {
                 let (sender, mut receiver) = unbounded_channel::<()>();
                 tokio::spawn(async move {
@@ -1638,7 +1627,6 @@ impl Terminal {
                 term,
                 event_proxy,
                 event_tx,
-                notify_tx,
                 disconnect_tx,
                 init_commands,
                 config.disable_shell_integration,

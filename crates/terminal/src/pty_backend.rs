@@ -688,6 +688,10 @@ impl GpuiEventProxy {
         self.wakeup_pending.store(false, Ordering::Release);
     }
 
+    pub(crate) fn queue_wakeup(&self) {
+        self.send_event(AlacTermEvent::Wakeup);
+    }
+
     /// 返回 Wakeup 去重标记的句柄，便于事件聚合任务在转发 Wakeup 后立即 reset，
     /// 让下一次 PTY 输出能继续触发 Wakeup
     pub fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
