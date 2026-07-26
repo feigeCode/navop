@@ -16,17 +16,28 @@ impl MarkdownEditor {
             return;
         };
         let projection = surface.projection.clone();
-        let value = surface.input.read(cx).value().to_string();
+        let input = surface.input.read(cx);
+        let display_cursor = input.selected_range().end;
+        let value = input.value().to_string();
         if value == projection.text {
             return;
         }
-        let cursor = projection.display_to_source(surface.input.read(cx).selected_range().end);
+        let cursor = projection.display_to_source(display_cursor);
         if let Some(edit) = projection.edit_for_value(&value)
             && !self.surface_is_source_code(key)
             && edit.source_range.is_empty()
             && edit.replacement == "\n"
         {
-            self.pending_newline = Some((key, edit.source_range.start));
+            // A newline inserted immediately before an existing line ending
+            // has an ambiguous common-prefix diff: the newly inserted `\n`
+            // can be paired with the old line ending, moving the edit to the
+            // beginning of the next projected line. Use the post-edit caret
+            // to recover the pre-edit display offset and split the source at
+            // the user's actual line boundary instead.
+            let insertion_display_offset =
+                display_cursor.saturating_sub(edit.replacement.len());
+            let source_offset = projection.display_to_source(insertion_display_offset);
+            self.pending_newline = Some((key, source_offset));
             cx.defer_in(window, move |editor, window, cx| {
                 editor.flush_pending_newline(key, window, cx);
             });

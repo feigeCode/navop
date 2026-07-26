@@ -1538,6 +1538,54 @@ fn pressing_enter_after_a_task_item_continues_an_unchecked_checkbox_on_the_next_
 }
 
 #[gpui::test]
+fn pressing_enter_between_task_items_keeps_the_following_marker_with_its_text(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "- [x] Todo\n- [x] Done";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let list_id = document.blocks[0].id;
+    let (window, editor) = open_editor_with_size(source, size(px(800.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(list_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_selected_range(4..4, false, window, cx);
+    });
+    cx.simulate_keystrokes("enter");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        "- [x] Todo\n- [ ] \n- [x] Done",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        "Todo\n\nDone",
+        editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
+    );
+
+    let first = input
+        .read_with(&cx, |input, _| input.range_to_bounds(&(0..0)))
+        .expect("the first task marker anchor must remain laid out");
+    let inserted = input
+        .read_with(&cx, |input, _| input.range_to_bounds(&(5..5)))
+        .expect("the inserted task marker anchor must be laid out");
+    let following = input
+        .read_with(&cx, |input, _| input.range_to_bounds(&(6..6)))
+        .expect("the following task marker anchor must stay with its text");
+    assert!((first.left() - inserted.left()).abs() <= px(1.));
+    assert!((inserted.left() - following.left()).abs() <= px(1.));
+    assert!(first.top() < inserted.top());
+    assert!(inserted.top() < following.top());
+}
+
+#[gpui::test]
 fn clicking_task_checkboxes_toggles_source_without_replacing_the_input(
     cx: &mut TestAppContext,
 ) {
