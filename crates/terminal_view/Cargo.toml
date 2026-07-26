@@ -39,3 +39,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

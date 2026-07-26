@@ -2803,6 +2803,7 @@ impl TabContainer {
                 .size_full()
                 .min_w_0()
                 .min_h_0()
+                .overflow_hidden()
                 .child(
                     div()
                         .flex_1()

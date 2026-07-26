@@ -101,6 +101,24 @@ fn sidebar_center_clips_active_view_intrinsic_size_at_every_flex_boundary() {
     assert!(center.contains(".min_w_0()"));
     assert!(center.contains(".min_h_0()"));
     assert!(center.contains(".overflow_hidden()"));
+
+    let bottom_center_start = renderer
+        .find(".id(\"tab-sidebar-center\")")
+        .expect("bottom-sidebar center wrapper");
+    let bottom_center_end = renderer[bottom_center_start..]
+        .find(".child(")
+        .map(|offset| bottom_center_start + offset)
+        .expect("bottom-sidebar center child");
+    let bottom_center = &renderer[bottom_center_start..bottom_center_end];
+
+    assert!(bottom_center.contains(".size_full()"));
+    assert!(bottom_center.contains(".min_w_0()"));
+    assert!(bottom_center.contains(".min_h_0()"));
+    assert!(
+        bottom_center.contains(".overflow_hidden()"),
+        "the bottom-sidebar v_flex wrapper must clip the active view before its intrinsic size \
+         reaches the outer sidebar row"
+    );
 }
 
 #[test]

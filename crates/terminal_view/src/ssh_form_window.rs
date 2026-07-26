@@ -9,7 +9,7 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -1348,29 +1348,40 @@ impl SshFormWindow {
     /// 渲染连接图标选择器：自动（跟随测试连接探测结果）或手动固定图标。
     fn render_icon_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
-        let accent = cx.theme().accent;
+        let list_active = cx.theme().list_active;
+        let list_active_border = cx.theme().list_active_border;
+        let list_hover = cx.theme().list_hover;
+        let indicator_background = cx.theme().button_primary;
+        let indicator_foreground = cx.theme().button_primary_foreground;
 
         let tile = |id: &str, selected: bool, icon: Option<IconName>| {
             let id_string = (!id.is_empty()).then(|| id.to_string());
+            let tile_id = format!("ssh-icon-{}", if id.is_empty() { "auto" } else { id });
+            let tile_selector = tile_id.clone();
             let mut tile = div()
-                .id(SharedString::from(format!(
-                    "ssh-icon-{}",
-                    if id.is_empty() { "auto" } else { id }
-                )))
+                .id(SharedString::from(tile_id.clone()))
+                .debug_selector(move || tile_selector.clone())
                 .w(px(36.0))
                 .h(px(36.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded_md()
-                .border_1()
+                .relative()
                 .cursor_pointer();
             if selected {
-                tile = tile.border_color(accent).bg(accent.opacity(0.12));
+                tile = tile
+                    .border_2()
+                    .border_color(list_active_border)
+                    .bg(list_active);
             } else {
-                tile = tile.border_color(border);
+                tile = tile
+                    .border_1()
+                    .border_color(border)
+                    .hover(|style| style.bg(list_hover));
             }
-            match icon {
+
+            let tile = match icon {
                 Some(icon) => tile.child(icon.color().with_size(px(22.0))),
                 None => tile.child(
                     div()
@@ -1378,7 +1389,32 @@ impl SshFormWindow {
                         .text_color(cx.theme().muted_foreground)
                         .child(t!("SSH.icon_auto").to_string()),
                 ),
-            }
+            };
+
+            tile.when(selected, move |tile| {
+                let indicator_id = format!("{tile_id}-selected");
+                tile.child(
+                    div()
+                        .id(SharedString::from(indicator_id.clone()))
+                        .debug_selector(move || indicator_id.clone())
+                        .absolute()
+                        .top(px(-5.0))
+                        .right(px(-5.0))
+                        .size(px(14.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(indicator_background)
+                        .border_1()
+                        .border_color(indicator_foreground)
+                        .child(
+                            Icon::new(IconName::Check)
+                                .with_size(px(9.0))
+                                .text_color(indicator_foreground),
+                        ),
+                )
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.manual_icon = id_string.clone();
                 cx.notify();
@@ -2137,6 +2173,7 @@ mod tests {
         validate_save_state,
     };
     use anyhow::Context as _;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
     use rust_i18n::t;
     use std::sync::Arc;
@@ -2191,6 +2228,40 @@ mod tests {
 
         assert!(config.supports_save_and_continue());
         assert!(!config.is_editing());
+    }
+
+    #[gpui::test]
+    fn icon_picker_click_selects_icon_and_shows_feedback(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let ubuntu = cx
+            .debug_bounds("ssh-icon-ubuntu")
+            .expect("Ubuntu icon tile should be rendered");
+        cx.simulate_click(ubuntu.center(), Modifiers::default());
+
+        assert_eq!(
+            Some("ubuntu".to_string()),
+            form.read_with(cx, |form, _| form.manual_icon.clone()),
+            "clicking an icon tile should update the selected icon"
+        );
+        assert!(
+            cx.debug_bounds("ssh-icon-ubuntu-selected").is_some(),
+            "the selected icon should render an unambiguous selection indicator"
+        );
     }
 
     #[test]
