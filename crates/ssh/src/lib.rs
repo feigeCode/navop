@@ -1,11 +1,16 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod dynamic_socks;
+mod host_key;
 mod session_manager;
 mod socks5;
 mod ssh;
 
 pub use dynamic_socks::{DynamicSocksConfig, DynamicSocksTunnel, start_dynamic_socks_forward};
+pub use host_key::{
+    HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyPolicy, HostKeyProxyType,
+    HostKeyRejection, HostKeyRoute, HostKeyVerifier,
+};
 pub use session_manager::SshSessionManager;
 pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
