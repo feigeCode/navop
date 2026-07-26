@@ -165,8 +165,13 @@ const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
 struct TransferClientPool {
     config: SshConnectConfig,
     max_size: usize,
+    retired: AtomicBool,
+    state: Mutex<TransferClientPoolState<Arc<Mutex<RusshSftpClient>>>>,
+}
+
+struct TransferClientPoolState<Client> {
     total_created: usize,
-    available: Vec<Arc<Mutex<RusshSftpClient>>>,
+    available: Vec<Client>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,9 +302,59 @@ impl TransferClientPool {
         Self {
             config,
             max_size,
+            retired: AtomicBool::new(false),
+            state: Mutex::new(TransferClientPoolState::default()),
+        }
+    }
+
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire)
+    }
+}
+
+impl<Client> Default for TransferClientPoolState<Client> {
+    fn default() -> Self {
+        Self {
             total_created: 0,
             available: Vec::new(),
         }
+    }
+}
+
+impl<Client> TransferClientPoolState<Client> {
+    fn take_available(&mut self) -> Option<Client> {
+        self.available.pop()
+    }
+
+    fn reserve_new(&mut self, max_size: usize) -> bool {
+        if self.total_created >= max_size {
+            return false;
+        }
+        self.total_created += 1;
+        true
+    }
+
+    fn discard_one(&mut self) {
+        self.total_created = self.total_created.saturating_sub(1);
+    }
+
+    fn return_client(&mut self, client: Client, retired: bool) -> Option<Client> {
+        if retired {
+            self.discard_one();
+            Some(client)
+        } else {
+            self.available.push(client);
+            None
+        }
+    }
+
+    fn drain_available(&mut self) -> Vec<Client> {
+        self.total_created = self.total_created.saturating_sub(self.available.len());
+        std::mem::take(&mut self.available)
     }
 }
 
@@ -396,38 +451,66 @@ impl TransferQueue {
 }
 
 async fn acquire_transfer_client(
-    pool: Arc<Mutex<TransferClientPool>>,
+    pool: Arc<TransferClientPool>,
 ) -> anyhow::Result<Arc<Mutex<RusshSftpClient>>> {
+    if pool.is_retired() {
+        return Err(anyhow::anyhow!("Transfer client pool retired"));
+    }
+
     let config = {
-        let mut pool_guard = pool.lock().await;
-        if let Some(client) = pool_guard.available.pop() {
+        let mut state = pool.state.lock().await;
+        if pool.is_retired() {
+            return Err(anyhow::anyhow!("Transfer client pool retired"));
+        }
+        if let Some(client) = state.take_available() {
             return Ok(client);
         }
 
-        if pool_guard.total_created >= pool_guard.max_size {
+        if !state.reserve_new(pool.max_size) {
             return Err(anyhow::anyhow!("Transfer client pool exhausted"));
         }
 
-        pool_guard.total_created += 1;
-        pool_guard.config.clone()
+        pool.config.clone()
     };
 
     match RusshSftpClient::connect(config).await {
-        Ok(client) => Ok(Arc::new(Mutex::new(client))),
+        Ok(client) => {
+            let client = Arc::new(Mutex::new(client));
+            let disconnect = {
+                let mut state = pool.state.lock().await;
+                if pool.is_retired() {
+                    state.discard_one();
+                    true
+                } else {
+                    false
+                }
+            };
+            if disconnect {
+                disconnect_sftp_client(client).await;
+                Err(anyhow::anyhow!("Transfer client pool retired"))
+            } else {
+                Ok(client)
+            }
+        }
         Err(error) => {
-            let mut pool_guard = pool.lock().await;
-            pool_guard.total_created = pool_guard.total_created.saturating_sub(1);
+            let mut state = pool.state.lock().await;
+            state.discard_one();
             Err(error)
         }
     }
 }
 
 async fn release_transfer_client(
-    pool: Arc<Mutex<TransferClientPool>>,
+    pool: Arc<TransferClientPool>,
     client: Arc<Mutex<RusshSftpClient>>,
 ) {
-    let mut pool_guard = pool.lock().await;
-    pool_guard.available.push(client);
+    let disconnect = {
+        let mut state = pool.state.lock().await;
+        state.return_client(client, pool.is_retired())
+    };
+    if let Some(client) = disconnect {
+        disconnect_sftp_client(client).await;
+    }
 }
 
 pub(crate) async fn disconnect_sftp_client(client: Arc<Mutex<RusshSftpClient>>) {
@@ -437,11 +520,11 @@ pub(crate) async fn disconnect_sftp_client(client: Arc<Mutex<RusshSftpClient>>) 
     }
 }
 
-async fn disconnect_transfer_pool(pool: Arc<Mutex<TransferClientPool>>) {
+async fn disconnect_transfer_pool(pool: Arc<TransferClientPool>) {
+    pool.retire();
     let clients = {
-        let mut pool = pool.lock().await;
-        pool.total_created = pool.total_created.saturating_sub(pool.available.len());
-        std::mem::take(&mut pool.available)
+        let mut state = pool.state.lock().await;
+        state.drain_available()
     };
 
     for client in clients {
@@ -842,7 +925,7 @@ pub struct SftpView {
 
     transfer_queue: TransferQueue,
     next_task_id: usize,
-    transfer_client_pool: Arc<Mutex<TransferClientPool>>,
+    transfer_client_pool: Arc<TransferClientPool>,
     active_extract: Option<ActiveExtract>,
 
     focus_handle: FocusHandle,
@@ -1021,10 +1104,10 @@ impl SftpView {
             },
         ));
 
-        let transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
+        let transfer_client_pool = Arc::new(TransferClientPool::new(
             config.clone(),
             MAX_CONCURRENT_TRANSFERS,
-        )));
+        ));
 
         let mut view = Self {
             connection_state: ConnectionState::Disconnected { error: None },
@@ -1200,10 +1283,15 @@ impl SftpView {
             Tokio::spawn(cx, disconnect_sftp_client(old_client)).detach();
         }
         self.remote_loading = false;
-        self.transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
-            self.sftp_config.clone(),
-            MAX_CONCURRENT_TRANSFERS,
-        )));
+        let retired_pool = std::mem::replace(
+            &mut self.transfer_client_pool,
+            Arc::new(TransferClientPool::new(
+                self.sftp_config.clone(),
+                MAX_CONCURRENT_TRANSFERS,
+            )),
+        );
+        retired_pool.retire();
+        Tokio::spawn(cx, disconnect_transfer_pool(retired_pool)).detach();
         self.connect(cx);
     }
 
@@ -6303,10 +6391,12 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{
-        CloseState, ConnectionGeneration, SharedProgress, TransferAdmission, TransferOperation,
-        TransferQueue, TransferTask, TransferTaskState, is_valid_entry_name, join_remote_path,
-        should_apply_local_listing, should_apply_remote_listing,
+        CloseState, ConnectionGeneration, SharedProgress, TransferAdmission, TransferClientPool,
+        TransferClientPoolState, TransferOperation, TransferQueue, TransferTask, TransferTaskState,
+        acquire_transfer_client, is_valid_entry_name, join_remote_path, should_apply_local_listing,
+        should_apply_remote_listing,
     };
+    use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -6330,6 +6420,23 @@ mod tests {
                 current_file_total: AtomicU64::new(0),
             }),
             error: None,
+        }
+    }
+
+    fn transfer_pool_config() -> SshConnectConfig {
+        SshConnectConfig {
+            host: "should-not-dial.invalid".to_string(),
+            port: 22,
+            username: "tester".to_string(),
+            auth: SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
         }
     }
 
@@ -6421,6 +6528,37 @@ mod tests {
         assert_eq!(1, wrapped);
         assert!(generation.is_current(wrapped));
         assert!(!generation.is_current(0));
+    }
+
+    #[test]
+    fn retired_transfer_pool_drains_idle_and_disconnects_late_returns() {
+        let mut state = TransferClientPoolState::default();
+
+        assert!(state.reserve_new(2));
+        assert!(state.reserve_new(2));
+        assert!(!state.reserve_new(2));
+        assert_eq!(2, state.total_created);
+
+        assert_eq!(None, state.return_client(10, false));
+        assert_eq!(vec![10], state.drain_available());
+        assert_eq!(1, state.total_created);
+
+        assert_eq!(Some(20), state.return_client(20, true));
+        assert!(state.available.is_empty());
+        assert_eq!(0, state.total_created);
+    }
+
+    #[tokio::test]
+    async fn retired_transfer_pool_rejects_acquire_before_dial() {
+        let pool = Arc::new(TransferClientPool::new(transfer_pool_config(), 1));
+        pool.retire();
+
+        let error = match acquire_transfer_client(pool).await {
+            Ok(_) => panic!("retired pool must reject new acquisitions"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("pool retired"));
     }
 
     #[test]
