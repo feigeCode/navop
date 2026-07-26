@@ -10,6 +10,7 @@ use russh::keys::PublicKey;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
+use russh_sftp::client::fs::File as SftpFile;
 use russh_sftp::client::rawsession::Limits;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
@@ -19,6 +20,7 @@ use ssh::{
     defaults,
 };
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -106,6 +108,194 @@ impl Drop for LocalDownloadTemp {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+/// A remote upload is staged beside its destination and published with one
+/// SFTP rename request. The target is never opened with TRUNCATE.
+struct RemoteReplaceTemp {
+    path: String,
+    committed: bool,
+    cleaned: bool,
+}
+
+impl RemoteReplaceTemp {
+    fn path_for(target: &str) -> Result<String> {
+        if target.is_empty() || target.ends_with('/') || target.contains('\0') {
+            return Err(anyhow!(
+                "Remote replace target must be a non-empty file path without a trailing slash"
+            ));
+        }
+
+        let (parent, name) = match target.rfind('/') {
+            Some(index) => {
+                let parent = if index == 0 { "/" } else { &target[..index] };
+                (parent, &target[index + 1..])
+            }
+            None => (".", target),
+        };
+        if name.is_empty() || name == "." || name == ".." {
+            return Err(anyhow!(
+                "Remote replace target must identify a regular file name"
+            ));
+        }
+        let temporary_name = format!(".{name}.navop-part-{}", uuid::Uuid::new_v4());
+
+        if parent == "/" {
+            Ok(format!("/{temporary_name}"))
+        } else {
+            Ok(format!("{parent}/{temporary_name}"))
+        }
+    }
+
+    async fn create(sftp: &SftpSession, target: &str) -> Result<(Self, SftpFile)> {
+        let path = Self::path_for(target)?;
+        let file = sftp
+            .open_with_flags(
+                &path,
+                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+            )
+            .await
+            .map_err(|error| {
+                anyhow!(
+                    "Failed to create remote temporary file beside {}: {}",
+                    target,
+                    error
+                )
+            })?;
+
+        Ok((
+            Self {
+                path,
+                committed: false,
+                cleaned: false,
+            },
+            file,
+        ))
+    }
+
+    async fn cleanup(&mut self, sftp: &SftpSession) {
+        if self.committed || self.cleaned {
+            return;
+        }
+
+        match sftp.remove_file(&self.path).await {
+            Ok(()) => self.cleaned = true,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                self.cleaned = true;
+            }
+            Err(error) => {
+                tracing::debug!(
+                    path = %self.path,
+                    error = %error,
+                    "failed to remove abandoned remote temporary file"
+                );
+            }
+        }
+    }
+
+    async fn commit(mut self, sftp: &SftpSession, target: &str) -> Result<()> {
+        match sftp.rename(&self.path, target).await {
+            Ok(()) => {
+                self.committed = true;
+                Ok(())
+            }
+            Err(error) => {
+                self.cleanup(sftp).await;
+                Err(anyhow!(
+                    "Failed to atomically replace remote file {} (the original was not removed): {}",
+                    target,
+                    error
+                ))
+            }
+        }
+    }
+}
+
+impl Drop for RemoteReplaceTemp {
+    fn drop(&mut self) {
+        if !self.committed && !self.cleaned {
+            tracing::warn!(
+                path = %self.path,
+                "remote temporary file may have been abandoned"
+            );
+        }
+    }
+}
+
+/// Run a complete remote replace transaction. The closure owns the temporary
+/// handle and returns it after writing so this helper can flush, verify the
+/// exact byte count, close the handle, and only then publish the new name.
+async fn with_remote_replace<F, Fut>(
+    sftp: &SftpSession,
+    target: &str,
+    expected_size: u64,
+    operation: F,
+) -> Result<u64>
+where
+    F: FnOnce(SftpFile) -> Fut,
+    Fut: Future<Output = Result<(SftpFile, u64)>>,
+{
+    let (mut temporary, file) = RemoteReplaceTemp::create(sftp, target).await?;
+    let (mut file, written) = match operation(file).await {
+        Ok(result) => result,
+        Err(error) => {
+            temporary.cleanup(sftp).await;
+            return Err(error);
+        }
+    };
+
+    let validation = async {
+        if written != expected_size {
+            return Err(anyhow!(
+                "Remote replace for {} wrote {} bytes, expected {}",
+                target,
+                written,
+                expected_size
+            ));
+        }
+
+        file.flush()
+            .await
+            .map_err(|error| anyhow!("Failed to flush remote temporary file: {}", error))?;
+        file.sync_all()
+            .await
+            .map_err(|error| anyhow!("Failed to sync remote temporary file: {}", error))?;
+
+        let actual_size = file
+            .metadata()
+            .await
+            .map_err(|error| anyhow!("Failed to verify remote temporary file: {}", error))?
+            .size
+            .ok_or_else(|| {
+                anyhow!(
+                    "Remote temporary file {} has no reported size",
+                    temporary.path
+                )
+            })?;
+        if actual_size != expected_size {
+            return Err(anyhow!(
+                "Remote replace for {} has remote size {}, expected {}",
+                target,
+                actual_size,
+                expected_size
+            ));
+        }
+
+        file.shutdown()
+            .await
+            .map_err(|error| anyhow!("Failed to close remote temporary file: {}", error))?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = validation {
+        let _ = file.shutdown().await;
+        temporary.cleanup(sftp).await;
+        return Err(error);
+    }
+
+    temporary.commit(sftp, target).await?;
+    Ok(written)
 }
 
 fn expected_chunk_len(offset: u64, total_size: u64) -> Result<usize> {
@@ -784,19 +974,22 @@ impl RusshSftpClient {
         target: &mut Self,
         request: CopyFileRequest<'_>,
     ) -> Result<()> {
+        let source_path = request.source_path.to_owned();
+        let target_path = request.target_path.to_owned();
+        let file_size = request.file_size;
+        let completed = request.completed;
+        let total = request.total;
+        let cancelled = request.cancelled;
+        let progress = request.progress;
+        let source_path_for_error = source_path.clone();
+        let target_path_for_error = target_path.clone();
+        let target_path_for_write = target_path.clone();
+
         let mut source_file = self
             .sftp
-            .open_with_flags(request.source_path, OpenFlags::READ)
+            .open_with_flags(&source_path, OpenFlags::READ)
             .await
-            .map_err(|error| anyhow!("Failed to open {}: {}", request.source_path, error))?;
-        let mut target_file = target
-            .sftp
-            .open_with_flags(
-                request.target_path,
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-            )
-            .await
-            .map_err(|error| anyhow!("Failed to create {}: {}", request.target_path, error))?;
+            .map_err(|error| anyhow!("Failed to open {}: {}", source_path, error))?;
         let file_name = request
             .source_path
             .rsplit('/')
@@ -804,41 +997,58 @@ impl RusshSftpClient {
             .unwrap_or(request.source_path)
             .to_string();
         let started_at = Instant::now();
-        let mut file_transferred = 0;
-        let mut buffer = vec![0u8; BUFFER_SIZE];
+        let result = with_remote_replace(
+            &target.sftp,
+            &target_path,
+            file_size,
+            move |mut target_file| async move {
+                let mut buffer = vec![0u8; BUFFER_SIZE];
+                let mut file_transferred = 0u64;
 
-        loop {
-            ensure_not_cancelled(&request.cancelled)?;
-            let read = source_file.read(&mut buffer).await?;
-            if read == 0 {
-                break;
-            }
-            target_file.write_all(&buffer[..read]).await?;
-            file_transferred += read as u64;
-            let elapsed = started_at.elapsed().as_secs_f64();
-            (request.progress)(TransferProgress {
-                transferred: request.completed + file_transferred,
-                total: request.total,
-                speed: if elapsed > 0.0 {
-                    file_transferred as f64 / elapsed
-                } else {
-                    0.0
-                },
-                current_file: Some(file_name.clone()),
-                current_file_transferred: file_transferred,
-                current_file_total: request.file_size,
-            });
-        }
-        if file_transferred != request.file_size {
-            return Err(anyhow!(
-                "Unexpected EOF while copying {}: received {} of {} bytes",
-                request.source_path,
-                file_transferred,
-                request.file_size
-            ));
-        }
-        target_file.sync_all().await?;
-        Ok(())
+                loop {
+                    ensure_not_cancelled(&cancelled)?;
+                    let read = source_file
+                        .read(&mut buffer)
+                        .await
+                        .map_err(|error| anyhow!("Failed to read {}: {}", source_path, error))?;
+                    if read == 0 {
+                        break;
+                    }
+                    target_file
+                        .write_all(&buffer[..read])
+                        .await
+                        .map_err(|error| {
+                            anyhow!("Failed to write {}: {}", target_path_for_write, error)
+                        })?;
+                    file_transferred += read as u64;
+                    let elapsed = started_at.elapsed().as_secs_f64();
+                    (progress)(TransferProgress {
+                        transferred: completed + file_transferred,
+                        total,
+                        speed: if elapsed > 0.0 {
+                            file_transferred as f64 / elapsed
+                        } else {
+                            0.0
+                        },
+                        current_file: Some(file_name.clone()),
+                        current_file_transferred: file_transferred,
+                        current_file_total: file_size,
+                    });
+                }
+
+                Ok((target_file, file_transferred))
+            },
+        )
+        .await;
+
+        result.map(|_| ()).map_err(|error| {
+            anyhow!(
+                "Failed to copy {} to {} without replacing the original: {}",
+                source_path_for_error,
+                target_path_for_error,
+                error
+            )
+        })
     }
 }
 
@@ -1087,62 +1297,73 @@ impl SftpClient for RusshSftpClient {
 
         let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
 
-        let mut remote_file = self
-            .sftp
-            .open_with_flags(
-                remote_path,
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
-            )
-            .await
-            .map_err(|e| anyhow!("Failed to create remote file {}: {}", remote_path, e))?;
+        let result = with_remote_replace(
+            &self.sftp,
+            remote_path,
+            total_size,
+            |mut remote_file| async {
+                let mut buffer = vec![0u8; BUFFER_SIZE];
+                let mut transferred = 0u64;
+                let mut last_update = Instant::now();
+                let mut speed_samples: Vec<f64> = Vec::new();
 
-        let mut buffer = vec![0u8; BUFFER_SIZE];
-        let mut transferred = 0u64;
-        let mut last_update = Instant::now();
-        let mut speed_samples: Vec<f64> = Vec::new();
+                loop {
+                    ensure_not_cancelled(&cancelled)?;
+                    let bytes_read = local_file
+                        .read(&mut buffer)
+                        .await
+                        .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
 
-        loop {
-            ensure_not_cancelled(&cancelled)?;
-            let bytes_read = local_file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
+                    if bytes_read == 0 {
+                        break;
+                    }
 
-            if bytes_read == 0 {
-                break;
-            }
+                    remote_file
+                        .write_all(&buffer[..bytes_read])
+                        .await
+                        .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
 
-            remote_file
-                .write_all(&buffer[..bytes_read])
-                .await
-                .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
+                    transferred += bytes_read as u64;
 
-            transferred += bytes_read as u64;
+                    let now = Instant::now();
+                    let elapsed = now.duration_since(last_update).as_secs_f64();
 
-            let now = Instant::now();
-            let elapsed = now.duration_since(last_update).as_secs_f64();
+                    if elapsed >= 0.1 {
+                        let speed = bytes_read as f64 / elapsed;
+                        speed_samples.push(speed);
+                        if speed_samples.len() > 10 {
+                            speed_samples.remove(0);
+                        }
 
-            if elapsed >= 0.1 {
-                let speed = bytes_read as f64 / elapsed;
-                speed_samples.push(speed);
-                if speed_samples.len() > 10 {
-                    speed_samples.remove(0);
+                        let avg_speed =
+                            speed_samples.iter().sum::<f64>() / speed_samples.len() as f64;
+
+                        progress(TransferProgress {
+                            transferred,
+                            total: total_size,
+                            speed: avg_speed,
+                            current_file: None,
+                            current_file_transferred: 0,
+                            current_file_total: 0,
+                        });
+
+                        last_update = now;
+                    }
                 }
 
-                let avg_speed = speed_samples.iter().sum::<f64>() / speed_samples.len() as f64;
+                ensure_not_cancelled(&cancelled)?;
+                Ok((remote_file, transferred))
+            },
+        )
+        .await;
 
-                progress(TransferProgress {
-                    transferred,
-                    total: total_size,
-                    speed: avg_speed,
-                    current_file: None,
-                    current_file_transferred: 0,
-                    current_file_total: 0,
-                });
-
-                last_update = now;
-            }
-        }
+        let transferred = result.map_err(|error| {
+            anyhow!(
+                "Failed to upload {} without replacing the original: {}",
+                remote_path,
+                error
+            )
+        })?;
 
         progress(TransferProgress {
             transferred,
@@ -1152,11 +1373,6 @@ impl SftpClient for RusshSftpClient {
             current_file_transferred: 0,
             current_file_total: 0,
         });
-
-        remote_file
-            .sync_all()
-            .await
-            .map_err(|e| anyhow!("Failed to sync remote file: {}", e))?;
 
         Ok(())
     }
@@ -1347,26 +1563,30 @@ impl SftpClient for RusshSftpClient {
     }
 
     async fn write_file(&mut self, path: &str, content: &[u8]) -> Result<()> {
-        let mut remote_file = self
-            .sftp
-            .open_with_flags(
+        with_remote_replace(
+            &self.sftp,
+            path,
+            content.len() as u64,
+            |mut remote_file| async {
+                if !content.is_empty() {
+                    remote_file
+                        .write_all(content)
+                        .await
+                        .map_err(|e| anyhow!("Failed to write to remote file {}: {}", path, e))?;
+                }
+
+                Ok((remote_file, content.len() as u64))
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            anyhow!(
+                "Failed to save {} without replacing the original: {}",
                 path,
-                OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+                error
             )
-            .await
-            .map_err(|e| anyhow!("Failed to create remote file {}: {}", path, e))?;
-
-        if !content.is_empty() {
-            remote_file
-                .write_all(content)
-                .await
-                .map_err(|e| anyhow!("Failed to write to remote file {}: {}", path, e))?;
-        }
-
-        // 文件在 drop 时会自动关闭
-        drop(remote_file);
-
-        Ok(())
+        })
     }
 
     async fn list_dir_recursive(
@@ -1688,59 +1908,65 @@ impl SftpClient for RusshSftpClient {
                 .await
                 .map_err(|e| anyhow!("Failed to open local file {:?}: {}", file_path, e))?;
             let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
+            let committed_before = transferred;
+            let expected_size = *file_size;
+            let current_file_transferred = with_remote_replace(
+                &self.sftp,
+                &remote_file_path,
+                expected_size,
+                |mut remote_file| async {
+                    let mut buffer = vec![0u8; BUFFER_SIZE];
+                    let mut current_file_transferred: u64 = 0;
 
-            let mut remote_file = self
-                .sftp
-                .open_with_flags(
-                    &remote_file_path,
-                    OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+                    loop {
+                        ensure_not_cancelled(&cancelled)?;
+                        let bytes_read = local_file
+                            .read(&mut buffer)
+                            .await
+                            .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
+
+                        if bytes_read == 0 {
+                            break;
+                        }
+
+                        remote_file
+                            .write_all(&buffer[..bytes_read])
+                            .await
+                            .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
+
+                        current_file_transferred += bytes_read as u64;
+
+                        let elapsed = start_time.elapsed().as_secs_f64();
+                        let displayed_transferred = committed_before + current_file_transferred;
+                        let speed = if elapsed > 0.0 {
+                            displayed_transferred as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+
+                        progress(TransferProgress {
+                            transferred: displayed_transferred,
+                            total: total_size,
+                            speed,
+                            current_file: Some(current_file_name.clone()),
+                            current_file_transferred,
+                            current_file_total: expected_size,
+                        });
+                    }
+
+                    ensure_not_cancelled(&cancelled)?;
+                    Ok((remote_file, current_file_transferred))
+                },
+            )
+            .await
+            .map_err(|error| {
+                anyhow!(
+                    "Failed to upload {} without replacing the original: {}",
+                    remote_file_path,
+                    error
                 )
-                .await
-                .map_err(|e| anyhow!("Failed to create remote file {}: {}", remote_file_path, e))?;
-
-            let mut buffer = vec![0u8; BUFFER_SIZE];
-            let mut current_file_transferred: u64 = 0;
-
-            loop {
-                ensure_not_cancelled(&cancelled)?;
-                let bytes_read = local_file
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
-
-                if bytes_read == 0 {
-                    break;
-                }
-
-                remote_file
-                    .write_all(&buffer[..bytes_read])
-                    .await
-                    .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
-
-                transferred += bytes_read as u64;
-                current_file_transferred += bytes_read as u64;
-
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 {
-                    transferred as f64 / elapsed
-                } else {
-                    0.0
-                };
-
-                progress(TransferProgress {
-                    transferred,
-                    total: total_size,
-                    speed,
-                    current_file: Some(current_file_name.clone()),
-                    current_file_transferred,
-                    current_file_total: *file_size,
-                });
-            }
-
-            remote_file
-                .sync_all()
-                .await
-                .map_err(|e| anyhow!("Failed to sync remote file: {}", e))?;
+            })?;
+            transferred = committed_before + current_file_transferred;
         }
 
         progress(TransferProgress {
@@ -1801,6 +2027,50 @@ mod tests {
         let out_of_range =
             expected_chunk_len(10, 10).expect_err("offset at EOF must not be scheduled");
         assert!(out_of_range.to_string().contains("out-of-range chunk"));
+    }
+
+    #[test]
+    fn remote_replace_temp_stays_beside_relative_target() {
+        let root_relative =
+            RemoteReplaceTemp::path_for("notes.txt").expect("relative file target must be valid");
+        assert!(
+            root_relative.starts_with("./.notes.txt.navop-part-"),
+            "unexpected temporary path: {root_relative}"
+        );
+
+        let nested = RemoteReplaceTemp::path_for("documents/notes.txt")
+            .expect("nested relative file target must be valid");
+        assert!(
+            nested.starts_with("documents/.notes.txt.navop-part-"),
+            "unexpected temporary path: {nested}"
+        );
+    }
+
+    #[test]
+    fn remote_replace_temp_stays_beside_absolute_target() {
+        let root =
+            RemoteReplaceTemp::path_for("/notes.txt").expect("root file target must be valid");
+        assert!(
+            root.starts_with("/.notes.txt.navop-part-"),
+            "unexpected temporary path: {root}"
+        );
+
+        let nested = RemoteReplaceTemp::path_for("/srv/documents/notes.txt")
+            .expect("nested absolute file target must be valid");
+        assert!(
+            nested.starts_with("/srv/documents/.notes.txt.navop-part-"),
+            "unexpected temporary path: {nested}"
+        );
+    }
+
+    #[test]
+    fn remote_replace_temp_rejects_non_file_targets() {
+        for invalid in ["", "/", "documents/", ".", "..", "/srv/."] {
+            assert!(
+                RemoteReplaceTemp::path_for(invalid).is_err(),
+                "{invalid:?} must not be accepted as a remote file target"
+            );
+        }
     }
 
     #[tokio::test]
