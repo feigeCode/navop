@@ -691,6 +691,24 @@ fn should_apply_remote_listing(current_path: &str, listed_path: &str) -> bool {
     current_path == listed_path
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ConnectionGeneration(u64);
+
+impl ConnectionGeneration {
+    fn advance(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(1).max(1);
+        self.0
+    }
+
+    fn current(self) -> u64 {
+        self.0
+    }
+
+    fn is_current(self, generation: u64) -> bool {
+        generation != 0 && self.0 == generation
+    }
+}
+
 fn should_apply_local_listing(
     current_path: &std::path::Path,
     listed_path: &std::path::Path,
@@ -793,6 +811,8 @@ pub struct SftpView {
     close_state: CloseState,
     sftp_config: SshConnectConfig,
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 当前主 SFTP 连接尝试的代次；迟到的异步结果不能覆盖更新的连接。
+    connection_generation: ConnectionGeneration,
 
     /// 原始连接信息，用于打开 SSH 终端
     stored_connection: StoredConnection,
@@ -1011,6 +1031,7 @@ impl SftpView {
             close_state: CloseState::Open,
             sftp_config: config,
             sftp_client: None,
+            connection_generation: ConnectionGeneration::default(),
             stored_connection: conn.clone(),
             local_current_path: local_current_path.clone(),
             remote_current_path: ".".to_string(),
@@ -1056,10 +1077,19 @@ impl SftpView {
         view
     }
 
+    fn next_connection_generation(&mut self) -> u64 {
+        self.connection_generation.advance()
+    }
+
+    fn is_current_connection_generation(&self, generation: u64) -> bool {
+        self.connection_generation.is_current(generation)
+    }
+
     fn connect(&mut self, cx: &mut Context<Self>) {
         if self.close_state.is_closing() {
             return;
         }
+        let generation = self.next_connection_generation();
         self.connection_state = ConnectionState::Connecting;
         let config = self.sftp_config.clone();
 
@@ -1083,7 +1113,9 @@ impl SftpView {
 
                 let installed = this
                     .update(cx, |this, cx| {
-                        if this.close_state.is_closing() {
+                        if this.close_state.is_closing()
+                            || !this.is_current_connection_generation(generation)
+                        {
                             return false;
                         }
                         this.sftp_client = Some(client.clone());
@@ -1113,7 +1145,9 @@ impl SftpView {
                 let error_msg = format!("{}", e);
                 tracing::error!("SFTP connection failed: {}", error_msg);
                 let _ = this.update(cx, |this, cx| {
-                    if this.close_state.is_closing() {
+                    if this.close_state.is_closing()
+                        || !this.is_current_connection_generation(generation)
+                    {
                         return;
                     }
                     this.connection_state = ConnectionState::Disconnected {
@@ -1127,7 +1161,9 @@ impl SftpView {
                 let error_msg = format!("Task error: {}", e);
                 tracing::error!("SFTP connection task error: {}", error_msg);
                 let _ = this.update(cx, |this, cx| {
-                    if this.close_state.is_closing() {
+                    if this.close_state.is_closing()
+                        || !this.is_current_connection_generation(generation)
+                    {
                         return;
                     }
                     this.connection_state = ConnectionState::Disconnected {
@@ -1158,7 +1194,12 @@ impl SftpView {
         if self.close_state.is_closing() {
             return;
         }
-        self.sftp_client = None;
+        let old_client = self.sftp_client.take();
+        self.set_connection_active(false, cx);
+        if let Some(old_client) = old_client {
+            Tokio::spawn(cx, disconnect_sftp_client(old_client)).detach();
+        }
+        self.remote_loading = false;
         self.transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
             self.sftp_config.clone(),
             MAX_CONCURRENT_TRANSFERS,
@@ -1238,6 +1279,7 @@ impl SftpView {
         };
 
         let path = self.remote_current_path.clone();
+        let generation = self.connection_generation.current();
         tracing::info!("Refreshing remote directory: {}", path);
         let remote_panel = self.remote_panel.clone();
 
@@ -1270,6 +1312,7 @@ impl SftpView {
                         .collect();
                     let _ = view.update(cx, |this, cx| {
                         if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
                             && should_apply_remote_listing(&this.remote_current_path, &listed_path)
                         {
                             let _ = remote_panel.update(cx, |panel, cx| {
@@ -1281,6 +1324,7 @@ impl SftpView {
                 Ok(Err(e)) => {
                     let _ = view.update(cx, |this, _cx| {
                         if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
                             && should_apply_remote_listing(&this.remote_current_path, &listed_path)
                         {
                             tracing::error!("Failed to list remote directory: {}", e);
@@ -1290,6 +1334,7 @@ impl SftpView {
                 Err(e) => {
                     let _ = view.update(cx, |this, _cx| {
                         if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
                             && should_apply_remote_listing(&this.remote_current_path, &listed_path)
                         {
                             tracing::error!("Task error: {}", e);
@@ -1298,7 +1343,10 @@ impl SftpView {
                 }
             }
             let _ = view.update(cx, |this, cx| {
-                if !this.close_state.is_closing() {
+                if !this.close_state.is_closing()
+                    && this.is_current_connection_generation(generation)
+                    && should_apply_remote_listing(&this.remote_current_path, &listed_path)
+                {
                     this.remote_loading = false;
                     cx.notify();
                 }
@@ -6255,8 +6303,8 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{
-        CloseState, SharedProgress, TransferAdmission, TransferOperation, TransferQueue,
-        TransferTask, TransferTaskState, is_valid_entry_name, join_remote_path,
+        CloseState, ConnectionGeneration, SharedProgress, TransferAdmission, TransferOperation,
+        TransferQueue, TransferTask, TransferTaskState, is_valid_entry_name, join_remote_path,
         should_apply_local_listing, should_apply_remote_listing,
     };
     use std::path::{Path, PathBuf};
@@ -6346,6 +6394,33 @@ mod tests {
     fn only_apply_remote_listing_for_active_path() {
         assert!(should_apply_remote_listing("/srv/app", "/srv/app"));
         assert!(!should_apply_remote_listing("/srv/other", "/srv/app"));
+    }
+
+    #[test]
+    fn connection_generation_rejects_stale_and_reserved_values() {
+        let mut generation = ConnectionGeneration::default();
+
+        assert!(!generation.is_current(0));
+
+        let first = generation.advance();
+        assert_eq!(1, first);
+        assert!(generation.is_current(first));
+
+        let second = generation.advance();
+        assert_eq!(2, second);
+        assert!(!generation.is_current(first));
+        assert!(generation.is_current(second));
+    }
+
+    #[test]
+    fn connection_generation_wraps_without_reusing_zero() {
+        let mut generation = ConnectionGeneration(u64::MAX);
+
+        let wrapped = generation.advance();
+
+        assert_eq!(1, wrapped);
+        assert!(generation.is_current(wrapped));
+        assert!(!generation.is_current(0));
     }
 
     #[test]
