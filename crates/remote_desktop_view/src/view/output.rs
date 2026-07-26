@@ -19,7 +19,7 @@ impl RemoteDesktopView {
         self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
     }
 
-    pub(super) fn drain_output(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn drain_output(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(output_rx) = self.output_rx.as_ref() else {
             return;
         };
@@ -30,11 +30,16 @@ impl RemoteDesktopView {
             .chain(batch.latest_frame)
             .chain(batch.latest_delta)
         {
-            self.apply_output(output, cx);
+            self.apply_output(output, window, cx);
         }
     }
 
-    fn apply_output(&mut self, output: RemoteDesktopOutput, cx: &mut Context<Self>) {
+    fn apply_output(
+        &mut self,
+        output: RemoteDesktopOutput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match output {
             RemoteDesktopOutput::Connected { width, height, .. } => {
                 self.remote_size = Some((width, height));
@@ -75,7 +80,10 @@ impl RemoteDesktopView {
                 self.remote_size = Some((width, height));
                 self.apply_bgra_rects(width, height, &rects, bgra);
             }
-            RemoteDesktopOutput::Reconnecting(message) => self.reset_session_state(message),
+            RemoteDesktopOutput::Reconnecting(message) => {
+                self.reset_session_state(message.clone());
+                self.notify_reconnecting(message, window, cx);
+            }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
             RemoteDesktopOutput::ConnectionFailure(message)
             | RemoteDesktopOutput::Terminated(message) => self.reset_session_state(message),
@@ -84,6 +92,18 @@ impl RemoteDesktopView {
             | RemoteDesktopOutput::CursorPosition { .. } => {}
             RemoteDesktopOutput::ClipboardText { text } => self.apply_remote_clipboard(text, cx),
         }
+    }
+
+    fn notify_reconnecting(&self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        let notification_id = ("remote-desktop-reconnect", cx.entity_id());
+        window.defer(cx, move |window, cx| {
+            window.push_notification(
+                Notification::info(message)
+                    .id1::<RemoteDesktopReconnectNotification>(notification_id)
+                    .autohide(true),
+                cx,
+            );
+        });
     }
 
     fn install_frame(&mut self, image: anyhow::Result<RenderImage>) {
@@ -197,19 +217,16 @@ impl RemoteDesktopView {
         self.status = SharedString::from(message);
         self.remote_size = None;
         self.framebuffer = None;
-        self.pending_frame_drops.extend(
-            self.rendered_frames
-                .take_all_distinct(self.latest_frame.take()),
-        );
+        if !preserve_presented_frame_during_session_reset(self.options.protocol) {
+            self.pending_frame_drops.extend(
+                self.rendered_frames
+                    .take_all_distinct(self.latest_frame.take()),
+            );
+        }
         self.last_resize_size = None;
         self.pending_resize_size = None;
         self.pending_resize_updated_at = None;
         self.last_resize_sent_at = None;
-    }
-
-    pub(super) fn request_reconnect(&mut self) {
-        self.reset_session_state(t!("RemoteDesktop.status_reconnecting").to_string());
-        self.send_input(RemoteDesktopInput::Reconnect);
     }
 
     pub(super) fn update_content_bounds(
