@@ -29,7 +29,10 @@ impl MarkdownEditor {
         if matches!(block.kind, SourceBlockKind::Html) {
             return self.render_html_shell(block, cx);
         }
-        if let Some(rendered) = self.render_block_output(block, cx) {
+        if self.should_render_artifact_shell(block) {
+            let rendered = self
+                .render_block_output(block, cx)
+                .unwrap_or_else(|| self.render_block_placeholder(block));
             return self.render_artifact_shell(block, rendered, cx);
         }
         self.render_block_edit_surface(block, true, cx)

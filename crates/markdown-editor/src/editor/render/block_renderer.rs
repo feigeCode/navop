@@ -1,4 +1,4 @@
-use super::MarkdownEditor;
+use super::{MarkdownEditor, layout_metrics::render_surface_reserved_height};
 use crate::{MarkdownBlockRenderArtifact, MarkdownBlockRenderKind, MarkdownBlockRenderRequest};
 use gpui::{
     AppContext, Context, Corners, Image, ImageFormat, InteractiveElement, IntoElement, ObjectFit,
@@ -58,6 +58,15 @@ pub(in crate::editor) enum RenderWaiter {
 }
 
 impl MarkdownEditor {
+    /// Whether this block owns a permanent rendered/source shell.
+    ///
+    /// Provider availability decides the shell shape. Render completion only
+    /// changes the child inside its rendered layer, so a pending request never
+    /// falls back to a differently shaped Input-only tree.
+    pub(super) fn should_render_artifact_shell(&self, block: &SourceBlock) -> bool {
+        self.block_render_provider.is_some() && self.block_render_request(block).is_some()
+    }
+
     pub(super) fn request_inline_math_renders(
         &mut self,
         range: Range<usize>,
@@ -287,16 +296,49 @@ impl MarkdownEditor {
             return None;
         }
         if let Some(error) = self.block_render_errors.get(&block.id) {
-            return Some(self.render_block_error(block.id, &source, error, cx));
+            return Some(self.render_block_error(block, &source, error, cx));
         }
-        self.render_block_artifact(block.id)
+        self.render_block_artifact(block)
     }
 
-    fn render_block_artifact(&self, block_id: SourceNodeId) -> Option<gpui::AnyElement> {
+    pub(super) fn render_block_placeholder(&self, block: &SourceBlock) -> gpui::AnyElement {
+        let block_id = block.id;
+        let height = render_surface_reserved_height(block).unwrap_or(240.);
+        let label = if matches!(block.kind, SourceBlockKind::MathBlock { .. }) {
+            "正在渲染公式…"
+        } else {
+            "正在渲染图表…"
+        };
+        gpui::div()
+            .id(("markdown-render-placeholder", block_id.0))
+            .debug_selector(move || format!("markdown-render-placeholder-{}", block_id.0))
+            .w_full()
+            .h(px(height))
+            .min_h(px(height))
+            .rounded_md()
+            .border_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.border.opacity(0.06))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_sm()
+            .text_color(self.theme.muted_foreground)
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_block_artifact(&self, block: &SourceBlock) -> Option<gpui::AnyElement> {
+        let block_id = block.id;
         let artifact = self.block_render_artifacts.get(&block_id)?;
         (artifact.media_type == "image/svg+xml").then(|| {
             let image = Arc::new(Image::from_bytes(ImageFormat::Svg, artifact.bytes.clone()));
-            let height = artifact.intrinsic_height.unwrap_or(240.).clamp(64., 520.);
+            let reserved_height = render_surface_reserved_height(block).unwrap_or(64.);
+            let height = artifact
+                .intrinsic_height
+                .unwrap_or(240.)
+                .clamp(64., 520.)
+                .max(reserved_height);
             let image_bounds_id = block_id;
             let image_canvas = canvas(
                 move |_, window, cx| image.use_render_image(window, cx),
@@ -313,7 +355,7 @@ impl MarkdownEditor {
                 .id(("markdown-rendered-block", block_id.0))
                 .debug_selector(|| format!("markdown-rendered-block-{}", block_id.0))
                 .w_full()
-                .min_h(px(64.))
+                .min_h(px(reserved_height))
                 .h(px(height))
                 .p_3()
                 .rounded_md()
@@ -336,17 +378,19 @@ impl MarkdownEditor {
 
     fn render_block_error(
         &self,
-        block_id: SourceNodeId,
+        block: &SourceBlock,
         source: &str,
         error: &str,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let block_id = block.id;
+        let reserved_height = render_surface_reserved_height(block).unwrap_or(96.);
         let editor = cx.entity();
         gpui::div()
             .id(("markdown-render-error", block_id.0))
             .debug_selector(|| format!("markdown-render-error-{}", block_id.0))
             .w_full()
-            .min_h(px(96.))
+            .min_h(px(reserved_height.max(96.)))
             .p_3()
             .rounded_md()
             .border_1()

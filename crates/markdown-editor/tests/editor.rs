@@ -1633,6 +1633,133 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
 }
 
 #[gpui::test]
+fn pending_artifact_owns_its_shell_and_input_from_the_first_frame(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "```mermaid\ngraph TD\nA --> B\n```\n\nFollowing paragraph";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let artifact_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
+    let (release, result) = futures::channel::oneshot::channel::<
+        Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+    >();
+    let result = Arc::new(Mutex::new(Some(result)));
+    let pending_result = result.clone();
+    let provider = Arc::new(move |_| {
+        let receiver = pending_result
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the pending artifact should be requested once");
+        Box::pin(async move {
+            receiver
+                .await
+                .unwrap_or_else(|_| Err("pending renderer was dropped".to_owned()))
+        })
+            as futures::future::BoxFuture<
+                'static,
+                Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+            >
+    });
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(620.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(provider), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let shell_selector =
+        Box::leak(format!("markdown-artifact-shell-{}", artifact_id.0).into_boxed_str());
+    let rendered_layer_selector =
+        Box::leak(format!("markdown-artifact-rendered-layer-{}", artifact_id.0).into_boxed_str());
+    let input_layer_selector =
+        Box::leak(format!("markdown-artifact-input-layer-{}", artifact_id.0).into_boxed_str());
+    let input_slot_selector =
+        Box::leak(format!("markdown-block-input-slot-{}", artifact_id.0).into_boxed_str());
+    let placeholder_selector =
+        Box::leak(format!("markdown-render-placeholder-{}", artifact_id.0).into_boxed_str());
+    let rendered_output_selector =
+        Box::leak(format!("markdown-rendered-block-{}", artifact_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+
+    let shell_before = cx
+        .debug_bounds(shell_selector)
+        .expect("the artifact shell must exist while its provider is pending");
+    let rendered_layer = cx
+        .debug_bounds(rendered_layer_selector)
+        .expect("the rendered layer must exist while its provider is pending");
+    assert!(
+        cx.debug_bounds(input_layer_selector).is_some(),
+        "the source layer must be mounted before the provider completes"
+    );
+    let input_before = cx
+        .debug_bounds(input_slot_selector)
+        .expect("the source Input must be laid out before the provider completes");
+    let placeholder_before = cx
+        .debug_bounds(placeholder_selector)
+        .expect("a pending render must occupy the permanent rendered layer");
+    let following_before = cx.debug_bounds(following_selector).unwrap();
+    let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    assert!(cx.debug_bounds(rendered_output_selector).is_none());
+    assert!(placeholder_before.bottom() <= shell_before.bottom());
+    assert!(placeholder_before.bottom() <= following_before.top());
+
+    cx.simulate_click(rendered_layer.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        Some(artifact_id),
+        editor.read_with(&cx, |editor, _| editor.active_block())
+    );
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+
+    release
+        .send(Ok(Some(svg_artifact(64.))))
+        .expect("the pending provider must still be awaiting its result");
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+
+    cx.simulate_click(following_before.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(placeholder_selector).is_none());
+    let rendered_output = cx
+        .debug_bounds(rendered_output_selector)
+        .expect("provider completion must replace only the rendered-layer child");
+    assert_eq!(placeholder_before.size.height, rendered_output.size.height);
+    assert!(rendered_output.bottom() <= shell_before.bottom());
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+}
+
+#[gpui::test]
 fn clicking_an_artifact_activates_its_mounted_input_without_moving_content(
     cx: &mut TestAppContext,
 ) {
@@ -1719,6 +1846,128 @@ fn clicking_an_artifact_activates_its_mounted_input_without_moving_content(
     assert!(
         cx.debug_bounds(input_slot_selector).is_some(),
         "activation must reveal the input that was already mounted"
+    );
+}
+
+#[gpui::test]
+fn editing_artifact_source_keeps_the_shell_while_the_new_render_is_pending(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "```mermaid\ngraph TD\nA --> B\n```\n\nFollowing paragraph";
+    let updated_source = "```mermaid\ngraph TD\nX --> Y\n```\n\nFollowing paragraph";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let artifact_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
+    let (release, result) = futures::channel::oneshot::channel::<
+        Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+    >();
+    let result = Arc::new(Mutex::new(Some(result)));
+    let pending_result = result.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider_calls = calls.clone();
+    let provider = Arc::new(move |_| {
+        let call = provider_calls.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            Box::pin(async { Ok(Some(svg_artifact(64.))) })
+                as futures::future::BoxFuture<
+                    'static,
+                    Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+                >
+        } else {
+            let receiver = pending_result
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the replacement artifact should be requested once");
+            Box::pin(async move {
+                receiver
+                    .await
+                    .unwrap_or_else(|_| Err("replacement renderer was dropped".to_owned()))
+            })
+                as futures::future::BoxFuture<
+                    'static,
+                    Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
+                >
+        }
+    });
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(620.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, _, cx| {
+        editor.set_block_render_provider(Some(provider), cx);
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let shell_selector =
+        Box::leak(format!("markdown-artifact-shell-{}", artifact_id.0).into_boxed_str());
+    let input_slot_selector =
+        Box::leak(format!("markdown-block-input-slot-{}", artifact_id.0).into_boxed_str());
+    let placeholder_selector =
+        Box::leak(format!("markdown-render-placeholder-{}", artifact_id.0).into_boxed_str());
+    let rendered_output_selector =
+        Box::leak(format!("markdown-rendered-block-{}", artifact_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+
+    assert_eq!(1, calls.load(Ordering::SeqCst));
+    assert!(cx.debug_bounds(rendered_output_selector).is_some());
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(artifact_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let shell_before = cx.debug_bounds(shell_selector).unwrap();
+    let input_before = cx.debug_bounds(input_slot_selector).unwrap();
+    let following_before = cx.debug_bounds(following_selector).unwrap();
+    let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(
+            editor
+                .edit_projected_value("graph TD\nX --> Y", window, cx)
+                .unwrap()
+        );
+    });
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(2, calls.load(Ordering::SeqCst));
+    assert_eq!(
+        updated_source,
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    cx.simulate_click(following_before.center(), Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(placeholder_selector).is_some());
+    assert!(cx.debug_bounds(rendered_output_selector).is_none());
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
+    );
+
+    release
+        .send(Ok(Some(svg_artifact(64.))))
+        .expect("the replacement provider must still be awaiting its result");
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(placeholder_selector).is_none());
+    assert!(cx.debug_bounds(rendered_output_selector).is_some());
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
     );
 }
 
@@ -1914,11 +2163,10 @@ fn identical_math_blocks_share_one_render_task_and_cached_artifact(cx: &mut Test
 #[gpui::test]
 fn failed_block_shows_source_fallback_and_retry_button_recovers(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-    let source = "```mermaid\ngraph TD\nA --> B\n```";
-    let block_id = markdown_source::SourceMarkdownDocument::parse(source)
-        .unwrap()
-        .blocks[0]
-        .id;
+    let source = "```mermaid\ngraph TD\nA --> B\n```\n\nFollowing paragraph";
+    let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+    let block_id = document.blocks[0].id;
+    let following_id = document.blocks[1].id;
     let calls = Arc::new(AtomicUsize::new(0));
     let provider_calls = calls.clone();
     let provider = Arc::new(move |_| {
@@ -1935,7 +2183,7 @@ fn failed_block_shows_source_fallback_and_retry_button_recovers(cx: &mut TestApp
                 Result<Option<markdown_editor::MarkdownBlockRenderArtifact>, String>,
             >
     });
-    let (window, editor) = open_editor(source, cx);
+    let (window, editor) = open_editor_with_size(source, size(px(760.), px(620.)), cx);
     let mut cx = VisualTestContext::from_window(window, cx);
     editor.update_in(&mut cx, |editor, _, cx| {
         editor.set_block_render_provider(Some(provider), cx);
@@ -1947,7 +2195,23 @@ fn failed_block_shows_source_fallback_and_retry_button_recovers(cx: &mut TestApp
         Box::leak(format!("markdown-render-error-{}", block_id.0).into_boxed_str());
     let retry_selector =
         Box::leak(format!("markdown-render-retry-{}", block_id.0).into_boxed_str());
-    assert!(cx.debug_bounds(error_selector).is_some());
+    let shell_selector =
+        Box::leak(format!("markdown-artifact-shell-{}", block_id.0).into_boxed_str());
+    let input_slot_selector =
+        Box::leak(format!("markdown-block-input-slot-{}", block_id.0).into_boxed_str());
+    let rendered_output_selector =
+        Box::leak(format!("markdown-rendered-block-{}", block_id.0).into_boxed_str());
+    let following_selector =
+        Box::leak(format!("markdown-block-frame-{}", following_id.0).into_boxed_str());
+    let error = cx
+        .debug_bounds(error_selector)
+        .expect("the failed output must stay inside the artifact shell");
+    let shell_before = cx.debug_bounds(shell_selector).unwrap();
+    let input_before = cx.debug_bounds(input_slot_selector).unwrap();
+    let following_before = cx.debug_bounds(following_selector).unwrap();
+    let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    assert!(error.bottom() <= shell_before.bottom());
+    assert!(error.bottom() <= following_before.top());
     let retry = cx
         .debug_bounds(retry_selector)
         .expect("failed render must expose a retry entry");
@@ -1958,11 +2222,13 @@ fn failed_block_shows_source_fallback_and_retry_button_recovers(cx: &mut TestApp
 
     assert_eq!(2, calls.load(Ordering::SeqCst));
     assert!(cx.debug_bounds(error_selector).is_none());
-    assert!(
-        cx.debug_bounds(Box::leak(
-            format!("markdown-rendered-block-{}", block_id.0).into_boxed_str(),
-        ))
-        .is_some()
+    assert!(cx.debug_bounds(rendered_output_selector).is_some());
+    assert_eq!(shell_before, cx.debug_bounds(shell_selector).unwrap());
+    assert_eq!(input_before, cx.debug_bounds(input_slot_selector).unwrap());
+    assert_eq!(following_before, cx.debug_bounds(following_selector).unwrap());
+    assert_eq!(
+        scroll_before,
+        editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset())
     );
 }
 
