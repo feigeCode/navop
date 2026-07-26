@@ -453,6 +453,37 @@ forwarding/SOCKS 或 server-copy consumer。完整测试、编译和既有 Clipp
 `12.11`。下一切片只建立 generation-bound lease/release contract，不提前混入 timer
 或 consumer 迁移。
 
+### 2026-07-26：切片 12，SSH generation-bound session lease contract
+
+状态：**实现完成并通过 SSH crate 与主要下游编译验证，已独立提交。**
+
+代码提交：
+
+```text
+d98a0be6 feat(ssh): add generation-bound session leases
+```
+
+本切片把 registry 的公开 acquire 结果从裸 `Arc<SshSessionManager>` 收紧为
+`SshSessionLease`，并建立与 slot generation 绑定的 consumer accounting：
+
+- `Ready` slot 保留 creation token、manager、`lease_count` 和 `idle_since`；
+- manager publish 时不预先为 waiter 增加计数；waiter 只收到 `Published` 信号，
+  随后重新进入 map，在锁内确认当前 generation 并完成 counted checkout，因此取消
+  的 acquire 不会留下 phantom lease；
+- 同 generation 的 lease clone 在同一 registry 临界区内精确增加计数；
+- lease release/drop 先做本地幂等保护，再只减少 token 同时匹配 generation 与
+  identity 的当前 slot；retire/replacement 后的 stale drop 不会修改新 generation；
+- 最后一个 lease 释放只写入 idle candidate 时间，不移除或断开 manager；idle slot
+  再次 acquire 会复用同一 manager，并清除当前 idle candidate；
+- `Drop` 不执行异步 I/O，disconnect、timeout 和 reaper 仍由后续 registry lifecycle
+  切片统一实现；
+- lease 使用共享的脱敏 `ConnectionKey` identity，避免每个 lease 复制大型 key；
+  `Debug` 只包含 credential-free label、generation 和 active 状态。
+
+本切片仍未增加 idle timeout/reaper、transport health/shutdown、GPUI
+application-level service 或任何生产 consumer 迁移。完整状态机、测试、下游验证
+与下一切片边界见 `12.12`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -2754,3 +2785,213 @@ cargo clippy -p ssh --lib --no-deps -- -D warnings
 
 idle timer、application owner 和生产 consumer 迁移继续保留为后续独立提交，避免把
 slot、lease、timer、disconnect 和调用方改造重新合成一个不可验证的大切片。
+
+### 12.12 切片 12：SSH generation-bound session lease contract
+
+#### 12.12.1 公开 API 与 slot 状态
+
+`crates/ssh/src/lib.rs` 新增公开：
+
+```rust
+SshSessionLease
+```
+
+`SshSessionRegistry::acquire()` 现在返回：
+
+```rust
+Result<SshSessionLease>
+```
+
+仓库检索确认此前新增的 registry API 尚无生产调用方，因此本切片直接收紧返回类型，
+没有保留一个可绕过 accounting 的裸 manager acquire 入口。lease 提供：
+
+```rust
+SshSessionLease::manager()
+SshSessionLease::release()
+Clone
+Deref<Target = SshSessionManager>
+Debug
+```
+
+调用方必须在从 manager 取得的 client/channel 整个使用期内持有 lease。直接 clone
+兼容期内仍可 clone 的 `SshSessionManager` 不等价于 clone lease，也不会增加 registry
+计数；后续生产 consumer 迁移必须把 lease 本身纳入 owner，而不能只保存 manager。
+
+registry 的 ready 状态从：
+
+```text
+Ready(Arc<Manager>)
+```
+
+演进为：
+
+```text
+Ready {
+  shared credential-free ConnectionKey,
+  creation token { generation, non-reusable identity },
+  Arc<Manager>,
+  lease_count,
+  idle_since,
+}
+```
+
+共享的 `Arc<ConnectionKey>` 只在 slot publish 时建立一次，各 lease 只 clone 该
+identity，不复制包含 endpoint/route/trust namespace 的大型 key。这也使
+`AcquirePhase` 保持小尺寸；严格 Clippy 不再报告本切片的 `large_enum_variant`。
+
+#### 12.12.2 Checkout、Clone、Release 与取消语义
+
+manager creation 成功后，registry 先发布一个：
+
+```text
+lease_count = 0
+idle_since = Some(now)
+```
+
+的 ready slot，再在 state lock 外向 waiter 发送不携带 manager 的 `Published`
+通知。每个仍存活的 waiter 被唤醒后重新进入 acquire loop，并在持锁时完成：
+
+```text
+确认当前 Ready generation
+  -> checked_add(lease_count)
+  -> clear idle_since
+  -> clone manager/key/token into lease
+```
+
+这条线性化边界避免了“waiter 先拿到 manager、随后才异步登记 consumer”的竞态：
+
+- waiter 在 publish 前取消：dead oneshot 不产生计数；
+- waiter 在 publish 后、checkout 前取消：同样不产生计数；
+- checkout 完成后 caller task 取消：返回值被 drop，lease 同步释放计数；
+- publish 与 retire/replacement 竞态：waiter 重新查 map，只能 checkout 当前
+  generation，不会拿到 stale manager。
+
+同 generation 的 `SshSessionLease::clone()` 在 registry mutex 内增加计数并清除 idle
+candidate。若原 generation 已被 retire 或替换，clone 仍可通过自身 `Arc` 保持旧
+manager 存活，但被标记为 uncounted；它不会把旧 manager 的使用错误登记到新 slot。
+
+release/drop 具备以下边界：
+
+- 每个 lease 先把本地 `counted` 置为 false，重复 release/drop 为 no-op；
+- 只有 key 和不可复用 creation token 都匹配当前 `Ready` slot 时才允许减计数；
+- 已移除 slot 或 token 不匹配时 stale release 为 no-op；
+- `lease_count == 0` 时拒绝继续递减，不发生 underflow；
+- 从 1 降到 0 只设置 `idle_since = Some(now)`；
+- release 不 remove manager、不调用 disconnect、不持锁跨 `.await`；
+- poisoned mutex 继续沿用 registry 的 recover 语义，`Drop` 不因 poison 主动 panic。
+
+`SshSessionLease::Debug` 不要求 manager 实现 `Debug`，只输出：
+
+```text
+credential-free connection label
+slot generation
+active/counted 状态
+```
+
+password、private-key content、passphrase、certificate path、完整
+`SshConnectConfig` 和 token identity 都不会进入输出。
+
+#### 12.12.3 Contract 测试
+
+定向测试：
+
+```text
+cargo test -p ssh session_registry --lib
+10 passed; 0 failed
+```
+
+覆盖：
+
+1. 同 key 的 12 个并发 acquire 仍只创建一个 manager，12 个 checkout 精确记为
+   12 个 lease，全部 drop 后变为 0/idle；
+2. 不同 key 不共享 manager；
+3. blocked creation 不持有 registry lock；
+4. 同一 flight 的 failure 被全部 waiter 共享，后续 acquire 可重试；
+5. stale creation result 不能覆盖 replacement generation；
+6. 首个 waiter 取消不会取消 detached shared creation；
+7. lease acquire、clone、部分 drop、最后 drop 和显式 release 的计数及 idle 转换
+   精确；
+8. idle slot reacquire 复用原 manager、清除 idle candidate 且不再次调用 factory；
+9. retire 后旧 lease 与 stale clone 的 drop 不减少 replacement generation 计数；
+10. 所有 waiter 在 manager publish 前取消时，ready slot 保持 `lease_count = 0`，
+    后续 acquire 可复用 manager，不存在 phantom lease；
+11. 公开 `SshSessionLease::clone()` 返回 counted lease，而不是因 `Deref` 误调用
+    manager clone；
+12. lease `Debug` 不泄露 private-key content、passphrase、certificate path 或
+    config。
+
+SSH crate 全量回归：
+
+```text
+cargo test -p ssh --lib
+64 passed; 0 failed
+```
+
+#### 12.12.4 编译、格式、Clippy 与下游验证
+
+```text
+cargo check -p ssh
+通过
+
+cargo check -p terminal -p sftp -p sftp_view -p remote_file_editor \
+  -p port_forwarding
+通过
+
+rustfmt --edition 2021 \
+  crates/ssh/src/session_registry.rs \
+  crates/ssh/src/lib.rs
+通过
+
+git diff --check
+通过
+```
+
+下游检查仍只报告 `extension-runtime` 的 5 个既有 unused/dead-code warning，以及
+workspace future-incompatibility 提示；没有 lease 或 SSH 新错误。
+
+严格 Clippy：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- -D warnings
+```
+
+最终只在本切片未修改的：
+
+```text
+crates/ssh/src/host_key.rs:399
+HostKeyVerifier::verify()
+clippy::result_large_err
+```
+
+失败。最终 lease 通过共享 `Arc<ConnectionKey>` 保持小尺寸，严格检查没有本切片
+新增的 `large_enum_variant` 或其他报告。本切片仍不顺手装箱
+`HostKeyRejection`，也不改变该既有公共错误 API。
+
+#### 12.12.5 未覆盖范围与下一切片
+
+本切片明确未实现：
+
+- idle timeout 配置、cancellable reaper 和到期 disconnect；
+- idle candidate 的 observer/snapshot；
+- transport health、reconnect 和 application shutdown；
+- GPUI Global/application-level owner；
+- Terminal、SFTP、remote file editor、forwarding/SOCKS 和 server-copy 对 lease 的
+  持有与移交；
+- 生产路径中直接 `SshSessionManager::new()`/manager clone 的收口；
+- “最后一个 lease + timeout”与同时 reacquire/retire/shutdown 的完整竞态处理。
+
+下一独立切片只增加 registry-owned idle reaper，至少验证：
+
+1. last release 为当前 generation 建立可失效的 idle candidate；
+2. timeout 到期时必须在锁内重新确认 key、creation token、idle marker 和
+   `lease_count == 0`；
+3. remove/retire manager 后才在锁外执行异步 disconnect；
+4. timeout 前 reacquire 会使旧 idle work 失效，不能断开重新活跃的 manager；
+5. retire/replacement 后旧 timer 不能移除或断开新 generation；
+6. repeated idle/reacquire 不累积无限 sleeping thread/task；
+7. registry drop/application shutdown 可以取消并收敛 reaper task；
+8. disconnect 失败保留真实状态和可诊断结果，不在 `Drop` 中阻塞或吞掉。
+
+application-level owner、health policy 和生产 consumer 迁移继续拆成后续独立提交，
+避免把 lease、timer、disconnect、GPUI lifecycle 与调用方改造重新合并成一个难以
+证明的大切片。
