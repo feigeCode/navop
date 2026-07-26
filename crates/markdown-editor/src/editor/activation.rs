@@ -4,6 +4,32 @@ use gpui::{Context, Pixels, Point, Window};
 use markdown_source::SourceSelection;
 
 impl MarkdownEditor {
+    /// Restores the preview projection of the surface that was active before
+    /// switching to another mounted input.
+    ///
+    /// A surface is kept mounted for the lifetime of the document so that
+    /// activating a block does not replace its layout tree.  Consequently we
+    /// cannot rely on an input blur event to collapse the old projection:
+    /// GPUI may focus the next input before the old input has emitted blur (and
+    /// the first click path can bypass that event altogether).  Collapse it
+    /// explicitly while the old surface's source selection is still
+    /// available, then let the caller activate the new key.
+    fn collapse_previous_surface(
+        &mut self,
+        next_key: MarkdownSurfaceKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let previous_key = self.active_surface_key();
+        if previous_key == next_key {
+            return;
+        }
+        let Some(selection) = self.surface_selection(previous_key, cx) else {
+            return;
+        };
+        self.collapse_surface_projection(previous_key, selection, window, cx);
+    }
+
     /// Activates an already-mounted edit surface and maps the window-space
     /// click through that surface's own laid-out input.
     ///
@@ -27,6 +53,7 @@ impl MarkdownEditor {
             return false;
         };
         let source_offset = surface.projection.display_to_source(display_offset);
+        self.collapse_previous_surface(key, window, cx);
         if !self.set_active_surface(key) {
             return false;
         }
@@ -57,6 +84,7 @@ impl MarkdownEditor {
         let Some(input) = self.surface(key).map(|surface| surface.input.clone()) else {
             return false;
         };
+        self.collapse_previous_surface(key, window, cx);
         if !self.set_active_surface(key) {
             return false;
         }
