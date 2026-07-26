@@ -208,6 +208,43 @@ Serial 的 `event_proxy: None` reset fallback 不再调用会创建独立 metric
 实现先于本轮新增测试，故不伪造 TDD Red 证据；本轮记录为定向 contract 与回归
 验证，完整命令和结果见 `12.6`。
 
+### 2026-07-26：切片 7，Bounded ingress queue 纯 Contract
+
+状态：**实现完成并通过定向、terminal 全量、跨 crate 编译和 throughput baseline
+验证。**
+
+本切片只新增 GPUI-independent 的通用 ingress primitive，不接入任何 backend：
+
+- `TerminalIngressBudget` 分别约束非零的 data byte、data chunk 和 control 三项预算；
+- data sender 先取得完整 byte reservation，再等待 data channel 的 chunk slot；
+- control 使用独立的有界 lane，不占用 data byte permits，receiver 对已就绪 control
+  保持优先；
+- pending bytes 精确包含已完整取得 byte reservation、即使仍在等待 chunk slot 的
+  data，不包含 `acquire_many` 尚未完整成功的 waiter；
+- 最后一个 sender drop 是 graceful close，receiver 会自然 drain 已接受的 control
+  和 data；
+- sender/receiver `abort()` 及 receiver drop 是 abortive shutdown，会唤醒 byte、
+  chunk、control waiter，并丢弃 backlog；
+- abort 使用 out-of-band latch，不占 control capacity；data permit 在 `recv` 返回
+  payload 前释放；
+- sender 和 receiver 都暴露当前/生命周期峰值 pending bytes，所有 payload/error
+  `Debug` 均脱敏；
+- cancelled send 通过 `ByteReservation` RAII 精确释放 reservation，不重复释放。
+
+实现中特别不能使用
+`max_pending_bytes - Semaphore::available_permits()` 推导 contract pending。Tokio
+`Semaphore::acquire_many` 的 waiter 在尚未取得完整请求前，可能已经部分占用可用
+permits；这种中间状态不属于本 contract 的 pending bytes。当前实现以完整
+`ByteReservation` 建立/释放时的原子计数为权威，并在 permit 再次可用之前先减少
+pending，因此不会把部分 waiter 误计入当前值或峰值。
+
+本切片没有新增 Tokio-owned worker task、GPUI entity、parser、transport 或
+`TerminalPerformanceMetrics` wiring，也没有修改 SSH、Serial、Local PTY、encoding、
+recording、registry、storage/schema 或 render policy。下一切片是 SSH ingress
+decision gate / integration，不在本切片提前扩大范围。
+
+完整 Red/Green 与回归命令见 `12.7`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1607,3 +1644,113 @@ clippy::unnecessary_sort_by
 因此本切片的 terminal 全量 lib 测试、ignored throughput baseline、编译、格式和
 whitespace 检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞，本切片不修改
 无关 crate。
+
+### 12.7 切片 7：Bounded ingress queue 纯 Contract
+
+第一轮先加入测试与模块声明，尚未提供实现，得到真实的编译 Red：
+
+```text
+cargo test -p terminal ingress_queue --lib
+未通过，退出码 101：
+error[E0583]: file not found for module `ingress_queue`
+```
+
+补入参考历史实现的首版后又得到一项真实行为 Red：
+
+```text
+cargo test -p terminal ingress_queue --lib
+12 passed，1 failed
+
+ingress_queue_tests::byte_budget_backpressures_until_data_is_received
+assertion failed：
+left: 4
+right: 3
+```
+
+该失败证明不能通过 semaphore 的 available permits 反推 contract pending：预算为
+4，已有完整的 3-byte reservation 时，另一个 `acquire_many(2)` waiter 会部分占用
+剩余 1 permit，使 available permits 暂时变成 0；但该 waiter 尚未完整取得 2 个
+permits，contract pending 必须仍为 3，而不是 4。修正为完整 `ByteReservation`
+建立/销毁时的 RAII 原子 accounting 后，定向测试转绿：
+
+```text
+cargo test -p terminal ingress_queue --lib
+13 passed，0 failed
+
+cargo test -p terminal --lib
+198 passed，0 failed
+```
+
+全量、跨 crate 和 baseline 验证：
+
+```text
+cargo test -p terminal
+unit tests：198 passed，0 failed
+throughput_baseline：5 ignored，0 failed
+doc tests：0 failed
+
+cargo test -p terminal --test throughput_baseline
+5 ignored，0 failed
+
+cargo test -p terminal --test throughput_baseline -- --ignored
+5 passed，0 failed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+cargo check -p main
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check --edition 2021 \
+  crates/terminal/src/lib.rs \
+  crates/terminal/src/ingress_queue.rs \
+  crates/terminal/src/ingress_queue/types.rs \
+  crates/terminal/src/ingress_queue_tests.rs
+通过
+
+git diff --check
+通过
+```
+
+新增的 13 项 contract 测试覆盖：
+
+- 三项 budget 的零值拒绝、byte budget 的 `u32::MAX` 上界和只读 accessor；
+- empty/oversized data 立即失败，不等待队列容量；
+- byte 与 chunk 两层 data backpressure，以及完全独立的 control backpressure；
+- 已就绪 control 绕过受阻 data，并在 receiver 中优先于 data；
+- pending/peak 的精确 accounting、delivery 前 release 和部分
+  `acquire_many` waiter 不计入 pending；
+- abort 唤醒所有类型 waiter、拒绝后续 send 并丢弃 backlog；
+- receiver abort/drop 的即时 abortive shutdown；
+- 最后一个 sender drop 后自然 drain 已接受项；
+- cancelled chunk-slot waiter 释放完整 reservation，后续 full-budget send 仍准确
+  backpressure，证明没有 double release；
+- data、control、item 和 send error 的 `Debug` 不泄露 payload。
+
+`crates/terminal/src/ingress_queue.rs` 为 298 行，保持在历史计划对 primitive 主文件
+`< 300 lines` 的范围内。最终点验确认 `send_data` 的顺序是完整 byte reservation
+先于 chunk slot，control 不获取 data permit，receiver 的 select 顺序为
+abort/control/data，`QueuedData::into_data` 在返回 payload 前显式 drop reservation，
+receiver drop 会 abort、close 并 drain；模块中没有 backend 或 metrics 引用。
+
+补充静态检查：
+
+```text
+cargo clippy -p terminal --lib -- -D warnings
+未通过，退出码 101；唯一错误位于本切片未修改的
+crates/x11_forwarding/src/detect.rs:238：
+clippy::unnecessary_sort_by
+```
+
+为继续点验 terminal 自身又运行了：
+
+```text
+cargo clippy -p terminal --lib --no-deps -- -D warnings
+未通过，退出码 101；报告 8 项位于 pty_backend.rs、ssh_backend.rs 和 terminal.rs
+的既有 lint；逐项与 HEAD 对照后确认对应表达式均非本切片新增，
+且没有 ingress_queue.rs / ingress_queue/types.rs 错误。
+```
+
+因此本切片的 contract、terminal 回归、baseline、跨 crate 编译、格式和 whitespace
+检查均通过；严格 Clippy 门禁仍被范围外既有 lint 阻塞，本切片不顺手修改无关代码。
+下一步保持为 SSH ingress decision gate / integration。

@@ -1,6 +1,7 @@
 pub(crate) mod exec_capture;
 pub(crate) mod exec_supervisor;
 pub mod history;
+pub mod ingress_queue;
 mod local_shell;
 pub mod osc;
 pub mod performance_metrics;
@@ -10,6 +11,9 @@ pub mod shell_integration;
 pub mod ssh_backend;
 pub mod terminal;
 pub mod types;
+
+#[cfg(test)]
+mod ingress_queue_tests;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_shell_integration;
 
