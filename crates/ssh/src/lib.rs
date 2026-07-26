@@ -18,7 +18,7 @@ pub use host_key::{
     HostKeyRejection, HostKeyRoute, HostKeyVerifier,
 };
 pub use session_manager::SshSessionManager;
-pub use session_registry::SshSessionRegistry;
+pub use session_registry::{SshSessionLease, SshSessionRegistry};
 pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
     KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,

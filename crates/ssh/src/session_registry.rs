@@ -1,16 +1,22 @@
-//! Application-level single-flight slots for shared SSH session managers.
+//! Application-level single-flight slots and leases for shared SSH session
+//! managers.
 //!
-//! This module deliberately stops at the registry/slot contract.  It does not
-//! introduce leases, idle eviction, a GPUI global owner, or migrate existing
-//! consumers.  Those lifecycle policies build on top of the guarantees here:
+//! This module deliberately stops before idle eviction, transport shutdown, a
+//! GPUI global owner, or migration of existing consumers.  Those lifecycle
+//! policies build on top of the guarantees here:
 //!
 //! - one in-flight manager creation per [`ConnectionKey`];
 //! - unrelated keys can make progress independently;
 //! - manager creation never runs while the registry state lock is held;
-//! - a result from a retired slot can never replace a newer generation.
+//! - a result from a retired slot can never replace a newer generation;
+//! - lease checkout/release is bound to the exact slot generation;
+//! - the last release only marks an idle candidate and never disconnects.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -40,8 +46,8 @@ impl CreationToken {
     }
 }
 
-enum FlightOutcome<M> {
-    Ready(Arc<M>),
+enum FlightOutcome {
+    Published,
     Failed(Arc<str>),
     Superseded,
 }
@@ -49,9 +55,15 @@ enum FlightOutcome<M> {
 enum RegistrySlot<M> {
     Creating {
         token: CreationToken,
-        waiters: Vec<oneshot::Sender<FlightOutcome<M>>>,
+        waiters: Vec<oneshot::Sender<FlightOutcome>>,
     },
-    Ready(Arc<M>),
+    Ready {
+        key: Arc<ConnectionKey>,
+        token: CreationToken,
+        manager: Arc<M>,
+        lease_count: usize,
+        idle_since: Option<Instant>,
+    },
 }
 
 struct RegistryState<M> {
@@ -78,7 +90,7 @@ impl<M> RegistryState<M> {
         &mut self,
         key: &ConnectionKey,
         expected: &CreationToken,
-    ) -> Option<Vec<oneshot::Sender<FlightOutcome<M>>>> {
+    ) -> Option<Vec<oneshot::Sender<FlightOutcome>>> {
         let is_current = matches!(
             self.slots.get(key),
             Some(RegistrySlot::Creating { token, .. }) if token.is_same_flight(expected)
@@ -89,7 +101,7 @@ impl<M> RegistryState<M> {
 
         match self.slots.remove(key) {
             Some(RegistrySlot::Creating { waiters, .. }) => Some(waiters),
-            Some(RegistrySlot::Ready(_)) | None => {
+            Some(RegistrySlot::Ready { .. }) | None => {
                 unreachable!("slot shape changed while the registry lock was held")
             }
         }
@@ -114,12 +126,126 @@ trait SessionManagerFactory<M>: Send + Sync + 'static {
 }
 
 enum AcquirePhase<M> {
-    Ready(Arc<M>),
-    Wait(oneshot::Receiver<FlightOutcome<M>>),
+    Ready(RegistryLease<M>),
+    Wait(oneshot::Receiver<FlightOutcome>),
     Start {
         token: CreationToken,
-        receiver: oneshot::Receiver<FlightOutcome<M>>,
+        receiver: oneshot::Receiver<FlightOutcome>,
     },
+}
+
+/// One counted use of a manager from an exact registry slot generation.
+///
+/// A retired generation may remain alive through this lease's `Arc`, but its
+/// release can never mutate the replacement generation for the same key.
+struct RegistryLease<M> {
+    shared: Arc<RegistryShared<M>>,
+    key: Arc<ConnectionKey>,
+    token: CreationToken,
+    manager: Arc<M>,
+    counted: bool,
+}
+
+impl<M> RegistryLease<M> {
+    fn manager(&self) -> &M {
+        &self.manager
+    }
+
+    fn release(&mut self) {
+        if !self.counted {
+            return;
+        }
+        // Clear this first so even an unexpected early return remains
+        // idempotent and `Drop` never attempts a second decrement.
+        self.counted = false;
+
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let Some(RegistrySlot::Ready {
+            token,
+            lease_count,
+            idle_since,
+            ..
+        }) = state.slots.get_mut(self.key.as_ref())
+        else {
+            return;
+        };
+        if !token.is_same_flight(&self.token) || *lease_count == 0 {
+            return;
+        }
+
+        *lease_count -= 1;
+        if *lease_count == 0 {
+            *idle_since = Some(Instant::now());
+        }
+    }
+}
+
+impl<M> Clone for RegistryLease<M> {
+    fn clone(&self) -> Self {
+        let counted = if self.counted {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            match state.slots.get_mut(self.key.as_ref()) {
+                Some(RegistrySlot::Ready {
+                    token,
+                    lease_count,
+                    idle_since,
+                    ..
+                }) if token.is_same_flight(&self.token) => {
+                    *lease_count = lease_count
+                        .checked_add(1)
+                        .expect("SSH session lease count overflow");
+                    *idle_since = None;
+                    true
+                }
+                Some(RegistrySlot::Creating { .. }) | Some(RegistrySlot::Ready { .. }) | None => {
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        Self {
+            shared: self.shared.clone(),
+            key: self.key.clone(),
+            token: self.token.clone(),
+            manager: self.manager.clone(),
+            counted,
+        }
+    }
+}
+
+impl<M> Drop for RegistryLease<M> {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl<M> Deref for RegistryLease<M> {
+    type Target = M;
+
+    fn deref(&self) -> &Self::Target {
+        self.manager()
+    }
+}
+
+impl<M> fmt::Debug for RegistryLease<M> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryLease")
+            .field("connection", &self.key.label())
+            .field("generation", &self.token.generation.0)
+            .field("active", &self.counted)
+            .finish_non_exhaustive()
+    }
 }
 
 struct SessionRegistryCore<M, F> {
@@ -148,7 +274,7 @@ where
         self: &Arc<Self>,
         key: &ConnectionKey,
         config: SshConnectConfig,
-    ) -> Result<Arc<M>> {
+    ) -> Result<RegistryLease<M>> {
         loop {
             let phase = {
                 let mut state = self
@@ -157,7 +283,25 @@ where
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
                 match state.slots.get_mut(key) {
-                    Some(RegistrySlot::Ready(manager)) => AcquirePhase::Ready(manager.clone()),
+                    Some(RegistrySlot::Ready {
+                        key: slot_key,
+                        token,
+                        manager,
+                        lease_count,
+                        idle_since,
+                    }) => {
+                        *lease_count = lease_count
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("SSH session lease count overflow"))?;
+                        *idle_since = None;
+                        AcquirePhase::Ready(RegistryLease {
+                            shared: self.shared.clone(),
+                            key: slot_key.clone(),
+                            token: token.clone(),
+                            manager: manager.clone(),
+                            counted: true,
+                        })
+                    }
                     Some(RegistrySlot::Creating { waiters, .. }) => {
                         let (sender, receiver) = oneshot::channel();
                         waiters.push(sender);
@@ -179,7 +323,7 @@ where
             };
 
             let receiver = match phase {
-                AcquirePhase::Ready(manager) => return Ok(manager),
+                AcquirePhase::Ready(lease) => return Ok(lease),
                 AcquirePhase::Wait(receiver) => receiver,
                 AcquirePhase::Start { token, receiver } => {
                     self.spawn_creation(key.clone(), token, config.clone());
@@ -188,7 +332,12 @@ where
             };
 
             match receiver.await {
-                Ok(FlightOutcome::Ready(manager)) => return Ok(manager),
+                Ok(FlightOutcome::Published) => {
+                    // Checkout must happen while holding the registry lock so
+                    // the lease count is charged to the exact generation that
+                    // supplies the manager.  A cancelled waiter therefore
+                    // never leaves a phantom lease.
+                }
                 Ok(FlightOutcome::Failed(message)) => {
                     return Err(anyhow!(message.to_string()));
                 }
@@ -233,10 +382,21 @@ where
             match result {
                 Ok(manager) => {
                     let manager = Arc::new(manager);
-                    state
-                        .slots
-                        .insert(key.clone(), RegistrySlot::Ready(manager.clone()));
-                    (waiters, FlightOutcome::Ready(manager))
+                    state.slots.insert(
+                        key.clone(),
+                        RegistrySlot::Ready {
+                            key: Arc::new(key.clone()),
+                            token: token.clone(),
+                            manager,
+                            lease_count: 0,
+                            // Every waiter performs its own counted checkout.
+                            // If all waiters were cancelled, the newly created
+                            // manager is immediately eligible for the future
+                            // idle policy instead of being leaked as "busy".
+                            idle_since: Some(Instant::now()),
+                        },
+                    );
+                    (waiters, FlightOutcome::Published)
                 }
                 Err(error) => (
                     waiters,
@@ -249,7 +409,7 @@ where
 
     /// Retire only the currently published/in-flight slot.
     ///
-    /// Lease accounting and transport disconnect are intentionally left to a
+    /// Idle eviction and transport disconnect are intentionally left to a
     /// later lifecycle layer.  Waiters on an in-flight generation retry
     /// against the new map state instead of accepting its stale result.
     fn retire(&self, key: &ConnectionKey) -> Option<Arc<M>> {
@@ -260,7 +420,7 @@ where
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             match state.slots.remove(key) {
-                Some(RegistrySlot::Ready(manager)) => (Some(manager), Vec::new()),
+                Some(RegistrySlot::Ready { manager, .. }) => (Some(manager), Vec::new()),
                 Some(RegistrySlot::Creating { waiters, .. }) => (None, waiters),
                 None => (None, Vec::new()),
             }
@@ -319,11 +479,11 @@ impl<M> Drop for CreationCleanup<M> {
     }
 }
 
-fn notify_waiters<M>(waiters: Vec<oneshot::Sender<FlightOutcome<M>>>, outcome: FlightOutcome<M>) {
+fn notify_waiters(waiters: Vec<oneshot::Sender<FlightOutcome>>, outcome: FlightOutcome) {
     match outcome {
-        FlightOutcome::Ready(manager) => {
+        FlightOutcome::Published => {
             for waiter in waiters {
-                let _ = waiter.send(FlightOutcome::Ready(manager.clone()));
+                let _ = waiter.send(FlightOutcome::Published);
             }
         }
         FlightOutcome::Failed(message) => {
@@ -349,11 +509,74 @@ impl SessionManagerFactory<SshSessionManager> for DefaultSessionManagerFactory {
     }
 }
 
-/// In-memory registry that coalesces manager creation by [`ConnectionKey`].
+/// A generation-bound use of a shared [`SshSessionManager`].
+///
+/// Dropping or explicitly releasing this value synchronously decrements only
+/// the slot generation from which it was checked out.  The last release marks
+/// that slot as idle; it does not disconnect or remove the manager.  Cloning a
+/// lease while its generation is current atomically adds another counted use.
+/// A clone of an already retired lease can keep that retired manager alive but
+/// is never charged to a replacement generation.  The lease does not expose
+/// the registry-owned `Arc<SshSessionManager>`; consumers must retain a lease
+/// for the full lifetime of clients or channels obtained from its manager.
+#[must_use = "dropping the lease immediately releases the registry use"]
+pub struct SshSessionLease {
+    inner: RegistryLease<SshSessionManager>,
+}
+
+impl SshSessionLease {
+    /// Borrow the shared manager while this lease is active.
+    ///
+    /// Cloning the returned manager is not a substitute for cloning and
+    /// retaining this lease, because only the lease participates in registry
+    /// lifecycle accounting.
+    #[must_use]
+    pub fn manager(&self) -> &SshSessionManager {
+        self.inner.manager()
+    }
+
+    /// Release this use before the end of its lexical scope.
+    ///
+    /// This is equivalent to dropping the lease and never performs async I/O
+    /// or disconnects the underlying transport.
+    pub fn release(mut self) {
+        self.inner.release();
+    }
+}
+
+impl Clone for SshSessionLease {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl Deref for SshSessionLease {
+    type Target = SshSessionManager;
+
+    fn deref(&self) -> &Self::Target {
+        self.manager()
+    }
+}
+
+impl fmt::Debug for SshSessionLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SshSessionLease")
+            .field("connection", &self.inner.key.label())
+            .field("generation", &self.inner.token.generation.0)
+            .field("active", &self.inner.counted)
+            .finish_non_exhaustive()
+    }
+}
+
+/// In-memory registry that coalesces manager creation by [`ConnectionKey`] and
+/// returns generation-bound leases.
 ///
 /// This type is intentionally not a process-global singleton.  The future
-/// application service owns one registry instance and later adds lease,
-/// shutdown, health and idle-eviction policy around it.
+/// application service owns one registry instance and later adds shutdown,
+/// health and idle-eviction policy around it.
 #[derive(Clone)]
 pub struct SshSessionRegistry {
     inner: Arc<SessionRegistryCore<SshSessionManager, DefaultSessionManagerFactory>>,
@@ -367,7 +590,7 @@ impl SshSessionRegistry {
         }
     }
 
-    /// Return the single manager slot for `key`.
+    /// Check out one lease from the single manager slot for `key`.
     ///
     /// Callers must build `key` from the same `config` and current opaque
     /// credential revisions.  Passing changed authentication material without
@@ -376,16 +599,19 @@ impl SshSessionRegistry {
         &self,
         key: &ConnectionKey,
         config: SshConnectConfig,
-    ) -> Result<Arc<SshSessionManager>> {
-        self.inner.acquire(key, config).await
+    ) -> Result<SshSessionLease> {
+        self.inner
+            .acquire(key, config)
+            .await
+            .map(|inner| SshSessionLease { inner })
     }
 
     /// Remove the currently published or in-flight slot for `key`.
     ///
     /// This operation only changes registry visibility.  It deliberately does
-    /// not disconnect a returned manager: a later lease/lifecycle layer must
-    /// decide when the last consumer has released it and when idle retirement
-    /// is safe.  Waiters on an in-flight slot transparently join a newer
+    /// not disconnect a returned manager: existing leases keep the retired
+    /// generation alive, while their later drops cannot alter a replacement
+    /// generation.  Waiters on an in-flight slot transparently join a newer
     /// generation, and that retired flight can no longer publish its result.
     pub fn retire(&self, key: &ConnectionKey) -> Option<Arc<SshSessionManager>> {
         self.inner.retire(key)
@@ -400,7 +626,7 @@ impl Default for SshSessionRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionManagerFactory, SessionRegistryCore};
+    use super::{RegistrySlot, SessionManagerFactory, SessionRegistryCore, SshSessionRegistry};
     use crate::{
         ConnectionCredentialRevisions, ConnectionKey, CredentialRevision, HostKeyVerifier,
         JumpServerConnectConfig, ProxyConnectConfig, SshAuth, SshConnectConfig,
@@ -600,7 +826,7 @@ mod tests {
                         .unwrap_or_else(|error| error.into_inner());
                     match state.slots.get(key) {
                         Some(super::RegistrySlot::Creating { waiters, .. }) => waiters.len(),
-                        Some(super::RegistrySlot::Ready(_)) | None => 0,
+                        Some(super::RegistrySlot::Ready { .. }) | None => 0,
                     }
                 };
                 if waiter_count >= expected {
@@ -611,6 +837,47 @@ mod tests {
         })
         .await
         .expect("slot should reach expected waiter count");
+    }
+
+    fn ready_lifecycle<M, F>(
+        registry: &SessionRegistryCore<M, F>,
+        key: &ConnectionKey,
+    ) -> (usize, bool) {
+        let state = registry
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match state.slots.get(key) {
+            Some(RegistrySlot::Ready {
+                lease_count,
+                idle_since,
+                ..
+            }) => (*lease_count, idle_since.is_some()),
+            Some(RegistrySlot::Creating { .. }) => panic!("slot is still being created"),
+            None => panic!("slot is not present"),
+        }
+    }
+
+    async fn wait_for_ready<M, F>(registry: &SessionRegistryCore<M, F>, key: &ConnectionKey) {
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let is_ready = {
+                    let state = registry
+                        .shared
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    matches!(state.slots.get(key), Some(RegistrySlot::Ready { .. }))
+                };
+                if is_ready {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("slot should become ready");
     }
 
     #[tokio::test]
@@ -649,9 +916,13 @@ mod tests {
         assert!(
             managers
                 .iter()
-                .all(|manager| Arc::ptr_eq(manager, &managers[0]))
+                .all(|manager| Arc::ptr_eq(&manager.manager, &managers[0].manager))
         );
         assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(ready_lifecycle(&registry, &key), (12, false));
+
+        drop(managers);
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
     }
 
     #[tokio::test]
@@ -672,7 +943,7 @@ mod tests {
             .await
             .expect("second manager should be created");
 
-        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first.manager, &second.manager));
         assert_ne!(first.id, second.id);
         assert_eq!(first.host, "first.example");
         assert_eq!(second.host, "second.example");
@@ -779,13 +1050,16 @@ mod tests {
             .await
             .expect("first acquire task should not panic")
             .expect("first acquire should join the replacement generation");
-        assert!(Arc::ptr_eq(&first_result, &current));
+        assert!(Arc::ptr_eq(&first_result.manager, &current.manager));
 
         let after_stale_completion = registry
             .acquire(&key, config)
             .await
             .expect("current slot should remain available");
-        assert!(Arc::ptr_eq(&after_stale_completion, &current));
+        assert!(Arc::ptr_eq(
+            &after_stale_completion.manager,
+            &current.manager
+        ));
         assert_eq!(
             *factory
                 .created_ids
@@ -833,7 +1107,156 @@ mod tests {
             .acquire(&key, config)
             .await
             .expect("completed slot should remain cached");
-        assert!(Arc::ptr_eq(&manager, &cached));
+        assert!(Arc::ptr_eq(&manager.manager, &cached.manager));
         assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn last_release_marks_idle_and_reacquire_reuses_the_manager() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::new(factory.clone()));
+        let config = test_config("idle.example");
+        let key = test_key(&config, 1);
+
+        let first = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("first lease should be created");
+        let manager_id = first.id;
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+
+        let cloned = first.clone();
+        assert!(Arc::ptr_eq(&first.manager, &cloned.manager));
+        assert_eq!(ready_lifecycle(&registry, &key), (2, false));
+
+        drop(first);
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+        drop(cloned);
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+
+        let mut second = registry
+            .acquire(&key, config)
+            .await
+            .expect("idle slot should be reused");
+        assert_eq!(second.id, manager_id);
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+
+        second.release();
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+    }
+
+    #[tokio::test]
+    async fn retired_lease_drop_cannot_decrement_the_replacement_generation() {
+        let factory = Arc::new(CountingFactory::default());
+        let registry = Arc::new(SessionRegistryCore::new(factory.clone()));
+        let config = test_config("retired-lease.example");
+        let key = test_key(&config, 1);
+
+        let old_lease = registry
+            .acquire(&key, config.clone())
+            .await
+            .expect("old generation should be created");
+        let old_manager = registry
+            .retire(&key)
+            .expect("ready generation should be retired");
+        assert!(Arc::ptr_eq(&old_lease.manager, &old_manager));
+
+        let replacement = registry
+            .acquire(&key, config)
+            .await
+            .expect("replacement generation should be created");
+        assert!(!Arc::ptr_eq(&old_lease.manager, &replacement.manager));
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+
+        let stale_clone = old_lease.clone();
+        assert!(!stale_clone.counted);
+        drop(old_lease);
+        drop(stale_clone);
+        assert_eq!(
+            ready_lifecycle(&registry, &key),
+            (1, false),
+            "stale release must not touch the replacement count"
+        );
+
+        drop(old_manager);
+        drop(replacement);
+        assert_eq!(ready_lifecycle(&registry, &key), (0, true));
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn cancelled_waiter_never_creates_a_phantom_lease() {
+        let factory = Arc::new(BlockingFactory::new(["phantom.example"]));
+        let registry = Arc::new(SessionRegistryCore::new(factory.clone()));
+        let config = test_config("phantom.example");
+        let key = test_key(&config, 1);
+
+        let cancelled_registry = registry.clone();
+        let cancelled_config = config.clone();
+        let cancelled_key = key.clone();
+        let cancelled = tokio::spawn(async move {
+            cancelled_registry
+                .acquire(&cancelled_key, cancelled_config)
+                .await
+        });
+        wait_for_count(&factory.create_count, 1).await;
+        cancelled.abort();
+        let _ = cancelled.await;
+
+        factory.release_one();
+        wait_for_count(&factory.completed_count, 1).await;
+        wait_for_ready(&registry, &key).await;
+        assert_eq!(
+            ready_lifecycle(&registry, &key),
+            (0, true),
+            "publishing a manager does not pre-charge cancelled waiters"
+        );
+
+        let lease = registry
+            .acquire(&key, config)
+            .await
+            .expect("published idle manager should remain reusable");
+        assert_eq!(lease.id, 1);
+        assert_eq!(factory.create_count.load(Ordering::SeqCst), 1);
+        assert_eq!(ready_lifecycle(&registry, &key), (1, false));
+    }
+
+    #[tokio::test]
+    async fn public_lease_debug_is_credential_free() {
+        let mut config = test_config("debug.example");
+        config.username = "debug-user".to_owned();
+        config.auth = SshAuth::PrivateKeyContent {
+            private_key: "LEASE-PRIVATE-KEY-SECRET".to_owned(),
+            passphrase: Some("LEASE-PASSPHRASE-SECRET".to_owned()),
+            certificate_path: Some("/secret/lease-certificate.pub".to_owned()),
+        };
+        let key = test_key(&config, 1);
+        let registry = SshSessionRegistry::new();
+
+        let lease = registry
+            .acquire(&key, config)
+            .await
+            .expect("manager construction should not dial eagerly");
+        let cloned: super::SshSessionLease = lease.clone();
+        assert_eq!(ready_lifecycle(registry.inner.as_ref(), &key), (2, false));
+        drop(cloned);
+        assert_eq!(ready_lifecycle(registry.inner.as_ref(), &key), (1, false));
+
+        let debug = format!("{lease:?}");
+
+        assert!(debug.contains("SshSessionLease"));
+        assert!(debug.contains("debug-user@debug.example:22"));
+        for secret in [
+            "LEASE-PRIVATE-KEY-SECRET",
+            "LEASE-PASSPHRASE-SECRET",
+            "/secret/lease-certificate.pub",
+            "SshConnectConfig",
+        ] {
+            assert!(
+                !debug.contains(secret),
+                "lease debug leaked {secret}: {debug}"
+            );
+        }
     }
 }
