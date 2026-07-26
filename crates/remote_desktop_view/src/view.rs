@@ -284,6 +284,14 @@ mod tests {
         assert!(canvas.contains("canvas("));
         assert!(canvas.contains("window.handle_input("));
         assert!(canvas.contains("window.paint_image("));
+        let paint_phase = canvas
+            .find("move |bounds, frame, window, cx|")
+            .expect("remote desktop canvas paint phase");
+        assert!(
+            !canvas[..paint_phase].contains("window.handle_input("),
+            "Window::handle_input may only be called during GPUI paint"
+        );
+        assert!(canvas[paint_phase..].contains("window.handle_input("));
         assert!(canvas.contains(".absolute()"));
         assert!(canvas.contains(".inset_0()"));
         assert!(canvas.contains(".size_full()"));

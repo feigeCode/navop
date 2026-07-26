@@ -7,11 +7,9 @@ fn remote_desktop_frame_canvas(
     focus_handle: FocusHandle,
 ) -> impl IntoElement {
     canvas(
-        move |bounds, window, cx| {
+        move |_, _, _| frame,
+        move |bounds, frame, window, cx| {
             window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
-            frame
-        },
-        move |bounds, frame, window, _cx| {
             if let Some(frame) = frame
                 && let Err(error) = window.paint_image(bounds, Corners::default(), frame, 0, false)
             {
