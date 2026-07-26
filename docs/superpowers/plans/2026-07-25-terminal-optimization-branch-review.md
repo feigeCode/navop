@@ -391,6 +391,34 @@ crate 建立脱敏、不可序列化、可单独测试的 `ConnectionKey` domain
 实现 slot、lease、应用级 owner 和 consumer 迁移。这个 decision gate 不代表 Local
 端到端验收已经完成。
 
+### 2026-07-26：切片 10，SSH `ConnectionKey` 纯 domain contract
+
+状态：**实现完成并通过 SSH crate 与主要下游编译验证，已独立提交。**
+
+代码提交：
+
+```text
+833cee6b feat(ssh): define secure connection keys
+```
+
+本切片只建立应用级 registry 的安全 identity 前置 contract：
+
+- `ConnectionKey` 复用现有 `HostKeyIdentity` 的 endpoint/route normalization；
+- target、jump、proxy、host-key policy/trust namespace、timeout、keepalive、
+  keyboard-interactive context 和 X11 forwarding 都参与相等性；
+- username 保持 transport 实际字符串，不做可能导致误共享的宽松 normalization；
+- password、passphrase、private-key content、proxy password 和 MFA response 不进入
+  key；调用方必须提供非敏感 credential slot/version 形成的 opaque
+  `CredentialRevision`；
+- jump、authenticated proxy 和 keyboard-interactive config 与 revision shape 不一致
+  时 fail closed；
+- key 字段私有，不实现持久化序列化；`Debug` 和错误只输出脱敏元数据；
+- 为完整 trust namespace 增加 OpenSSH `known_hosts` path 的只读 getter。
+
+本切片没有创建 registry、slot 或 global owner，没有拨号，也没有迁移 Terminal、
+SFTP、forwarding 或 server-copy consumer。验证和已知 workspace 范围外格式/lint
+阻塞见 `12.10`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -2455,3 +2483,99 @@ relay 建立预算，并补齐跨 Local/SSH/Serial 的 byte hash、关闭、重�
 per-pane budget 验收，再根据结果判断 ingress P1 是否达到手册中的完成标准。按最新
 架构手册顺序，下一个独立实现切片先建立应用级 SSH registry 所需的
 `ConnectionKey` 纯 contract。
+
+### 12.10 切片 10：SSH `ConnectionKey` 纯 domain contract
+
+#### 12.10.1 实现边界
+
+新增：
+
+```text
+crates/ssh/src/connection_key.rs
+```
+
+并只对现有 host-key/public export 做两个窄改动：
+
+- `HostKeyVerifier::openssh_known_hosts_path()` 暴露只读 trust namespace；
+- `host_key::normalize_host()` 提升为 crate 内共享，避免 registry key 复制另一套
+  host normalization。
+
+`ConnectionKey` 的 `Eq + Hash` 覆盖：
+
+- normalized target endpoint 和 jump/proxy route；
+- target/jump/proxy username 及 auth type；
+- target/jump/proxy opaque credential revision；
+- keyboard-interactive responder context revision；
+- host-key policy、app trust store、OpenSSH `known_hosts` path；
+- timeout、keepalive interval/max 和 X11 forwarding。
+
+credential revision 是调用方提供的非敏感 slot/version，不从明文 secret 或普通
+未加盐 hash 派生。secret 或 responder context 变化而 revision 不变属于调用方违反
+contract；后续 registry consumer 接线必须从配置存储的稳定 identity/revision 提供
+该值。
+
+#### 12.10.2 Contract 测试
+
+新增测试覆盖：
+
+- 等价 config/key 相等，host 大小写、首尾空格和尾点按现有 host-key contract
+  normalization；
+- target、jump、proxy username 不做宽松 normalization，避免不同认证主体误共享；
+- auth 类型、credential revision、jump/proxy route、trust policy/namespace、
+  timeout 或 X11 任一变化都生成不同 key；
+- authenticated proxy、jump 和 keyboard-interactive revision 缺失或多余时 fail
+  closed；
+- password、passphrase、private-key content、proxy password、certificate path
+  不出现在 `Debug` 或错误；
+- lifecycle label 使用 normalized endpoint 和 auth 类型，不包含 credential。
+
+#### 12.10.3 验证
+
+```text
+cargo test -p ssh --lib
+54 passed; 0 failed
+
+cargo check -p ssh
+通过
+
+cargo check -p terminal -p sftp -p sftp_view -p remote_file_editor \
+  -p port_forwarding
+通过；只有 extension-runtime 的 5 个既有 unused/dead-code warning 和 workspace
+future-incompat 提示
+
+git diff --check
+通过
+```
+
+严格 clippy：
+
+```text
+cargo clippy -p ssh --lib --no-deps -- -D warnings
+```
+
+仍在本切片未修改的 `HostKeyVerifier::verify()` 返回大型
+`HostKeyRejection` 处因 `clippy::result_large_err` 失败；本切片没有为通过检查而
+混入错误枚举装箱或公共 API 变更。
+
+workspace 全量 `cargo fmt --all -- --check` 仍会报告以下三个从最新 `dev` 合并而来、
+且不属于本切片的既有格式差异：
+
+```text
+crates/markdown-editor/examples/visual_snapshot.rs
+crates/markdown-editor/src/editor/render/table_toolbar.rs
+crates/markdown-editor/tests/editor.rs
+```
+
+本切片涉及的三个 SSH 文件已用定向 `rustfmt --edition 2021` 格式化，未修改上述
+Markdown Editor 文件。
+
+#### 12.10.4 后续
+
+下一独立切片建立 `ConnectionKey -> slot` 的 registry-owned single-flight
+contract，先用 fake connector/manager 验证：
+
+- 相同 key 的并发 acquire 只创建一个 slot/manager；
+- 不同 key 绝不共享；
+- dial/connect 期间不持有全局 registry lock；
+- stale generation 结果不能覆盖新 slot；
+- 此阶段仍不迁移生产 consumer，lease、idle reaper 和应用级 owner 分开提交。
