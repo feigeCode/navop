@@ -32,6 +32,10 @@ pub enum RemoteDesktopOutput {
     ClipboardText {
         text: String,
     },
+    /// The backend is tearing down the current helper session and will start
+    /// another one. This is distinct from a human-readable status string so
+    /// views can reset session-bound state without parsing text.
+    Reconnecting(String),
     Status(String),
     ConnectionFailure(String),
     Terminated(String),

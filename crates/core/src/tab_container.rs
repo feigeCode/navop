@@ -3881,6 +3881,7 @@ mod tests {
         focus_handle: FocusHandle,
         frame: Option<Arc<RenderImage>>,
         status: Option<SharedString>,
+        connected: bool,
     }
 
     impl TestTab {
@@ -3890,6 +3891,7 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: None,
+                connected: true,
             }
         }
 
@@ -3903,11 +3905,23 @@ mod tests {
                 focus_handle: cx.focus_handle(),
                 frame: None,
                 status: Some(status.into()),
+                connected: false,
             }
         }
 
         fn set_frame(&mut self, frame: Arc<RenderImage>, cx: &mut Context<Self>) {
             self.frame = Some(frame);
+            self.connected = true;
+            cx.notify();
+        }
+
+        fn set_reconnecting(&mut self, cx: &mut Context<Self>) {
+            self.connected = false;
+            cx.notify();
+        }
+
+        fn set_connected(&mut self, cx: &mut Context<Self>) {
+            self.connected = true;
             cx.notify();
         }
     }
@@ -3955,6 +3969,20 @@ mod tests {
                                 .child(status),
                         )
                     })
+                })
+                .when(!self.connected, |root| {
+                    root.child(
+                        div()
+                            .id("test-rdp-status-overlay")
+                            .debug_selector(|| "test-rdp-status-overlay".to_owned())
+                            .absolute()
+                            .top_2()
+                            .left_2()
+                            .max_w(px(520.0))
+                            .px_3()
+                            .py_1()
+                            .child(self.status.clone().unwrap_or_else(|| "reconnecting".into())),
+                    )
                 })
         }
     }
@@ -4008,8 +4036,8 @@ mod tests {
         }
     }
 
-    fn rdp_sized_test_frame() -> Arc<RenderImage> {
-        let image = ImageBuffer::from_pixel(2400, 1400, Rgba([0x44, 0x44, 0x44, 0xff]));
+    fn rdp_sized_test_frame(width: u32, height: u32) -> Arc<RenderImage> {
+        let image = ImageBuffer::from_pixel(width, height, Rgba([0x44, 0x44, 0x44, 0xff]));
         Arc::new(RenderImage::new(smallvec::SmallVec::from_elem(
             image::Frame::new(image),
             1,
@@ -4259,9 +4287,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn opening_rdp_content_and_first_frame_keep_windows_titlebar_controls_anchored(
-        cx: &mut TestAppContext,
-    ) {
+    fn rdp_connection_lifecycle_keeps_windows_titlebar_controls_anchored(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(Theme::default());
@@ -4349,7 +4375,7 @@ mod tests {
 
         cx.update(|window, cx| {
             rdp.update(cx, |rdp, cx| {
-                rdp.set_frame(rdp_sized_test_frame(), cx);
+                rdp.set_frame(rdp_sized_test_frame(2400, 1400), cx);
             });
             window.refresh();
         });
@@ -4393,5 +4419,41 @@ mod tests {
 
         let frame_bounds = cx.debug_bounds("test-rdp-frame").expect("RDP frame");
         assert_eq!(frame_bounds, after_first_frame.tab_content);
+
+        cx.update(|window, cx| {
+            rdp.update(cx, |rdp, cx| {
+                rdp.set_reconnecting(cx);
+            });
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        let while_reconnecting = window_chrome_bounds(&mut cx);
+        assert_eq!(
+            after_first_frame, while_reconnecting,
+            "RDP reconnecting overlay must not move window chrome"
+        );
+        assert!(cx.debug_bounds("test-rdp-frame").is_some());
+        assert!(cx.debug_bounds("test-rdp-status-overlay").is_some());
+
+        cx.update(|window, cx| {
+            rdp.update(cx, |rdp, cx| {
+                rdp.set_connected(cx);
+                rdp.set_frame(rdp_sized_test_frame(1600, 900), cx);
+            });
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        let after_reconnect = window_chrome_bounds(&mut cx);
+        assert_eq!(
+            after_first_frame, after_reconnect,
+            "the first frame after reconnect must not move window chrome"
+        );
+        assert_eq!(
+            cx.debug_bounds("test-rdp-frame")
+                .expect("reconnected frame"),
+            after_reconnect.tab_content
+        );
     }
 }

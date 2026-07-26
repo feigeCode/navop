@@ -72,6 +72,7 @@ pub struct RemoteDesktopView {
     latest_frame: Option<Arc<RenderImage>>,
     framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
+    pending_frame_drops: Vec<Arc<RenderImage>>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
     initial_size: resize::InitialSize,
@@ -110,9 +111,11 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
-            let frames = this
-                .rendered_frames
-                .take_all_distinct(this.latest_frame.take());
+            let mut frames = std::mem::take(&mut this.pending_frame_drops);
+            frames.extend(
+                this.rendered_frames
+                    .take_all_distinct(this.latest_frame.take()),
+            );
             let _ = window_handle.update(cx, move |_, window, _| {
                 for frame in frames {
                     if let Err(error) = window.drop_image(frame) {
@@ -132,6 +135,7 @@ impl RemoteDesktopView {
             latest_frame: None,
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
+            pending_frame_drops: Vec::new(),
             remote_size: None,
             content_bounds: None,
             initial_size: resize::InitialSize::default(),
@@ -286,9 +290,42 @@ mod tests {
         assert!(frame.contains(".min_w_0()"));
         assert!(frame.contains(".min_h_0()"));
 
+        let status = &content[content
+            .find(".when(rendered_frame.is_none()")
+            .expect("empty-frame status")..];
+        assert!(status.contains(".min_w_0()"));
+        assert!(status.contains(".max_w_full()"));
+        assert!(status.contains(".overflow_hidden()"));
+
         assert!(root.contains(".size_full()"));
         assert!(root.contains(".min_w_0()"));
         assert!(root.contains(".min_h_0()"));
         assert!(root.contains(".overflow_hidden()"));
+    }
+
+    #[test]
+    fn reconnect_status_overlay_has_a_full_size_layout_boundary() {
+        let source = include_str!("view/render.rs");
+        let overlay_start = source
+            .find(".when(show_status_overlay")
+            .expect("reconnect overlay");
+        let overlay = &source[overlay_start..];
+        let badge_start = overlay
+            .find(".id(\"remote-desktop-status-overlay\")")
+            .expect("reconnect status badge");
+        let boundary = &overlay[..badge_start];
+        let badge = &overlay[badge_start..];
+
+        assert!(boundary.contains(".absolute()"));
+        assert!(boundary.contains(".inset_0()"));
+        assert!(boundary.contains(".min_w_0()"));
+        assert!(boundary.contains(".min_h_0()"));
+        assert!(boundary.contains(".flex()"));
+        assert!(boundary.contains(".overflow_hidden()"));
+        assert!(boundary.contains(".p_2()"));
+        assert!(badge.contains(".min_w_0()"));
+        assert!(badge.contains(".max_w(px(520.0))"));
+        assert!(badge.contains(".flex_shrink(1.0)"));
+        assert!(badge.contains(".overflow_hidden()"));
     }
 }

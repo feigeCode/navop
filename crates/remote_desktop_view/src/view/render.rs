@@ -43,6 +43,15 @@ impl TabContent for RemoteDesktopView {
 
 impl Render for RemoteDesktopView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Only release frames retired by the previous render. A reconnect can
+        // reset the session while draining output below; delaying those drops
+        // until the next render keeps the image alive until the scene that
+        // referenced it has been replaced.
+        for frame in self.pending_frame_drops.drain(..) {
+            if let Err(error) = window.drop_image(frame) {
+                tracing::warn!(?error, "failed to release remote desktop frame");
+            }
+        }
         self.drain_output(cx);
         self.sync_local_clipboard(window, cx);
         self.flush_pending_start();
@@ -53,7 +62,10 @@ impl Render for RemoteDesktopView {
         {
             tracing::warn!(?error, "failed to retire remote desktop frame");
         }
-        let rendered_frame = self.rendered_frames.current().cloned();
+        let rendered_frame = self
+            .connected
+            .then(|| self.rendered_frames.current().cloned())
+            .flatten();
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
         let show_status_overlay = !self.connected;
@@ -156,6 +168,9 @@ impl Render for RemoteDesktopView {
             .when(rendered_frame.is_none(), |this| {
                 this.child(
                     div()
+                        .min_w_0()
+                        .max_w_full()
+                        .overflow_hidden()
                         .px_4()
                         .py_2()
                         .text_color(cx.theme().muted_foreground)
@@ -180,25 +195,36 @@ impl Render for RemoteDesktopView {
             .when(show_status_overlay, |this| {
                 this.child(
                     div()
-                        .id("remote-desktop-status-overlay")
                         .absolute()
-                        .top_2()
-                        .left_2()
-                        .max_w(px(520.0))
-                        .px_3()
-                        .py_1()
-                        .border_1()
-                        .rounded_sm()
-                        .bg(cx.theme().background)
-                        .border_color(cx.theme().border)
-                        .text_sm()
-                        .text_color(cx.theme().foreground)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_reconnect();
-                            cx.stop_propagation();
-                        }))
-                        .child(self.status.clone()),
+                        .inset_0()
+                        .min_w_0()
+                        .min_h_0()
+                        .flex()
+                        .items_start()
+                        .overflow_hidden()
+                        .p_2()
+                        .child(
+                            div()
+                                .id("remote-desktop-status-overlay")
+                                .min_w_0()
+                                .max_w(px(520.0))
+                                .flex_shrink(1.0)
+                                .overflow_hidden()
+                                .px_3()
+                                .py_1()
+                                .border_1()
+                                .rounded_sm()
+                                .bg(cx.theme().background)
+                                .border_color(cx.theme().border)
+                                .text_sm()
+                                .text_color(cx.theme().foreground)
+                                .cursor_pointer()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.request_reconnect();
+                                    cx.stop_propagation();
+                                }))
+                                .child(self.status.clone()),
+                        ),
                 )
             })
     }
