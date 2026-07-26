@@ -1,8 +1,8 @@
 use super::MarkdownEditor;
 use crate::{MarkdownBlockRenderArtifact, MarkdownBlockRenderKind, MarkdownBlockRenderRequest};
 use gpui::{
-    AppContext, Context, Image, ImageFormat, InteractiveElement, IntoElement, ObjectFit,
-    ParentElement, Styled, StyledImage, img, px,
+    AppContext, Context, Corners, Image, ImageFormat, InteractiveElement, IntoElement, ObjectFit,
+    ParentElement, Styled, canvas, px,
 };
 use gpui_component::{Sizable, button::Button};
 use markdown_source::{SourceBlock, SourceBlockKind, SourceNodeId};
@@ -297,6 +297,18 @@ impl MarkdownEditor {
         (artifact.media_type == "image/svg+xml").then(|| {
             let image = Arc::new(Image::from_bytes(ImageFormat::Svg, artifact.bytes.clone()));
             let height = artifact.intrinsic_height.unwrap_or(240.).clamp(64., 520.);
+            let image_bounds_id = block_id;
+            let image_canvas = canvas(
+                move |_, window, cx| image.use_render_image(window, cx),
+                move |bounds, image, window, _| {
+                    let Some(image) = image else {
+                        return;
+                    };
+                    let image_bounds = ObjectFit::Contain.get_bounds(bounds, image.size(0));
+                    let _ = window.paint_image(image_bounds, Corners::default(), image, 0, false);
+                },
+            )
+            .size_full();
             gpui::div()
                 .id(("markdown-rendered-block", block_id.0))
                 .debug_selector(|| format!("markdown-rendered-block-{}", block_id.0))
@@ -308,7 +320,16 @@ impl MarkdownEditor {
                 .border_1()
                 .border_color(self.theme.border)
                 .bg(self.theme.background)
-                .child(img(image).w_full().h_full().object_fit(ObjectFit::Contain))
+                .child(
+                    gpui::div()
+                        .id(("markdown-rendered-image-bounds", block_id.0))
+                        .debug_selector(move || {
+                            format!("markdown-rendered-image-bounds-{}", image_bounds_id.0)
+                        })
+                        .size_full()
+                        .overflow_hidden()
+                        .child(image_canvas),
+                )
                 .into_any_element()
         })
     }

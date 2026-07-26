@@ -216,7 +216,6 @@ impl MarkdownEditor {
             .debug_selector(move || format!("markdown-artifact-shell-{}", block_id.0))
             .grid()
             .grid_cols(1)
-            .grid_rows(1)
             .w_full()
             .min_w_0()
             .on_prepaint(move |bounds, _, cx| {

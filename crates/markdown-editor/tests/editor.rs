@@ -1653,6 +1653,10 @@ fn clicking_an_artifact_activates_its_mounted_input_without_moving_content(
         Box::leak(format!("markdown-artifact-shell-{}", artifact_id.0).into_boxed_str());
     let rendered_layer_selector =
         Box::leak(format!("markdown-artifact-rendered-layer-{}", artifact_id.0).into_boxed_str());
+    let rendered_output_selector =
+        Box::leak(format!("markdown-rendered-block-{}", artifact_id.0).into_boxed_str());
+    let rendered_image_selector =
+        Box::leak(format!("markdown-rendered-image-bounds-{}", artifact_id.0).into_boxed_str());
     let input_slot_selector =
         Box::leak(format!("markdown-block-input-slot-{}", artifact_id.0).into_boxed_str());
     let following_selector =
@@ -1664,12 +1668,30 @@ fn clicking_an_artifact_activates_its_mounted_input_without_moving_content(
     let rendered_layer = cx
         .debug_bounds(rendered_layer_selector)
         .expect("inactive artifact render layer must be visible");
+    let rendered_output = cx
+        .debug_bounds(rendered_output_selector)
+        .expect("inactive artifact output must be visible");
+    let rendered_image = cx
+        .debug_bounds(rendered_image_selector)
+        .expect("inactive artifact image bounds must be laid out");
     assert!(
         cx.debug_bounds(input_slot_selector).is_some(),
         "artifact input must be laid out before its first activation"
     );
     let following_before = cx.debug_bounds(following_selector).unwrap();
     let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    assert!(
+        rendered_output.bottom() <= shell_before.bottom(),
+        "artifact output must be contained by its shell: shell={shell_before:?}, output={rendered_output:?}"
+    );
+    assert!(
+        rendered_image.bottom() <= rendered_output.bottom(),
+        "artifact image must be contained by its output: output={rendered_output:?}, image={rendered_image:?}"
+    );
+    assert!(
+        rendered_output.bottom() <= following_before.top(),
+        "artifact output must not paint over the following block: output={rendered_output:?}, following={following_before:?}"
+    );
 
     cx.simulate_click(rendered_layer.center(), Modifiers::none());
     cx.run_until_parked();
@@ -1719,6 +1741,8 @@ fn clicking_native_html_activates_its_mounted_input_without_moving_content(
         Box::leak(format!("markdown-html-shell-{}", html_id.0).into_boxed_str());
     let native_layer_selector =
         Box::leak(format!("markdown-html-native-layer-{}", html_id.0).into_boxed_str());
+    let native_content_selector =
+        Box::leak(format!("markdown-html-native-content-{}", html_id.0).into_boxed_str());
     let input_slot_selector =
         Box::leak(format!("markdown-block-input-slot-{}", html_id.0).into_boxed_str());
     let following_selector =
@@ -1730,12 +1754,23 @@ fn clicking_native_html_activates_its_mounted_input_without_moving_content(
     let native_layer = cx
         .debug_bounds(native_layer_selector)
         .expect("inactive HTML native layer must be visible");
+    let native_content = cx
+        .debug_bounds(native_content_selector)
+        .expect("inactive HTML native content must be visible");
     assert!(
         cx.debug_bounds(input_slot_selector).is_some(),
         "HTML input must be laid out before its first activation"
     );
     let following_before = cx.debug_bounds(following_selector).unwrap();
     let scroll_before = editor.read_with(&cx, |editor, _| editor.vertical_scroll_offset());
+    assert!(
+        native_content.bottom() <= shell_before.bottom(),
+        "native HTML must be contained by its shell: shell={shell_before:?}, native={native_content:?}"
+    );
+    assert!(
+        native_content.bottom() <= following_before.top(),
+        "native HTML must not paint over the following block: native={native_content:?}, following={following_before:?}"
+    );
 
     cx.simulate_click(native_layer.center(), Modifiers::none());
     cx.run_until_parked();

@@ -55,19 +55,25 @@ impl MarkdownEditor {
                 });
             })
             .child(
-                TextView::html(
-                    ("markdown-html-native-view", block.id.0),
-                    block.original_source.clone(),
-                )
-                .style(self.html_preview_style())
-                .w_full(),
+                gpui::div()
+                    .id(("markdown-html-native-content", block.id.0))
+                    .debug_selector(move || format!("markdown-html-native-content-{}", block_id.0))
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        TextView::html(
+                            ("markdown-html-native-view", block.id.0),
+                            block.original_source.clone(),
+                        )
+                        .style(self.html_preview_style())
+                        .w_full(),
+                    ),
             );
         gpui::div()
             .id(("markdown-html-shell", block.id.0))
             .debug_selector(move || format!("markdown-html-shell-{}", block_id.0))
             .grid()
             .grid_cols(1)
-            .grid_rows(1)
             .w_full()
             .min_w_0()
             .on_prepaint(move |bounds, _, cx| {
