@@ -1385,8 +1385,8 @@ impl Terminal {
         Self::spawn_serial_connect(
             serial_params.clone(),
             term.clone(),
+            event_proxy.clone(),
             performance_metrics.clone(),
-            event_tx.clone(),
             Some(disconnect_tx),
             connection_generation,
             cx,
@@ -1409,7 +1409,7 @@ impl Terminal {
             ssh_mfa_responder: None,
             serial_params: Some(serial_params),
             event_tx: Some(event_tx),
-            event_proxy: None,
+            event_proxy: Some(event_proxy),
             connection_id: conn.id,
             connection_name: Some(conn.name),
             init_commands: None,
@@ -1708,8 +1708,8 @@ impl Terminal {
     fn spawn_serial_connect(
         params: SerialParams,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
         performance_metrics: Arc<TerminalPerformanceMetrics>,
-        event_tx: UnboundedSender<TerminalEvent>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
         generation: u64,
         cx: &mut Context<Self>,
@@ -1728,7 +1728,7 @@ impl Terminal {
         let result = SerialBackend::connect_with_metrics(
             params,
             term,
-            event_tx,
+            event_proxy,
             disconnect_tx,
             performance_metrics,
         );
@@ -2232,7 +2232,7 @@ impl Terminal {
             })
             .detach();
         } else if let Some(params) = self.serial_params.clone() {
-            let Some(event_tx) = self.event_tx.clone() else {
+            let Some(event_proxy) = self.event_proxy.clone() else {
                 return;
             };
 
@@ -2249,8 +2249,8 @@ impl Terminal {
             Self::spawn_serial_connect(
                 params,
                 self.term.clone(),
+                event_proxy,
                 self.performance_metrics.clone(),
-                event_tx,
                 Some(disconnect_tx),
                 generation,
                 cx,

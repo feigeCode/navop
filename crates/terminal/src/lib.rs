@@ -7,6 +7,7 @@ pub mod osc;
 pub mod performance_metrics;
 pub mod pty_backend;
 pub mod serial_backend;
+mod serial_ingress;
 pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_ingress;
@@ -39,5 +40,7 @@ pub use types::{
 mod ingress_queue_tests;
 #[cfg(test)]
 mod performance_metrics_tests;
+#[cfg(test)]
+mod serial_ingress_tests;
 #[cfg(test)]
 mod ssh_ingress_tests;
