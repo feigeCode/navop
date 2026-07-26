@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 futures.workspace = true
 gpui.workspace = true
-gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
+gpui-component = { workspace = true, features = ["tree-sitter-languages"] }
 markdown-source.workspace = true
 thiserror.workspace = true
 
@@ -15,6 +15,7 @@ thiserror.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 gpui-component-assets.workspace = true
 gpui_platform = { workspace = true, features = ["test-support"] }
+ropey.workspace = true
 rust-embed = { version = "8.7.2", features = ["include-exclude"] }
 
 [lints]

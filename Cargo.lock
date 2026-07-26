@@ -6859,6 +6859,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "markdown-source",
+ "ropey",
  "rust-embed",
  "thiserror 2.0.18",
 ]
