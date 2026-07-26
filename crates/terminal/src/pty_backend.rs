@@ -24,7 +24,8 @@ use crate::osc::{OscEvent, OscStreamParser};
 use crate::{
     TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
     TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
-    TerminalExecRequest, TerminalInputHandle, TerminalPerformanceMetrics, TerminalSize,
+    TerminalExecRequest, TerminalInputHandle, TerminalInputMetricSource,
+    TerminalPerformanceMetrics, TerminalSize,
 };
 
 /// 终端事件类型
@@ -175,6 +176,7 @@ struct OscTrackingReader<T: EventedPty> {
     event_tx: UnboundedSender<TerminalEvent>,
     command_tx: UnboundedSender<LocalPtyCommand>,
     capture_output: Arc<AtomicBool>,
+    metrics: Arc<TerminalPerformanceMetrics>,
     osc_parser: OscStreamParser,
 }
 
@@ -188,6 +190,7 @@ impl<T: EventedPty> OscTrackingPty<T> {
         event_tx: UnboundedSender<TerminalEvent>,
         command_tx: UnboundedSender<LocalPtyCommand>,
         capture_output: Arc<AtomicBool>,
+        metrics: Arc<TerminalPerformanceMetrics>,
     ) -> Self {
         let mut inner = Box::new(inner);
         let reader = OscTrackingReader {
@@ -195,6 +198,7 @@ impl<T: EventedPty> OscTrackingPty<T> {
             event_tx,
             command_tx,
             capture_output,
+            metrics,
             osc_parser: OscStreamParser::default(),
         };
         Self { inner, reader }
@@ -206,6 +210,7 @@ impl<T: EventedPty> Read for OscTrackingReader<T> {
         let bytes_read = unsafe { (&mut *self.inner).reader().read(buf) }?;
         if bytes_read > 0 {
             let data = &buf[..bytes_read];
+            self.metrics.record_parser_chunk(bytes_read);
             let osc_events = self.osc_parser.push(data);
             if self.capture_output.load(Ordering::Acquire) || !osc_events.is_empty() {
                 let _ = self.command_tx.send(LocalPtyCommand::TerminalChunk {
@@ -316,6 +321,7 @@ pub struct LocalPtyBackend {
     command_tx: UnboundedSender<LocalPtyCommand>,
     exec_ids: Arc<AtomicU64>,
     event_proxy: GpuiEventProxy,
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
     _event_loop_handle: JoinHandle<()>,
     _supervisor_handle: JoinHandle<()>,
 }
@@ -343,12 +349,14 @@ impl LocalPtyBackend {
 
         let (command_tx, command_rx) = unbounded_channel();
         let capture_output = Arc::new(AtomicBool::new(false));
+        let performance_metrics = event_proxy.performance_metrics();
         let pty = tty::new(&pty_options, window_size, 0)?;
         let pty = OscTrackingPty::new(
             pty,
             event_proxy.event_tx.clone(),
             command_tx.clone(),
             capture_output.clone(),
+            performance_metrics.clone(),
         );
         let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
@@ -376,12 +384,15 @@ impl LocalPtyBackend {
             command_tx,
             exec_ids: Arc::new(AtomicU64::new(1)),
             event_proxy,
+            performance_metrics,
             _event_loop_handle: event_loop_handle,
             _supervisor_handle: supervisor_handle,
         })
     }
 
     pub fn write(&self, data: Vec<u8>) {
+        self.performance_metrics
+            .record_input(TerminalInputMetricSource::User, data.len());
         let _ = self.command_tx.send(LocalPtyCommand::Write {
             source: TerminalInputSource::User,
             data,
@@ -428,12 +439,15 @@ impl TerminalBackend for LocalPtyBackend {
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
         let sender = self.command_tx.clone();
-        Some(TerminalInputHandle::new(move |data| {
-            let _ = sender.send(LocalPtyCommand::Write {
-                source: TerminalInputSource::User,
-                data,
-            });
-        }))
+        Some(TerminalInputHandle::with_metrics(
+            self.performance_metrics.clone(),
+            move |data| {
+                let _ = sender.send(LocalPtyCommand::Write {
+                    source: TerminalInputSource::User,
+                    data,
+                });
+            },
+        ))
     }
 
     fn exec_handle(&self) -> Option<TerminalExecHandle> {
@@ -685,6 +699,8 @@ impl GpuiEventProxy {
     }
 
     fn write_back(&self, data: Vec<u8>) {
+        self.metrics
+            .record_input(TerminalInputMetricSource::TerminalResponse, data.len());
         if let Some(wb) = self.write_back.lock().unwrap().as_ref() {
             wb.write(data);
         }
@@ -770,9 +786,65 @@ mod tests {
     use super::*;
     use crate::TerminalPerformanceMetrics;
     use base64::Engine;
+    use std::io::Cursor;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
     use tokio_util::sync::CancellationToken;
+
+    struct TestEventedPty {
+        reader: Cursor<Vec<u8>>,
+        writer: io::Sink,
+    }
+
+    impl TestEventedPty {
+        fn new(data: impl Into<Vec<u8>>) -> Self {
+            Self {
+                reader: Cursor::new(data.into()),
+                writer: io::sink(),
+            }
+        }
+    }
+
+    impl EventedReadWrite for TestEventedPty {
+        type Reader = Cursor<Vec<u8>>;
+        type Writer = io::Sink;
+
+        unsafe fn register(
+            &mut self,
+            _poller: &Arc<polling::Poller>,
+            _event: polling::Event,
+            _mode: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reregister(
+            &mut self,
+            _poller: &Arc<polling::Poller>,
+            _event: polling::Event,
+            _mode: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn deregister(&mut self, _poller: &Arc<polling::Poller>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reader(&mut self) -> &mut Self::Reader {
+            &mut self.reader
+        }
+
+        fn writer(&mut self) -> &mut Self::Writer {
+            &mut self.writer
+        }
+    }
+
+    impl EventedPty for TestEventedPty {
+        fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+            None
+        }
+    }
 
     fn exec_request(command: &str) -> crate::TerminalExecRequest {
         crate::TerminalExecRequest {
@@ -783,6 +855,31 @@ mod tests {
             timeout: std::time::Duration::from_secs(1),
             observer: None,
         }
+    }
+
+    #[test]
+    fn osc_tracking_reader_records_each_non_empty_pty_read() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let mut pty = OscTrackingPty::new(
+            TestEventedPty::new(b"local output".to_vec()),
+            event_tx,
+            command_tx,
+            Arc::new(AtomicBool::new(false)),
+            metrics.clone(),
+        );
+        let mut buffer = [0; 64];
+
+        assert_eq!(12, pty.reader().read(&mut buffer).expect("PTY read"));
+        assert_eq!(0, pty.reader().read(&mut buffer).expect("PTY EOF"));
+        assert!(command_rx.try_recv().is_err());
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(12, snapshot.ingress_bytes);
+        assert_eq!(1, snapshot.parser_chunks);
+        assert_eq!(12, snapshot.parser_chunk_bytes);
+        assert_eq!(12, snapshot.parser_chunk_max_bytes);
     }
 
     #[test]
@@ -824,6 +921,27 @@ mod tests {
         assert_eq!(1, snapshot.wakeup_requests);
         assert_eq!(0, snapshot.wakeup_queued);
         assert_eq!(0, snapshot.wakeup_coalesced);
+    }
+
+    #[test]
+    fn event_proxy_records_all_terminal_responses_without_a_write_back_sink() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
+
+        proxy.send_event(AlacTermEvent::PtyWrite("pty".to_string()));
+        proxy.send_event(AlacTermEvent::ColorRequest(
+            NamedColor::Foreground as usize,
+            Arc::new(|_| "color".to_string()),
+        ));
+        proxy.send_event(AlacTermEvent::TextAreaSizeRequest(Arc::new(|_| {
+            "size".to_string()
+        })));
+
+        assert_eq!(
+            ("pty".len() + "color".len() + "size".len()) as u64,
+            metrics.snapshot().terminal_response_bytes
+        );
     }
 
     #[test]
@@ -896,6 +1014,13 @@ mod tests {
         }
         let reply = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
         assert_eq!(reply, "132x40");
+        assert_eq!(
+            reply.len() as u64,
+            proxy
+                .performance_metrics()
+                .snapshot()
+                .terminal_response_bytes
+        );
     }
 
     #[test]

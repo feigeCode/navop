@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use alacritty_terminal::sync::FairMutex;
@@ -9,7 +9,10 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use one_core::storage::models::SerialParams;
 
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
-use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
+use crate::{
+    TerminalBackend, TerminalInputHandle, TerminalInputMetricSource, TerminalPerformanceMetrics,
+    TerminalSize,
+};
 
 enum SerialCommand {
     Write(Vec<u8>),
@@ -18,6 +21,7 @@ enum SerialCommand {
 
 pub struct SerialBackend {
     command_tx: UnboundedSender<SerialCommand>,
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
 }
 
 impl SerialBackend {
@@ -26,6 +30,22 @@ impl SerialBackend {
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_tx: UnboundedSender<TerminalEvent>,
         on_disconnect: Option<UnboundedSender<()>>,
+    ) -> anyhow::Result<Self> {
+        Self::connect_with_metrics(
+            params,
+            term,
+            event_tx,
+            on_disconnect,
+            Arc::new(TerminalPerformanceMetrics::default()),
+        )
+    }
+
+    pub fn connect_with_metrics(
+        params: SerialParams,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_tx: UnboundedSender<TerminalEvent>,
+        on_disconnect: Option<UnboundedSender<()>>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
     ) -> anyhow::Result<Self> {
         let data_bits = match params.data_bits {
             5 => serialport::DataBits::Five,
@@ -70,6 +90,7 @@ impl SerialBackend {
 
         // 读取线程：从串口读取数据并写入 alacritty Term
         let read_event_tx = event_tx.clone();
+        let read_metrics = performance_metrics.clone();
         std::thread::Builder::new()
             .name("serial-read".into())
             .spawn(move || {
@@ -80,7 +101,7 @@ impl SerialBackend {
                 loop {
                     match port.read(&mut buf) {
                         Ok(n) if n > 0 => {
-                            processor.advance(&mut *term.lock(), &buf[..n]);
+                            advance_serial_term(&term, &mut processor, &buf[..n], &read_metrics);
                             let _ = read_event_tx.send(TerminalEvent::Wakeup);
                         }
                         Ok(_) => {}
@@ -121,20 +142,28 @@ impl SerialBackend {
                 }
             })?;
 
-        Ok(Self { command_tx })
+        Ok(Self {
+            command_tx,
+            performance_metrics,
+        })
     }
 }
 
 impl TerminalBackend for SerialBackend {
     fn write(&self, data: Vec<u8>) {
+        self.performance_metrics
+            .record_input(TerminalInputMetricSource::User, data.len());
         let _ = self.command_tx.send(SerialCommand::Write(data));
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
         let tx = self.command_tx.clone();
-        Some(TerminalInputHandle::new(move |data| {
-            let _ = tx.send(SerialCommand::Write(data));
-        }))
+        Some(TerminalInputHandle::with_metrics(
+            self.performance_metrics.clone(),
+            move |data| {
+                let _ = tx.send(SerialCommand::Write(data));
+            },
+        ))
     }
 
     fn resize(&self, _size: TerminalSize) {
@@ -144,6 +173,25 @@ impl TerminalBackend for SerialBackend {
     fn shutdown(&self) {
         let _ = self.command_tx.send(SerialCommand::Shutdown);
     }
+}
+
+fn advance_serial_term(
+    term: &Arc<FairMutex<Term<GpuiEventProxy>>>,
+    processor: &mut Processor<StdSyncHandler>,
+    data: &[u8],
+    performance_metrics: &TerminalPerformanceMetrics,
+) {
+    performance_metrics.record_parser_chunk(data.len());
+
+    let wait_started = Instant::now();
+    let mut term = term.lock();
+    let wait = wait_started.elapsed();
+    let hold_started = Instant::now();
+    processor.advance(&mut *term, data);
+    let hold = hold_started.elapsed();
+    drop(term);
+
+    performance_metrics.record_term_lock(wait, hold);
 }
 
 #[cfg(test)]
@@ -211,6 +259,55 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn advance_serial_term_records_parser_and_lock_metrics_once() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let term = create_test_term(event_tx);
+        let metrics = TerminalPerformanceMetrics::default();
+        let mut processor = Processor::<StdSyncHandler>::new();
+        let data = b"serial output\r\n";
+
+        advance_serial_term(&term, &mut processor, data, &metrics);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(data.len() as u64, snapshot.ingress_bytes);
+        assert_eq!(1, snapshot.parser_chunks);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_bytes);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_max_bytes);
+        assert_eq!(1, snapshot.term_lock_samples);
+        assert_eq!(snapshot.term_lock_wait_ns, snapshot.term_lock_wait_max_ns);
+        assert_eq!(snapshot.term_lock_hold_ns, snapshot.term_lock_hold_max_ns);
+    }
+
+    #[test]
+    fn serial_backend_records_direct_and_handle_input_without_double_counting() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let backend = SerialBackend {
+            command_tx,
+            performance_metrics: metrics.clone(),
+        };
+
+        TerminalBackend::write(&backend, b"direct".to_vec());
+        TerminalBackend::input_handle(&backend)
+            .expect("serial input handle")
+            .write(b"handle".to_vec());
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SerialCommand::Write(data)) if data == b"direct"
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SerialCommand::Write(data)) if data == b"handle"
+        ));
+        assert!(command_rx.try_recv().is_err());
+        assert_eq!(
+            (b"direct".len() + b"handle".len()) as u64,
+            metrics.snapshot().user_input_bytes
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -26,7 +26,8 @@ use crate::shell_integration::{
 use crate::{
     TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
     TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
-    TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalInputMetricSource,
+    TerminalPerformanceMetrics, TerminalSize,
 };
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
@@ -295,6 +296,7 @@ enum SshCommand {
 pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
     exec_ids: Arc<AtomicU64>,
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
 }
 
 type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
@@ -491,6 +493,8 @@ impl SshBackend {
         // 创建 PtyWrite 回写通道
         let (pty_write_tx, mut pty_write_rx) = unbounded_channel::<Vec<u8>>();
         event_proxy.set_ssh_write_back(pty_write_tx);
+        let performance_metrics = event_proxy.performance_metrics();
+        let task_metrics = performance_metrics.clone();
 
         tokio::spawn(async move {
             let mut shutdown = false;
@@ -679,7 +683,12 @@ impl SshBackend {
                                     }
                                 }
 
-                                processor.advance(&mut *term.lock(), &data);
+                                advance_ssh_term(
+                                    &term,
+                                    &mut processor,
+                                    &data,
+                                    &task_metrics,
+                                );
                                 let _ = notify_tx.send(());
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
@@ -703,6 +712,7 @@ impl SshBackend {
                 .await;
 
             if !shutdown {
+                task_metrics.record_ssh_invalidation();
                 let _ = session_manager.invalidate().await;
             }
             if let Some(tx) = on_disconnect {
@@ -713,6 +723,7 @@ impl SshBackend {
         Ok(Self {
             command_tx,
             exec_ids,
+            performance_metrics,
         })
     }
 
@@ -1061,11 +1072,31 @@ impl SshBackend {
     }
 }
 
+fn advance_ssh_term(
+    term: &Arc<FairMutex<Term<GpuiEventProxy>>>,
+    processor: &mut Processor<StdSyncHandler>,
+    data: &[u8],
+    performance_metrics: &TerminalPerformanceMetrics,
+) {
+    performance_metrics.record_parser_chunk(data.len());
+
+    let wait_started = Instant::now();
+    let mut term = term.lock();
+    let wait = wait_started.elapsed();
+    let hold_started = Instant::now();
+    processor.advance(&mut *term, data);
+    let hold = hold_started.elapsed();
+    drop(term);
+
+    performance_metrics.record_term_lock(wait, hold);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::osc::parse_osc_payload;
     use crate::{TerminalControlReadiness, TerminalExecCompletion};
+    use alacritty_terminal::grid::Dimensions;
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
     use ssh::SshConnectConfig;
@@ -1076,6 +1107,77 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::time::sleep;
     use tokio_util::sync::CancellationToken;
+
+    struct TestDimensions;
+
+    impl Dimensions for TestDimensions {
+        fn total_lines(&self) -> usize {
+            24
+        }
+
+        fn screen_lines(&self) -> usize {
+            24
+        }
+
+        fn columns(&self) -> usize {
+            80
+        }
+    }
+
+    #[test]
+    fn advance_ssh_term_records_parser_and_lock_metrics_once() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let proxy = GpuiEventProxy::new(event_tx);
+        let term = Arc::new(FairMutex::new(Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TestDimensions,
+            proxy,
+        )));
+        let metrics = TerminalPerformanceMetrics::default();
+        let mut processor = Processor::<StdSyncHandler>::new();
+        let data = b"ssh output\r\n";
+
+        advance_ssh_term(&term, &mut processor, data, &metrics);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(data.len() as u64, snapshot.ingress_bytes);
+        assert_eq!(1, snapshot.parser_chunks);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_bytes);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_max_bytes);
+        assert_eq!(1, snapshot.term_lock_samples);
+        assert_eq!(snapshot.term_lock_wait_ns, snapshot.term_lock_wait_max_ns);
+        assert_eq!(snapshot.term_lock_hold_ns, snapshot.term_lock_hold_max_ns);
+    }
+
+    #[test]
+    fn ssh_backend_records_direct_and_handle_input_without_double_counting() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let backend = SshBackend {
+            command_tx,
+            exec_ids: Arc::new(AtomicU64::new(1)),
+            performance_metrics: metrics.clone(),
+        };
+
+        TerminalBackend::write(&backend, b"direct".to_vec());
+        TerminalBackend::input_handle(&backend)
+            .expect("SSH input handle")
+            .write(b"handle".to_vec());
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SshCommand::Write(data)) if data == b"direct"
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SshCommand::Write(data)) if data == b"handle"
+        ));
+        assert!(command_rx.try_recv().is_err());
+        assert_eq!(
+            (b"direct".len() + b"handle".len()) as u64,
+            metrics.snapshot().user_input_bytes
+        );
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ChannelOp {
@@ -2288,14 +2390,19 @@ mod tests {
 
 impl TerminalBackend for SshBackend {
     fn write(&self, data: Vec<u8>) {
+        self.performance_metrics
+            .record_input(TerminalInputMetricSource::User, data.len());
         let _ = self.command_tx.send(SshCommand::Write(data));
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
         let tx = self.command_tx.clone();
-        Some(TerminalInputHandle::new(move |data| {
-            let _ = tx.send(SshCommand::Write(data));
-        }))
+        Some(TerminalInputHandle::with_metrics(
+            self.performance_metrics.clone(),
+            move |data| {
+                let _ = tx.send(SshCommand::Write(data));
+            },
+        ))
     }
 
     fn exec_handle(&self) -> Option<TerminalExecHandle> {

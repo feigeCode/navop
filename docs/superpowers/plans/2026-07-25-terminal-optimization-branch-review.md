@@ -176,6 +176,38 @@ Serial 的 `event_proxy: None` reset fallback 不再调用会创建独立 metric
 
 验证记录见本文末尾的“实施验证记录”。
 
+### 2026-07-26：切片 6，接入真实 Backend/Parser Observability 与 Throughput Baseline
+
+状态：**实现完成并通过定向 contract、terminal 回归和 ignored baseline 验证。**
+
+本切片把切片 3–5 的 payload-free metrics 接到当前 backend 的真实数据路径，范围
+保持在可观测性和基准测试，不改变终端数据面调度语义：
+
+- Local PTY 的每次非空 OS read 记录 parser chunk；Local direct write 和
+  `input_handle` 各记录一次 user input；
+- `GpuiEventProxy::write_back` 统一记录所有 terminal response bytes，即使当前没有
+  write-back sink；Local supervisor 和 SSH `pty_write_rx` 不重复统计；
+- SSH 的 `Data`/`ExtendedData` 统一经过 parser chunk 与 `Term` lock wait/hold
+  helper；Serial 每次 `read n > 0` 同样记录 parser chunk 和 lock 样本；
+- SSH task 仅在非显式 shutdown 退出时记录 invalidation；成功连接按 generation
+  记录 connects，只有 generation 大于 1 才记录 reconnect；
+- Local、SSH、Serial 的 direct write 和 metrics-aware input handle 均覆盖去重测试；
+- 新增 `crates/terminal/tests/throughput_baseline.rs`，保留 parser、metrics overhead、
+  并发 parser、background activity 和真实 Local PTY 高输出关闭五项 ignored baseline。
+  Local PTY baseline 的启动等待和关闭检查均有 deadline，默认测试不会启动无限输出
+  子进程。
+
+本切片刻意没有混入：
+
+- bounded ingress queue 或 SSH ingress 架构改造；
+- render policy、UI overlay、encoding、recording；
+- SSH connection registry、storage/schema 修改；
+- Serial/SSH Wakeup coalescing 行为改造。Serial 与 SSH 仍直接发送既有 `Wakeup`，
+  不机械伪造 coalesced 指标，也没有改变 event loop 的 8ms/reset 顺序。
+
+实现先于本轮新增测试，故不伪造 TDD Red 证据；本轮记录为定向 contract 与回归
+验证，完整命令和结果见 `12.6`。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1509,3 +1541,69 @@ clippy::unnecessary_sort_by
 
 因此本切片的两项定向 contract、terminal 全量 lib 测试、编译、格式和 whitespace
 检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞，本切片不修改无关 crate。
+
+### 12.6 切片 6：真实 Backend/Parser Observability 与 Throughput Baseline
+
+本轮没有把实现倒写成 TDD Red；新增测试是在实现完成后补齐的定向 contract 与
+回归保护，重点确认埋点位置和“不重复计数”边界：
+
+```text
+cargo test -p terminal --lib
+185 passed，0 failed
+
+cargo test -p terminal --test throughput_baseline
+5 ignored，0 failed
+
+cargo test -p terminal --test throughput_baseline -- --ignored
+5 passed，0 failed
+
+cargo check -p terminal
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+cargo check -p main
+0 errors；仅有 workspace 既有 future-incompatibility warning
+
+rustfmt --check \
+  crates/terminal/src/types.rs \
+  crates/terminal/src/pty_backend.rs \
+  crates/terminal/src/ssh_backend.rs \
+  crates/terminal/src/serial_backend.rs \
+  crates/terminal/src/terminal.rs \
+  crates/terminal/tests/throughput_baseline.rs
+通过
+
+git diff --check
+通过
+```
+
+新增/覆盖的 contract 包括：
+
+- Local `OscTrackingReader` 每次非空 read 的 parser bytes/chunk；
+- terminal response 在有、无 write-back sink 时均只由 `write_back` 计数；
+- SSH/Serial parser 与 `Term` lock wait/hold 各自产生一个样本；
+- Local/SSH/Serial direct write 与 input handle 的 user bytes 不重复；
+- SSH reconnect generation 的首次连接与后续重连边界；
+- ignored baseline 的默认安全跳过、background activity、并发 parser 和真实 Local
+  PTY 高输出有界关闭。
+
+ignored baseline 首次并行运行暴露了真实 PTY 启动时序：固定 100ms 等待可能在首次
+read 前就发送 shutdown，导致观测到 0 bytes。随后将 baseline 改为带 2 秒 deadline
+的“等待首个 ingress 后再关闭”，并重新运行 `-- --ignored`，五项全部通过；这不是
+生产路径语义变更。
+
+本轮仍明确未改变 bounded ingress、SSH ingress、render、encoding、recording、
+connection registry、storage/schema 以及 Serial/SSH Wakeup coalescing；后者继续
+使用既有 direct `Wakeup` 发送路径。
+
+补充验证：
+
+```text
+cargo clippy -p terminal --lib -- -D warnings
+未通过，退出码 101；唯一错误仍位于本切片未修改的
+crates/x11_forwarding/src/detect.rs:238：
+clippy::unnecessary_sort_by
+```
+
+因此本切片的 terminal 全量 lib 测试、ignored throughput baseline、编译、格式和
+whitespace 检查均通过；Clippy 仍被同一个 workspace 既有 lint 阻塞，本切片不修改
+无关 crate。

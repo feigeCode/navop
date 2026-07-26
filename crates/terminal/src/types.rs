@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use crate::TerminalExecError;
+use crate::{TerminalExecError, TerminalInputMetricSource, TerminalPerformanceMetrics};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalControlReadiness {
@@ -95,6 +95,23 @@ impl TerminalInputHandle {
         Self {
             write_fn: Arc::new(write_fn),
         }
+    }
+
+    /// Creates an input handle that records user input before forwarding it.
+    ///
+    /// Backends that expose a direct [`TerminalBackend::write`] path record
+    /// there instead.  Keeping the instrumentation on this alternate handle
+    /// prevents callers using `external_input_handle` from bypassing the
+    /// terminal's shared metrics without adding a second count to the direct
+    /// write path.
+    pub(crate) fn with_metrics(
+        metrics: Arc<TerminalPerformanceMetrics>,
+        write_fn: impl Fn(Vec<u8>) + Send + Sync + 'static,
+    ) -> Self {
+        Self::new(move |data| {
+            metrics.record_input(TerminalInputMetricSource::User, data.len());
+            write_fn(data);
+        })
     }
 
     pub fn write(&self, data: impl Into<Vec<u8>>) {
@@ -230,7 +247,7 @@ mod tests {
         TerminalControlReadiness, TerminalControlRequest, TerminalExecCompletion,
         TerminalExecHandle, TerminalExecOutput, TerminalExecRequest, TerminalInputHandle,
     };
-    use crate::TerminalExecError;
+    use crate::{TerminalExecError, TerminalPerformanceMetrics};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
@@ -246,6 +263,24 @@ mod tests {
         handle.write(b"df -h\n".to_vec());
 
         assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
+    }
+
+    #[test]
+    fn metrics_input_handle_records_user_bytes_once() {
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+        let handle = TerminalInputHandle::with_metrics(metrics.clone(), move |bytes| {
+            sink.lock().expect("written lock").push(bytes);
+        });
+
+        handle.write(b"echo metrics\n".to_vec());
+
+        assert_eq!(
+            vec![b"echo metrics\n".to_vec()],
+            *written.lock().expect("written lock")
+        );
+        assert_eq!(13, metrics.snapshot().user_input_bytes);
     }
 
     #[tokio::test]

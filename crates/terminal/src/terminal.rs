@@ -1133,6 +1133,10 @@ fn normalize_history_matches(
     normalized
 }
 
+fn is_reconnect_generation(generation: u64) -> bool {
+    generation > 1
+}
+
 impl Terminal {
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
@@ -1381,6 +1385,7 @@ impl Terminal {
         Self::spawn_serial_connect(
             serial_params.clone(),
             term.clone(),
+            performance_metrics.clone(),
             event_tx.clone(),
             Some(disconnect_tx),
             connection_generation,
@@ -1666,6 +1671,8 @@ impl Terminal {
         match result {
             Ok(Ok(backend)) => {
                 self.connection_state = ConnectionState::Connected;
+                self.performance_metrics
+                    .record_ssh_connect(is_reconnect_generation(generation));
                 self.set_connection_active(true, cx);
                 // 连接后重新调整终端大小
                 self.term.lock().resize(TermDimensions {
@@ -1713,6 +1720,7 @@ impl Terminal {
     fn spawn_serial_connect(
         params: SerialParams,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
         event_tx: UnboundedSender<TerminalEvent>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
         generation: u64,
@@ -1729,7 +1737,13 @@ impl Terminal {
             sender
         });
 
-        let result = SerialBackend::connect(params, term, event_tx, disconnect_tx);
+        let result = SerialBackend::connect_with_metrics(
+            params,
+            term,
+            event_tx,
+            disconnect_tx,
+            performance_metrics,
+        );
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let _ = this.update(cx, |this, cx| {
@@ -2247,6 +2261,7 @@ impl Terminal {
             Self::spawn_serial_connect(
                 params,
                 self.term.clone(),
+                self.performance_metrics.clone(),
                 event_tx,
                 Some(disconnect_tx),
                 generation,
@@ -2406,7 +2421,7 @@ mod tests {
         CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
         TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, build_cd_command,
         build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
-        compose_ssh_init_commands, format_connection_error,
+        compose_ssh_init_commands, format_connection_error, is_reconnect_generation,
         keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
@@ -2434,6 +2449,14 @@ mod tests {
     fn shell_escape_arg_handles_single_quote() {
         let escaped = shell_escape_arg("a'b");
         assert_eq!(escaped, "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn reconnect_generation_only_counts_attempts_after_the_first() {
+        assert!(!is_reconnect_generation(0));
+        assert!(!is_reconnect_generation(1));
+        assert!(is_reconnect_generation(2));
+        assert!(is_reconnect_generation(u64::MAX));
     }
 
     #[test]
