@@ -77,7 +77,7 @@ trait SshSessionAccess: Send + Sync {
     type Client: SshClient;
 
     async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>>;
-    async fn disconnect(&self) -> anyhow::Result<()>;
+    async fn invalidate_client(&self, client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool;
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup>;
     async fn set_shell_integration(
         &self,
@@ -94,8 +94,8 @@ impl SshSessionAccess for SshSessionManager {
         SshSessionManager::client(self).await
     }
 
-    async fn disconnect(&self) -> anyhow::Result<()> {
-        SshSessionManager::disconnect(self).await
+    async fn invalidate_client(&self, client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool {
+        SshSessionManager::invalidate_client(self, client).await
     }
 
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -455,7 +455,7 @@ impl SshBackend {
             Self::uninstall_shell_integration_for_client(&mut *guard).await
         };
         if result.is_ok() {
-            session_manager.invalidate().await;
+            session_manager.invalidate_client(&client).await;
         }
         result.map_err(add_connect_error_context)
     }
@@ -479,8 +479,10 @@ impl SshBackend {
         )
         .await
         .map_err(add_connect_error_context)?;
-        // 关联变量，避免 clippy 警告未使用。
-        let _keep_client = client;
+        // Keep the exact transport generation with the actor so any late
+        // failure report cannot invalidate a replacement published by another
+        // shared consumer.
+        let transport_client = client;
 
         // 有 Shell Integration 时等待 OSC 133;B；裸终端在收到第一段远端数据后即可发送。
         let pending_init = init_commands;
@@ -755,9 +757,8 @@ impl SshBackend {
             let _ = apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
                 .await;
 
-            if !shutdown {
+            if !shutdown && session_manager.invalidate_client(&transport_client).await {
                 task_metrics.record_ssh_invalidation();
-                let _ = session_manager.invalidate().await;
             }
             if let Some(tx) = on_disconnect {
                 let _ = tx.send(());
@@ -771,7 +772,8 @@ impl SshBackend {
         })
     }
 
-    /// 获取一个 interactive channel，封装了"channel open 失败时断开旧 session 并重试一次"的重连逻辑。
+    /// 获取一个 interactive channel，封装了"channel open 失败时失效当前 transport generation
+    /// 并重试一次"的重连逻辑。
     /// 同时把首次 setup 成功的 `ShellIntegrationSetup` 写回 manager，供其他 terminal 复用。
     async fn establish_channel(
         session_manager: &Arc<SshSessionManager>,
@@ -839,13 +841,12 @@ impl SshBackend {
                         error = %err,
                         "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
                     );
-                    if let Err(disconnect_error) = session_manager.disconnect().await {
-                        tracing::warn!(
-                            target: "terminal.ssh.connect",
-                            error = %disconnect_error,
-                            "释放被拒绝 channel 所在的旧 SSH session 失败，继续尝试重连"
-                        );
-                    }
+                    let invalidated = session_manager.invalidate_client(&client).await;
+                    tracing::debug!(
+                        target: "terminal.ssh.connect",
+                        invalidated,
+                        "已报告被拒绝 channel 所属的 SSH transport generation"
+                    );
                     attempt += 1;
                     plain_channel_only = true;
                     continue;
@@ -1349,7 +1350,7 @@ mod tests {
 
     struct MockSessionManager {
         clients: tokio::sync::Mutex<VecDeque<Arc<tokio::sync::Mutex<MockClient>>>>,
-        disconnects: AtomicU64,
+        invalidations: AtomicU64,
     }
 
     impl MockSessionManager {
@@ -1361,12 +1362,12 @@ mod tests {
                         .map(|client| Arc::new(tokio::sync::Mutex::new(client)))
                         .collect(),
                 ),
-                disconnects: AtomicU64::new(0),
+                invalidations: AtomicU64::new(0),
             }
         }
 
-        fn disconnect_count(&self) -> u64 {
-            self.disconnects.load(std::sync::atomic::Ordering::SeqCst)
+        fn invalidation_count(&self) -> u64 {
+            self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1382,10 +1383,10 @@ mod tests {
                 .ok_or_else(|| anyhow!("no more mock clients"))
         }
 
-        async fn disconnect(&self) -> Result<()> {
-            self.disconnects
+        async fn invalidate_client(&self, _client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool {
+            self.invalidations
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+            true
         }
 
         async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -1714,9 +1715,9 @@ mod tests {
             "单通道降级后不能继续等待 OSC Shell Integration 信号"
         );
         assert_eq!(
-            manager.disconnect_count(),
+            manager.invalidation_count(),
             1,
-            "首次失败后应主动断开旧 session，立即释放交换机 VTY"
+            "首次失败后只应失效发生错误的 transport generation"
         );
         assert_eq!(
             recorded_ops(&setup_state),
@@ -1760,7 +1761,7 @@ mod tests {
             shell_integration_active,
             "安装成功后应继续等待 OSC 133;B 再发送初始化脚本"
         );
-        assert_eq!(manager.disconnect_count(), 0);
+        assert_eq!(manager.invalidation_count(), 0);
     }
 
     #[tokio::test]

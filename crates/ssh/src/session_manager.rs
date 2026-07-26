@@ -209,7 +209,7 @@ where
                     // 本地状态检查便宜，先做。
                     let connected = client.lock().await.is_connected();
                     if !connected {
-                        self.clear_dead_client(&client).await;
+                        self.invalidate_client(&client).await;
                         continue;
                     }
 
@@ -229,7 +229,7 @@ where
                         continue;
                     }
 
-                    self.clear_dead_client(&client).await;
+                    self.invalidate_client(&client).await;
                     // 落到下轮循环重连。
                 }
                 Phase1::Wait(completion) => {
@@ -358,18 +358,29 @@ where
         can_checkout
     }
 
-    /// 如果死 client 仍挂在 state 上，清掉它（同时丢弃配套的 integration 缓存 / 探活时间）。
-    async fn clear_dead_client(&self, dead: &Arc<Mutex<C>>) {
+    /// Evict one exact client generation from the cache.
+    ///
+    /// A consumer may observe a failure only after another consumer has
+    /// already evicted that transport and published a replacement.  Matching
+    /// by `Arc` identity prevents that stale report from clearing the newer
+    /// transport or its shell-integration cache.
+    async fn invalidate_client(&self, expected: &Arc<Mutex<C>>) -> bool {
         let mut state = self.state.lock().await;
         if let Some(current) = &state.client {
-            if Arc::ptr_eq(current, dead) {
+            if Arc::ptr_eq(current, expected) {
                 state.client = None;
                 state.shell_integration = None;
                 state.last_ping = None;
+                return true;
             }
         }
+        false
     }
 
+    /// Unconditionally evict the cached client.
+    ///
+    /// Shared consumers should prefer [`Self::invalidate_client`] so a late
+    /// failure from an old client cannot evict a replacement generation.
     async fn invalidate(&self) {
         let mut state = self.state.lock().await;
         state.client = None;
@@ -536,6 +547,21 @@ impl SshSessionManager {
 
     pub async fn invalidate(&self) {
         self.inner.invalidate().await;
+    }
+
+    /// Report a transport failure for the exact client returned by
+    /// [`Self::client`].
+    ///
+    /// If that client is still the cached generation, this clears it and its
+    /// associated health/integration state so the next checkout reconnects
+    /// through the existing single-flight path.  If another consumer has
+    /// already published a replacement, this is a no-op and returns `false`.
+    ///
+    /// This never disconnects the reported transport: channels already using
+    /// it may finish independently.  Application shutdown remains the only
+    /// permanent reconnect gate.
+    pub async fn invalidate_client(&self, client: &Arc<Mutex<RusshClient>>) -> bool {
+        self.inner.invalidate_client(client).await
     }
 
     pub async fn disconnect(&self) -> Result<()> {
@@ -876,6 +902,70 @@ mod tests {
 
         assert!(!Arc::ptr_eq(&first, &second));
         assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exact_client_invalidation_reconnects_without_disconnecting_existing_channels() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+
+        let first = pool.client().await.expect("first client should connect");
+        let disconnect_count = first.lock().await.disconnect_count.clone();
+
+        assert!(
+            pool.invalidate_client(&first).await,
+            "the current client generation should be evicted"
+        );
+        let second = pool
+            .client()
+            .await
+            .expect("the next checkout should reconnect");
+
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            disconnect_count.load(Ordering::SeqCst),
+            0,
+            "health invalidation must not kill channels still using the old transport"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_client_invalidation_preserves_the_replacement_generation() {
+        let connector = Arc::new(FakeConnector::default());
+        let pool = SessionPool::new(test_config(), connector.clone());
+
+        let first = pool.client().await.expect("first client should connect");
+        assert!(pool.invalidate_client(&first).await);
+        let replacement = pool.client().await.expect("replacement should connect");
+        pool.set_shell_integration(
+            &replacement,
+            ShellIntegrationSetup {
+                home_dir: "/replacement/home".into(),
+                session_dir: "/replacement/session".into(),
+                login_shell: Some("/bin/zsh".into()),
+            },
+        )
+        .await;
+
+        assert!(
+            !pool.invalidate_client(&first).await,
+            "a late failure report from the old generation must be ignored"
+        );
+        let checked_out = pool
+            .client()
+            .await
+            .expect("the replacement should remain available");
+
+        assert!(Arc::ptr_eq(&replacement, &checked_out));
+        assert_eq!(connector.connect_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            pool.cached_shell_integration()
+                .await
+                .expect("replacement integration cache should survive")
+                .session_dir,
+            "/replacement/session"
+        );
     }
 
     #[tokio::test]
