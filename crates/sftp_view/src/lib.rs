@@ -5748,27 +5748,30 @@ impl TabContent for SftpView {
                     .close_button(false)
             });
 
-            let client = self.sftp_client.take();
-            // 预先创建断开连接的 tokio task（但还不执行）
-            let disconnect_task = client.clone().map(|c| {
-                Tokio::spawn(cx, async move {
-                    let mut guard = c.lock().await;
-                    if let Err(e) = guard.disconnect().await {
-                        tracing::error!("关闭 SFTP 连接失败: {}", e);
-                    }
-                })
-            });
-
             return cx.spawn(async move |this, cx| {
                 let confirmed = rx.await.unwrap_or(false);
                 if confirmed {
-                    let _ = this.update(cx, |this, cx| {
-                        this.cancel_all_transfers();
-                        this.disconnect_left_remote(cx);
-                        cx.notify();
-                    });
+                    let client = this
+                        .update(cx, |this, cx| {
+                            // Keep the client owned by the view until the user has
+                            // explicitly confirmed the close.
+                            let client = this.sftp_client.take();
+                            this.cancel_all_transfers();
+                            this.disconnect_left_remote(cx);
+                            cx.notify();
+                            client
+                        })
+                        .ok()
+                        .flatten();
+
                     // 用户确认关闭，断开连接
-                    if let Some(task) = disconnect_task {
+                    if let Some(client) = client {
+                        let task = Tokio::spawn(cx, async move {
+                            let mut guard = client.lock().await;
+                            if let Err(e) = guard.disconnect().await {
+                                tracing::error!("关闭 SFTP 连接失败: {}", e);
+                            }
+                        });
                         let _ = task.await;
                     }
                     let _ = this.update(cx, |this, cx| {
@@ -5776,10 +5779,6 @@ impl TabContent for SftpView {
                     });
                     true
                 } else {
-                    // 用户取消，恢复 client
-                    let _ = this.update(cx, |this, _cx| {
-                        this.sftp_client = client;
-                    });
                     false
                 }
             });
