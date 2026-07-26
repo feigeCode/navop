@@ -304,6 +304,43 @@ command 和 terminal-response 路径仍沿用既有 unbounded channel，因此�
 
 完整 Red/Green、reservation 边界证据和回归命令见 `12.8`。
 
+### 2026-07-26：切片 9，Serial bounded parser ingress integration
+
+状态：**实现完成并通过 Serial ingress 定向、terminal 全量和格式检查，作为独立的
+Serial 接入提交。**
+
+本切片把切片 7/7.5 的 bounded queue 和 reservation-aware consumer 接到 Serial
+真实数据面，范围和边界如下：
+
+- 独立代码提交为 `ab7ff553 feat(terminal): bound serial parser ingress`；
+- Serial reader 使用固定 4 KiB source buffer，只负责串口 I/O 和有界入队；
+- 新增名为 `serial-parser` 的标准 OS thread，串行持有
+  `Processor<StdSyncHandler>`，并在 parser 线程中同步更新 `Term`；
+- Serial ingress 默认预算为 `64 KiB / 16 chunks / 1 control`（byte/chunk/control
+  三条预算分别计算）；
+- parser 通过 `recv_reserved()` 接收数据，`TerminalIngressDataGuard` 的 byte
+  reservation 一直保持到 `Processor::advance()` 返回，避免 dequeue 后又把 payload
+  转发到无界阶段；
+- reader 和 parser 都是标准 OS thread；`futures::executor::block_on` 只用于驱动
+  不依赖 Tokio runtime 的 Tokio sync primitive future，不把 GPUI 线程或 parser
+  线程绑定到某个 Tokio runtime；
+- reader 检测到自然 EOF/断开时只发送 `SourceClosed` control。parser 先 graceful
+  drain 已接受 payload，完成 drain 后才发送 disconnect callback；用户 shutdown
+  则 cancel、abort ingress 并丢弃尚未消费 backlog，两种语义不混淆；
+- `RUNNING -> DRAINED/ABORTED` completion state 防止 abort 后再发送延迟的自然断开
+  通知；control lane 独立于 data budget，`SourceClosed` 不会因 data lane 已满而
+  永久等待；
+- Serial `Term`、parser、event loop 和 reconnect 复用同一个 `GpuiEventProxy`；
+  `reset_terminal_surface()` 也复用该 proxy/metrics，不在重连时静默创建第二套
+  wakeup 边界；
+- 本切片没有引入 Text/Hex/Mixed 模式或 encoding/schema/UI model；Local 尚未迁移；
+  Serial write command channel 仍是既有 unbounded channel，属于明确保留的后续风险；
+- 因此当前只完成 Serial 这条真实 ingress，Terminal P1 和 Local/SSH/Serial 全部
+  端到端 bounded 仍未完成，不能据此宣称整个 P1 已完成。
+
+完整 Red/Green、回归和未覆盖范围见 `12.9`。切片 8 中“Serial 尚未接入”的描述
+保留为当时的历史事实，不回写或删除。
+
 ## 1. 背景与目标
 
 本文审查两个历史终端优化分支，目标是识别其中值得在当前 `dev` 分支重新实现的优化点，并明确：
@@ -1950,3 +1987,167 @@ git diff --check
 - 下一步应分别为 Local、Serial 接入同一 reservation-aware contract，并在
   三条真实路径上补齐 flood、slow consumer、abort、reconnect 和 control
   latency 验收，之后才能评估 P1 完成度。
+
+### 12.9 切片 9：Serial bounded parser ingress integration
+
+#### 12.9.1 实现范围与边界
+
+切片 9 在已有 queue contract（`4e5d3fb8`）和 reservation guard
+（`d2a92d1e`）之上接入 Serial 真实数据面，代码以独立提交
+`ab7ff553 feat(terminal): bound serial parser ingress` 交付。数据链路为：
+
+```text
+serial-read OS thread
+    -> BoundedTerminalSender
+    -> serial-parser OS thread
+    -> recv_reserved()
+    -> Processor::advance()
+    -> shared GpuiEventProxy::queue_wakeup()
+```
+
+具体 contract：
+
+- reader 固定使用 4 KiB source buffer；在当前 chunk 入队完成前不再执行下一次
+  串口 read；
+- data lane 预算为 64 KiB 和 16 chunks，control lane 预算为 1；source buffer、
+  pending bytes、pending chunks 和 pending controls 的上界彼此独立；
+- parser worker 是标准 OS thread，串行持有 `Processor<StdSyncHandler>` 并同步
+  更新 `Term`。`futures::executor::block_on` 只驱动 runtime-independent 的
+  Tokio sync primitive future，不要求 worker 运行在 Tokio runtime 中；
+- worker 使用 `recv_reserved()`。`TerminalIngressDataGuard` 在
+  `Processor::advance()` 返回后才 drop，因此 reservation 覆盖真正的 parser
+  consumption boundary，而不只是 channel dequeue boundary；
+- `Serial` 的 `Term`、parser、event loop 和 reconnect 复用同一个
+  `GpuiEventProxy`；surface reset 复用原 proxy/metrics，保留现有 wakeup
+  coalescing；
+- 自然断开先发送 `SourceClosed` control，parser graceful drain 已接受 payload
+  后才触发 disconnect callback；用户 shutdown 走 cancel + abortive discard，
+  不等待或回放未消费 backlog。completion state 防止 abort 后出现延迟的自然断开
+  通知；
+- 本切片没有新增 Text/Hex/Mixed 或 encoding/schema/UI model，Local ingress 尚未
+  迁移；Serial write command channel 仍是 unbounded，作为后续独立风险记录；
+- 这只是 Serial 真实入口接线，不代表 Local/SSH/Serial 全部端到端 bounded，也不
+  代表 Terminal P1 已完成。
+
+#### 12.9.2 TDD Red：reservation 必须覆盖 parser 消费
+
+先以旧的 `receiver.recv()` 语义运行 reservation contract，得到真实失败：
+
+```bash
+cargo test -p terminal \
+  serial_ingress_tests::parser_worker_holds_byte_reservation_through_term_lock_and_parser_consumption \
+  --lib -- --exact --nocapture
+```
+
+失败信息：
+
+```text
+assertion `left == right` failed:
+a dequeued Serial payload must retain its reservation until parsing finishes
+left: 0
+right: 3
+```
+
+失败原因是 dequeue 后 byte reservation 已被释放，parser 尚未取得 `Term` lock
+或执行 `Processor::advance()` 时，producer 已经可以继续制造 payload，违反架构
+审查手册要求的“reservation 覆盖真正消费边界”。
+
+#### 12.9.3 Green：定向与 crate 回归
+
+改为 `recv_reserved()` 并把 guard 保持到同步 parser 消费完成后，以下验证全部
+通过：
+
+```text
+cargo test -p terminal serial_ingress_tests --lib -- --nocapture
+6 passed; 0 failed
+
+cargo test -p terminal serial_backend::tests --lib -- --nocapture
+5 passed; 0 failed
+
+cargo check -p terminal --lib
+通过
+
+cargo test -p terminal --lib
+214 passed; 0 failed
+
+cargo test -p terminal
+214 passed; 0 failed
+5 ignored（既有 throughput_baseline 性能测试）
+doc-tests：0 passed; 0 failed
+```
+
+Serial backend 的虚拟串口读写用例在 macOS 上按既有逻辑遇到
+`Not a typewriter` 时跳过；这不改变真实串口连接路径的编译和定向 ingress
+contract 结果。
+
+#### 12.9.4 格式与 whitespace
+
+```bash
+rustfmt --edition 2021 --check \
+  crates/terminal/src/lib.rs \
+  crates/terminal/src/serial_backend.rs \
+  crates/terminal/src/serial_ingress.rs \
+  crates/terminal/src/serial_ingress_tests.rs \
+  crates/terminal/src/terminal.rs
+通过
+
+git diff --check
+通过
+```
+
+#### 12.9.5 Contract 覆盖
+
+新增的 6 项 Serial ingress 测试覆盖：
+
+- reader 到 parser 的字节顺序保持不变，parser drain 后只触发一次 coalesced
+  wakeup 边；
+- 自然断开在所有已接受 payload 消费完成后才发送 disconnect callback；
+- parser 在 `Term` lock 和 `Processor::advance()` 阻塞期间保持 byte reservation，
+  blocked sender 只有在消费结束后才能继续；
+- 满 data budget 时 reader 最多保留一个额外 source chunk，`abort()` 能唤醒
+  阻塞 reader；
+- `SourceClosed` control 可绕过满 data budget，关闭后拒绝新的 payload；
+- 已取消的 reader 不执行串口 read，abortive shutdown 不发送延迟的自然断开
+  callback。
+
+这些测试同时核对了 reader/parser 的 shutdown 生命周期、control/data lane 的
+优先级和 `GpuiEventProxy` 的复用边界，没有把 payload 写入日志或错误文本。
+
+#### 12.9.6 自然断开与 shutdown 修复说明
+
+旧实现由 reader 直接触发 `on_disconnect`。串口断开瞬间，Terminal disconnect
+handler 可能先清空 backend 并 drop parser，使已经入队但尚未解析的 backlog 被
+abort 丢弃。切片 9 将通知改为 `SourceClosed` control，由 parser 在 graceful
+drain 完成后发 callback；只有显式 shutdown、abort 或 queue/send error 才走
+abortive discard。`RUNNING -> DRAINED` 与 `RUNNING -> ABORTED` 的 completion
+state 保证两条路径不会交叉，也不会在 abort 后补发过期 disconnect。
+
+#### 12.9.7 Clippy 范围外阻塞
+
+```bash
+cargo clippy -p terminal --lib -- -D warnings
+```
+
+严格检查仍在本切片未修改的
+`crates/x11_forwarding/src/detect.rs:238` 处因
+`clippy::unnecessary_sort_by` 失败。补充的
+`cargo clippy -p terminal --lib --no-deps -- -D warnings` 还报告
+`ingress_queue/types.rs`、`pty_backend.rs`、`ssh_backend.rs` 和
+`terminal.rs` 中的既有 lint；逐项与本提交对照后均不属于 Serial ingress
+接入，因此本切片不混入无关修复。
+
+#### 12.9.8 未覆盖范围与后续工作
+
+本切片仍未实现：
+
+- Local PTY bounded ingress，以及三条真实路径的统一 flood/slow-consumer/
+  reconnect 压力验收；
+- Serial write command channel 的 bounded 化；
+- Text/Hex/Mixed、encoding model、schema 或 UI；
+- SSH host-key policy、应用级 session registry、SFTP 完整性与 transfer
+  registry；
+- Terminal P1 的整体完成定义。
+
+后续应在不改变本切片 reservation 和 wakeup 语义的前提下迁移 Local，并补齐
+跨 Local/SSH/Serial 的 byte hash、关闭、重连、控制事件延迟和 per-pane budget
+验收，再根据结果判断 P1 是否达到手册中的完成标准。
