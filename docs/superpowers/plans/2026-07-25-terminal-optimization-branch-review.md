@@ -21,6 +21,25 @@ baseline: cf16096f
 `774a383c`，并额外包含 5 个本地已提交变更。因此本轮将本地 `dev` HEAD
 作为“最新 dev”基线。
 
+### 2026-07-26：新增两个独立产品目标
+
+状态：**已补充设计目标，尚未实现。**
+
+在既有安全、数据完整性、连接所有权和 bounded ingress 工作之外，后续增加两个
+彼此独立、也不与当前 P0/P1 修复混合交付的产品目标：
+
+1. **终端会话录制**：记录带时间信息的 output、resize、marker 和必要会话元数据，
+   支持开始、暂停、继续、停止及只读回放；输入录制必须显式 opt-in，默认不持久化
+   密码、token、私钥或其他认证材料，并定义格式版本、资源上限、异常退出和损坏文件
+   恢复边界。
+2. **重连后恢复历史操作日志**：连接中断和应用重启后恢复经过脱敏的命令/操作记录、
+   状态、错误、输出摘要及列表展示状态；重连只恢复日志和展示上下文，**绝不自动
+   重放历史命令或操作**。中断时尚未完成的操作必须显示为 `interrupted`、
+   `unknown` 或 `needs_review`，显式重试前重新展示命令、参数和风险。
+
+详细范围、状态模型、安全边界和验收标准分别见 `6.7` 与 `6.8`。两个目标当前均为
+规划项，不能因为本文已有 contract 就标记为 `[已接入]`。
+
 ### 2026-07-25：切片 1，`terminal.exec` capture 内存有界化
 
 状态：**实现完成并通过定向验证，作为独立分支的首个优化提交。**
@@ -390,8 +409,9 @@ Serial 接入提交。**
 6. 根据实际指标决定是否调整 local PTY 数据面；
 7. SSH connection registry 单独立项；
 8. 连接级编码单独立项；
-9. 终端录制单独立项；
-10. 基于实测结果再决定 render policy。
+9. 终端会话录制单独立项；
+10. 重连后的历史操作日志恢复单独立项；
+11. 基于实测结果再决定 render policy。
 
 ## 3. 分支结构
 
@@ -1022,7 +1042,9 @@ crates/core/src/storage/models.rs
 
 编码功能应作为独立功能开发，不与性能优化合并。
 
-## 6.7 P3：Terminal recording / Asciicast v2
+## 6.7 P3：Terminal session recording / Asciicast v2
+
+状态：**规划中，尚未实现。**
 
 参考文件：
 
@@ -1055,6 +1077,90 @@ backend 中已经存在 input/output 接线：
 
 `record_input()` 在 `capture_input == false` 时直接返回，不保存用户输入。
 
+### 目标范围
+
+首版录制能力应覆盖：
+
+- output、resize、marker 和必要的会话生命周期事件；
+- 单调递增的相对时间，以及录制开始时的 wall-clock 时间；
+- 不含认证材料的会话元数据，例如 `recording_id`、逻辑 `session_id`、
+  backend 类型、初始终端尺寸、应用版本和录制格式版本；
+- 用户可见的开始、暂停、继续和停止操作；
+- 录制完成后的只读回放、暂停、seek、倍速和搜索；
+- 异常退出后的 `.partial`/未完成录制识别，以及尽可能恢复到最后一个完整事件。
+
+首版不以“逐字节复现底层 transport”为目标。必须先明确记录的是进入 terminal parser
+前的 raw bytes、解码后的 terminal bytes，还是 terminal 已接受的语义事件；不能让
+SSH、Serial 和 Local 在没有版本标记的情况下产生含义不同但格式相同的文件。
+
+### 状态与持久化 contract
+
+建议显式状态机：
+
+```text
+Idle
+  -> Recording
+  -> Paused
+  -> Recording
+  -> Stopping
+  -> Stopped
+
+Recording / Paused / Stopping
+  -> Failed
+```
+
+核心约束：
+
+- `stop` 必须幂等；并发 stop、pane close、应用退出不能重复发布同一录制；
+- `pause` 后不能继续写入 output 或 input，只允许写入必要的状态边界事件；
+- 使用临时文件增量写入，完整 header 和事件落盘成功后才发布最终文件；
+- 文件必须带格式版本；未知版本应拒绝播放，而不是猜测字段含义；
+- 需要定义单事件大小、总文件大小、持续时长、事件数量、内存缓冲和 flush 间隔上限；
+- 达到任一硬上限时应安全停止并展示原因，不能继续无界增长；
+- 崩溃或磁盘写入失败后不得把损坏文件伪装为完整录制；
+- reader 应能识别截断尾部、非法时间戳和超大事件，隔离或跳过损坏尾部时必须向用户
+  明示“部分恢复”，不能静默当作完整内容。
+
+Asciicast v2 可作为互操作格式，但 Navop 自有 metadata 或扩展事件必须遵循版本化、
+向后兼容和未知字段处理规则。durable atomic file 能力应先独立稳定，再用于最终发布。
+
+### 安全与隐私边界
+
+- `capture_input` 默认必须为 `false`，输入录制只能由用户针对当前录制显式开启；
+- 密码提示、token、私钥、认证 challenge 或其他敏感输入期间，应自动暂停输入捕获，
+  或要求用户使用明确的“暂停录制”控制；不能仅依赖普通文本正则声称已完全识别秘密；
+- Agent 或自动化入口开启录制、特别是开启输入捕获时，必须经过独立 disclosure 和
+  grant，不能继承一个过宽的通用终端权限；
+- header、marker、错误信息和日志同样不得写入密码、token、私钥正文、完整认证命令行
+  或 secret environment；
+- 如果未来提供静态加密，密钥不得与录制文件无保护地放在同一位置；未实现可靠密钥
+  管理前，不应把“文件可加密”写成已完成；
+- 录制文件导出、分享或上传前必须再次提示其中可能包含终端输出和显式 opt-in 的输入。
+
+### 回放隔离
+
+回放 surface 必须与活动终端有清晰、持续可见的区别，并满足：
+
+- playback 事件只驱动离线 terminal state，不写入当前 PTY、SSH channel 或 Serial；
+- 文件中的 input 事件只能作为历史展示，默认不执行，也不能通过播放自动重新发送；
+- marker、OSC、链接和潜在控制序列不能绕过当前安全策略触发本地命令、文件读取或网络
+  操作；
+- 关闭原始连接、删除 profile 或凭据过期后，历史录制仍不得获得连接能力；
+- seek、倍速和搜索只影响回放视图，不改变任何活动 session。
+
+### 完成定义
+
+只有同时满足以下条件，才能把本目标从“规划中”改为“已接入”：
+
+1. Local、SSH、Serial 各自的事件语义和不支持范围有明确 contract；
+2. 默认不记录 input，敏感输入路径和 Agent disclosure 有自动化测试；
+3. start/pause/resume/stop、并发关闭、磁盘写失败和崩溃恢复有确定性测试；
+4. 文件大小、时长、事件数和单事件上限均有生产代码约束和超限测试；
+5. 完整文件、截断尾部、非法 header、未知版本和超大事件均有 parser 测试；
+6. playback 无法向活动 backend 发送 input 或重新执行历史动作；
+7. TerminalView 有明确录制状态、暂停原因、失败状态和导出提示；
+8. 高吞吐输出下的复制、锁竞争、flush 和内存峰值经过基准验证。
+
 ### 不建议首轮实现的原因
 
 - 不是性能优化的必要前置；
@@ -1067,7 +1173,117 @@ backend 中已经存在 input/output 接线：
 
 建议 durable atomic file 在 `dev` 独立稳定后，再单独实现 recording。
 
-## 6.8 P3：Render policy
+## 6.8 P3：Reconnect history / operation log recovery
+
+状态：**规划中，尚未实现。**
+
+该目标用于在 Terminal 连接中断、成功重连或应用异常退出后，恢复用户已经看到的
+历史操作记录和日志展示上下文。它不是远端 shell history 的替代品，也不是 command
+replay queue。
+
+### 目标范围
+
+历史记录至少应包含：
+
+- 稳定的 `operation_id` 和逻辑 `session_id`；
+- 区分每次实际连接的 `connection_generation`；
+- 命令或操作类型、开始/结束时间和最近状态；
+- 经过脱敏的命令/参数摘要；
+- 成功、失败、取消、中断和不确定结果；
+- 经过大小限制的输出摘要及 `truncated`、`captured_bytes`、
+  `discarded_bytes` 等已有 capture 元数据；
+- 经过脱敏的错误类别和用户可理解的失败说明；
+- 日志列表的筛选、展开项、滚动锚点等必要展示状态。
+
+“恢复展示状态”不等于把旧输出重新注入活动 PTY。历史日志必须以只读记录展示，并与
+重连后新 generation 产生的实时 terminal 内容明确区分。
+
+### 状态模型
+
+建议统一记录以下终态和恢复态：
+
+```text
+queued
+running
+succeeded
+failed
+cancelled
+interrupted
+unknown
+needs_review
+```
+
+断线或崩溃时：
+
+- 尚未开始的本地 queued 操作可以标记 `cancelled` 或保留为待用户处理，但不能自动
+  提交给新连接；
+- 已经发送、但没有收到可靠完成证据的操作必须标记 `interrupted` 或 `unknown`；
+- 可能产生不可逆副作用、无法判断远端结果的操作应标记 `needs_review`；
+- 不得因为重连成功就把旧 generation 的 `running` 操作改成 `succeeded`；
+- 新连接必须增加 `connection_generation`，同时保留同一个逻辑 session 的历史链路。
+
+### 持久化与恢复边界
+
+- 日志 schema 必须版本化，并定义旧版本迁移与未知版本拒绝策略；
+- 写入应采用有界 append journal 或等价的可恢复结构，定期生成原子 checkpoint；
+- 明确定义每 session 条目数、总字节数、保存时长、单条输出摘要和错误文本上限；
+- 淘汰策略必须可观察，不能无提示地丢失用户认为仍被保留的历史；
+- 应用启动或重连时只读取到最后一个通过长度、版本和完整性校验的记录；
+- 截断尾部、校验失败或非法超大记录必须被隔离，并向用户显示“日志部分恢复”；
+- 日志存储失败不能阻塞 terminal 数据面或让连接无限等待，但失败状态必须可见；
+- profile 删除、账号切换和 workspace 隔离时，要定义日志归属与清理策略，不能把一个
+  用户或连接的记录串到另一个 session。
+
+### 重连与显式重试 contract
+
+重连成功后只允许：
+
+1. 恢复历史日志；
+2. 恢复日志列表的展示上下文；
+3. 建立新的 `connection_generation`；
+4. 让用户查看哪些操作被中断、结果未知或需要复核。
+
+明确禁止：
+
+- 自动重新发送历史命令、粘贴内容、控制序列或文件操作；
+- 因为命令文本相同就推断操作是幂等的；
+- 把历史 output 当作新连接返回的实时 output；
+- 自动把 `unknown`/`needs_review` 归类为成功；
+- 在没有用户确认的情况下恢复 side-effecting workflow。
+
+用户点击“重试”时，必须重新展示将要执行的命令或结构化参数、目标连接、工作目录、
+可能的副作用和脱敏后的风险提示，并经过显式确认。重试创建新的 `operation_id`，
+通过 `retry_of` 指向原记录；不得覆盖或改写原操作的最终状态。
+
+### 安全与隐私边界
+
+- 默认不得持久化密码、token、私钥正文、认证 challenge、secret environment 或完整
+  凭据命令行；
+- redaction 必须发生在进入持久化层之前，不能先明文落盘再异步清理；
+- `Debug`、错误、搜索索引、checkpoint 和备份文件都遵循同一脱敏规则；
+- output 只保存有界摘要；允许用户针对敏感 session 关闭持久化或清除历史；
+- 查看、导出和重试日志必须服从当前 workspace、连接和自动化授权边界；
+- 记录中不得保存可直接重新取得认证能力的 opaque handle 或可复用临时 secret。
+
+### 完成定义
+
+只有同时满足以下条件，才能把本目标从“规划中”改为“已接入”：
+
+1. 正常断线、连接失败、重连成功、应用崩溃和强制关闭都有状态转换测试；
+2. 所有未确认完成的操作恢复为 `interrupted`、`unknown` 或 `needs_review`，不会伪装
+   成成功；
+3. 重连自动化测试证明没有历史 input/command 被写入新 backend；
+4. 显式重试生成新 ID、保留 `retry_of`，并要求重新确认目标、参数和风险；
+5. schema 版本、容量/保留上限、淘汰提示、截断 journal 和损坏 checkpoint 均有测试；
+6. 密码、token、私钥和 secret environment 不出现在主日志、索引、错误或备份中；
+7. 历史 output 与实时 output 在 UI 和数据模型中可区分；
+8. 日志写入失败不会阻塞 terminal ingress，同时能向用户报告持久化降级。
+
+该能力可以复用已有 `terminal.exec` capture 元数据，但不能把当前 command store 是否
+保存过某些字段当作已经完成恢复 contract。存储 schema、重连 generation、UI 和安全
+审查应作为独立 PR 拆分。
+
+## 6.9 P3：Render policy
 
 参考文件：
 
@@ -1248,7 +1464,29 @@ local PTY 是否接入应根据 PR 1 的指标决定。
 - Asciicast；
 - playback；
 - TerminalView UI；
-- Agent disclosure。
+- Agent disclosure；
+- 输入默认关闭、敏感输入暂停/脱敏；
+- 资源上限、异常退出和损坏文件部分恢复；
+- playback 与活动 backend 的强隔离。
+
+详细 contract 和完成定义见 `6.7`。录制应作为独立功能提交，不能与 ingress、
+connection registry 或历史日志恢复混为一个大 PR。
+
+### Reconnect history / operation log recovery
+
+单独处理：
+
+- versioned operation journal 与原子 checkpoint；
+- logical session、connection generation 和 operation ID；
+- `interrupted` / `unknown` / `needs_review` 恢复语义；
+- 有界 output 摘要、容量和保留策略；
+- 日志展示状态恢复；
+- 敏感字段进入持久化前脱敏；
+- 显式重试、`retry_of` 和二次风险确认；
+- 截断 journal、损坏 checkpoint 和持久化失败降级。
+
+详细 contract 和完成定义见 `6.8`。重连只恢复日志和展示上下文，自动化验收必须证明
+旧命令、输入或文件操作不会被自动重放。
 
 ### Render policy
 
