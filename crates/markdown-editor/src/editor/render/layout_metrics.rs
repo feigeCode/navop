@@ -1,4 +1,4 @@
-use super::active_block::active_block_height;
+use super::{active_block::active_block_height, code_language::CODE_LANGUAGE_HEADER_HEIGHT};
 use gpui::{Pixels, Size, px};
 use markdown_source::{SourceBlock, SourceBlockKind};
 
@@ -55,7 +55,7 @@ pub(super) fn block_size(block: &SourceBlock) -> Size<Pixels> {
 
 fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
     if let Some(height) = render_surface_reserved_height(block) {
-        return height;
+        return height + artifact_shell_header_height(block);
     }
     match &block.kind {
         SourceBlockKind::Heading { level, .. } => match level {
@@ -74,6 +74,12 @@ fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
         | SourceBlockKind::BlockQuote => lines.mul_add(25., 6.),
         _ => lines.mul_add(24., 6.),
     }
+}
+
+fn artifact_shell_header_height(block: &SourceBlock) -> f32 {
+    matches!(block.kind, SourceBlockKind::CodeFence { .. })
+        .then_some(CODE_LANGUAGE_HEADER_HEIGHT)
+        .unwrap_or_default()
 }
 
 /// Height reserved by the permanent rich-render/source-edit shell.
@@ -249,6 +255,6 @@ mod tests {
         assert_eq!(Some(230.), render_surface_reserved_height(math));
         assert_eq!(Some(260.), render_surface_reserved_height(mermaid));
         assert_eq!(px(230.), block_size(math).height);
-        assert_eq!(px(260.), block_size(mermaid).height);
+        assert_eq!(px(288.), block_size(mermaid).height);
     }
 }

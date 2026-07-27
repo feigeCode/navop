@@ -226,6 +226,7 @@ impl MarkdownEditor {
         let editor = cx.entity();
         let click_editor = editor.clone();
         let block_id = block.id;
+        let language_header = self.render_code_language_header(block, cx);
         let input_layer = gpui::div()
             .id(("markdown-artifact-input-layer", block.id.0))
             .debug_selector(move || format!("markdown-artifact-input-layer-{}", block_id.0))
@@ -254,11 +255,16 @@ impl MarkdownEditor {
                 });
             })
             .child(rendered);
-        gpui::div()
-            .id(("markdown-artifact-shell", block.id.0))
-            .debug_selector(move || format!("markdown-artifact-shell-{}", block_id.0))
+        let layers = gpui::div()
             .grid()
             .grid_cols(1)
+            .w_full()
+            .min_w_0()
+            .child(input_layer)
+            .child(rendered_layer);
+        v_flex()
+            .id(("markdown-artifact-shell", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-shell-{}", block_id.0))
             .w_full()
             .min_w_0()
             .on_prepaint(move |bounds, _, cx| {
@@ -266,8 +272,8 @@ impl MarkdownEditor {
                     editor.record_measured_block_height(block_id, bounds.size.height, cx);
                 });
             })
-            .child(input_layer)
-            .child(rendered_layer)
+            .children(language_header)
+            .child(layers)
             .into_any_element()
     }
 

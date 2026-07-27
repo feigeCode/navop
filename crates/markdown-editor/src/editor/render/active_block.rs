@@ -32,6 +32,9 @@ impl MarkdownEditor {
         let heading = heading_level(block);
         let source_code = is_source_code(block);
         let list_gutter = super::list_marker_source::list_gutter_width(block);
+        let language_header = records_block_height
+            .then(|| self.render_code_language_header(block, cx))
+            .flatten();
         let content = gpui::div()
             .flex()
             .flex_col()
@@ -45,6 +48,7 @@ impl MarkdownEditor {
                     .text_color(self.theme.muted_foreground)
             })
             .relative()
+            .children(language_header)
             .child(
                 gpui::div()
                     .id(("markdown-block-input-slot", block.id.0))

@@ -1815,6 +1815,55 @@ fn changing_fenced_code_language_preserves_input_selection_and_history(
 }
 
 #[gpui::test]
+fn fenced_code_language_selector_stays_in_the_upper_right_and_opens_a_menu(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "```rust\nfn main() {}\n```";
+    let code_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let (window, editor) = open_editor_with_size(source, size(px(800.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let selector = Box::leak(
+        format!("markdown-code-language-{}", code_id.0).into_boxed_str(),
+    );
+    let input_selector = Box::leak(
+        format!("markdown-block-input-slot-{}", code_id.0).into_boxed_str(),
+    );
+    let frame_selector =
+        Box::leak(format!("markdown-block-frame-{}", code_id.0).into_boxed_str());
+    let language = cx
+        .debug_bounds(selector)
+        .expect("the code language selector must always be mounted");
+    let input = cx.debug_bounds(input_selector).unwrap();
+    let frame = cx.debug_bounds(frame_selector).unwrap();
+    assert!(language.left() > frame.center().x);
+    assert!(frame.right() - language.right() <= px(20.));
+    assert!(language.bottom() <= input.top() + px(1.));
+    assert!(
+        cx.debug_bounds("markdown-code-language-option-rust")
+            .is_none()
+    );
+
+    cx.simulate_click(language.center(), Modifiers::none());
+    cx.run_until_parked();
+    let json = cx
+        .debug_bounds("markdown-code-language-option-json")
+        .expect("the menu must use languages registered by the highlighter");
+    cx.simulate_click(json.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        "```json\nfn main() {}\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+}
+
+#[gpui::test]
 fn fully_expanded_fenced_code_stays_at_the_top_when_scrolled(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "```rust\nfn main() {\n    println!(\"visible\");\n}\n```";
@@ -1960,6 +2009,13 @@ fn mermaid_preview_uses_async_svg_renderer_and_opens_source_on_click(cx: &mut Te
     cx.run_until_parked();
     let selector = Box::leak(format!("markdown-rendered-block-{}", block_id.0).into_boxed_str());
     assert!(cx.debug_bounds(selector).is_some());
+    assert!(
+        cx.debug_bounds(Box::leak(
+            format!("markdown-code-language-{}", block_id.0).into_boxed_str(),
+        ))
+        .is_some(),
+        "the language selector must remain visible over the inactive artifact"
+    );
 
     editor.update_in(&mut cx, |editor, window, cx| {
         assert!(editor.activate_block(block_id, window, cx));
