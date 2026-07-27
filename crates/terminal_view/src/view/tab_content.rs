@@ -1,5 +1,28 @@
 use super::*;
 
+const DEFAULT_RECORDING_NAME: &str = "recording.cast";
+
+pub(super) fn recording_playback_display_name(value: &str) -> SharedString {
+    let basename = value.rsplit(['/', '\\']).next().unwrap_or_default();
+    let sanitized = basename
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    let sanitized = sanitized.trim();
+
+    if sanitized.is_empty() {
+        DEFAULT_RECORDING_NAME.into()
+    } else {
+        sanitized.to_string().into()
+    }
+}
+
+pub(super) fn recording_playback_tab_title(name: &str) -> SharedString {
+    t!("TerminalRecordingPlayback.tab_title", name = name)
+        .to_string()
+        .into()
+}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -14,6 +37,10 @@ impl TabContent for TerminalView {
     }
 
     fn title(&self, cx: &App) -> SharedString {
+        if let Some(name) = &self.recording_playback_name {
+            return recording_playback_tab_title(name.as_ref());
+        }
+
         let terminal = self.terminal.read(cx);
         let base_title = if let Some(name) = terminal.connection_name() {
             name.to_string()
@@ -55,7 +82,7 @@ impl TabContent for TerminalView {
         if !self.duplicate_supported(cx) {
             return None;
         }
-        let source = self.duplicate_source_snapshot(cx);
+        let source = self.duplicate_source_snapshot(cx)?;
         let duplicate = cx.new(|cx| Self::new_from_duplicate_source(source, window, cx));
         Some(Arc::new(duplicate))
     }

@@ -2,16 +2,20 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn new_with_terminal(
-        terminal: Entity<Terminal>,
-        connection_id: Option<i64>,
-        stored_connection: Option<StoredConnection>,
-        sync_path_enabled: bool,
-        local_working_dir: Option<PathBuf>,
-        tab_index: Option<usize>,
-        duplicate_source: TerminalDuplicateSource,
+        init: TerminalViewInit,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let TerminalViewInit {
+            terminal,
+            connection_id,
+            stored_connection,
+            sync_path_enabled,
+            local_working_dir,
+            tab_index,
+            duplicate_source,
+            recording_playback_name,
+        } = init;
         let blink_manager = cx.new(|_| BlinkCursor::new());
         let recording_playback_slider = cx.new(|_| {
             SliderState::new()
@@ -43,10 +47,12 @@ impl TerminalView {
         } else {
             (None, None)
         };
-        let history_scope = terminal_history_scope(connection_kind, connection_id);
-        let public_mcp_registration = {
+        let history_scope = terminal_history_scope(live_connection_kind, connection_id);
+        let public_mcp_registration = if live_connection_kind.is_some() {
             let terminal = terminal.read(cx);
             crate::public_mcp::register_terminal(terminal, cx)
+        } else {
+            None
         };
         let terminal_ai_resource = public_mcp_registration
             .as_ref()
@@ -177,6 +183,7 @@ impl TerminalView {
         let mut this = Self {
             terminal,
             duplicate_source,
+            recording_playback_name,
             local_working_dir: if is_local_terminal {
                 local_working_dir
             } else {
@@ -249,74 +256,5 @@ impl TerminalView {
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
         this
-    }
-
-    pub(super) fn register_broadcast_input(&mut self, cx: &mut Context<Self>) {
-        if self.broadcast_client_id.is_some() {
-            return;
-        }
-
-        let label = {
-            let terminal = self.terminal.read(cx);
-            if !live_ssh_feature_supported(terminal.live_connection_kind()) {
-                return;
-            }
-            let base = terminal
-                .connection_name()
-                .filter(|name| !name.is_empty())
-                .or_else(|| (!terminal.title().is_empty()).then(|| terminal.title()))
-                .unwrap_or("SSH Terminal");
-            self.tab_index
-                .map(|index| format!("{base}({index})"))
-                .unwrap_or_else(|| base.to_string())
-        };
-
-        init_broadcast_input_registry(cx);
-        let view = cx.entity().downgrade();
-        let Some(registry) = broadcast_input_registry(cx) else {
-            return;
-        };
-        let client_id = registry.update(cx, |registry, cx| registry.register(label, view, cx));
-        self.broadcast_client_id = Some(client_id);
-    }
-
-    pub(super) fn unregister_broadcast_input(&mut self, cx: &mut Context<Self>) {
-        let Some(client_id) = self.broadcast_client_id.take() else {
-            return;
-        };
-        if let Some(registry) = broadcast_input_registry(cx) {
-            registry.update(cx, |registry, cx| registry.unregister(client_id, cx));
-        }
-    }
-
-    pub(super) fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
-        if !self.is_live_ssh_terminal(cx) {
-            return;
-        }
-        let Some(client_id) = self.broadcast_client_id else {
-            return;
-        };
-        let Some(registry) = broadcast_input_registry(cx) else {
-            return;
-        };
-        let deliveries = registry.read(cx).deliveries_from(client_id, data);
-        for (view, data) in deliveries {
-            let _ = view.update(cx, |view, cx| {
-                view.write_broadcast_input(data, cx);
-            });
-        }
-    }
-
-    pub(super) fn refresh_public_mcp_session(&self, cx: &mut Context<Self>) {
-        let Some(registration) = &self.public_mcp_registration else {
-            return;
-        };
-        registration.refresh(self.terminal.read(cx));
-    }
-
-    pub(super) fn unregister_public_mcp_session(&mut self, cx: &mut Context<Self>) {
-        if let Some(registration) = self.public_mcp_registration.take() {
-            registration.unregister(cx);
-        }
     }
 }

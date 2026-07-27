@@ -137,17 +137,19 @@ impl TerminalView {
         if !self.accepts_live_terminal_input(cx) {
             return;
         }
-        let reconnect_source =
-            resolve_ssh_reconnect_source(&self.duplicate_source, |connection_id| {
-                let storage = cx
-                    .try_global::<GlobalStorageState>()
-                    .ok_or_else(|| anyhow::anyhow!("Global storage is unavailable"))?;
-                let repository = storage
-                    .storage
-                    .get::<ConnectionRepository>()
-                    .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                repository.get(connection_id)
-            });
+        let Some(duplicate_source) = self.duplicate_source.as_ref() else {
+            return;
+        };
+        let reconnect_source = resolve_ssh_reconnect_source(duplicate_source, |connection_id| {
+            let storage = cx
+                .try_global::<GlobalStorageState>()
+                .ok_or_else(|| anyhow::anyhow!("Global storage is unavailable"))?;
+            let repository = storage
+                .storage
+                .get::<ConnectionRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+            repository.get(connection_id)
+        });
         let reconnect_source = match reconnect_source {
             Ok(source) => source,
             Err(error) => {
@@ -181,11 +183,11 @@ impl TerminalView {
                 );
                 return;
             }
-            self.duplicate_source = TerminalDuplicateSource::Ssh {
+            self.duplicate_source = Some(TerminalDuplicateSource::Ssh {
                 connection: source.connection,
                 working_dir: source.working_dir,
                 sync_path_with_terminal: source.sync_path_with_terminal,
-            };
+            });
         }
 
         let working_dir = self

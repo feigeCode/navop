@@ -1857,6 +1857,10 @@ TerminalRecordingPlayback:
     en: Recording Playback
     zh-CN: 终端录制回放
     zh-HK: 終端錄製回放
+  tab_title:
+    en: "Playback · %{name}"
+    zh-CN: "回放 · %{name}"
+    zh-HK: "回放 · %{name}"
   read_only:
     en: Read-only
     zh-CN: 只读

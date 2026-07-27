@@ -24,7 +24,7 @@ fn assert_function_guard_precedes(
 
 #[test]
 fn playback_never_registers_or_uses_ssh_broadcast_input() {
-    let source = include_str!("../initialization.rs");
+    let source = include_str!("../registrations.rs");
     let registration = function_region(
         source,
         "fn register_broadcast_input",
@@ -253,11 +253,7 @@ fn playback_history_assistance_never_starts_sftp_completion() {
 #[test]
 fn playback_view_initialization_does_not_attach_live_workspace_or_ssh_resources() {
     let source = include_str!("../initialization.rs");
-    let initialization = function_region(
-        source,
-        "pub(super) fn new_with_terminal",
-        "pub(super) fn register_broadcast_input",
-    );
+    let initialization = function_region(source, "pub(super) fn new_with_terminal", "\n}");
 
     assert!(
         initialization
@@ -276,6 +272,38 @@ fn playback_view_initialization_does_not_attach_live_workspace_or_ssh_resources(
         .find(".ssh_session_manager()")
         .expect("live SSH initialization should retain its session manager");
     assert!(ssh_gate < ssh_config && ssh_gate < ssh_manager);
+    assert!(initialization.contains("terminal_history_scope(live_connection_kind, connection_id)"));
+    assert!(initialization.contains("if live_connection_kind.is_some()"));
+}
+
+#[test]
+fn playback_has_dedicated_read_only_view_and_workspace_constructors() {
+    let view = include_str!("../constructors.rs");
+    let workspace = include_str!("../../workspace/view.rs");
+
+    let view_constructor =
+        function_region(view, "pub fn new_recording_playback", "pub fn new_serial");
+    assert!(view_constructor.contains("Terminal::new_recording_playback(playback, cx)"));
+    assert!(view_constructor.contains("duplicate_source: None"));
+    assert!(view_constructor.contains("recording_playback_name: Some(display_name)"));
+
+    let workspace_constructor = function_region(
+        workspace,
+        "pub fn new_recording_playback",
+        "pub(super) fn from_pane",
+    );
+    assert!(workspace_constructor.contains("TerminalView::new_recording_playback"));
+    assert!(workspace_constructor.contains("with_workspace_pane()"));
+}
+
+#[test]
+fn playback_duplicate_and_reconnect_require_an_owned_live_source() {
+    let support = include_str!("../workspace_support.rs");
+    let reconnect = include_str!("../preferences.rs");
+
+    assert!(support.contains("pub(crate) fn duplicate_source_snapshot"));
+    assert!(support.contains("self.duplicate_source.clone()?"));
+    assert!(reconnect.contains("let Some(duplicate_source) = self.duplicate_source.as_ref()"));
 }
 
 #[test]

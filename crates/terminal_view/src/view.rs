@@ -108,30 +108,7 @@ use terminal::terminal::{
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
 
-actions!(
-    terminal_view,
-    [
-        SendTab,
-        SendShiftTab,
-        Copy,
-        Paste,
-        SelectAll,
-        ClearSelection,
-        ClearScreen,
-        SearchForward,
-        SearchBackward,
-        ToggleViMode,
-        ViModeStartSelection,
-        IncreaseFont,
-        DecreaseFont,
-        ResetFont,
-        StartRecording,
-        PauseRecording,
-        ResumeRecording,
-        StopRecording,
-    ]
-);
-
+mod actions;
 mod appearance;
 mod clipboard;
 mod clipboard_image;
@@ -145,6 +122,7 @@ mod helpers;
 mod history_actions;
 mod history_query;
 mod history_render;
+mod init_config;
 mod initialization;
 mod input_handler;
 mod keybindings;
@@ -153,9 +131,11 @@ mod mouse_selection;
 mod paste_confirmation;
 mod preferences;
 mod recording_footer;
+mod recording_playback_config;
 mod recording_playback_controls;
 mod recording_playback_footer;
 mod recording_playback_render;
+mod registrations;
 mod render;
 mod render_layout;
 mod render_surface;
@@ -172,17 +152,21 @@ mod text_input;
 mod tool_dock;
 mod vi_input;
 
+use actions::*;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
 use helpers::*;
+use init_config::TerminalViewInit;
 use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
     TERMINAL_PASTE_SHORTCUT, TERMINAL_SELECT_ALL_SHORTCUT, TERMINAL_TOGGLE_VI_MODE_SHORTCUT,
     terminal_paste_defaults, terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
+pub use recording_playback_config::RecordingPlaybackViewConfig;
 use resize_event_handler::ResizeEventHandler;
 pub(crate) use state::TerminalDuplicateSource;
 use state::*;
+use tab_content::{recording_playback_display_name, recording_playback_tab_title};
 
 pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 
@@ -190,7 +174,8 @@ pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 pub struct TerminalView {
     /// Terminal model entity
     terminal: Entity<Terminal>,
-    duplicate_source: TerminalDuplicateSource,
+    duplicate_source: Option<TerminalDuplicateSource>,
+    recording_playback_name: Option<SharedString>,
     /// 本地终端工作目录
     local_working_dir: Option<PathBuf>,
     /// 光标闪烁管理器

@@ -48,7 +48,7 @@ impl TabContent for TerminalWorkspace {
         if !self.active_pane().read(cx).duplicate_supported(cx) {
             return None;
         }
-        let source = self.active_pane().read(cx).duplicate_source_snapshot(cx);
+        let source = self.active_pane().read(cx).duplicate_source_snapshot(cx)?;
         let duplicate = cx.new(|cx| {
             let main = cx.new(|cx| {
                 TerminalView::new_from_duplicate_source(source, window, cx).with_workspace_pane()

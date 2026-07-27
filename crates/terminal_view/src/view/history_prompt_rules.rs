@@ -78,13 +78,13 @@ fn history_prompt_connection_supported(connection_kind: TerminalConnectionKind) 
 }
 
 pub(super) fn terminal_history_scope(
-    connection_kind: TerminalConnectionKind,
+    live_connection_kind: Option<TerminalConnectionKind>,
     connection_id: Option<i64>,
 ) -> Option<TerminalHistoryScope> {
-    match connection_kind {
-        TerminalConnectionKind::Local => Some(TerminalHistoryScope::local()),
-        TerminalConnectionKind::Ssh => connection_id.map(TerminalHistoryScope::ssh),
-        TerminalConnectionKind::Serial => None,
+    match live_connection_kind {
+        Some(TerminalConnectionKind::Local) => Some(TerminalHistoryScope::local()),
+        Some(TerminalConnectionKind::Ssh) => connection_id.map(TerminalHistoryScope::ssh),
+        Some(TerminalConnectionKind::Serial) | None => None,
     }
 }
 
@@ -99,12 +99,12 @@ fn local_tui_application_active(mode: TermMode) -> bool {
 }
 
 pub(super) fn should_confirm_local_terminal_close(
-    connection_kind: TerminalConnectionKind,
+    live_connection_kind: Option<TerminalConnectionKind>,
     command_running: bool,
     mode: TermMode,
     child_exited: Option<i32>,
 ) -> bool {
-    connection_kind == TerminalConnectionKind::Local
+    live_connection_kind == Some(TerminalConnectionKind::Local)
         && child_exited.is_none()
         && (command_running || local_tui_application_active(mode))
 }

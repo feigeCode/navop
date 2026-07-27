@@ -18,12 +18,18 @@ fn command_history_changed_refreshes_history_command_panel() {
 fn terminal_close_confirmation_is_only_for_local_terminals() {
     for kind in [TerminalConnectionKind::Ssh, TerminalConnectionKind::Serial] {
         assert!(!should_confirm_local_terminal_close(
-            kind,
+            Some(kind),
             true,
             TermMode::ALT_SCREEN,
             None,
         ));
     }
+    assert!(!should_confirm_local_terminal_close(
+        None,
+        true,
+        TermMode::ALT_SCREEN,
+        None,
+    ));
 }
 
 #[test]

@@ -27,21 +27,22 @@ impl TerminalView {
         self
     }
 
-    pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> TerminalDuplicateSource {
+    pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> Option<TerminalDuplicateSource> {
+        let source = self.duplicate_source.clone()?;
         let current_working_dir = self
             .terminal
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
-        terminal_duplicate_source_with_cwd(
-            self.duplicate_source.clone(),
+        Some(terminal_duplicate_source_with_cwd(
+            source,
             current_working_dir.as_deref(),
-        )
+        ))
     }
 
     pub(crate) fn duplicate_supported(&self, cx: &App) -> bool {
         terminal_tab_duplicate_supported(
-            &self.duplicate_source,
+            self.duplicate_source.as_ref(),
             self.terminal.read(cx).live_connection_kind(),
         )
     }
@@ -83,7 +84,7 @@ impl TerminalView {
         }
         let terminal = self.terminal.read(cx);
         should_confirm_local_terminal_close(
-            terminal.connection_kind(),
+            terminal.live_connection_kind(),
             self.local_command_running,
             terminal.mode(),
             terminal.child_exited(),

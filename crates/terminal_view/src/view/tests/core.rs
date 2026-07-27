@@ -25,7 +25,7 @@ fn wrapped_addon_line_text_joins_visual_continuation_lines() {
 #[test]
 fn local_terminal_close_confirms_while_command_is_running() {
     assert!(should_confirm_local_terminal_close(
-        TerminalConnectionKind::Local,
+        Some(TerminalConnectionKind::Local),
         true,
         TermMode::empty(),
         None,
@@ -35,7 +35,7 @@ fn local_terminal_close_confirms_while_command_is_running() {
 #[test]
 fn local_terminal_close_confirms_while_tui_is_running() {
     assert!(should_confirm_local_terminal_close(
-        TerminalConnectionKind::Local,
+        Some(TerminalConnectionKind::Local),
         false,
         TermMode::ALT_SCREEN,
         None,
@@ -45,7 +45,7 @@ fn local_terminal_close_confirms_while_tui_is_running() {
 #[test]
 fn local_terminal_close_does_not_confirm_when_shell_is_idle() {
     assert!(!should_confirm_local_terminal_close(
-        TerminalConnectionKind::Local,
+        Some(TerminalConnectionKind::Local),
         false,
         TermMode::empty(),
         None,
@@ -92,28 +92,29 @@ fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
     let serial_source = TerminalDuplicateSource::Serial(serial);
 
     assert!(terminal_tab_duplicate_supported(
-        &local_source,
+        Some(&local_source),
         Some(TerminalConnectionKind::Local),
     ));
     assert!(terminal_tab_duplicate_supported(
-        &ssh_source,
+        Some(&ssh_source),
         Some(TerminalConnectionKind::Ssh),
     ));
     assert!(terminal_tab_duplicate_supported(
-        &serial_source,
+        Some(&serial_source),
         Some(TerminalConnectionKind::Serial),
     ));
-    assert!(!terminal_tab_duplicate_supported(&local_source, None));
+    assert!(!terminal_tab_duplicate_supported(None, None));
+    assert!(!terminal_tab_duplicate_supported(Some(&local_source), None,));
     assert!(!terminal_tab_duplicate_supported(
-        &local_source,
+        Some(&local_source),
         Some(TerminalConnectionKind::Ssh),
     ));
     assert!(!terminal_tab_duplicate_supported(
-        &ssh_source,
+        Some(&ssh_source),
         Some(TerminalConnectionKind::Serial),
     ));
     assert!(!terminal_tab_duplicate_supported(
-        &serial_source,
+        Some(&serial_source),
         Some(TerminalConnectionKind::Local),
     ));
 }
@@ -289,15 +290,45 @@ fn ssh_reconnect_resolves_latest_saved_connection_by_id() {
 
 #[test]
 fn terminal_history_scope_matches_supported_connection_kinds() {
-    let local = terminal_history_scope(TerminalConnectionKind::Local, None)
+    let local = terminal_history_scope(Some(TerminalConnectionKind::Local), None)
         .expect("local terminal should have history scope");
-    let ssh = terminal_history_scope(TerminalConnectionKind::Ssh, Some(42))
+    let ssh = terminal_history_scope(Some(TerminalConnectionKind::Ssh), Some(42))
         .expect("ssh terminal with id should have history scope");
 
     assert_eq!("local", local.scope_key);
     assert_eq!("ssh:42", ssh.scope_key);
-    assert!(terminal_history_scope(TerminalConnectionKind::Ssh, None).is_none());
-    assert!(terminal_history_scope(TerminalConnectionKind::Serial, Some(7)).is_none());
+    assert!(terminal_history_scope(Some(TerminalConnectionKind::Ssh), None).is_none());
+    assert!(terminal_history_scope(Some(TerminalConnectionKind::Serial), Some(7)).is_none());
+    assert!(terminal_history_scope(None, None).is_none());
+}
+
+#[test]
+fn recording_playback_title_uses_only_a_sanitized_basename() {
+    assert_eq!(
+        "session.cast",
+        recording_playback_display_name("/tmp/private/session.cast").as_ref()
+    );
+    assert_eq!(
+        "session.cast",
+        recording_playback_display_name(r"C:\private\session.cast").as_ref()
+    );
+    assert_eq!(
+        "session.cast",
+        recording_playback_display_name("session\n.cast").as_ref()
+    );
+    assert_eq!(
+        "recording.cast",
+        recording_playback_display_name(" \n\t ").as_ref()
+    );
+    assert!(!recording_playback_display_name("/tmp/private/session.cast").contains("/tmp/private"));
+}
+
+#[test]
+fn recording_playback_tab_title_is_visibly_read_only_playback() {
+    assert_eq!(
+        "Playback · session.cast",
+        recording_playback_tab_title("session.cast").as_ref()
+    );
 }
 
 #[test]

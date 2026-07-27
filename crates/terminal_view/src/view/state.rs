@@ -75,19 +75,19 @@ pub(super) fn live_ssh_feature_supported(
 }
 
 pub(super) fn terminal_tab_duplicate_supported(
-    source: &TerminalDuplicateSource,
+    source: Option<&TerminalDuplicateSource>,
     live_connection_kind: Option<TerminalConnectionKind>,
 ) -> bool {
     matches!(
         (source, live_connection_kind),
         (
-            TerminalDuplicateSource::Local(_),
+            Some(TerminalDuplicateSource::Local(_)),
             Some(TerminalConnectionKind::Local),
         ) | (
-            TerminalDuplicateSource::Ssh { .. },
+            Some(TerminalDuplicateSource::Ssh { .. }),
             Some(TerminalConnectionKind::Ssh),
         ) | (
-            TerminalDuplicateSource::Serial(_),
+            Some(TerminalDuplicateSource::Serial(_)),
             Some(TerminalConnectionKind::Serial),
         )
     )
