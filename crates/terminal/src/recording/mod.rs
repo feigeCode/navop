@@ -1,6 +1,7 @@
 mod asciicast;
 mod controller;
 mod model;
+mod playback;
 mod recorder;
 mod recovery;
 mod runtime;
@@ -16,6 +17,14 @@ pub use controller::RecordingController;
 pub use model::{
     RecordingConfig, RecordingEvent, RecordingEventKind, RecordingFailure, RecordingLimit,
     RecordingLimits, RecordingState, RecordingTransition,
+};
+pub use playback::{
+    DEFAULT_MAX_PLAYBACK_INDEXED_EVENTS, DEFAULT_MAX_PLAYBACK_INDEXED_TEXT_BYTES,
+    DEFAULT_MAX_PLAYBACK_SEARCH_QUERY_BYTES, DEFAULT_MAX_PLAYBACK_SEARCH_RESULTS,
+    DEFAULT_MAX_PLAYBACK_SEARCH_SNIPPET_BYTES, MAX_PLAYBACK_SPEED, MIN_PLAYBACK_SPEED,
+    RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
+    RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchKind, RecordingPlaybackSearchMatch,
+    RecordingPlaybackSearchResults, RecordingPlaybackState, RecordingPlaybackTransition,
 };
 pub use recorder::{
     RecordingFileConfig, RecordingFileState, RecordingFileTransition, RecordingFileWriter,
@@ -35,6 +44,8 @@ pub use runtime::{
 
 #[cfg(test)]
 mod persistence_tests;
+#[cfg(test)]
+mod playback_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]
