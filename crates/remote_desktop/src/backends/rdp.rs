@@ -5,17 +5,24 @@ use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
     RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopReconnect,
     RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
-    helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
+    helper_protocol::{HelperRequest, encode_request_line},
     output_mailbox::{OutputMailboxSender, output_mailbox},
 };
 
+mod helper_events;
 mod input;
-#[cfg(test)]
-mod tests;
+mod reconnect;
 mod transport;
+mod transport_frames;
 
 const REMOTE_DESKTOP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const MAX_INPUTS_PER_POLL: usize = 256;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClipboardFilesSnapshot {
+    pub(super) transfer_id: u64,
+    pub(super) paths: Vec<String>,
+}
 
 pub struct RdpBackend {
     options: RemoteDesktopConnectionOptions,
@@ -107,13 +114,13 @@ impl RemoteDesktopBackend for RdpBackend {
                                 );
                                 continue;
                             }
-                            let delay = input::reconnect_delay(reconnect_attempt);
+                            let delay = reconnect::reconnect_delay(reconnect_attempt);
                             reconnect_attempt = reconnect_attempt.saturating_add(1);
                             transport::send_reconnecting(
                                 &output_tx,
-                                input::reconnect_event(&reason, delay),
+                                reconnect::reconnect_event(&reason, delay),
                             );
-                            if !input::wait_before_reconnect(
+                            if !reconnect::wait_before_reconnect(
                                 &mut connect,
                                 &mut latest_clipboard_text,
                                 &mut latest_clipboard_files,
@@ -149,7 +156,7 @@ fn run_helper_session(
     helper: &HelperProcessConfig,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
-    latest_clipboard_files: &mut Option<Vec<String>>,
+    latest_clipboard_files: &mut Option<ClipboardFilesSnapshot>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,

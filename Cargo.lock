@@ -9915,6 +9915,7 @@ dependencies = [
  "remote_desktop",
  "rust-i18n",
  "smallvec",
+ "tempfile",
  "tokio",
  "tracing",
 ]

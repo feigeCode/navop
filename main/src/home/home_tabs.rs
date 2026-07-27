@@ -1046,6 +1046,8 @@ pub(crate) fn remote_desktop_options(
         domain: params.domain,
         read_only: params.read_only,
         audio_playback: protocol == RemoteDesktopProtocol::Rdp && params.audio_playback,
+        audio_capture: false,
+        shared_folders: Vec::new(),
         proxy: params.proxy.map(remote_desktop_proxy_config),
     })
 }

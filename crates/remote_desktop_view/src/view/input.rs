@@ -1,3 +1,7 @@
+use super::clipboard::{
+    LocalClipboardContent, allocate_local_clipboard_transfer_id, classify_local_clipboard,
+    clipboard_files_supported, clipboard_text_supported,
+};
 use super::*;
 
 impl RemoteDesktopView {
@@ -127,7 +131,9 @@ impl RemoteDesktopView {
                 if !clipboard_files_supported(self.options.protocol) {
                     return false;
                 }
-                self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
+                let transfer_id =
+                    allocate_local_clipboard_transfer_id(&mut self.next_clipboard_transfer_id);
+                self.send_input(RemoteDesktopInput::ClipboardFiles { transfer_id, paths });
                 true
             }
             LocalClipboardContent::Text(text) => {
