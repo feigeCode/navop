@@ -14,6 +14,7 @@ mod markdown_watcher;
 mod model;
 mod notes_actions;
 mod notes_close;
+mod notes_export;
 mod notes_notifications;
 mod notes_render;
 mod notes_setup;
