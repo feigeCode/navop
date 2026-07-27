@@ -17,6 +17,7 @@ ssh = { workspace = true }
 # Terminal emulation
 alacritty_terminal.workspace = true
 serde = { workspace = true }
+serde_json = { workspace = true }
 shell-words = { workspace = true }
 plist = { workspace = true }
 tracing = { workspace = true }
