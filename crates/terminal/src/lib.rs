@@ -6,12 +6,14 @@ mod local_shell;
 pub mod osc;
 pub mod performance_metrics;
 pub mod pty_backend;
+pub mod recording;
 pub mod serial_backend;
 mod serial_ingress;
 pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_ingress;
 mod ssh_session_identity;
+mod ssh_session_installation;
 pub mod terminal;
 pub mod types;
 #[cfg(any(test, target_os = "windows"))]
