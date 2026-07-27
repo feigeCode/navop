@@ -180,6 +180,13 @@ impl RemoteDesktopView {
         ) else {
             return;
         };
+        if should_track_local_cursor_position(
+            self.options.protocol,
+            self.connected,
+            self.options.read_only,
+        ) {
+            self.cursor.set_position(x, y);
+        }
         self.send_input(RemoteDesktopInput::MouseMove { x, y });
     }
 
@@ -237,6 +244,14 @@ fn map_mouse_button(button: MouseButton) -> Option<RemoteMouseButton> {
     }
 }
 
+fn should_track_local_cursor_position(
+    protocol: RemoteDesktopProtocol,
+    connected: bool,
+    read_only: bool,
+) -> bool {
+    protocol == RemoteDesktopProtocol::Vnc && connected && !read_only
+}
+
 fn pixels_to_f32(pixels: Pixels) -> f32 {
     pixels.into()
 }
@@ -249,3 +264,7 @@ fn bounds_to_local(bounds: Bounds<Pixels>) -> LocalBounds {
         height: pixels_to_f32(bounds.size.height),
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

@@ -77,7 +77,7 @@ fn create_backend_with_registry_rejects_outdated_vnc_provider() {
         "vnc",
         "VNC",
         "vnc",
-        "0.1.1",
+        "0.2.1",
         "./onetcli-vnc-helper",
     );
     let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
@@ -92,8 +92,8 @@ fn create_backend_with_registry_rejects_outdated_vnc_provider() {
         .downcast_ref::<RemoteDesktopProviderVersionError>()
         .expect("version error");
     assert_eq!(RemoteDesktopProtocol::Vnc, version_error.protocol);
-    assert_eq!("0.1.1", version_error.installed);
-    assert_eq!("0.2.0", version_error.required);
+    assert_eq!("0.2.1", version_error.installed);
+    assert_eq!("0.2.2", version_error.required);
     assert!(!version_error.invalid);
 }
 
