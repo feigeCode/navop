@@ -11,6 +11,7 @@ mod serial_ingress;
 pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_ingress;
+mod ssh_session_identity;
 pub mod terminal;
 pub mod types;
 #[cfg(any(test, target_os = "windows"))]
@@ -28,6 +29,9 @@ pub use performance_metrics::{
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
+pub use ssh_session_identity::{
+    PersistedSshSessionIdentity, PersistedSshSessionIdentityError, SshSessionIdentityTransition,
+};
 pub use terminal::{TerminalScrollProxy, TerminalTextSnapshot};
 pub use types::{
     LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
