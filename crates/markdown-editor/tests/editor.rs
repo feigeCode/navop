@@ -1958,6 +1958,59 @@ fn fenced_code_uses_code_editor_input_and_preserves_newlines(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn fenced_code_accepts_text_and_newlines_at_the_end_of_its_last_line(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        markdown_editor::init(cx);
+    });
+    let source = "```rust\nfirst();\nlast();\n```";
+    let code_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(code_id, window, cx));
+    });
+    cx.run_until_parked();
+
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let input_id = input.entity_id();
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_cursor_position(Position::new(1, 7), window, cx);
+    });
+    cx.simulate_keystrokes("x");
+    cx.run_until_parked();
+    assert_eq!(
+        "```rust\nfirst();\nlast();x\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        "```rust\nfirst();\nlast();x\n\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+
+    cx.simulate_keystrokes("next");
+    cx.run_until_parked();
+    assert_eq!(
+        "```rust\nfirst();\nlast();x\nnext\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id())
+    );
+    assert_eq!(
+        Some(code_id),
+        editor.read_with(&cx, |editor, _| editor.active_block())
+    );
+}
+
+#[gpui::test]
 fn fenced_code_supports_tab_indentation(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);

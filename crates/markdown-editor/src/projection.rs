@@ -111,8 +111,18 @@ impl MarkdownProjection {
         }
         let mut builder =
             ProjectionBuilder::new(document.source.len(), active_inline, source_range.clone());
+        let terminal_code_content_boundary =
+            terminal_code_content_boundary(document, &source_range);
         builder.append_source(&document.source, source_range, &hidden);
         let mut projection = builder.finish();
+        if let Some(source_offset) = terminal_code_content_boundary {
+            if let Some(last) = projection.display_to_source.last_mut() {
+                *last = source_offset;
+            }
+            if let Some(last) = projection.display_end_to_source.last_mut() {
+                *last = source_offset;
+            }
+        }
         projection.styles = projection_style_spans(document, &projection);
         projection.styles.extend(active_marker_style_spans(
             document,
@@ -196,6 +206,26 @@ fn trailing_line_ending(source: &str, range: &Range<usize>) -> Option<Range<usiz
         0
     };
     (length > 0).then(|| range.end - length..range.end)
+}
+
+fn terminal_code_content_boundary(
+    document: &SourceMarkdownDocument,
+    source_range: &Range<usize>,
+) -> Option<usize> {
+    document.blocks.iter().rev().find_map(|block| {
+        if block.source_range.end != source_range.end
+            || block.source_range.start < source_range.start
+        {
+            return None;
+        }
+        match &block.kind {
+            markdown_source::SourceBlockKind::CodeFence {
+                closing_fence: Some(_),
+                ..
+            } => block.content_range.as_ref().map(|content| content.end),
+            _ => None,
+        }
+    })
 }
 
 struct ProjectionBuilder {
