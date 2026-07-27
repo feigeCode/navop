@@ -36,6 +36,11 @@ pub struct MysqlDbConnection {
 }
 
 impl MysqlDbConnection {
+    /// MySQL's column packet calls this field `character_set`, but it carries
+    /// the collation ID. Collation 63 is the binary pseudo-collation used by
+    /// BINARY, VARBINARY, and binary BLOB values.
+    const MYSQL_BINARY_COLLATION_ID: u16 = 63;
+
     pub fn new(config: DbConnectionConfig) -> Self {
         Self {
             config,
@@ -200,8 +205,9 @@ impl MysqlDbConnection {
         }
     }
 
-    fn is_binary_column(column_type: ColumnType, flags: ColumnFlags) -> bool {
+    fn is_binary_column(column_type: ColumnType, flags: ColumnFlags, collation_id: u16) -> bool {
         flags.contains(ColumnFlags::BINARY_FLAG)
+            && collation_id == Self::MYSQL_BINARY_COLLATION_ID
             && matches!(
                 column_type,
                 ColumnType::MYSQL_TYPE_STRING
@@ -321,7 +327,11 @@ impl MysqlDbConnection {
             let row_data: Vec<Option<String>> = (0..row.len())
                 .map(|i| {
                     if columns_arc.get(i).is_some_and(|column| {
-                        Self::is_binary_column(column.column_type(), column.flags())
+                        Self::is_binary_column(
+                            column.column_type(),
+                            column.flags(),
+                            column.character_set(),
+                        )
                     }) {
                         if let Value::Bytes(bytes) = &row[i] {
                             binary_cells.push(BinaryCell {
@@ -1164,24 +1174,35 @@ mod tests {
     }
 
     #[test]
-    fn binary_column_detection_uses_protocol_flags_instead_of_debug_type_names() {
+    fn binary_column_detection_requires_the_binary_collation() {
         use mysql_async::consts::{ColumnFlags, ColumnType};
+
+        const UTF8MB4_BIN_COLLATION_ID: u16 = 46;
 
         assert!(MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_BLOB,
             ColumnFlags::BLOB_FLAG | ColumnFlags::BINARY_FLAG,
+            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
         ));
         assert!(MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_VAR_STRING,
             ColumnFlags::BINARY_FLAG,
+            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
+        ));
+        assert!(!MysqlDbConnection::is_binary_column(
+            ColumnType::MYSQL_TYPE_VARCHAR,
+            ColumnFlags::BINARY_FLAG,
+            UTF8MB4_BIN_COLLATION_ID,
         ));
         assert!(!MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_BLOB,
             ColumnFlags::BLOB_FLAG,
+            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
         ));
         assert!(!MysqlDbConnection::is_binary_column(
             ColumnType::MYSQL_TYPE_LONG,
             ColumnFlags::BINARY_FLAG,
+            MysqlDbConnection::MYSQL_BINARY_COLLATION_ID,
         ));
     }
 }
