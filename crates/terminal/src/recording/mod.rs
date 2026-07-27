@@ -2,6 +2,7 @@ mod asciicast;
 mod controller;
 mod model;
 mod playback;
+mod playback_surface;
 mod recorder;
 mod recovery;
 mod runtime;
@@ -26,6 +27,7 @@ pub use playback::{
     RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchKind, RecordingPlaybackSearchMatch,
     RecordingPlaybackSearchResults, RecordingPlaybackState, RecordingPlaybackTransition,
 };
+pub(crate) use playback_surface::{RecordingPlaybackApplySummary, TerminalPlaybackRuntime};
 pub use recorder::{
     RecordingFileConfig, RecordingFileState, RecordingFileTransition, RecordingFileWriter,
     partial_recording_path,
@@ -44,6 +46,8 @@ pub use runtime::{
 
 #[cfg(test)]
 mod persistence_tests;
+#[cfg(test)]
+mod playback_surface_tests;
 #[cfg(test)]
 mod playback_tests;
 #[cfg(test)]
