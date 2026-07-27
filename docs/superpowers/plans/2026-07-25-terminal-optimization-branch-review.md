@@ -1353,9 +1353,13 @@ backend 中已经存在 input/output 接线：
 - 不含认证材料的会话元数据，例如 `recording_id`、逻辑 `session_id`、
   backend 类型、初始终端尺寸、应用版本和录制格式版本；
 - 用户可见的开始、暂停、继续和停止操作；
-- 录制控制按钮固定放在每个 terminal pane 底部的 footer/status bar，不覆盖 terminal
-  内容；按钮应能清楚显示 `recording`、`paused`、`stopping`、`failed` 等状态，
-  并为键盘和辅助功能提供等价操作；
+- 每个 terminal pane 独立拥有位于底部的录制 footer/status bar；footer 占用独立
+  布局高度，不能以 overlay 方式覆盖 terminal 内容。footer 出现、隐藏或高度变化时，
+  必须重新测量 terminal viewport 并同步更新 PTY rows/columns，确保最后一行可见且
+  backend 收到的终端尺寸与实际可用区域一致；
+- footer 提供开始、暂停/继续和停止按钮，并持续显示录制时长以及 `recording`、
+  `paused`、`stopping`、`failed` 等状态；失败状态需要给出可见原因，所有控制都要
+  为键盘和辅助功能提供等价操作；
 - 录制完成后的只读回放、暂停、seek、倍速和搜索；
 - 异常退出后的 `.partial`/未完成录制识别，以及尽可能恢复到最后一个完整事件。
 
@@ -1428,11 +1432,16 @@ Asciicast v2 可作为互操作格式，但 Navop 自有 metadata 或扩展事�
 4. 文件大小、时长、事件数和单事件上限均有生产代码约束和超限测试；
 5. 完整文件、截断尾部、非法 header、未知版本和超大事件均有 parser 测试；
 6. playback 无法向活动 backend 发送 input 或重新执行历史动作；
-7. TerminalView 底部 footer/status bar 有明确录制状态、暂停原因、失败状态和导出
-   提示；开始录制、开启 input capture、停止和导出均有明确的用户确认或 disclosure；
+7. 每个 TerminalView pane 的底部 footer/status bar 有明确录制时长、录制状态、暂停
+   原因、失败状态和导出提示；开始录制、开启 input capture、停止和导出均有明确的
+   用户确认或 disclosure；
 8. 回放入口与活动终端 footer 控件有清晰视觉区分，回放不会显示成可发送输入的活动
    会话；
-9. 高吞吐输出下的复制、锁竞争、flush 和内存峰值经过基准验证。
+9. footer 不覆盖 terminal viewport；显示/隐藏 footer、pane resize、split/unsplit
+   和 DPI 变化均会重新计算可用区域与 PTY rows/columns，并有布局和 resize 回归测试；
+10. footer 只在真实 recorder 状态、持久化和订阅路径可用后接入，不能先提交仅有视觉
+    效果而无法可靠录制的空壳按钮；
+11. 高吞吐输出下的复制、锁竞争、flush 和内存峰值经过基准验证。
 
 ### 不建议首轮实现的原因
 
