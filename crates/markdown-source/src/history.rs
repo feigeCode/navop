@@ -23,8 +23,16 @@ pub enum SourceParseScope {
 #[derive(Debug, Clone)]
 pub struct SourceHistory {
     document: SourceMarkdownDocument,
-    undo: Vec<SourceEditTransaction>,
-    redo: Vec<SourceEditTransaction>,
+    undo: Vec<SourceHistoryEntry>,
+    redo: Vec<SourceHistoryEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceHistoryEntry {
+    forward_edits: Vec<SourceEdit>,
+    inverse_edits: Vec<SourceEdit>,
+    selection_before: SourceSelection,
+    selection_after: SourceSelection,
 }
 
 impl SourceHistory {
@@ -42,8 +50,21 @@ impl SourceHistory {
 
     pub fn apply(&mut self, transaction: &SourceTransaction) -> Result<(), PatchError> {
         let applied = self.document.apply_transaction(transaction)?;
-        self.document = applied.document.clone();
-        self.undo.push(applied);
+        let SourceEditTransaction {
+            document,
+            forward_edits,
+            inverse_edits,
+            selection_before,
+            selection_after,
+            ..
+        } = applied;
+        self.document = document;
+        self.undo.push(SourceHistoryEntry {
+            forward_edits,
+            inverse_edits,
+            selection_before,
+            selection_after,
+        });
         self.redo.clear();
         Ok(())
     }
