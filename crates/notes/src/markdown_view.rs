@@ -358,7 +358,7 @@ impl NotesView {
     pub(crate) fn markdown_has_blocking_state(&self) -> bool {
         self.markdown_sessions
             .values()
-            .any(|session| !matches!(session.state.sync_state, MarkdownSyncState::Clean))
+            .any(|session| session.state.has_unpersisted_changes())
     }
 
     pub(crate) fn remove_markdown_sessions_under(&mut self, path: &std::path::Path) {

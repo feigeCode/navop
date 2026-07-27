@@ -97,6 +97,22 @@ Notes:
     en: Cancel
     zh-CN: 取消
     zh-HK: 取消
+  markdown_save_and_close:
+    en: Save and Close
+    zh-CN: 保存并关闭
+    zh-HK: 儲存並關閉
+  markdown_discard_and_close:
+    en: Discard and Close
+    zh-CN: 放弃并关闭
+    zh-HK: 放棄並關閉
+  unsaved_markdown_changes_title:
+    en: Unsaved Changes
+    zh-CN: 未保存的修改
+    zh-HK: 尚未儲存的修改
+  unsaved_markdown_changes_message:
+    en: This note has changes that have not been saved. Save them before closing?
+    zh-CN: 笔记包含未保存的修改。关闭前是否保存？
+    zh-HK: 筆記包含尚未儲存的修改。關閉前是否儲存？
   unsaved_markdown_close_title:
     en: Changes Could Not Be Saved
     zh-CN: 修改无法保存

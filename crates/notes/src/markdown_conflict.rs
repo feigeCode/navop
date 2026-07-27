@@ -115,29 +115,4 @@ impl NotesView {
             Err(error) => notify_operation_error(window, cx, error),
         }
     }
-
-    /// Ids of documents whose local changes conflict with external
-    /// modifications or failed to save.
-    pub(crate) fn blocked_markdown_document_ids(&self) -> Vec<String> {
-        self.markdown_sessions
-            .iter()
-            .filter(|(_, session)| {
-                matches!(
-                    session.state.sync_state,
-                    MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)
-                )
-            })
-            .map(|(id, _)| id.clone())
-            .collect()
-    }
-
-    /// Discard local changes of every blocked session so the view can close.
-    pub(crate) fn discard_blocked_markdown_sessions(&mut self, cx: &mut Context<Self>) {
-        for id in self.blocked_markdown_document_ids() {
-            if let Some(session) = self.markdown_sessions.get_mut(&id) {
-                session.state.external_reloaded();
-            }
-        }
-        cx.notify();
-    }
 }
