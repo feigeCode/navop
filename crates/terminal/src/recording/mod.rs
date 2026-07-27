@@ -27,7 +27,7 @@ pub use playback::{
     RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchKind, RecordingPlaybackSearchMatch,
     RecordingPlaybackSearchResults, RecordingPlaybackState, RecordingPlaybackTransition,
 };
-pub(crate) use playback_surface::{RecordingPlaybackApplySummary, TerminalPlaybackRuntime};
+pub(crate) use playback_surface::TerminalPlaybackRuntime;
 pub use recorder::{
     RecordingFileConfig, RecordingFileState, RecordingFileTransition, RecordingFileWriter,
     partial_recording_path,

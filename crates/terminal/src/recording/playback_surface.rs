@@ -1,10 +1,14 @@
-use super::{RecordingEvent, RecordingEventKind, RecordingPlayback};
+use super::{
+    RecordingEvent, RecordingEventKind, RecordingPlayback, RecordingPlaybackError,
+    RecordingPlaybackTransition,
+};
 use crate::{GpuiEventProxy, TerminalEvent, TerminalPerformanceMetrics, TerminalSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -73,12 +77,20 @@ impl TerminalPlaybackRuntime {
         &self.timeline
     }
 
+    #[cfg(test)]
     pub(crate) fn timeline_mut(&mut self) -> &mut RecordingPlayback {
         &mut self.timeline
     }
 
     pub(crate) fn term(&self) -> &Arc<FairMutex<Term<GpuiEventProxy>>> {
         &self.term
+    }
+
+    /// Returns only the wakeup de-duplication state needed by Terminal's event
+    /// loop. The fail-closed playback proxy itself remains private so callers
+    /// cannot attach a backend response sink or broaden its event policy.
+    pub(crate) fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
+        self.event_proxy.wakeup_pending_handle()
     }
 
     #[cfg(test)]
@@ -96,6 +108,27 @@ impl TerminalPlaybackRuntime {
             scrolling_history: scrollback_lines,
             ..Default::default()
         });
+    }
+
+    pub(crate) fn resume(&mut self) -> RecordingPlaybackTransition {
+        let transition = self.timeline.resume();
+        self.queue_wakeup_for_transition(transition);
+        transition
+    }
+
+    pub(crate) fn pause(&mut self) -> RecordingPlaybackTransition {
+        let transition = self.timeline.pause();
+        self.queue_wakeup_for_transition(transition);
+        transition
+    }
+
+    pub(crate) fn set_speed(
+        &mut self,
+        speed: f64,
+    ) -> Result<RecordingPlaybackTransition, RecordingPlaybackError> {
+        let transition = self.timeline.set_speed(speed)?;
+        self.queue_wakeup_for_transition(transition);
+        Ok(transition)
     }
 
     pub(crate) fn advance(&mut self, wall_elapsed: Duration) -> RecordingPlaybackApplySummary {
@@ -143,6 +176,12 @@ impl TerminalPlaybackRuntime {
         let summary = Self::apply_events(processor, term, prefix);
         self.event_proxy.queue_wakeup();
         summary
+    }
+
+    fn queue_wakeup_for_transition(&self, transition: RecordingPlaybackTransition) {
+        if transition == RecordingPlaybackTransition::Changed {
+            self.event_proxy.queue_wakeup();
+        }
     }
 
     fn initial_size_for(timeline: &RecordingPlayback) -> TerminalSize {

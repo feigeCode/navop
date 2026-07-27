@@ -88,6 +88,7 @@ pub struct RecordingPlaybackSearchResults {
 #[derive(Debug)]
 pub enum RecordingPlaybackError {
     RecordingFile(RecordingFileError),
+    NotPlaybackSession,
     InvalidLimit(&'static str),
     InvalidTimeline {
         event_index: usize,
@@ -105,6 +106,9 @@ impl fmt::Display for RecordingPlaybackError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RecordingFile(error) => write!(formatter, "{error}"),
+            Self::NotPlaybackSession => {
+                formatter.write_str("terminal is not a recording playback session")
+            }
             Self::InvalidLimit(name) => {
                 write!(
                     formatter,
