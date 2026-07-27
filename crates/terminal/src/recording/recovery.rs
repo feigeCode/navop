@@ -34,28 +34,28 @@ pub fn read_recording(
     Ok(read_recording_inner(path.as_ref(), limits, false)?.recording)
 }
 
+/// Reads a published recording strictly, or an unfinished `.partial` recording
+/// up to its last complete event, without modifying the source file.
+pub fn read_recording_for_playback(
+    path: impl AsRef<Path>,
+    limits: RecordingFileLimits,
+) -> Result<ParsedRecording, RecordingFileError> {
+    let path = path.as_ref();
+    let recovery = read_recording_inner(path, limits, is_partial_recording_path(path))?;
+    ensure_file_length_unchanged(path, &recovery)?;
+    Ok(recovery.recording)
+}
+
 pub fn recover_partial_recording(
     path: impl AsRef<Path>,
     limits: RecordingFileLimits,
 ) -> Result<RecordingRecovery, RecordingFileError> {
     let path = path.as_ref();
-    if !path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().ends_with(".partial"))
-    {
+    if !is_partial_recording_path(path) {
         return Err(RecordingFileError::InvalidPartialPath(path.to_path_buf()));
     }
     let recovery = read_recording_inner(path, limits, true)?;
-    let current_bytes = fs::metadata(path)
-        .map_err(|error| RecordingFileError::io("stat partial recording", error))?
-        .len();
-    let expected_bytes = recovery
-        .valid_bytes
-        .checked_add(recovery.discarded_bytes)
-        .ok_or(RecordingFileError::FileChangedDuringRecovery)?;
-    if current_bytes != expected_bytes {
-        return Err(RecordingFileError::FileChangedDuringRecovery);
-    }
+    ensure_file_length_unchanged(path, &recovery)?;
     if recovery.discarded_bytes > 0 {
         let file = OpenOptions::new()
             .write(true)
@@ -67,6 +67,28 @@ pub fn recover_partial_recording(
             .map_err(|error| RecordingFileError::io("sync recovered recording", error))?;
     }
     Ok(recovery)
+}
+
+fn is_partial_recording_path(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with(".partial"))
+}
+
+fn ensure_file_length_unchanged(
+    path: &Path,
+    recovery: &RecordingRecovery,
+) -> Result<(), RecordingFileError> {
+    let current_bytes = fs::metadata(path)
+        .map_err(|error| RecordingFileError::io("stat recording after read", error))?
+        .len();
+    let expected_bytes = recovery
+        .valid_bytes
+        .checked_add(recovery.discarded_bytes)
+        .ok_or(RecordingFileError::FileChangedDuringRecovery)?;
+    if current_bytes != expected_bytes {
+        return Err(RecordingFileError::FileChangedDuringRecovery);
+    }
+    Ok(())
 }
 
 fn read_recording_inner(

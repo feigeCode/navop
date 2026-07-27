@@ -1,6 +1,6 @@
 use super::{
     ParsedRecording, RecordingCompleteness, RecordingEvent, RecordingEventKind, RecordingFileError,
-    RecordingFileLimits, read_recording,
+    RecordingFileLimits, read_recording_for_playback,
 };
 use std::fmt;
 use std::path::Path;
@@ -190,7 +190,7 @@ impl RecordingPlayback {
         file_limits: RecordingFileLimits,
         playback_limits: RecordingPlaybackLimits,
     ) -> Result<Self, RecordingPlaybackError> {
-        let recording = read_recording(path, file_limits)?;
+        let recording = read_recording_for_playback(path, file_limits)?;
         Self::from_parsed(recording, playback_limits)
     }
 

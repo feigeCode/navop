@@ -34,7 +34,7 @@ pub use recorder::{
 };
 pub use recovery::{
     ParsedRecording, RecordingCompleteness, RecordingRecovery, read_recording,
-    recover_partial_recording,
+    read_recording_for_playback, recover_partial_recording,
 };
 #[cfg(test)]
 use runtime::RecordingWorkerTestGate;
@@ -50,6 +50,8 @@ mod persistence_tests;
 mod playback_surface_tests;
 #[cfg(test)]
 mod playback_tests;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]
