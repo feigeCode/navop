@@ -57,6 +57,11 @@ impl MarkdownSessionState {
         }
     }
 
+    pub(crate) fn has_unpersisted_changes(&self) -> bool {
+        self.source_revision != self.persisted_revision
+            || !matches!(self.sync_state, MarkdownSyncState::Clean)
+    }
+
     pub(crate) fn source_changed(&mut self) -> u64 {
         self.source_revision = self.source_revision.saturating_add(1);
         self.generation = self.generation.saturating_add(1);
@@ -135,12 +140,12 @@ impl MarkdownSessionState {
     pub(crate) fn switch_to_wysiwyg(&mut self) {
         self.mode = MarkdownViewMode::Wysiwyg;
         self.projected_revision = self.source_revision;
-        self.sync_state = MarkdownSyncState::Clean;
+        self.finish_switch();
     }
 
     pub(crate) fn switch_to_source(&mut self) {
         self.mode = MarkdownViewMode::Source;
-        self.sync_state = MarkdownSyncState::Clean;
+        self.finish_switch();
     }
 
     pub(crate) fn conflict(&mut self) {
@@ -200,6 +205,14 @@ impl MarkdownSessionState {
         self.saving_generation = Some(generation);
         self.sync_state = MarkdownSyncState::SavingSource;
         Some(generation)
+    }
+
+    fn finish_switch(&mut self) {
+        self.sync_state = if self.source_revision == self.persisted_revision {
+            MarkdownSyncState::Clean
+        } else {
+            MarkdownSyncState::SourceDirty
+        };
     }
 }
 
@@ -317,6 +330,23 @@ mod tests {
         state.switch_to_wysiwyg();
         assert_eq!(state.source_revision, state.projected_revision);
         assert_eq!(MarkdownViewMode::Wysiwyg, state.mode);
+        assert_eq!(
+            MarkdownSyncState::SourceDirty,
+            state.sync_state,
+            "changing editor modes must not mark an unpersisted revision as saved"
+        );
+        assert!(state.has_unpersisted_changes());
+    }
+
+    #[test]
+    fn switching_a_saved_document_stays_clean() {
+        let mut state = MarkdownSessionState::default();
+
+        assert!(state.begin_switch());
+        state.switch_to_source();
+
+        assert_eq!(MarkdownSyncState::Clean, state.sync_state);
+        assert!(!state.has_unpersisted_changes());
     }
 
     #[test]
