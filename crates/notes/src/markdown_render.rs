@@ -5,12 +5,10 @@ use gpui::{
     prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable,
+    Disableable, Icon, IconName, Sizable,
     button::Button,
     h_flex,
     input::{Input, LocalInputStyle},
-    scroll::ScrollableElement,
-    text::TextView,
     v_flex,
 };
 use rust_i18n::t;
@@ -56,25 +54,14 @@ impl NotesView {
                     .into_any_element()
             }
             MarkdownViewMode::Wysiwyg => {
-                let theme = self.resolved_editor_theme(cx);
                 div()
-                    .id("markdown-readonly-preview")
-                    .debug_selector(|| "markdown-readonly-preview".to_owned())
+                    .id("markdown-wysiwyg-editor")
+                    .debug_selector(|| "markdown-wysiwyg-editor".to_owned())
                     .size_full()
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(
-                        div().size_full().overflow_y_scrollbar().child(
-                            TextView::markdown(
-                                "markdown-preview-content",
-                                session.preview.read(cx).source().to_owned(),
-                            )
-                            .style(theme.preview_style(cx.theme().is_dark()))
-                            .selectable(true)
-                            .p_6(),
-                        ),
-                    )
+                    .child(session.preview.clone())
                     .into_any_element()
             }
         };

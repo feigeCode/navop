@@ -453,14 +453,19 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
-    fn standalone_markdown_preview_is_read_only(cx: &mut TestAppContext) {
+    fn standalone_markdown_preview_uses_the_editable_wysiwyg_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
         });
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("editable.md");
-        std::fs::write(&path, "# Title\n\nBody\n").unwrap();
+        let source = "# Title\n\nBody\n";
+        std::fs::write(&path, source).unwrap();
+        let body_id = markdown_source::SourceMarkdownDocument::parse(source)
+            .unwrap()
+            .blocks[1]
+            .id;
         let (window, view) = cx.update(|cx| {
             let mut view = None;
             let window = cx
@@ -476,21 +481,48 @@ mod external_markdown_tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         cx.run_until_parked();
 
-        let preview = cx
-            .debug_bounds("markdown-readonly-preview")
-            .expect("read-only Markdown preview must be rendered");
-        cx.simulate_click(preview.center(), gpui::Modifiers::default());
+        assert!(
+            cx.debug_bounds("markdown-readonly-preview").is_none(),
+            "the legacy read-only preview must not remain mounted"
+        );
+        cx.debug_bounds("markdown-wysiwyg-editor")
+            .expect("the editable WYSIWYG editor must be rendered");
+        let body = cx
+            .debug_bounds(Box::leak(
+                format!("markdown-preview-block-{}", body_id.0).into_boxed_str(),
+            ))
+            .expect("the Markdown editor must expose its rendered body block");
+        cx.simulate_click(body.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        let editor = view.read_with(&cx, |view, _| {
+            let id = view.active_document_id.as_ref().unwrap();
+            view.markdown_sessions.get(id).unwrap().preview.clone()
+        });
+        assert_eq!(
+            Some(body_id),
+            editor.read_with(&cx, |editor, _| editor.active_block())
+        );
+        let input = editor.read_with(&cx, |editor, _| editor.input_state());
+        input.update_in(&mut cx, |input, window, cx| {
+            input.set_selected_range(4..4, false, window, cx);
+        });
+        cx.simulate_keystrokes("X");
         cx.run_until_parked();
 
         view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.as_ref().unwrap();
             let session = view.markdown_sessions.get(id).unwrap();
             assert_eq!(
-                "# Title\n\nBody\n",
+                "# Title\n\nBodyX\n",
                 session.source_document.lock().unwrap().source.as_str()
             );
-            assert!(!session.preview.read(cx).is_dirty());
-            assert_eq!(None, session.preview.read(cx).active_block());
+            assert_eq!("# Title\n\nBodyX\n", session.preview.read(cx).source());
+            assert_eq!(
+                "# Title\n\nBodyX\n",
+                session.source_editor.read(cx).value().as_ref()
+            );
+            assert!(session.preview.read(cx).is_dirty());
         });
     }
 
