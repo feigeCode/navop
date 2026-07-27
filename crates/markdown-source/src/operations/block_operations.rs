@@ -119,6 +119,33 @@ impl SourceMarkdownDocument {
             SourceEditOrigin::Formatting,
         ))
     }
+
+    pub fn set_code_fence_language(
+        &self,
+        block_id: SourceNodeId,
+        language: &str,
+    ) -> Result<SourceTransaction, SourceOperationError> {
+        if language.is_empty()
+            || language
+                .chars()
+                .any(|character| character.is_whitespace() || character == '`')
+        {
+            return Err(SourceOperationError::InvalidCodeFenceLanguage);
+        }
+        let block = find_block(self, block_id)?;
+        let SourceBlockKind::CodeFence {
+            opening_fence,
+            language_range,
+            ..
+        } = &block.kind
+        else {
+            return Err(SourceOperationError::NotCodeFence);
+        };
+        let range = language_range
+            .clone()
+            .unwrap_or(opening_fence.end..opening_fence.end);
+        Ok(self.single_edit(range, language, SourceEditOrigin::Formatting))
+    }
 }
 
 fn block_index(

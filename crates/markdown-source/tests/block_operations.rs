@@ -1,5 +1,6 @@
 use markdown_source::{
-    BlockMoveDirection, SourceHistory, SourceMarkdownDocument, SourceParseScope,
+    BlockMoveDirection, SourceHistory, SourceMarkdownDocument, SourceOperationError,
+    SourceParseScope,
 };
 
 fn apply(
@@ -114,6 +115,52 @@ fn blockquote_and_code_fence_toggles_round_trip() {
     )
     .document;
     assert_eq!(paragraph.source, unfenced.source);
+}
+
+#[test]
+fn changing_code_fence_language_preserves_fence_info_and_content() {
+    let fenced =
+        SourceMarkdownDocument::parse("  ~~~~rust title=\"example\"\nfn main() {}\n  ~~~~")
+            .unwrap();
+    let transaction = fenced
+        .set_code_fence_language(fenced.blocks[0].id, "python")
+        .unwrap();
+
+    assert_eq!(
+        "  ~~~~python title=\"example\"\nfn main() {}\n  ~~~~",
+        apply(&fenced, &transaction).document.source
+    );
+
+    let language_less = SourceMarkdownDocument::parse("```\nvalue\n```").unwrap();
+    let transaction = language_less
+        .set_code_fence_language(language_less.blocks[0].id, "rust")
+        .unwrap();
+
+    assert_eq!(
+        "```rust\nvalue\n```",
+        apply(&language_less, &transaction).document.source
+    );
+}
+
+#[test]
+fn changing_code_fence_language_rejects_invalid_targets_and_identifiers() {
+    let paragraph = SourceMarkdownDocument::parse("paragraph").unwrap();
+    assert_eq!(
+        SourceOperationError::NotCodeFence,
+        paragraph
+            .set_code_fence_language(paragraph.blocks[0].id, "rust")
+            .unwrap_err()
+    );
+
+    let fenced = SourceMarkdownDocument::parse("```rust\nvalue\n```").unwrap();
+    for language in ["", "two words", "rust\npython", "rust`"] {
+        assert_eq!(
+            SourceOperationError::InvalidCodeFenceLanguage,
+            fenced
+                .set_code_fence_language(fenced.blocks[0].id, language)
+                .unwrap_err()
+        );
+    }
 }
 
 #[test]

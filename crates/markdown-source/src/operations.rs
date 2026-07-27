@@ -32,6 +32,10 @@ pub enum SourceOperationError {
     InvalidTableSize,
     #[error("Markdown source node is not an image")]
     NotImage,
+    #[error("Markdown source node is not a fenced code block")]
+    NotCodeFence,
+    #[error("Markdown fenced code language must be one non-empty identifier")]
+    InvalidCodeFenceLanguage,
     #[error("Markdown block cannot move in that direction")]
     CannotMoveBlock,
     #[error("Markdown block cannot be split at that position")]
