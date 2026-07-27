@@ -1,4 +1,4 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RemoteDesktopInput {
     Resize {
         width: u16,
@@ -28,7 +28,11 @@ pub enum RemoteDesktopInput {
         text: String,
     },
     ClipboardFiles {
+        transfer_id: u64,
         paths: Vec<String>,
+    },
+    CancelClipboardTransfer {
+        transfer_id: u64,
     },
     Reconnect,
     Close,
@@ -74,4 +78,37 @@ pub enum RemoteNamedKey {
     Meta,
     CapsLock,
     F(u8),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_debug_reports_metadata_without_text_paths_or_character_keys() {
+        let inputs = [
+            RemoteDesktopInput::Text {
+                text: "typed-secret".to_string(),
+            },
+            RemoteDesktopInput::ClipboardText {
+                text: "clipboard-secret".to_string(),
+            },
+            RemoteDesktopInput::ClipboardFiles {
+                transfer_id: 17,
+                paths: vec!["/Users/rachel/private-file".to_string()],
+            },
+            RemoteDesktopInput::Key {
+                key: RemoteKey::Character('q'),
+                pressed: true,
+            },
+        ];
+
+        for input in inputs {
+            let debug = format!("{input:?}");
+
+            assert!(!debug.contains("secret"));
+            assert!(!debug.contains("private-file"));
+            assert!(!debug.contains("Character('q')"));
+        }
+    }
 }

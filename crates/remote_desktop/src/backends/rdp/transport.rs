@@ -1,7 +1,5 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::process::{Command, Stdio};
-
-use crate::{RemoteDesktopFrameRect, helper_protocol::HelperFrameRect};
 
 use super::*;
 
@@ -15,7 +13,7 @@ pub(super) fn start_helper_session(
     helper: &HelperProcessConfig,
     connect: &HelperRequest,
     latest_clipboard_text: &Option<String>,
-    latest_clipboard_files: &Option<Vec<String>>,
+    latest_clipboard_files: &Option<ClipboardFilesSnapshot>,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> Result<
@@ -57,7 +55,7 @@ pub(super) fn start_helper_session(
 
 pub(super) fn reconnect_replay_requests(
     latest_clipboard_text: &Option<String>,
-    latest_clipboard_files: &Option<Vec<String>>,
+    latest_clipboard_files: &Option<ClipboardFilesSnapshot>,
     protocol: RemoteDesktopProtocol,
 ) -> Vec<HelperRequest> {
     let mut requests = Vec::with_capacity(2);
@@ -65,9 +63,12 @@ pub(super) fn reconnect_replay_requests(
         requests.push(HelperRequest::ClipboardText { text });
     }
     if protocol == RemoteDesktopProtocol::Rdp
-        && let Some(paths) = latest_clipboard_files.clone()
+        && let Some(snapshot) = latest_clipboard_files.clone()
     {
-        requests.push(HelperRequest::ClipboardFiles { paths });
+        requests.push(HelperRequest::ClipboardFiles {
+            transfer_id: snapshot.transfer_id,
+            paths: snapshot.paths,
+        });
     }
     requests
 }
@@ -113,7 +114,7 @@ fn spawn_output_reader(
         .spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
-                match read_helper_output(&mut reader, protocol) {
+                match super::transport_frames::read_helper_output(&mut reader, protocol) {
                     Ok(Some(output)) => forward_helper_output(output, &output_tx, &signal_tx),
                     Ok(None) => break,
                     Err(error) => {
@@ -133,147 +134,6 @@ pub(super) struct HelperOutput {
     pub(super) output: RemoteDesktopOutput,
     pub(super) connected: bool,
     pub(super) disconnect_message: Option<String>,
-}
-
-pub(super) fn read_helper_output(
-    reader: &mut impl BufRead,
-    protocol: RemoteDesktopProtocol,
-) -> anyhow::Result<Option<HelperOutput>> {
-    let mut line = Vec::new();
-    let header_bytes = reader.read_until(b'\n', &mut line)?;
-    if header_bytes == 0 {
-        return Ok(None);
-    }
-    let event = decode_event_line(std::str::from_utf8(&line)?)?;
-    let connected = matches!(event, HelperEvent::Connected { .. });
-    let disconnect_message = helper_disconnect_message(&event);
-    match event {
-        HelperEvent::FrameBytes {
-            width,
-            height,
-            rgba_len,
-        } => read_binary_frame_output(reader, width, height, rgba_len).map(Some),
-        HelperEvent::FrameBgraBytes {
-            width,
-            height,
-            bgra_len,
-        } => read_binary_bgra_frame_output(reader, width, height, bgra_len).map(Some),
-        HelperEvent::FrameBgraRects {
-            width,
-            height,
-            rects,
-            bgra_len,
-        } => read_binary_bgra_rects_output(reader, width, height, rects, bgra_len).map(Some),
-        event => Ok(Some(HelperOutput {
-            output: helper_event_to_output(event, protocol)?,
-            connected,
-            disconnect_message,
-        })),
-    }
-}
-
-fn read_binary_bgra_rects_output<R>(
-    reader: &mut R,
-    width: u16,
-    height: u16,
-    rects: Vec<HelperFrameRect>,
-    bgra_len: usize,
-) -> anyhow::Result<HelperOutput>
-where
-    R: Read + ?Sized,
-{
-    let expected_len: usize = rects.iter().map(|rect| rect.byte_len).sum();
-    anyhow::ensure!(
-        bgra_len == expected_len,
-        "invalid BGRA rectangle payload length"
-    );
-    for rect in &rects {
-        anyhow::ensure!(rect.width > 0 && rect.height > 0, "BGRA rectangle is empty");
-        anyhow::ensure!(
-            rect.x.saturating_add(rect.width) <= width
-                && rect.y.saturating_add(rect.height) <= height,
-            "BGRA rectangle is outside framebuffer"
-        );
-        anyhow::ensure!(
-            rect.byte_len == usize::from(rect.width) * usize::from(rect.height) * 4,
-            "invalid BGRA rectangle byte length"
-        );
-    }
-    let mut bgra = vec![0; bgra_len];
-    reader.read_exact(&mut bgra)?;
-    Ok(HelperOutput {
-        output: RemoteDesktopOutput::FrameBgraRects {
-            width,
-            height,
-            rects: rects
-                .into_iter()
-                .map(|rect| RemoteDesktopFrameRect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                    byte_len: rect.byte_len,
-                })
-                .collect(),
-            bgra,
-        },
-        connected: false,
-        disconnect_message: None,
-    })
-}
-
-fn read_binary_frame_output<R>(
-    reader: &mut R,
-    width: u16,
-    height: u16,
-    rgba_len: usize,
-) -> anyhow::Result<HelperOutput>
-where
-    R: Read + ?Sized,
-{
-    let expected_len = usize::from(width) * usize::from(height) * 4;
-    if rgba_len != expected_len {
-        anyhow::bail!(
-            "invalid binary frame payload length: expected {expected_len}, got {rgba_len}"
-        );
-    }
-    let mut rgba = vec![0; rgba_len];
-    reader.read_exact(&mut rgba)?;
-    Ok(HelperOutput {
-        output: RemoteDesktopOutput::Frame {
-            width,
-            height,
-            rgba,
-        },
-        connected: false,
-        disconnect_message: None,
-    })
-}
-
-fn read_binary_bgra_frame_output<R>(
-    reader: &mut R,
-    width: u16,
-    height: u16,
-    bgra_len: usize,
-) -> anyhow::Result<HelperOutput>
-where
-    R: Read + ?Sized,
-{
-    let expected_len = usize::from(width) * usize::from(height) * 4;
-    if bgra_len != expected_len {
-        anyhow::bail!("invalid BGRA frame payload length: expected {expected_len}, got {bgra_len}");
-    }
-    let mut bgra = vec![0; bgra_len];
-    reader.read_exact(&mut bgra)?;
-    Ok(HelperOutput {
-        output: RemoteDesktopOutput::FrameBgra {
-            width,
-            height,
-            bgra,
-        },
-        connected: false,
-        disconnect_message: None,
-    })
 }
 
 pub(super) fn forward_helper_output(
@@ -320,58 +180,6 @@ pub(super) fn write_request(
     Ok(())
 }
 
-pub(super) fn helper_event_to_output(
-    event: HelperEvent,
-    protocol: RemoteDesktopProtocol,
-) -> anyhow::Result<RemoteDesktopOutput> {
-    Ok(match event {
-        HelperEvent::Status { message } => RemoteDesktopOutput::Status(message),
-        HelperEvent::Connected { width, height } => RemoteDesktopOutput::Connected {
-            width,
-            height,
-            capabilities: capabilities_for_protocol(protocol),
-        },
-        HelperEvent::Frame { width, height, .. } => RemoteDesktopOutput::Frame {
-            width,
-            height,
-            rgba: event.into_rgba()?,
-        },
-        HelperEvent::FrameBytes { .. }
-        | HelperEvent::FrameBgraBytes { .. }
-        | HelperEvent::FrameBgraRects { .. } => {
-            anyhow::bail!("binary frame payload is missing")
-        }
-        HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
-        HelperEvent::CursorHidden => RemoteDesktopOutput::CursorHidden,
-        HelperEvent::CursorPosition { x, y } => RemoteDesktopOutput::CursorPosition { x, y },
-        HelperEvent::ClipboardText { text } => RemoteDesktopOutput::ClipboardText { text },
-        HelperEvent::ConnectionFailure { message } => {
-            RemoteDesktopOutput::ConnectionFailure(message)
-        }
-        HelperEvent::Terminated { message } => RemoteDesktopOutput::Terminated(message),
-    })
-}
-
-fn capabilities_for_protocol(protocol: RemoteDesktopProtocol) -> RemoteDesktopCapabilities {
-    match protocol {
-        RemoteDesktopProtocol::Rdp => RemoteDesktopCapabilities {
-            clipboard_text: true,
-            file_transfer: true,
-            ..RemoteDesktopCapabilities::rdp_mvp()
-        },
-        RemoteDesktopProtocol::Vnc => RemoteDesktopCapabilities::vnc_mvp(),
-    }
-}
-
-pub(super) fn helper_disconnect_message(event: &HelperEvent) -> Option<String> {
-    match event {
-        HelperEvent::ConnectionFailure { message } | HelperEvent::Terminated { message } => {
-            Some(message.clone())
-        }
-        _ => None,
-    }
-}
-
 pub(super) fn send_status(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::Status(message.to_string()));
 }
@@ -386,3 +194,7 @@ pub(super) fn send_reconnecting(
 pub(super) fn send_failure(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(message.to_string()));
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;

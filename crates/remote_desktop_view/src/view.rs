@@ -2,12 +2,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use gpui_component::{ActiveTheme, Icon, IconName, WindowExt, notification::Notification};
+use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
-    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopFrameRect,
-    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
-    RemoteDesktopProviderVersionError, RemoteDesktopReconnect, RemoteDesktopReconnectReason,
+    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopInput,
+    RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
     RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
     ResizeSupport, RgbaFramebuffer, create_backend,
 };
@@ -16,16 +15,18 @@ use rust_i18n::t;
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::modifier_inputs;
-use crate::pixels::bgra_to_render_image;
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
 use crate::shortcuts::{
     ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
 };
 use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 
+mod clipboard;
 mod frame_lifecycle;
 mod frame_sync;
+mod frames;
 mod input;
+mod notifications;
 mod output;
 mod render;
 mod resize;
@@ -34,11 +35,7 @@ const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(800);
-const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
-
-struct RemoteDesktopReconnectNotification;
-struct RemoteDesktopClipboardNotification;
 
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
@@ -73,41 +70,6 @@ fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> 
     matches!(reason, SessionResetReason::Reconnecting)
 }
 
-fn clipboard_text_supported(protocol: RemoteDesktopProtocol, text: &str) -> bool {
-    protocol == RemoteDesktopProtocol::Rdp || text.is_ascii()
-}
-
-fn clipboard_files_supported(protocol: RemoteDesktopProtocol) -> bool {
-    protocol == RemoteDesktopProtocol::Rdp
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum LocalClipboardContent {
-    Files(Vec<String>),
-    Text(String),
-    Other,
-}
-
-fn classify_local_clipboard(item: &ClipboardItem) -> LocalClipboardContent {
-    if let Some(paths) = item.entries().iter().find_map(|entry| match entry {
-        ClipboardEntry::ExternalPaths(paths) => {
-            let paths: Vec<String> = paths
-                .paths()
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect();
-            (!paths.is_empty()).then_some(paths)
-        }
-        ClipboardEntry::Image(_) | ClipboardEntry::String(_) => None,
-    }) {
-        return LocalClipboardContent::Files(paths);
-    }
-
-    item.text()
-        .map(LocalClipboardContent::Text)
-        .unwrap_or(LocalClipboardContent::Other)
-}
-
 pub struct RemoteDesktopViewConfig {
     pub options: RemoteDesktopConnectionOptions,
     pub title: String,
@@ -137,6 +99,7 @@ pub struct RemoteDesktopView {
     last_clipboard_text: Option<String>,
     last_clipboard_files: Option<Vec<String>>,
     last_clipboard_sync_at: Option<Instant>,
+    next_clipboard_transfer_id: u64,
     display_scale_factor: u32,
     status: SharedString,
     connected: bool,
@@ -202,6 +165,7 @@ impl RemoteDesktopView {
             last_clipboard_text: None,
             last_clipboard_files: None,
             last_clipboard_sync_at: None,
+            next_clipboard_transfer_id: clipboard::FIRST_LOCAL_CLIPBOARD_TRANSFER_ID,
             display_scale_factor: 100,
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             connected: false,
@@ -269,229 +233,9 @@ pub fn init(cx: &mut App) {
 pub fn refresh_keybindings(_cx: &mut App) {}
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
+#[path = "view/render_contract_tests.rs"]
+mod render_contract_tests;
 
-    use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
-    use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
-
-    use super::{
-        LocalClipboardContent, SessionResetReason, classify_local_clipboard,
-        clipboard_files_supported, clipboard_text_supported, close_runtime_once,
-        preserve_presented_frame_during_session_reset,
-    };
-
-    #[test]
-    fn closes_runtime_only_once() {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut input_tx = Some(input_tx);
-
-        close_runtime_once(&mut input_tx);
-        close_runtime_once(&mut input_tx);
-
-        assert_eq!(
-            Some(remote_desktop::RemoteDesktopInput::Close),
-            input_rx.blocking_recv()
-        );
-        assert!(input_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn tab_title_uses_connection_name_and_duplicate_index() {
-        assert_eq!(
-            "prod-rdp",
-            super::remote_desktop_tab_title("prod-rdp", None)
-        );
-        assert_eq!(
-            "prod-rdp(2)",
-            super::remote_desktop_tab_title("prod-rdp", Some(2))
-        );
-    }
-
-    #[test]
-    fn provider_version_error_message_is_localized_after_context() {
-        let error = anyhow::Error::new(RemoteDesktopProviderVersionError {
-            protocol: RemoteDesktopProtocol::Vnc,
-            installed: "0.1.0".to_string(),
-            required: "0.1.1".to_string(),
-            invalid: false,
-        })
-        .context("VNC remote desktop provider");
-
-        assert_eq!(
-            "VNC provider version 0.1.0 is too old. Please update the provider to 0.1.1 or newer.",
-            super::remote_desktop_error_message(&error)
-        );
-    }
-
-    #[test]
-    fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() {
-        let source = include_str!("view/render.rs");
-
-        let canvas_start = source
-            .find("fn remote_desktop_frame_canvas")
-            .expect("remote desktop frame canvas");
-        let canvas_end = source[canvas_start..]
-            .find("impl Focusable for RemoteDesktopView")
-            .map(|offset| canvas_start + offset)
-            .expect("remote desktop view implementation");
-        let canvas = &source[canvas_start..canvas_end];
-
-        assert!(canvas.contains("canvas("));
-        assert!(canvas.contains("window.handle_input("));
-        assert!(canvas.contains("window.paint_image("));
-        let paint_phase = canvas
-            .find("move |bounds, frame, window, cx|")
-            .expect("remote desktop canvas paint phase");
-        assert!(
-            !canvas[..paint_phase].contains("window.handle_input("),
-            "Window::handle_input may only be called during GPUI paint"
-        );
-        assert!(canvas[paint_phase..].contains("window.handle_input("));
-        assert!(canvas.contains(".absolute()"));
-        assert!(canvas.contains(".inset_0()"));
-        assert!(canvas.contains(".size_full()"));
-        assert!(canvas.contains(".min_w_0()"));
-        assert!(canvas.contains(".min_h_0()"));
-        assert!(canvas.contains(".overflow_hidden()"));
-        assert!(
-            !canvas.contains("img("),
-            "GPUI Img injects the remote frame aspect ratio during request_layout"
-        );
-
-        let content_start = source
-            .find("let content = div()")
-            .expect("remote desktop content");
-        let root_start = source[content_start..]
-            .find("\n        div()\n            .size_full()\n            .min_w_0()")
-            .map(|offset| content_start + offset)
-            .expect("remote desktop root");
-        let content = &source[content_start..root_start];
-        let root = &source[root_start..];
-
-        assert!(content.contains(".size_full()"));
-        assert!(content.contains(".min_w_0()"));
-        assert!(content.contains(".min_h_0()"));
-        assert!(content.contains(".relative()"));
-        assert!(content.contains(".overflow_hidden()"));
-        assert!(
-            content.contains(".child(remote_desktop_frame_canvas(rendered_frame, focus_handle))")
-        );
-        assert!(
-            !content.contains(".when_some(rendered_frame"),
-            "frame replacement must not switch between Img and status layout trees"
-        );
-
-        let status = &content[content
-            .find(".when(show_empty_status")
-            .expect("empty-frame status")..];
-        assert!(status.contains(".min_w_0()"));
-        assert!(status.contains(".max_w_full()"));
-        assert!(status.contains(".overflow_hidden()"));
-
-        assert!(root.contains(".size_full()"));
-        assert!(root.contains(".min_w_0()"));
-        assert!(root.contains(".min_h_0()"));
-        assert!(root.contains(".overflow_hidden()"));
-    }
-
-    #[test]
-    fn only_transient_reconnect_preserves_the_presented_frame() {
-        assert!(preserve_presented_frame_during_session_reset(
-            SessionResetReason::Reconnecting
-        ));
-        assert!(!preserve_presented_frame_during_session_reset(
-            SessionResetReason::ConnectionFailure
-        ));
-        assert!(!preserve_presented_frame_during_session_reset(
-            SessionResetReason::Terminated
-        ));
-    }
-
-    #[test]
-    fn reconnect_keeps_the_presented_frame_visible() {
-        let source = include_str!("view/render.rs");
-
-        assert!(
-            source.contains("let rendered_frame = self.rendered_frames.current().cloned();"),
-            "the presentation frame must not be gated by the transient connected flag"
-        );
-        assert!(
-            !source.contains(".then(|| self.rendered_frames.current().cloned())"),
-            "a reconnect must not blank the last frame"
-        );
-    }
-
-    #[test]
-    fn reconnect_status_uses_a_transient_notification_outside_tab_content() {
-        let output = include_str!("view/output.rs");
-        let render = include_str!("view/render.rs");
-
-        assert!(output.contains("window.defer(cx"));
-        assert!(output.contains("Notification::info(message)"));
-        assert!(output.contains("localized_reconnect_notification("));
-        assert!(!output.contains("localized_reconnect_status("));
-        assert!(
-            output.contains("self.reset_session_state(None, SessionResetReason::Reconnecting)")
-        );
-        assert!(!output.contains("RemoteDesktopOutput::Reconnecting(message)"));
-        assert!(output.contains(".id1::<RemoteDesktopReconnectNotification>("));
-        assert!(output.contains(".autohide(true)"));
-        assert!(!render.contains("show_status_overlay"));
-        assert!(!render.contains("remote-desktop-status-overlay"));
-    }
-
-    #[test]
-    fn clipboard_protocol_policy_keeps_vnc_to_ascii_text_only() {
-        assert!(clipboard_text_supported(
-            RemoteDesktopProtocol::Rdp,
-            "中文 clipboard"
-        ));
-        assert!(clipboard_text_supported(
-            RemoteDesktopProtocol::Vnc,
-            "ASCII clipboard"
-        ));
-        assert!(!clipboard_text_supported(
-            RemoteDesktopProtocol::Vnc,
-            "中文 clipboard"
-        ));
-        assert!(clipboard_files_supported(RemoteDesktopProtocol::Rdp));
-        assert!(!clipboard_files_supported(RemoteDesktopProtocol::Vnc));
-    }
-
-    #[test]
-    fn local_clipboard_classification_prioritizes_files_over_path_text_fallback() {
-        let files = ExternalPaths(
-            [
-                PathBuf::from("/tmp/report.txt"),
-                PathBuf::from("/tmp/data.csv"),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        let item = ClipboardItem {
-            entries: vec![
-                ClipboardEntry::String(gpui::ClipboardString::new(
-                    "platform path fallback".to_string(),
-                )),
-                ClipboardEntry::ExternalPaths(files),
-            ],
-        };
-
-        assert_eq!(
-            LocalClipboardContent::Files(vec![
-                "/tmp/report.txt".to_string(),
-                "/tmp/data.csv".to_string(),
-            ]),
-            classify_local_clipboard(&item)
-        );
-        assert_eq!(
-            LocalClipboardContent::Text("ASCII clipboard".to_string()),
-            classify_local_clipboard(&ClipboardItem::new_string("ASCII clipboard".to_string()))
-        );
-        assert_eq!(
-            LocalClipboardContent::Other,
-            classify_local_clipboard(&ClipboardItem { entries: vec![] })
-        );
-    }
-}
+#[cfg(test)]
+#[path = "view/view_tests.rs"]
+mod tests;

@@ -1,5 +1,4 @@
-use std::time::{Duration, Instant};
-
+use super::reconnect::remember_reconnect_state;
 use super::transport::{BackendSignal, send_failure, write_request};
 use super::*;
 
@@ -11,7 +10,7 @@ enum RemoteInputBatch {
 pub(super) struct RemoteInputContext<'a> {
     pub(super) connect: &'a mut HelperRequest,
     pub(super) latest_clipboard_text: &'a mut Option<String>,
-    pub(super) latest_clipboard_files: &'a mut Option<Vec<String>>,
+    pub(super) latest_clipboard_files: &'a mut Option<ClipboardFilesSnapshot>,
     pub(super) helper: &'a mut std::process::Child,
     pub(super) stdin: &'a mut std::process::ChildStdin,
     pub(super) output_tx: &'a OutputMailboxSender,
@@ -196,77 +195,6 @@ fn reconnect_result(reason: String, manual: bool, was_connected: bool) -> Helper
     }
 }
 
-pub(super) fn wait_before_reconnect(
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-    latest_clipboard_files: &mut Option<Vec<String>>,
-    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    delay: Duration,
-    protocol: RemoteDesktopProtocol,
-) -> bool {
-    let deadline = Instant::now() + delay;
-    loop {
-        match input_rx.try_recv() {
-            Ok(RemoteDesktopInput::Close) => return false,
-            Ok(RemoteDesktopInput::Reconnect) => return true,
-            Ok(input) => remember_reconnect_state(
-                &input,
-                connect,
-                latest_clipboard_text,
-                latest_clipboard_files,
-                protocol,
-            ),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
-        }
-        if Instant::now() >= deadline {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-pub(super) fn remember_reconnect_state(
-    input: &RemoteDesktopInput,
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-    latest_clipboard_files: &mut Option<Vec<String>>,
-    protocol: RemoteDesktopProtocol,
-) {
-    match input {
-        RemoteDesktopInput::Resize {
-            width,
-            height,
-            scale_factor,
-        } => {
-            if let HelperRequest::Connect {
-                width: connect_width,
-                height: connect_height,
-                scale_factor: connect_scale_factor,
-                ..
-            } = connect
-            {
-                *connect_width = *width;
-                *connect_height = *height;
-                *connect_scale_factor = *scale_factor;
-            }
-        }
-        RemoteDesktopInput::ClipboardText { text } => {
-            *latest_clipboard_text = Some(text.clone());
-            *latest_clipboard_files = None;
-        }
-        RemoteDesktopInput::ClipboardFiles { paths } if protocol == RemoteDesktopProtocol::Rdp => {
-            tracing::debug!(
-                file_count = paths.len(),
-                "remembering RDP clipboard files for helper reconnect"
-            );
-            *latest_clipboard_text = None;
-            *latest_clipboard_files = Some(paths.clone());
-        }
-        _ => {}
-    }
-}
-
 fn close_helper(
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
@@ -282,28 +210,6 @@ fn close_helper(
     }
 }
 
-pub(super) fn reconnect_delay(attempt: usize) -> Duration {
-    match attempt {
-        0 => Duration::from_secs(1),
-        1 => Duration::from_secs(2),
-        2 => Duration::from_secs(5),
-        _ => Duration::from_secs(10),
-    }
-}
-
-pub(super) fn reconnect_event(reason: &str, delay: Duration) -> RemoteDesktopReconnect {
-    RemoteDesktopReconnect {
-        reason: classify_disconnect_reason(reason),
-        delay_secs: Some(delay.as_secs()),
-    }
-}
-
-fn classify_disconnect_reason(reason: &str) -> RemoteDesktopReconnectReason {
-    if reason.contains("Fast-Path") {
-        return RemoteDesktopReconnectReason::DisplayUpdate;
-    }
-    if reason.contains("/Users/") || reason.contains(".cargo/git/checkouts") {
-        return RemoteDesktopReconnectReason::SessionError;
-    }
-    RemoteDesktopReconnectReason::ConnectionLost
-}
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

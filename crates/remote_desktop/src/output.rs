@@ -1,6 +1,6 @@
 use crate::capabilities::RemoteDesktopCapabilities;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RemoteDesktopOutput {
     Connected {
         width: u16,
@@ -32,6 +32,14 @@ pub enum RemoteDesktopOutput {
     ClipboardText {
         text: String,
     },
+    ClipboardFilesReady {
+        transfer_id: u64,
+        paths: Vec<String>,
+    },
+    ClipboardTransferFailed {
+        transfer_id: u64,
+        message: String,
+    },
     /// The backend is tearing down the current helper session and will start
     /// another one. The event is deliberately structured so the view can
     /// localize it without parsing or exposing backend error text.
@@ -62,4 +70,45 @@ pub struct RemoteDesktopFrameRect {
     pub width: u16,
     pub height: u16,
     pub byte_len: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_debug_reports_metadata_without_frames_text_paths_or_messages() {
+        let outputs = [
+            RemoteDesktopOutput::Frame {
+                width: 1,
+                height: 1,
+                rgba: b"private-frame".to_vec(),
+            },
+            RemoteDesktopOutput::FrameBgra {
+                width: 1,
+                height: 1,
+                bgra: b"private-bgra".to_vec(),
+            },
+            RemoteDesktopOutput::ClipboardText {
+                text: "private-clipboard".to_string(),
+            },
+            RemoteDesktopOutput::ClipboardFilesReady {
+                transfer_id: 17,
+                paths: vec!["/Users/rachel/private-file".to_string()],
+            },
+            RemoteDesktopOutput::ClipboardTransferFailed {
+                transfer_id: 18,
+                message: "private-transfer-error".to_string(),
+            },
+            RemoteDesktopOutput::Status("private-status".to_string()),
+            RemoteDesktopOutput::ConnectionFailure("private-connection-error".to_string()),
+            RemoteDesktopOutput::Terminated("private-termination".to_string()),
+        ];
+
+        for output in outputs {
+            let debug = format!("{output:?}");
+
+            assert!(!debug.contains("private-"));
+        }
+    }
 }
