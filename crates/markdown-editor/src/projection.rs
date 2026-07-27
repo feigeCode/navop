@@ -109,8 +109,7 @@ impl MarkdownProjection {
             hidden.push(separator);
             hidden.sort_by_key(|range| range.start);
         }
-        let mut builder =
-            ProjectionBuilder::new(document.source.len(), active_inline, source_range.clone());
+        let mut builder = ProjectionBuilder::new(active_inline, source_range.clone());
         let terminal_code_content_boundary =
             terminal_code_content_boundary(document, &source_range);
         builder.append_source(&document.source, source_range, &hidden);
@@ -151,11 +150,13 @@ impl MarkdownProjection {
     }
 
     pub fn source_to_display(&self, source_offset: usize) -> usize {
-        let display_offset = self
-            .source_to_display
-            .get(source_offset)
-            .copied()
-            .unwrap_or(self.text.len());
+        let display_offset = if source_offset < self.source_range.start {
+            0
+        } else if source_offset > self.source_range.end {
+            self.text.len()
+        } else {
+            self.source_to_display[source_offset - self.source_range.start]
+        };
         // `source_to_display` is indexed per byte, so a caller that hands us an
         // offset inside a multi-byte character (for example a stale cursor after
         // a deferred newline flush) would otherwise receive a display offset
@@ -238,17 +239,13 @@ struct ProjectionBuilder {
 }
 
 impl ProjectionBuilder {
-    fn new(
-        source_len: usize,
-        active_inline: Option<SourceNodeId>,
-        source_range: Range<usize>,
-    ) -> Self {
+    fn new(active_inline: Option<SourceNodeId>, source_range: Range<usize>) -> Self {
         Self {
             text: String::with_capacity(source_range.len()),
             active_inline,
             display_to_source: vec![source_range.start],
             display_end_to_source: vec![source_range.start],
-            source_to_display: vec![0; source_len.saturating_add(1)],
+            source_to_display: vec![0; source_range.len().saturating_add(1)],
             source_range,
         }
     }
@@ -271,19 +268,22 @@ impl ProjectionBuilder {
         let display_start = self.text.len();
         self.text.push_str(&source[range.clone()]);
         for source_offset in range {
-            self.source_to_display[source_offset] =
+            let local_offset = source_offset - self.source_range.start;
+            self.source_to_display[local_offset] =
                 display_start + source_offset.saturating_sub(source_start);
             self.display_to_source.push(source_offset + 1);
             self.display_end_to_source.push(source_offset + 1);
-            self.source_to_display[source_offset + 1] =
+            self.source_to_display[local_offset + 1] =
                 display_start + source_offset + 1 - source_start;
         }
     }
 
     fn hide(&mut self, range: Range<usize>) {
         let display_offset = self.text.len();
-        self.source_to_display[range.clone()].fill(display_offset);
-        self.source_to_display[range.end] = display_offset;
+        let local_range =
+            range.start - self.source_range.start..range.end - self.source_range.start;
+        self.source_to_display[local_range.clone()].fill(display_offset);
+        self.source_to_display[local_range.end] = display_offset;
         if let Some(last) = self.display_to_source.last_mut() {
             *last = range.end;
         }
@@ -373,6 +373,32 @@ mod tests {
         assert_eq!(projection.source_to_display(1), 0);
         assert_eq!(projection.source_to_display(2), 0);
         assert_eq!(projection.source_to_display(3), 3);
+    }
+
+    #[test]
+    fn range_projection_keeps_only_local_source_mappings() {
+        let source = "prefix\n\n中文 _value_\n\nsuffix";
+        let document = document(source);
+        let range = document.blocks[1].source_range.clone();
+        assert!(range.start > 0);
+        assert!(range.end < source.len());
+
+        let projection = MarkdownProjection::build_range(&document, None, range.clone());
+
+        assert_eq!(range.len() + 1, projection.source_to_display.len());
+        assert_eq!(0, projection.source_to_display(range.start - 1));
+        assert_eq!(
+            projection.text.len(),
+            projection.source_to_display(range.end + 1)
+        );
+        for source_offset in range {
+            assert!(
+                projection
+                    .text
+                    .is_char_boundary(projection.source_to_display(source_offset)),
+                "source offset {source_offset} mapped inside a UTF-8 character"
+            );
+        }
     }
 
     #[test]
