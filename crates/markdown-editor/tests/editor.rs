@@ -753,6 +753,21 @@ fn table_grid_picker_highlights_rectangle_and_click_resizes_real_table(cx: &mut 
         cx.debug_bounds("markdown-table-grid-label-empty").is_some(),
         "picker must show the placeholder label before any hover"
     );
+    let first = cx
+        .debug_bounds("markdown-table-size-1-1")
+        .expect("picker must expose its first cell");
+    let next_column = cx
+        .debug_bounds("markdown-table-size-1-2")
+        .expect("picker must expose adjacent columns");
+    let next_row = cx
+        .debug_bounds("markdown-table-size-2-1")
+        .expect("picker must expose adjacent rows");
+    assert!((first.size.width - px(24.)).abs() <= px(1.));
+    assert!((first.size.height - px(24.)).abs() <= px(1.));
+    assert!((first.top() - next_column.top()).abs() <= px(1.));
+    assert!((first.left() - next_row.left()).abs() <= px(1.));
+    assert!((next_column.left() - first.right() - px(4.)).abs() <= px(1.));
+    assert!((next_row.top() - first.bottom() - px(4.)).abs() <= px(1.));
     let target = cx
         .debug_bounds("markdown-table-size-4-5")
         .expect("6×6 picker must expose the 5×4 cell");

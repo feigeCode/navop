@@ -105,6 +105,7 @@ impl MarkdownEditor {
                 let label_selector = hovered
                     .map(|(rows, columns)| format!("markdown-table-grid-label-{columns}x{rows}"))
                     .unwrap_or_else(|| "markdown-table-grid-label-empty".to_owned());
+                let grid_border = editor.read(cx).theme.border;
                 v_flex()
                     .id(("markdown-table-grid-content", address.block_id.0))
                     .debug_selector(|| {
@@ -119,7 +120,7 @@ impl MarkdownEditor {
                             .text_color(editor.read(cx).theme.muted_foreground)
                             .child(label),
                     )
-                    .children((1..=6).map(|rows| {
+                    .child(v_flex().gap_1().children((1..=6).map(|rows| {
                         h_flex().gap_1().children((1..=6).map(|columns| {
                             grid_cell(
                                 editor.clone(),
@@ -127,9 +128,10 @@ impl MarkdownEditor {
                                 rows,
                                 columns,
                                 grid_cell_highlighted(hovered, rows, columns),
+                                grid_border,
                             )
                         }))
-                    }))
+                    })))
             })
             .into_any_element()
     }
@@ -229,6 +231,7 @@ fn grid_cell(
     rows: usize,
     columns: usize,
     highlighted: bool,
+    border: gpui::Hsla,
 ) -> gpui::AnyElement {
     gpui::div()
         .id(SharedString::from(format!(
@@ -257,6 +260,10 @@ fn grid_cell(
             .w(gpui::px(24.))
             .h(gpui::px(24.))
             .border_1()
+            // Ghost buttons intentionally have a transparent border. The
+            // picker needs an explicit theme border so unselected cells do
+            // not disappear against the popover background.
+            .border_color(border)
             .tooltip(format!("{columns} × {rows}"))
             .on_click(move |_, window, cx| {
                 editor.update(cx, |editor, cx| {
