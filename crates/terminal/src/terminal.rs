@@ -32,10 +32,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::interval;
+use uuid::Uuid;
 
 #[cfg(any(test, target_os = "windows"))]
 use std::env;
@@ -51,8 +52,9 @@ use crate::history::{
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
-    RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingSnapshot,
-    RecordingStartRequest, RecordingTap, RecordingTransition,
+    RecordingBackend, RecordingConfig, RecordingMetadata, RecordingRuntime, RecordingRuntimeConfig,
+    RecordingRuntimeError, RecordingSnapshot, RecordingStartRequest, RecordingTap,
+    RecordingTransition,
 };
 #[cfg(not(target_os = "windows"))]
 #[cfg(not(target_os = "windows"))]
@@ -906,6 +908,8 @@ pub struct Terminal {
     backend: Option<Box<dyn TerminalBackend>>,
     /// 与终端实例同生命周期的录制运行时；重连只会克隆新的 tap，不会替换时间线。
     recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+    /// 只用于录制文件关联的随机逻辑会话 ID；不包含连接名称、地址或凭据。
+    recording_session_id: String,
 
     /// 终端标题
     title: String,
@@ -1150,6 +1154,10 @@ fn is_reconnect_generation(generation: u64) -> bool {
 }
 
 impl Terminal {
+    fn new_recording_session_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
     fn create_recording_runtime(
         event_tx: UnboundedSender<TerminalEvent>,
     ) -> std::result::Result<RecordingRuntime, RecordingRuntimeError> {
@@ -1198,6 +1206,7 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            recording_session_id: Self::new_recording_session_id(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1299,6 +1308,7 @@ impl Terminal {
             performance_metrics,
             backend: Some(Box::new(local_backend)),
             recording_runtime,
+            recording_session_id: Self::new_recording_session_id(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1393,6 +1403,7 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            recording_session_id: Self::new_recording_session_id(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1458,6 +1469,7 @@ impl Terminal {
             performance_metrics,
             backend: None,
             recording_runtime,
+            recording_session_id: Self::new_recording_session_id(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -2148,6 +2160,84 @@ impl Terminal {
         Ok(self.recording_runtime()?.snapshot())
     }
 
+    /// Builds the privacy-preserving request used by the pane recording UI.
+    ///
+    /// This path intentionally records terminal output, resize events and
+    /// lifecycle markers only. Input capture requires a separate, explicit
+    /// disclosure flow and must not be enabled by mutating UI defaults.
+    pub fn build_output_recording_start_request(
+        &self,
+        final_path: PathBuf,
+    ) -> std::result::Result<RecordingStartRequest, RecordingRuntimeError> {
+        // Surface a runtime initialization failure before generating metadata
+        // or touching the requested destination.
+        self.recording_runtime()?;
+
+        let rows = u16::try_from(self.rows).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(format!(
+                "terminal row count does not fit recording format: {}",
+                self.rows
+            ))
+        })?;
+        let cols = u16::try_from(self.cols).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(format!(
+                "terminal column count does not fit recording format: {}",
+                self.cols
+            ))
+        })?;
+        if rows == 0 || cols == 0 {
+            return Err(RecordingRuntimeError::InvalidConfig(
+                "terminal dimensions must be non-zero".to_string(),
+            ));
+        }
+
+        let started_at = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig("system clock predates the Unix epoch".to_string())
+        })?;
+        let started_at_unix_ms = u64::try_from(started_at.as_millis()).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(
+                "recording start timestamp exceeds the supported range".to_string(),
+            )
+        })?;
+        let backend = match self.connection_kind {
+            TerminalConnectionKind::Local => RecordingBackend::Local,
+            TerminalConnectionKind::Ssh => RecordingBackend::Ssh,
+            TerminalConnectionKind::Serial => RecordingBackend::Serial,
+        };
+
+        Ok(RecordingStartRequest {
+            final_path,
+            metadata: RecordingMetadata {
+                recording_id: Uuid::new_v4().to_string(),
+                session_id: self.recording_session_id.clone(),
+                backend,
+                application_version: option_env!("NAVOP_APPLICATION_VERSION")
+                    .unwrap_or(env!("CARGO_PKG_VERSION"))
+                    .to_string(),
+                started_at_unix_ms,
+                capture_input: false,
+            },
+            initial_size: TerminalSize {
+                rows,
+                cols,
+                pixel_width: self.pixel_width,
+                pixel_height: self.pixel_height,
+            },
+            recording: RecordingConfig::default(),
+        })
+    }
+
+    /// Starts an output-only recording using metadata generated by the active
+    /// terminal. Repeated calls after a completed stop create a fresh file and
+    /// recording ID while retaining the pane's logical session ID.
+    pub fn start_output_recording(
+        &self,
+        final_path: PathBuf,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        let request = self.build_output_recording_start_request(final_path)?;
+        self.start_recording(request)
+    }
+
     /// Starts a recording on this terminal's stable runtime. Reconnects reuse
     /// the same runtime and therefore cannot silently replace the timeline.
     pub fn start_recording(
@@ -2615,6 +2705,7 @@ mod tests {
             performance_metrics,
             backend: None,
             recording_runtime,
+            recording_session_id: "terminal-runtime-test-session".to_string(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -2764,6 +2855,125 @@ mod tests {
     }
 
     #[test]
+    fn output_recording_request_uses_safe_metadata_and_stable_session_identity() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        let first = terminal
+            .build_output_recording_start_request(PathBuf::from("first.cast"))
+            .expect("build first output recording request");
+        let second = terminal
+            .build_output_recording_start_request(PathBuf::from("second.cast"))
+            .expect("build second output recording request");
+
+        assert!(!first.metadata.recording_id.is_empty());
+        assert_ne!(
+            first.metadata.recording_id, second.metadata.recording_id,
+            "each recording file must receive a fresh identity"
+        );
+        assert_eq!(
+            "terminal-runtime-test-session", first.metadata.session_id,
+            "metadata must use the pane's privacy-preserving logical session ID"
+        );
+        assert_eq!(first.metadata.session_id, second.metadata.session_id);
+        assert_eq!(RecordingBackend::Ssh, first.metadata.backend);
+        assert!(!first.metadata.capture_input);
+        assert!(!first.recording.capture_input);
+        assert_eq!(
+            TerminalSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 640,
+                pixel_height: 480,
+            },
+            first.initial_size
+        );
+        assert!(first.metadata.started_at_unix_ms > 0);
+        assert!(!first.metadata.application_version.is_empty());
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn output_recording_can_restart_with_a_new_file_in_the_same_session() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let first_path = directory.path().join("first.cast");
+        let second_path = directory.path().join("second.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let tap = terminal.recording_tap().expect("backend recording tap");
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_output_recording(first_path.clone())
+                .expect("start first output recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            tap.record_output(b"first recording\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .stop_recording()
+                .expect("stop first output recording")
+        );
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_output_recording(second_path.clone())
+                .expect("start second output recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            tap.record_output(b"second recording\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .stop_recording()
+                .expect("stop second output recording")
+        );
+
+        let first = read_recording(&first_path, RecordingFileLimits::default())
+            .expect("read first recording");
+        let second = read_recording(&second_path, RecordingFileLimits::default())
+            .expect("read second recording");
+        assert_ne!(
+            first.header.navop.recording_id, second.header.navop.recording_id,
+            "each completed recording must have its own recording ID"
+        );
+        assert_eq!(
+            first.header.navop.session_id, second.header.navop.session_id,
+            "successive recordings from one pane must remain associated"
+        );
+        assert_eq!(
+            vec![RecordingEventKind::Output(b"first recording\r\n".to_vec())],
+            first
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![RecordingEventKind::Output(b"second recording\r\n".to_vec())],
+            second
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
     fn terminal_resize_records_only_cell_changes_delivered_to_a_backend() {
         let directory = tempfile::tempdir().expect("create recording directory");
         let final_path = directory.path().join("resize.cast");
@@ -2885,6 +3095,16 @@ mod tests {
         let request = test_recording_start_request(PathBuf::from("unused.cast"));
 
         assert_eq!(Err(expected.clone()), terminal.recording_snapshot());
+        assert_eq!(
+            Some(expected.clone()),
+            terminal
+                .build_output_recording_start_request(PathBuf::from("unused-output.cast"))
+                .err()
+        );
+        assert_eq!(
+            Err(expected.clone()),
+            terminal.start_output_recording(PathBuf::from("unused-output.cast"))
+        );
         assert_eq!(Err(expected.clone()), terminal.start_recording(request));
         assert_eq!(Err(expected.clone()), terminal.pause_recording());
         assert_eq!(Err(expected.clone()), terminal.resume_recording());
@@ -3518,6 +3738,7 @@ mod tests {
             performance_metrics,
             backend: None,
             recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            recording_session_id: "surface-reset-test-session".to_string(),
             title: "old title".to_string(),
             current_working_dir: Some("/tmp/project".to_string()),
             child_exited: Some(255),
@@ -3610,6 +3831,7 @@ mod tests {
             performance_metrics,
             backend: None,
             recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            recording_session_id: "scrollback-test-session".to_string(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
