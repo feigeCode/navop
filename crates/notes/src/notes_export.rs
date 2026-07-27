@@ -1,6 +1,7 @@
 use crate::notes_notifications::notify_operation_error;
 use crate::{MarkdownViewMode, NodeKind, NotesView, TreeRow};
 use anyhow::Context as _;
+use futures::AsyncReadExt;
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
@@ -8,7 +9,7 @@ use rust_i18n::t;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NotesExportFormat {
@@ -91,13 +92,14 @@ impl NotesView {
             assets: source.assets,
             theme: export_theme_from_app(cx),
         };
-        self.prompt_and_export(catalog, request, window, cx);
+        self.prompt_and_export(catalog, request, cx.http_client(), window, cx);
     }
 
     fn prompt_and_export(
         &self,
         catalog: Arc<extension_runtime::ExtensionRuntimeCatalog>,
         request: extension_wasm::DocumentExportRequest,
+        http_client: Arc<dyn gpui::http_client::HttpClient>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -124,7 +126,12 @@ impl NotesView {
             let Some(directory) = directory else { return };
             notify_export_started(cx, window_handle);
             let result = cx
-                .background_spawn(run_document_export(catalog, request, directory))
+                .background_spawn(run_document_export(
+                    catalog,
+                    request,
+                    directory,
+                    http_client,
+                ))
                 .await;
             notify_export_finished(cx, window_handle, result);
         })
@@ -191,9 +198,14 @@ impl ExportSource {
 
 async fn run_document_export(
     catalog: Arc<extension_runtime::ExtensionRuntimeCatalog>,
-    request: extension_wasm::DocumentExportRequest,
+    mut request: extension_wasm::DocumentExportRequest,
     directory: PathBuf,
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
 ) -> anyhow::Result<PathBuf> {
+    request
+        .assets
+        .extend(collect_remote_export_assets(&request.source, http_client).await);
+    prepare_export_image_assets(&request.format, &mut request.assets)?;
     let title = request.title.clone();
     let artifact = catalog
         .export_document(request)
@@ -331,6 +343,131 @@ fn export_asset_media_type(path: &Path) -> &'static str {
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     }
+}
+
+async fn collect_remote_export_assets(
+    source: &str,
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
+) -> Vec<extension_wasm::DocumentExportAsset> {
+    let mut assets = Vec::new();
+    let mut seen = HashSet::new();
+    for target in export_asset_paths(source) {
+        let path = export_asset_target(target);
+        let lower = path.to_ascii_lowercase();
+        if !(lower.starts_with("https://") || lower.starts_with("http://"))
+            || !seen.insert(path.to_owned())
+        {
+            continue;
+        }
+        let Ok(response) = http_client
+            .get(path, gpui::http_client::AsyncBody::default(), true)
+            .await
+        else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+        if body.read_to_end(&mut bytes).await.is_err() || bytes.is_empty() {
+            continue;
+        }
+        assets.push(extension_wasm::DocumentExportAsset {
+            path: path.to_owned(),
+            media_type: export_image_media_type(path, &bytes).to_owned(),
+            bytes,
+        });
+    }
+    assets
+}
+
+fn export_image_media_type(path: &str, bytes: &[u8]) -> &'static str {
+    let trimmed = bytes
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .take(64)
+        .collect::<Vec<_>>();
+    if trimmed.starts_with(b"<svg") || trimmed.starts_with(b"<?xml") {
+        return "image/svg+xml";
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return "image/png";
+    }
+    if bytes.starts_with(b"\xff\xd8\xff") {
+        return "image/jpeg";
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return "image/gif";
+    }
+    if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        return "image/webp";
+    }
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    export_asset_media_type(Path::new(path))
+}
+
+static EXPORT_SVG_FONT_DB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut font_db = resvg::usvg::fontdb::Database::new();
+    font_db.load_system_fonts();
+    Arc::new(font_db)
+});
+
+fn prepare_export_image_assets(
+    format: &str,
+    assets: &mut [extension_wasm::DocumentExportAsset],
+) -> anyhow::Result<()> {
+    if !matches!(format.to_ascii_lowercase().as_str(), "pdf" | "docx") {
+        return Ok(());
+    }
+    for asset in assets {
+        let png = match asset.media_type.as_str() {
+            "image/svg+xml" => rasterize_export_svg(&asset.bytes)
+                .and_then(|pixmap| pixmap.encode_png().map_err(anyhow::Error::from))
+                .with_context(|| format!("rasterize image asset {}", asset.path))?,
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp" => {
+                normalize_export_raster_image(&asset.bytes)
+                    .with_context(|| format!("normalize image asset {}", asset.path))?
+            }
+            _ => continue,
+        };
+        asset.bytes = png;
+        asset.media_type = "image/png".to_owned();
+    }
+    Ok(())
+}
+
+fn normalize_export_raster_image(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let image = image::load_from_memory(bytes).context("decode image")?;
+    let image = if image.width() > 400 || image.height() > 300 {
+        image.thumbnail(400, 300)
+    } else {
+        image
+    };
+    let mut output = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, image::ImageFormat::Png)
+        .context("encode PNG")?;
+    Ok(output.into_inner())
+}
+
+fn rasterize_export_svg(svg: &[u8]) -> anyhow::Result<resvg::tiny_skia::Pixmap> {
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb = Arc::clone(&EXPORT_SVG_FONT_DB);
+    let tree = resvg::usvg::Tree::from_data(svg, &options).context("parse SVG")?;
+    let size = tree.size();
+    let scale = (400.0 / size.width()).min(300.0 / size.height()).min(1.0);
+    let width = (size.width() * scale).round().max(1.0) as u32;
+    let height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(width, height).context("SVG raster size is invalid")?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    Ok(pixmap)
 }
 
 fn export_asset_paths(source: &str) -> Vec<&str> {
@@ -509,7 +646,10 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportSource, NotesExportFormat, collect_export_assets, next_export_path};
+    use super::{
+        ExportSource, NotesExportFormat, collect_export_assets, export_image_media_type,
+        next_export_path, prepare_export_image_assets, rasterize_export_svg,
+    };
 
     #[test]
     fn export_submenu_exposes_html_pdf_and_word() {
@@ -567,6 +707,60 @@ mod tests {
                 "extension={extension:?}"
             );
         }
+    }
+
+    #[test]
+    fn pdf_and_word_images_are_normalized_by_the_host() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="40"><rect width="160" height="40" fill="#2563eb"/></svg>"##;
+        let pixmap = rasterize_export_svg(svg).unwrap();
+        assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
+
+        let mut large_png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(800, 600)
+            .write_to(&mut large_png, image::ImageFormat::Png)
+            .unwrap();
+        let assets = vec![
+            extension_wasm::DocumentExportAsset {
+                path: "diagram.svg".to_owned(),
+                media_type: "image/svg+xml".to_owned(),
+                bytes: svg.to_vec(),
+            },
+            extension_wasm::DocumentExportAsset {
+                path: "screenshot.png".to_owned(),
+                media_type: "image/png".to_owned(),
+                bytes: large_png.into_inner(),
+            },
+        ];
+
+        for format in ["pdf", "docx"] {
+            let mut normalized_assets = assets.clone();
+            prepare_export_image_assets(format, &mut normalized_assets).unwrap();
+            for asset in &normalized_assets {
+                assert_eq!(asset.media_type, "image/png");
+                assert!(asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+            }
+            let normalized = image::load_from_memory(&normalized_assets[1].bytes).unwrap();
+            assert_eq!((normalized.width(), normalized.height()), (400, 300));
+        }
+    }
+
+    #[test]
+    fn remote_image_media_type_uses_content_before_url_extension() {
+        assert_eq!(
+            export_image_media_type(
+                "https://img.example/badge?style=flat",
+                b"\n <svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+            ),
+            "image/svg+xml"
+        );
+        assert_eq!(
+            export_image_media_type("https://example.com/wrong.png", b"\xff\xd8\xffjpeg"),
+            "image/jpeg"
+        );
+        assert_eq!(
+            export_image_media_type("https://example.com/photo.webp?size=2", b"unknown"),
+            "image/webp"
+        );
     }
 
     #[test]

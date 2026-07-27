@@ -15,10 +15,12 @@ extension_view.workspace = true
 extension-wasm.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-html", "tree-sitter-markdown"] }
+image.workspace = true
 markdown-editor.workspace = true
 markdown-source.workspace = true
 notify.workspace = true
 one-core.workspace = true
+resvg.workspace = true
 rust-i18n.workspace = true
 ropey.workspace = true
 serde.workspace = true
