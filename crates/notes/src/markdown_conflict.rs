@@ -12,10 +12,14 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
-        let Ok(snapshot) = session.store.load() else {
-            session.state.conflict();
-            cx.notify();
-            return;
+        let snapshot = match session.store.load_external_change() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return,
+            Err(_) => {
+                session.state.conflict();
+                cx.notify();
+                return;
+            }
         };
         if snapshot.source == session.preview.read(cx).source() {
             return;

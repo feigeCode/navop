@@ -10,10 +10,9 @@ use gpui::{AppContext, AsyncApp, Context, Window};
 use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
 use markdown_source::SourceMarkdownDocument;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-const MARKDOWN_SAVE_DELAY: Duration = Duration::from_millis(700);
+const MARKDOWN_SAVE_INTERVAL: Duration = Duration::from_secs(2);
 
 impl NotesView {
     pub(crate) fn apply_source_mode_history(
@@ -98,7 +97,6 @@ impl NotesView {
                     source_editor,
                     preview,
                     source_document,
-                    save_generation: Default::default(),
                     state: MarkdownSessionState::with_mode(mode),
                     _subscriptions: vec![preview_subscription, source_subscription],
                     _file_watcher: Some(file_watcher),
@@ -127,42 +125,142 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
-            return;
+        let save_mode = self.tree.markdown_save_mode;
+        let schedule_epoch = {
+            let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+                return;
+            };
+            let generation = session.state.source_changed();
+            if let Err(error) = replace_session_source(session, &source) {
+                session
+                    .state
+                    .source_save_failed(generation, error.to_string());
+                notify_operation_error(window, cx, error);
+                return;
+            }
+            session.state.save_mode_changed(save_mode)
         };
-        let generation = session.state.source_changed();
-        if let Err(error) = replace_session_source(session, &source) {
-            session
-                .state
-                .source_save_failed(generation, error.to_string());
-            notify_operation_error(window, cx, error);
-            return;
+        if let Some(epoch) = schedule_epoch {
+            self.schedule_markdown_auto_save(document_id.to_owned(), epoch, window, cx);
         }
-        session.save_generation.store(generation, Ordering::Release);
-        let _ = session.state.begin_source_save(generation);
-        let store = session.store.clone();
-        let generation_token = session.save_generation.clone();
+        cx.notify();
+    }
+
+    pub(crate) fn schedule_markdown_auto_save(
+        &self,
+        document_id: String,
+        epoch: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let weak = cx.entity().downgrade();
         let window_handle = window.window_handle();
-        let id = document_id.to_owned();
         let executor = cx.background_executor().clone();
         let task = cx.background_spawn(async move {
-            executor.timer(MARKDOWN_SAVE_DELAY).await;
-            if generation_token.load(Ordering::Acquire) != generation {
-                return Ok(None);
-            }
-            store.save(&source).map(Some)
+            executor.timer(MARKDOWN_SAVE_INTERVAL).await;
         });
         cx.spawn(async move |_, cx: &mut AsyncApp| {
-            let result = task.await;
+            task.await;
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = weak.update(cx, |view, cx| {
-                    view.finish_markdown_save(&id, generation, result, window, cx)
+                    view.fire_markdown_auto_save(&document_id, epoch, window, cx)
                 });
             });
         })
         .detach();
+    }
+
+    fn fire_markdown_auto_save(
+        &mut self,
+        document_id: &str,
+        epoch: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((generation, source, store)) = self
+            .markdown_sessions
+            .get_mut(document_id)
+            .and_then(|session| {
+                let generation = session.state.begin_scheduled_source_save(epoch)?;
+                Some((
+                    generation,
+                    session.preview.read(cx).source().to_owned(),
+                    session.store.clone(),
+                ))
+            })
+        else {
+            return;
+        };
+        self.start_markdown_save(
+            document_id.to_owned(),
+            generation,
+            source,
+            store,
+            window,
+            cx,
+        );
         cx.notify();
+    }
+
+    pub(crate) fn save_markdown_document(
+        &mut self,
+        document_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((generation, source, store)) = self
+            .markdown_sessions
+            .get_mut(document_id)
+            .and_then(|session| {
+                let generation = session.state.begin_manual_source_save()?;
+                Some((
+                    generation,
+                    session.preview.read(cx).source().to_owned(),
+                    session.store.clone(),
+                ))
+            })
+        else {
+            return;
+        };
+        self.start_markdown_save(
+            document_id.to_owned(),
+            generation,
+            source,
+            store,
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(crate) fn save_active_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document_id) = self.active_document_id.clone() else {
+            return;
+        };
+        self.save_markdown_document(&document_id, window, cx);
+    }
+
+    fn start_markdown_save(
+        &mut self,
+        document_id: String,
+        generation: u64,
+        source: String,
+        store: crate::markdown_file_store::MarkdownFileStore,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        let task = cx.background_spawn(async move { store.save(&source) });
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    view.finish_markdown_save(&document_id, generation, result, window, cx)
+                });
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn toggle_markdown_mode(

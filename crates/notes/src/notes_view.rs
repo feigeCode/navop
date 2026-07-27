@@ -280,6 +280,7 @@ mod external_markdown_tests {
     use crate::markdown_session::MarkdownSyncState;
     use gpui::{TestAppContext, VisualTestContext, WindowOptions};
     use gpui_component::Root;
+    use std::time::Duration;
 
     #[test]
     fn standalone_markdown_descriptor_preserves_the_external_file() -> anyhow::Result<()> {
@@ -523,6 +524,211 @@ mod external_markdown_tests {
                 session.source_editor.read(cx).value().as_ref()
             );
             assert!(session.preview.read(cx).is_dirty());
+        });
+    }
+
+    #[gpui::test]
+    fn automatic_markdown_save_uses_one_trailing_throttle_window(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("throttled-save.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "first edit",
+                        markdown_source::SourceSelection {
+                            anchor: 10,
+                            head: 10,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            "before",
+            std::fs::read_to_string(&path).unwrap(),
+            "the first half of the throttle window must not write to disk"
+        );
+
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "latest edit",
+                        markdown_source::SourceSelection {
+                            anchor: 11,
+                            head: 11,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+
+        assert_eq!(
+            "latest edit",
+            std::fs::read_to_string(&path).unwrap(),
+            "typing again must not restart the throttle window, and the timer must save the latest source"
+        );
+        view.read_with(&cx, |view, _| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!(MarkdownSyncState::Clean, session.state.sync_state);
+        });
+    }
+
+    #[gpui::test]
+    fn manual_markdown_save_never_runs_automatically_and_can_save_immediately(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("manual-save.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+
+        view.update_in(&mut cx, |view, window, cx| {
+            view.tree.markdown_save_mode = crate::MarkdownSaveMode::Manual;
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "manual edit",
+                        markdown_source::SourceSelection {
+                            anchor: 11,
+                            head: 11,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+
+        assert_eq!("before", std::fs::read_to_string(&path).unwrap());
+        view.read_with(&cx, |view, _| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!(MarkdownSyncState::SourceDirty, session.state.sync_state);
+        });
+
+        view.update_in(&mut cx, |view, window, cx| {
+            view.save_markdown_document(&document_id, window, cx);
+        });
+        cx.run_until_parked();
+
+        assert_eq!("manual edit", std::fs::read_to_string(&path).unwrap());
+        view.read_with(&cx, |view, _| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!(MarkdownSyncState::Clean, session.state.sync_state);
+        });
+    }
+
+    #[gpui::test]
+    fn local_save_event_does_not_conflict_with_a_newer_dirty_revision(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("local-save-event.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "newer local revision",
+                        markdown_source::SourceSelection {
+                            anchor: 20,
+                            head: 20,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session
+                .store
+                .save("older revision written by this session")
+                .unwrap();
+            view.markdown_file_changed_on_disk(&document_id, window, cx);
+        });
+
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!("newer local revision", session.preview.read(cx).source());
+            assert_eq!(MarkdownSyncState::SourceDirty, session.state.sync_state);
         });
     }
 

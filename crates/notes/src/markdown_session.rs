@@ -29,7 +29,6 @@ pub(crate) struct MarkdownSession {
     pub source_editor: Entity<InputState>,
     pub preview: Entity<markdown_editor::MarkdownEditor>,
     pub source_document: Arc<std::sync::Mutex<markdown_source::SourceMarkdownDocument>>,
-    pub save_generation: Arc<AtomicU64>,
     pub state: MarkdownSessionState,
     pub _subscriptions: Vec<Subscription>,
     pub _file_watcher: Option<notify::RecommendedWatcher>,
@@ -64,16 +63,6 @@ impl MarkdownSessionState {
         self.generation = self.generation.saturating_add(1);
         self.sync_state = MarkdownSyncState::SourceDirty;
         self.generation
-    }
-
-    pub(crate) fn begin_source_save(&mut self, generation: u64) -> bool {
-        if generation != self.generation || self.sync_state != MarkdownSyncState::SourceDirty {
-            return false;
-        }
-        self.auto_save_scheduled = false;
-        self.saving_generation = Some(generation);
-        self.sync_state = MarkdownSyncState::SavingSource;
-        true
     }
 
     /// Apply a user save-mode choice and, for automatic mode, return the epoch
@@ -335,8 +324,10 @@ mod tests {
     fn failed_save_blocks_mode_switch() {
         let mut state = MarkdownSessionState::default();
         state.mode = MarkdownViewMode::Source;
-        let generation = state.source_changed();
-        assert!(state.begin_source_save(generation));
+        state.source_changed();
+        let generation = state
+            .begin_manual_source_save()
+            .expect("dirty source should start saving");
         state.source_save_failed(generation, "disk full".to_owned());
         assert!(!state.begin_switch());
         assert_eq!(MarkdownViewMode::Source, state.mode);
@@ -355,4 +346,3 @@ use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
