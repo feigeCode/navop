@@ -4,6 +4,7 @@ use terminal::recording::{
 };
 
 pub(super) const PLAYBACK_SPEED_PRESETS: [f64; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+pub(super) const MAX_PLAYBACK_ADVANCE_STEP: Duration = Duration::from_millis(250);
 const PLAYBACK_SPEED_SELECTION_EPSILON: f64 = 1.0e-9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +99,19 @@ pub(super) fn playback_speed_is_selected(current: f64, preset: f64) -> bool {
     current.is_finite()
         && preset.is_finite()
         && (current - preset).abs() <= PLAYBACK_SPEED_SELECTION_EPSILON
+}
+
+pub(super) fn try_for_each_playback_advance_step<E>(
+    elapsed: Duration,
+    mut advance: impl FnMut(Duration) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut remaining = elapsed;
+    while !remaining.is_zero() {
+        let step = remaining.min(MAX_PLAYBACK_ADVANCE_STEP);
+        advance(step)?;
+        remaining = remaining.saturating_sub(step);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -214,5 +228,47 @@ mod tests {
         assert!(playback_speed_is_selected(1.0 + 1.0e-10, 1.0));
         assert!(!playback_speed_is_selected(1.01, 1.0));
         assert!(!playback_speed_is_selected(f64::NAN, 1.0));
+    }
+
+    #[test]
+    fn playback_wall_clock_delta_is_advanced_in_bounded_steps_without_loss() {
+        let elapsed = Duration::from_millis(1_010);
+        let mut steps = Vec::new();
+
+        try_for_each_playback_advance_step(elapsed, |step| {
+            steps.push(step);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            vec![
+                Duration::from_millis(250),
+                Duration::from_millis(250),
+                Duration::from_millis(250),
+                Duration::from_millis(250),
+                Duration::from_millis(10),
+            ],
+            steps
+        );
+        assert_eq!(elapsed, steps.into_iter().sum::<Duration>());
+    }
+
+    #[test]
+    fn playback_wall_clock_stepper_skips_zero_and_stops_on_error() {
+        let mut calls = 0;
+        try_for_each_playback_advance_step(Duration::ZERO, |_| {
+            calls += 1;
+            Ok::<_, &'static str>(())
+        })
+        .unwrap();
+        assert_eq!(0, calls);
+
+        let result = try_for_each_playback_advance_step(Duration::from_secs(1), |_| {
+            calls += 1;
+            Err("advance failed")
+        });
+        assert_eq!(Err("advance failed"), result);
+        assert_eq!(1, calls);
     }
 }

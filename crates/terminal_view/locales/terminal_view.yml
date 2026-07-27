@@ -1851,3 +1851,73 @@ TerminalRecording:
     en: Failed to select recording folder
     zh-CN: 选择录制目录失败
     zh-HK: 選擇錄製目錄失敗
+
+TerminalRecordingPlayback:
+  title:
+    en: Recording Playback
+    zh-CN: 终端录制回放
+    zh-HK: 終端錄製回放
+  read_only:
+    en: Read-only
+    zh-CN: 只读
+    zh-HK: 唯讀
+  playing:
+    en: Playing
+    zh-CN: 播放中
+    zh-HK: 播放中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  finished:
+    en: Finished
+    zh-CN: 已结束
+    zh-HK: 已結束
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  replay:
+    en: Replay
+    zh-CN: 重新播放
+    zh-HK: 重新播放
+  partial_recovery:
+    en: "Partial recovery · %{bytes} trailing bytes discarded"
+    zh-CN: "部分恢复 · 已丢弃尾部 %{bytes} 字节"
+    zh-HK: "部分恢復 · 已丟棄尾部 %{bytes} 位元組"
+  discarded_bytes:
+    en: "%{bytes} bytes discarded"
+    zh-CN: "已丢弃 %{bytes} 字节"
+    zh-HK: "已丟棄 %{bytes} 位元組"
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  search_placeholder:
+    en: Search this recording
+    zh-CN: 搜索当前录制
+    zh-HK: 搜尋目前錄製
+  search_index_truncated:
+    en: "Search index truncated at %{events} events / %{bytes} bytes"
+    zh-CN: "搜索索引已在 %{events} 个事件 / %{bytes} 字节处截断"
+    zh-HK: "搜尋索引已在 %{events} 個事件 / %{bytes} 位元組處截斷"
+  output_match:
+    en: Output
+    zh-CN: 输出
+    zh-HK: 輸出
+  input_display_only:
+    en: Input · display only
+    zh-CN: 输入 · 仅展示
+    zh-HK: 輸入 · 僅展示
+  marker_display_only:
+    en: Marker · display only
+    zh-CN: 标记 · 仅展示
+    zh-HK: 標記 · 僅展示
+  unavailable:
+    en: Playback controls are unavailable
+    zh-CN: 回放控制当前不可用
+    zh-HK: 回放控制目前不可用

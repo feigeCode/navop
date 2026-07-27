@@ -13,6 +13,13 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let blink_manager = cx.new(|_| BlinkCursor::new());
+        let recording_playback_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.001)
+                .default_value(0.0)
+        });
 
         // 获取初始颜色
         let colors = terminal.read(cx).term().lock().colors().clone();
@@ -97,6 +104,11 @@ impl TerminalView {
         let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
         let command_bar_subscription =
             cx.subscribe_in(&command_bar, window, Self::handle_command_bar_event);
+        let recording_playback_slider_subscription = cx.subscribe_in(
+            &recording_playback_slider,
+            window,
+            Self::handle_recording_playback_slider_event,
+        );
         let workspace_editor_subscription = workspace_editor
             .as_ref()
             .map(|editor| cx.subscribe_in(editor, window, Self::handle_workspace_editor_event));
@@ -126,6 +138,7 @@ impl TerminalView {
         subscriptions.push(sidebar_subscription);
         subscriptions.push(terminal_subscription);
         subscriptions.push(command_bar_subscription);
+        subscriptions.push(recording_playback_slider_subscription);
         if let Some(subscription) = workspace_editor_subscription {
             subscriptions.push(subscription);
         }
@@ -194,6 +207,10 @@ impl TerminalView {
             recording_path_prompt_pending: false,
             recording_control_error: None,
             recording_ticker: None,
+            recording_playback_slider,
+            recording_playback_slider_dragging: false,
+            recording_playback_control_error: None,
+            recording_playback_ticker: None,
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,

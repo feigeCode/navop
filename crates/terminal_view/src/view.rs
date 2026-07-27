@@ -11,9 +11,10 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Disableable, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd,
-    v_flex,
+    ActiveTheme, BlinkCursor, Disableable, Icon, IconName, Selectable, Sizable, WindowExt, h_flex,
+    kbd::Kbd, v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -152,7 +153,9 @@ mod mouse_selection;
 mod paste_confirmation;
 mod preferences;
 mod recording_footer;
+mod recording_playback_controls;
 mod recording_playback_footer;
+mod recording_playback_render;
 mod render;
 mod render_layout;
 mod render_surface;
@@ -245,6 +248,14 @@ pub struct TerminalView {
     recording_control_error: Option<String>,
     /// 仅在录制时间持续增长时存在，用于每秒刷新 Footer。
     recording_ticker: Option<Task<()>>,
+    /// 当前 pane 独占的 Playback seek 控件状态。
+    recording_playback_slider: Entity<SliderState>,
+    /// 用户拖动期间只预览位置，Release 后才重建 Playback grid。
+    recording_playback_slider_dragging: bool,
+    /// 最近一次 Playback 控制错误；成功控制后清除。
+    recording_playback_control_error: Option<String>,
+    /// 仅在 Playback 正在播放时存在，drop 即取消。
+    recording_playback_ticker: Option<Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求

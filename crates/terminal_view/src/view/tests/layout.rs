@@ -194,15 +194,15 @@ fn terminal_recording_footer_sits_between_primary_content_and_bottom_tool() {
     let primary_content = center_region
         .find(".child(primary_content)")
         .expect("primary terminal content should be rendered");
-    let recording_footer = center_region
-        .find(".child(self.render_recording_footer(cx))")
-        .expect("recording footer should be rendered");
+    let session_footer = center_region
+        .find(".child(self.render_terminal_session_footer(cx))")
+        .expect("online recording or playback footer should be rendered");
     let bottom_tool = center_region
         .find(".when_some(state.bottom_panel")
         .expect("optional bottom tool should be rendered");
 
-    assert!(primary_content < recording_footer);
-    assert!(recording_footer < bottom_tool);
+    assert!(primary_content < session_footer);
+    assert!(session_footer < bottom_tool);
 }
 
 #[test]
@@ -334,6 +334,102 @@ fn recording_footer_formats_elapsed_time_and_safe_unique_paths() {
             "recording filename must not incorporate `{sensitive_source}`"
         );
     }
+}
+
+#[test]
+fn recording_playback_footer_is_a_fixed_dispatched_flex_child() {
+    let render_source = include_str!("../recording_playback_render.rs");
+    let layout_source = include_str!("../render_layout.rs");
+
+    for fixed_height_contract in [
+        ".h(RECORDING_PLAYBACK_FOOTER_HEIGHT)",
+        ".min_h(RECORDING_PLAYBACK_FOOTER_HEIGHT)",
+        ".max_h(RECORDING_PLAYBACK_FOOTER_HEIGHT)",
+        ".flex_shrink_0()",
+    ] {
+        assert!(
+            render_source.contains(fixed_height_contract),
+            "playback footer must retain `{fixed_height_contract}`"
+        );
+    }
+    assert!(!render_source.contains(".absolute()"));
+    assert!(render_source.contains(".is_recording_playback()"));
+    assert!(render_source.contains("self.render_recording_playback_footer(cx)"));
+    assert!(render_source.contains("self.render_recording_footer(cx)"));
+    assert!(layout_source.contains(".child(self.render_terminal_session_footer(cx))"));
+    assert!(!layout_source.contains(".child(self.render_recording_footer(cx))"));
+}
+
+#[test]
+fn recording_playback_slider_seeks_only_after_user_release() {
+    let controls_source = include_str!("../recording_playback_controls.rs");
+    let handler = controls_source
+        .split("fn handle_recording_playback_slider_event")
+        .nth(1)
+        .and_then(|source| source.split("fn request_recording_playback_seek").next())
+        .expect("playback slider handler should exist");
+
+    let change = handler
+        .find("SliderEvent::Change(SliderValue::Single")
+        .expect("slider change branch should exist");
+    let release = handler
+        .find("SliderEvent::Release(SliderValue::Single")
+        .expect("slider release branch should exist");
+    let seek = handler
+        .find("request_recording_playback_seek")
+        .expect("release should request one bounded seek");
+
+    assert!(change < release);
+    assert!(release < seek);
+    assert!(
+        !handler[..release].contains("request_recording_playback_seek"),
+        "continuous slider changes must not rebuild the playback grid"
+    );
+}
+
+#[test]
+fn recording_playback_clock_is_owned_and_advanced_in_bounded_steps() {
+    let view_source = include_str!("../../view.rs");
+    let controls_source = include_str!("../recording_playback_controls.rs");
+    let initialization_source = include_str!("../initialization.rs");
+    let render_layout_source = include_str!("../render_layout.rs");
+
+    for pane_field in [
+        "recording_playback_slider: Entity<SliderState>",
+        "recording_playback_slider_dragging: bool",
+        "recording_playback_control_error: Option<String>",
+        "recording_playback_ticker: Option<Task<()>>",
+    ] {
+        assert!(
+            view_source.contains(pane_field),
+            "playback UI state must remain on each TerminalView: `{pane_field}`"
+        );
+    }
+    assert!(initialization_source.contains("SliderState::new()"));
+    assert!(initialization_source.contains("Self::handle_recording_playback_slider_event"));
+    assert!(
+        initialization_source
+            .contains("subscriptions.push(recording_playback_slider_subscription)")
+    );
+    assert!(render_layout_source.contains("self.sync_recording_playback_ticker(cx);"));
+    assert!(render_layout_source.contains("self.sync_recording_playback_slider(window, cx);"));
+
+    for clock_contract in [
+        "PLAYBACK_TICK_INTERVAL",
+        "Instant::now()",
+        "try_for_each_playback_advance_step",
+        "terminal.advance_recording_playback(step)",
+        "recording_playback_ticker = Some(cx.spawn",
+    ] {
+        assert!(
+            controls_source.contains(clock_contract),
+            "playback clock must retain `{clock_contract}`"
+        );
+    }
+    assert!(
+        !controls_source.contains(".detach()"),
+        "the playback clock task must remain owned by TerminalView"
+    );
 }
 
 #[test]
