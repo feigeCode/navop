@@ -12,7 +12,8 @@ use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex,
+    ActiveTheme, BlinkCursor, Disableable, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd,
+    v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -123,6 +124,10 @@ actions!(
         IncreaseFont,
         DecreaseFont,
         ResetFont,
+        StartRecording,
+        PauseRecording,
+        ResumeRecording,
+        StopRecording,
     ]
 );
 
@@ -146,6 +151,7 @@ mod mouse_down;
 mod mouse_selection;
 mod paste_confirmation;
 mod preferences;
+mod recording_footer;
 mod render;
 mod render_layout;
 mod render_surface;
@@ -232,6 +238,12 @@ pub struct TerminalView {
     local_command_running: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<Task<()>>,
+    /// 当前 pane 是否正在等待用户选择录制文件保存目录。
+    recording_path_prompt_pending: bool,
+    /// 当前 pane 最近一次录制控制错误；在 Footer 中直接展示。
+    recording_control_error: Option<String>,
+    /// 仅在录制时间持续增长时存在，用于每秒刷新 Footer。
+    recording_ticker: Option<Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求

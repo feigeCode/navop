@@ -34,6 +34,7 @@ impl TerminalView {
         }
         self.line_height = self.font_size * self.line_height_scale;
         self.apply_pending_scrollbar_offset(cx);
+        self.sync_recording_ticker(cx);
 
         let terminal_mode = self.terminal.read(cx).mode();
         self.handle_alt_screen_transition(terminal_mode, cx);
@@ -99,6 +100,11 @@ impl TerminalView {
             .min_h_0()
             .overflow_hidden()
             .bg(bg_color)
+            .key_context(TERMINAL_CONTEXT)
+            .on_action(cx.listener(Self::start_recording_action))
+            .on_action(cx.listener(Self::pause_recording_action))
+            .on_action(cx.listener(Self::resume_recording_action))
+            .on_action(cx.listener(Self::stop_recording_action))
             .when_some(state.left_panel, |this, panel| {
                 this.child(self.render_left_region(panel, state.sidebar_size, cx))
             })
@@ -197,6 +203,7 @@ impl TerminalView {
             .min_w_0()
             .overflow_hidden()
             .child(primary_content)
+            .child(self.render_recording_footer(cx))
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))
             })

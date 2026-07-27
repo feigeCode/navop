@@ -1789,3 +1789,65 @@ Conflict:
     en: "%{name} and %{count} other files"
     zh-CN: "%{name} 等 %{count} 个文件"
     zh-HK: "%{name} 等 %{count} 個文件"
+
+TerminalRecording:
+  ready:
+    en: Ready
+    zh-CN: 准备录制
+    zh-HK: 準備錄製
+  recording:
+    en: Recording
+    zh-CN: 录制中
+    zh-HK: 錄製中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  stopping:
+    en: Stopping
+    zh-CN: 正在停止
+    zh-HK: 正在停止
+  stopped:
+    en: Stopped
+    zh-CN: 已停止
+    zh-HK: 已停止
+  failed:
+    en: Failed
+    zh-CN: 录制失败
+    zh-HK: 錄製失敗
+  output_only:
+    en: Output only · Input not recorded
+    zh-CN: 仅录制输出 · 不记录输入
+    zh-HK: 僅錄製輸出 · 不記錄輸入
+  input_included:
+    en: Input recording enabled
+    zh-CN: 已启用输入录制
+    zh-HK: 已啟用輸入錄製
+  start:
+    en: Start
+    zh-CN: 开始
+    zh-HK: 開始
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  stop:
+    en: Stop
+    zh-CN: 停止
+    zh-HK: 停止
+  select_directory:
+    en: Select a folder for the terminal recording
+    zh-CN: 选择终端录制文件保存目录
+    zh-HK: 選擇終端錄製檔案儲存目錄
+  selecting_directory:
+    en: Selecting folder…
+    zh-CN: 正在选择目录…
+    zh-HK: 正在選擇目錄…
+  select_directory_failed:
+    en: Failed to select recording folder
+    zh-CN: 选择录制目录失败
+    zh-HK: 選擇錄製目錄失敗

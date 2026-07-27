@@ -35,6 +35,7 @@ impl TerminalView {
 
         match event {
             TerminalModelEvent::Wakeup => {
+                self.sync_recording_ticker(cx);
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
