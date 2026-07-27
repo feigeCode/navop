@@ -652,9 +652,20 @@ fn apply_local_exec_effects(
 /// GPUI Event proxy for alacritty_terminal
 /// 将 alacritty 事件转换为 TerminalEvent 并发送，
 /// 同时处理 PtyWrite 等需要回写 PTY 的事件
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GpuiEventPolicy {
+    Live,
+    /// Fail-closed policy for untrusted recording playback.
+    ///
+    /// Only grid invalidation may leave the parser. Terminal responses,
+    /// clipboard access, title changes, bells, and exit events are discarded.
+    PlaybackSafe,
+}
+
 #[derive(Clone)]
 pub struct GpuiEventProxy {
     event_tx: UnboundedSender<TerminalEvent>,
+    policy: GpuiEventPolicy,
     /// PtyWrite 回写通道（在后端创建后设置）
     write_back: Arc<Mutex<Option<PtyWriteBack>>>,
     /// 共享窗口尺寸，供 TextAreaSizeRequest 真实回复使用
@@ -673,8 +684,24 @@ impl GpuiEventProxy {
         event_tx: UnboundedSender<TerminalEvent>,
         metrics: Arc<TerminalPerformanceMetrics>,
     ) -> Self {
+        Self::with_metrics_and_policy(event_tx, metrics, GpuiEventPolicy::Live)
+    }
+
+    pub(crate) fn playback_safe(
+        event_tx: UnboundedSender<TerminalEvent>,
+        metrics: Arc<TerminalPerformanceMetrics>,
+    ) -> Self {
+        Self::with_metrics_and_policy(event_tx, metrics, GpuiEventPolicy::PlaybackSafe)
+    }
+
+    fn with_metrics_and_policy(
+        event_tx: UnboundedSender<TerminalEvent>,
+        metrics: Arc<TerminalPerformanceMetrics>,
+        policy: GpuiEventPolicy,
+    ) -> Self {
         Self {
             event_tx,
+            policy,
             write_back: Arc::new(Mutex::new(None)),
             window_size: Arc::new(Mutex::new(WindowSize {
                 num_lines: 24,
@@ -693,6 +720,9 @@ impl GpuiEventProxy {
 
     /// 设置回写通道
     fn set_write_back(&self, wb: PtyWriteBack) {
+        if self.policy == GpuiEventPolicy::PlaybackSafe {
+            return;
+        }
         *self.write_back.lock().unwrap() = Some(wb);
     }
 
@@ -763,6 +793,14 @@ fn send_local_input(
 
 impl EventListener for GpuiEventProxy {
     fn send_event(&self, event: AlacTermEvent) {
+        // Recording bytes are untrusted terminal input. Fail closed for every
+        // current and future Alacritty event except the render invalidation
+        // needed after harmless grid mutation.
+        if self.policy == GpuiEventPolicy::PlaybackSafe && !matches!(&event, AlacTermEvent::Wakeup)
+        {
+            return;
+        }
+
         let terminal_event = match event {
             AlacTermEvent::PtyWrite(text) => {
                 self.write_back(text.into_bytes());
@@ -1066,6 +1104,47 @@ mod tests {
             ("pty".len() + "color".len() + "size".len()) as u64,
             metrics.snapshot().terminal_response_bytes
         );
+    }
+
+    #[test]
+    fn playback_safe_event_proxy_only_allows_grid_wakeup() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let proxy = GpuiEventProxy::playback_safe(event_tx, metrics.clone());
+        let (write_tx, mut write_rx) = unbounded_channel::<Vec<u8>>();
+
+        // Even an accidental attempt to attach a live response sink must not
+        // grant a playback parser write-back capability.
+        proxy.set_ssh_write_back(write_tx);
+        proxy.send_event(AlacTermEvent::PtyWrite("response".to_string()));
+        proxy.send_event(AlacTermEvent::ColorRequest(
+            NamedColor::Foreground as usize,
+            Arc::new(|_| "color".to_string()),
+        ));
+        proxy.send_event(AlacTermEvent::TextAreaSizeRequest(Arc::new(|_| {
+            "size".to_string()
+        })));
+        proxy.send_event(AlacTermEvent::ClipboardStore(
+            ClipboardType::Clipboard,
+            "secret".to_string(),
+        ));
+        proxy.send_event(AlacTermEvent::ClipboardLoad(
+            ClipboardType::Clipboard,
+            Arc::new(|_| "clipboard contents".to_string()),
+        ));
+        proxy.send_event(AlacTermEvent::Title("recorded title".to_string()));
+        proxy.send_event(AlacTermEvent::Bell);
+        proxy.send_event(AlacTermEvent::Exit);
+        proxy.send_event(AlacTermEvent::Wakeup);
+
+        assert!(write_rx.try_recv().is_err());
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+        assert!(event_rx.try_recv().is_err());
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(0, snapshot.terminal_response_bytes);
+        assert_eq!(1, snapshot.wakeup_requests);
+        assert_eq!(1, snapshot.wakeup_queued);
     }
 
     #[test]
