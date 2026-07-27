@@ -78,6 +78,13 @@ fn helper_event_debug_reports_metadata_without_payloads() {
             height: 1,
             rgba_base64: "private-base64".to_string(),
         },
+        HelperEvent::CursorRgbaBytes {
+            width: 1,
+            height: 1,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            rgba_len: "private-cursor".len(),
+        },
         HelperEvent::ClipboardText {
             text: "private-clipboard".to_string(),
         },
@@ -100,6 +107,32 @@ fn helper_event_debug_reports_metadata_without_payloads() {
     for event in events {
         assert!(!format!("{event:?}").contains("private-"));
     }
+}
+
+#[test]
+fn binary_cursor_header_decodes_without_embedding_pixels() {
+    let event = decode_event_line(
+        r#"{"type":"CursorRgbaBytes","width":2,"height":1,"hotspot_x":1,"hotspot_y":0,"rgba_len":8}"#,
+    )
+    .expect("binary cursor header decodes");
+
+    assert_eq!(
+        HelperEvent::CursorRgbaBytes {
+            width: 2,
+            height: 1,
+            hotspot_x: 1,
+            hotspot_y: 0,
+            rgba_len: 8,
+        },
+        event
+    );
+    assert!(
+        event
+            .into_rgba()
+            .expect_err("cursor payload is not part of the JSON header")
+            .to_string()
+            .contains("binary cursor payload")
+    );
 }
 
 #[test]

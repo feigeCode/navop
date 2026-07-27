@@ -29,6 +29,7 @@ pub enum RemoteDesktopOutput {
         x: u16,
         y: u16,
     },
+    CursorBitmap(RemoteDesktopCursor),
     ClipboardText {
         text: String,
     },
@@ -47,6 +48,15 @@ pub enum RemoteDesktopOutput {
     Status(String),
     ConnectionFailure(String),
     Terminated(String),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemoteDesktopCursor {
+    pub width: u16,
+    pub height: u16,
+    pub hotspot_x: u16,
+    pub hotspot_y: u16,
+    pub rgba: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +99,13 @@ mod tests {
                 height: 1,
                 bgra: b"private-bgra".to_vec(),
             },
+            RemoteDesktopOutput::CursorBitmap(RemoteDesktopCursor {
+                width: 1,
+                height: 1,
+                hotspot_x: 0,
+                hotspot_y: 0,
+                rgba: b"private-cursor".to_vec(),
+            }),
             RemoteDesktopOutput::ClipboardText {
                 text: "private-clipboard".to_string(),
             },

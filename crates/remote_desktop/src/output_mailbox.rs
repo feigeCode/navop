@@ -119,6 +119,7 @@ impl OutputMailboxSender {
                 state.accepting_frames = false;
                 state.latest_frame = None;
                 state.latest_delta = None;
+                discard_pending_cursor_outputs(&mut state.control);
                 state.control.push(terminal);
             }
             reconnecting @ RemoteDesktopOutput::Reconnecting(_) => {
@@ -127,9 +128,10 @@ impl OutputMailboxSender {
                 state.accepting_frames = false;
                 state.latest_frame = None;
                 state.latest_delta = None;
+                discard_pending_cursor_outputs(&mut state.control);
                 state.control.push(reconnecting);
             }
-            control => state.control.push(control),
+            control => enqueue_control(&mut state.control, control),
         }
         Ok(())
     }
@@ -183,6 +185,38 @@ fn merge_deltas(previous: RemoteDesktopOutput, next: RemoteDesktopOutput) -> Rem
         }
         (_, next) => next,
     }
+}
+
+fn enqueue_control(control: &mut Vec<RemoteDesktopOutput>, output: RemoteDesktopOutput) {
+    match (control.last_mut(), output) {
+        (
+            Some(RemoteDesktopOutput::CursorPosition { x, y }),
+            RemoteDesktopOutput::CursorPosition {
+                x: next_x,
+                y: next_y,
+            },
+        ) => {
+            *x = next_x;
+            *y = next_y;
+        }
+        (
+            Some(previous @ RemoteDesktopOutput::CursorBitmap(_)),
+            next @ RemoteDesktopOutput::CursorBitmap(_),
+        ) => *previous = next,
+        (_, output) => control.push(output),
+    }
+}
+
+fn discard_pending_cursor_outputs(control: &mut Vec<RemoteDesktopOutput>) {
+    control.retain(|output| {
+        !matches!(
+            output,
+            RemoteDesktopOutput::CursorDefault
+                | RemoteDesktopOutput::CursorHidden
+                | RemoteDesktopOutput::CursorPosition { .. }
+                | RemoteDesktopOutput::CursorBitmap(_)
+        )
+    });
 }
 
 impl fmt::Debug for OutputMailboxSender {

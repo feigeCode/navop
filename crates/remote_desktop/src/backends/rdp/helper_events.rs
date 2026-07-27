@@ -23,6 +23,9 @@ pub(super) fn helper_event_to_output(
         | HelperEvent::FrameBgraRects { .. } => {
             anyhow::bail!("binary frame payload is missing")
         }
+        HelperEvent::CursorRgbaBytes { .. } => {
+            anyhow::bail!("binary cursor payload is missing")
+        }
         HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
         HelperEvent::CursorHidden => RemoteDesktopOutput::CursorHidden,
         HelperEvent::CursorPosition { x, y } => RemoteDesktopOutput::CursorPosition { x, y },

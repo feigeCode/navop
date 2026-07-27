@@ -14,6 +14,10 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
     assert!(canvas.contains("canvas("));
     assert!(canvas.contains("window.handle_input("));
     assert!(canvas.contains("window.paint_image("));
+    assert!(
+        canvas.matches("window.paint_image(").count() >= 2,
+        "framebuffer and remote cursor must be painted in the same bounded canvas"
+    );
     let paint_phase = canvas
         .find("move |bounds, frame, window, cx|")
         .expect("remote desktop canvas paint phase");
@@ -30,10 +34,32 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
     assert!(canvas.contains(".overflow_hidden()"));
     assert!(
         !canvas.contains("img("),
-        "GPUI Img injects the remote frame aspect ratio during request_layout"
+        "GPUI Img injects remote image dimensions during request_layout"
+    );
+    let frame_paint = canvas
+        .find("paint_remote_frame(")
+        .expect("framebuffer paint helper");
+    let cursor_paint = canvas
+        .find("paint_remote_cursor(")
+        .expect("remote cursor paint helper");
+    assert!(
+        frame_paint < cursor_paint,
+        "the remote cursor must be painted over the framebuffer"
     );
 
     assert_parent_bounded_remote_desktop_content(source);
+}
+
+#[test]
+fn remote_cursor_never_calls_gpui_paint_only_cursor_apis_from_output_callbacks() {
+    let output = include_str!("output.rs");
+    let cursor = include_str!("cursor.rs");
+    let native_cursor = include_str!("../native_cursor.rs");
+
+    assert!(!output.contains("set_cursor_style"));
+    assert!(!cursor.contains("set_cursor_style"));
+    assert!(!native_cursor.contains("ShowCursor"));
+    assert!(native_cursor.contains("SetCursor"));
 }
 
 fn assert_parent_bounded_remote_desktop_content(source: &str) {
@@ -56,7 +82,7 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     ] {
         assert!(content.contains(constraint));
     }
-    assert!(content.contains(".child(remote_desktop_frame_canvas(rendered_frame, focus_handle))"));
+    assert!(content.contains(".child(remote_desktop_frame_canvas(canvas_paint, focus_handle))"));
     assert!(
         !content.contains(".when_some(rendered_frame"),
         "frame replacement must not switch between Img and status layout trees"

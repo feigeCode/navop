@@ -167,6 +167,7 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn send_pointer_move(&mut self, position: Point<Pixels>, window: &mut Window) {
+        self.cursor.refresh_native_cursor();
         let Some((remote_width, remote_height)) = self.remote_size else {
             return;
         };

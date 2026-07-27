@@ -1,5 +1,8 @@
 use super::*;
-use crate::{RemoteDesktopFrameRect, RemoteDesktopReconnect, RemoteDesktopReconnectReason};
+use crate::{
+    RemoteDesktopCursor, RemoteDesktopFrameRect, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason,
+};
 
 #[test]
 fn keeps_only_latest_pending_frame() {
@@ -218,6 +221,58 @@ fn keeps_keyframe_when_coalescing_dirty_rectangles() {
 }
 
 #[test]
+fn coalesces_adjacent_cursor_positions() {
+    let (tx, rx) = output_mailbox();
+    tx.send(RemoteDesktopOutput::CursorPosition { x: 1, y: 2 })
+        .unwrap();
+    tx.send(RemoteDesktopOutput::CursorPosition { x: 3, y: 4 })
+        .unwrap();
+
+    assert_eq!(
+        vec![RemoteDesktopOutput::CursorPosition { x: 3, y: 4 }],
+        rx.drain().control
+    );
+}
+
+#[test]
+fn coalesces_adjacent_cursor_bitmaps_without_crossing_state_boundaries() {
+    let (tx, rx) = output_mailbox();
+    tx.send(cursor(1)).unwrap();
+    tx.send(cursor(2)).unwrap();
+    tx.send(RemoteDesktopOutput::CursorHidden).unwrap();
+    tx.send(cursor(3)).unwrap();
+
+    assert_eq!(
+        vec![cursor(2), RemoteDesktopOutput::CursorHidden, cursor(3)],
+        rx.drain().control
+    );
+}
+
+#[test]
+fn reconnect_barrier_discards_pending_cursor_state() {
+    let (tx, rx) = output_mailbox();
+    tx.send(RemoteDesktopOutput::CursorPosition { x: 1, y: 2 })
+        .unwrap();
+    tx.send(cursor(1)).unwrap();
+    tx.send(reconnecting()).unwrap();
+
+    assert_eq!(vec![reconnecting()], rx.drain().control);
+}
+
+#[test]
+fn terminal_barrier_discards_pending_cursor_state() {
+    let (tx, rx) = output_mailbox();
+    tx.send(RemoteDesktopOutput::CursorHidden).unwrap();
+    tx.send(RemoteDesktopOutput::ConnectionFailure("closed".into()))
+        .unwrap();
+
+    assert_eq!(
+        vec![RemoteDesktopOutput::ConnectionFailure("closed".into())],
+        rx.drain().control
+    );
+}
+
+#[test]
 fn send_fails_after_receiver_is_dropped() {
     let (tx, rx) = output_mailbox();
     drop(rx);
@@ -237,5 +292,15 @@ fn reconnecting() -> RemoteDesktopOutput {
     RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
         reason: RemoteDesktopReconnectReason::ConnectionLost,
         delay_secs: Some(1),
+    })
+}
+
+fn cursor(value: u8) -> RemoteDesktopOutput {
+    RemoteDesktopOutput::CursorBitmap(RemoteDesktopCursor {
+        width: 1,
+        height: 1,
+        hotspot_x: 0,
+        hotspot_y: 0,
+        rgba: vec![value, 0, 0, 255],
     })
 }

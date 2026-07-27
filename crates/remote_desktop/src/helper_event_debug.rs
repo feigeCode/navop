@@ -148,6 +148,20 @@ fn debug_data_event(event: &HelperEvent, formatter: &mut fmt::Formatter<'_>) -> 
             .field("x", x)
             .field("y", y)
             .finish(),
+        HelperEvent::CursorRgbaBytes {
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            rgba_len,
+        } => formatter
+            .debug_struct("CursorRgbaBytes")
+            .field("width", width)
+            .field("height", height)
+            .field("hotspot_x", hotspot_x)
+            .field("hotspot_y", hotspot_y)
+            .field("byte_len", rgba_len)
+            .finish(),
         HelperEvent::ClipboardText { text } => formatter
             .debug_struct("ClipboardText")
             .field("text_len", &text.len())
