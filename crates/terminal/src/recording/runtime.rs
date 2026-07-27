@@ -134,6 +134,15 @@ impl RecordingTap {
         })
     }
 
+    /// Returns a lock-free snapshot used to avoid cloning input solely for
+    /// post-send recording while recording is inactive or input capture is
+    /// disabled. The subsequent enqueue still rechecks all gates.
+    pub(crate) fn is_input_capture_active(&self) -> bool {
+        !self.queue.closed.load(Ordering::Acquire)
+            && self.queue.accepting.load(Ordering::Acquire)
+            && self.queue.capture_input.load(Ordering::Acquire)
+    }
+
     /// Captures disclosed user input. Input is not copied or queued unless the
     /// active recording explicitly enabled input capture.
     pub fn record_input(&self, data: &[u8]) -> RecordingTapOutcome {

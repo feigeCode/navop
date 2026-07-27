@@ -19,10 +19,21 @@ pub(crate) enum ShellCommandReadiness {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TerminalInputSource {
     User,
+    ExternalInput,
     AgentPreflight,
     AgentCommand,
     TerminalResponse,
     InitCommand,
+}
+
+impl TerminalInputSource {
+    pub(crate) fn affects_interactive_input_state(self) -> bool {
+        matches!(self, Self::User | Self::ExternalInput)
+    }
+
+    pub(crate) fn is_recordable_user_input(self) -> bool {
+        self == Self::User
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

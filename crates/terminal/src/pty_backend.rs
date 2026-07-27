@@ -373,7 +373,7 @@ impl LocalPtyBackend {
             command_tx.clone(),
             capture_output.clone(),
             performance_metrics.clone(),
-            recording_tap,
+            recording_tap.clone(),
         );
         let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
@@ -390,6 +390,7 @@ impl LocalPtyBackend {
                 supervisor_command_tx,
                 supervisor_event_loop_sender,
                 capture_output,
+                recording_tap,
             );
         });
         let event_loop_handle = thread::spawn(move || {
@@ -460,7 +461,7 @@ impl TerminalBackend for LocalPtyBackend {
             self.performance_metrics.clone(),
             move |data| {
                 let _ = sender.send(LocalPtyCommand::Write {
-                    source: TerminalInputSource::User,
+                    source: TerminalInputSource::ExternalInput,
                     data,
                 });
             },
@@ -492,18 +493,23 @@ fn run_local_exec_supervisor(
     command_tx: UnboundedSender<LocalPtyCommand>,
     event_loop_sender: EventLoopSender,
     capture_output: Arc<AtomicBool>,
+    recording_tap: Option<RecordingTap>,
 ) {
     let mut supervisor = ExecSupervisor::new();
     let mut exec_results = HashMap::<u64, ExecResultSender>::new();
     while let Some(command) = command_rx.blocking_recv() {
         let keep_running = match command {
             LocalPtyCommand::Write { source, data } => {
-                apply_local_exec_effects(
+                let effects_applied = apply_local_exec_effects(
                     supervisor.on_input(source, &data),
                     &event_loop_sender,
                     &command_tx,
                     &mut exec_results,
-                ) && event_loop_sender.send(Msg::Input(Cow::Owned(data))).is_ok()
+                );
+                effects_applied
+                    && send_local_input(source, data, recording_tap.as_ref(), |data| {
+                        event_loop_sender.send(Msg::Input(Cow::Owned(data))).is_ok()
+                    })
             }
             LocalPtyCommand::InterruptForeground {
                 request,
@@ -734,6 +740,27 @@ impl GpuiEventProxy {
     }
 }
 
+fn send_local_input(
+    source: TerminalInputSource,
+    data: Vec<u8>,
+    recording_tap: Option<&RecordingTap>,
+    send: impl FnOnce(Vec<u8>) -> bool,
+) -> bool {
+    // The Alacritty event-loop sender consumes the Vec on success. Preserve a
+    // copy only while disclosed input capture is active so inactive terminals
+    // retain the zero-copy fast path.
+    let recording_data = (source.is_recordable_user_input()
+        && recording_tap.is_some_and(RecordingTap::is_input_capture_active))
+    .then(|| data.clone());
+    let sent = send(data);
+    if sent {
+        if let (Some(tap), Some(recording_data)) = (recording_tap, recording_data) {
+            let _ = tap.record_input(&recording_data);
+        }
+    }
+    sent
+}
+
 impl EventListener for GpuiEventProxy {
     fn send_event(&self, event: AlacTermEvent) {
         let terminal_event = match event {
@@ -932,6 +959,50 @@ mod tests {
             &parsed.events[0].kind,
             crate::recording::RecordingEventKind::Output(data)
                 if data == b"\xffraw\x1b]133;A\x07output"
+        ));
+    }
+
+    #[test]
+    fn local_input_recording_captures_only_accepted_disclosed_user_bytes() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Local,
+            true,
+        );
+        let tap = recording.tap();
+
+        assert!(send_local_input(
+            TerminalInputSource::User,
+            b"user input".to_vec(),
+            Some(&tap),
+            |data| data == b"user input"
+        ));
+        for source in [
+            TerminalInputSource::ExternalInput,
+            TerminalInputSource::AgentPreflight,
+            TerminalInputSource::AgentCommand,
+            TerminalInputSource::TerminalResponse,
+            TerminalInputSource::InitCommand,
+        ] {
+            assert!(send_local_input(
+                source,
+                b"excluded input".to_vec(),
+                Some(&tap),
+                |_| true
+            ));
+        }
+        assert!(!send_local_input(
+            TerminalInputSource::User,
+            b"rejected input".to_vec(),
+            Some(&tap),
+            |_| false
+        ));
+
+        drop(tap);
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
         ));
     }
 

@@ -272,7 +272,10 @@ fn format_setup_failure_context(script: &str, stdout: &[u8], stderr: &[u8]) -> S
 }
 
 enum SshCommand {
-    Write(Vec<u8>),
+    Write {
+        source: TerminalInputSource,
+        data: Vec<u8>,
+    },
     InterruptForeground {
         request: TerminalControlRequest,
         cancellation: CancellationToken,
@@ -360,6 +363,21 @@ async fn send_terminal_data<C: SshChannel + ?Sized>(channel: &mut C, data: &[u8]
     tokio::time::timeout(Duration::from_secs(30), channel.send_data(data))
         .await
         .is_ok_and(|result| result.is_ok())
+}
+
+async fn send_terminal_input<C: SshChannel + ?Sized>(
+    channel: &mut C,
+    source: TerminalInputSource,
+    data: &[u8],
+    recording_tap: Option<&RecordingTap>,
+) -> bool {
+    let sent = send_terminal_data(channel, data).await;
+    if sent && source.is_recordable_user_input() {
+        if let Some(tap) = recording_tap {
+            let _ = tap.record_input(data);
+        }
+    }
+    sent
 }
 
 async fn apply_exec_effects<C: SshChannel + ?Sized>(
@@ -528,7 +546,7 @@ impl SshBackend {
             term,
             event_proxy.clone(),
             task_metrics.clone(),
-            recording_tap,
+            recording_tap.clone(),
         );
 
         tokio::spawn(async move {
@@ -551,9 +569,8 @@ impl SshBackend {
                 .await
                 {
                     SshActorInput::Command(cmd) => match cmd {
-                        SshCommand::Write(data) => {
-                            let effects =
-                                exec_supervisor.on_input(TerminalInputSource::User, &data);
+                        SshCommand::Write { source, data } => {
+                            let effects = exec_supervisor.on_input(source, &data);
                             if !apply_exec_effects(
                                 effects,
                                 &mut channel,
@@ -561,7 +578,13 @@ impl SshBackend {
                                 &mut exec_results,
                             )
                             .await
-                                || !send_terminal_data(&mut channel, &data).await
+                                || !send_terminal_input(
+                                    &mut channel,
+                                    source,
+                                    &data,
+                                    recording_tap.as_ref(),
+                                )
+                                .await
                             {
                                 break;
                             }
@@ -1182,11 +1205,17 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv(),
-            Ok(SshCommand::Write(data)) if data == b"direct"
+            Ok(SshCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            }) if data == b"direct"
         ));
         assert!(matches!(
             command_rx.try_recv(),
-            Ok(SshCommand::Write(data)) if data == b"handle"
+            Ok(SshCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data,
+            }) if data == b"handle"
         ));
         assert!(command_rx.try_recv().is_err());
         assert_eq!(
@@ -1211,6 +1240,7 @@ mod tests {
         events: VecDeque<ChannelEvent>,
         exec_consumes_session: bool,
         recv_delay: Option<Duration>,
+        send_data_error: bool,
     }
 
     struct MockChannel {
@@ -1235,6 +1265,7 @@ mod tests {
                 events: events.into_iter().collect(),
                 exec_consumes_session,
                 recv_delay,
+                send_data_error: false,
             }));
             (
                 Self {
@@ -1283,12 +1314,13 @@ mod tests {
         }
 
         async fn send_data(&mut self, data: &[u8]) -> Result<()> {
-            self.state
-                .lock()
-                .expect("mock channel state should lock")
-                .ops
-                .push(ChannelOp::SendData(data.to_vec()));
-            Ok(())
+            let mut state = self.state.lock().expect("mock channel state should lock");
+            state.ops.push(ChannelOp::SendData(data.to_vec()));
+            if state.send_data_error {
+                Err(anyhow!("mock send failure"))
+            } else {
+                Ok(())
+            }
         }
 
         async fn resize_pty(&mut self, _width: u32, _height: u32) -> Result<()> {
@@ -1439,6 +1471,56 @@ mod tests {
             .expect("mock channel state should lock")
             .ops
             .clone()
+    }
+
+    #[tokio::test]
+    async fn ssh_input_recording_captures_only_successfully_sent_user_bytes() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Ssh,
+            true,
+        );
+        let tap = recording.tap();
+        let (mut channel, state) = MockChannel::new([], false);
+
+        assert!(
+            send_terminal_input(
+                &mut channel,
+                TerminalInputSource::User,
+                b"user input",
+                Some(&tap),
+            )
+            .await
+        );
+        assert!(
+            send_terminal_input(
+                &mut channel,
+                TerminalInputSource::ExternalInput,
+                b"external input",
+                Some(&tap),
+            )
+            .await
+        );
+        state
+            .lock()
+            .expect("mock channel state should lock")
+            .send_data_error = true;
+        assert!(
+            !send_terminal_input(
+                &mut channel,
+                TerminalInputSource::User,
+                b"failed input",
+                Some(&tap),
+            )
+            .await
+        );
+
+        drop(tap);
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
+        ));
     }
 
     #[tokio::test]
@@ -2408,7 +2490,10 @@ impl TerminalBackend for SshBackend {
     fn write(&self, data: Vec<u8>) {
         self.performance_metrics
             .record_input(TerminalInputMetricSource::User, data.len());
-        let _ = self.command_tx.send(SshCommand::Write(data));
+        let _ = self.command_tx.send(SshCommand::Write {
+            source: TerminalInputSource::User,
+            data,
+        });
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
@@ -2416,7 +2501,10 @@ impl TerminalBackend for SshBackend {
         Some(TerminalInputHandle::with_metrics(
             self.performance_metrics.clone(),
             move |data| {
-                let _ = tx.send(SshCommand::Write(data));
+                let _ = tx.send(SshCommand::Write {
+                    source: TerminalInputSource::ExternalInput,
+                    data,
+                });
             },
         ))
     }

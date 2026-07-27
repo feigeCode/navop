@@ -110,7 +110,7 @@ impl ExecSupervisor {
 
     pub(crate) fn on_input(&mut self, source: TerminalInputSource, data: &[u8]) -> Vec<ExecEffect> {
         let pre_submit_phase = self.active.as_ref().map(|active| active.phase);
-        if source == TerminalInputSource::User
+        if source.affects_interactive_input_state()
             && matches!(
                 pre_submit_phase,
                 Some(ExecPhase::WaitingForReady | ExecPhase::ClearingInput)
@@ -124,7 +124,9 @@ impl ExecSupervisor {
         }
         if matches!(
             source,
-            TerminalInputSource::User | TerminalInputSource::InitCommand
+            TerminalInputSource::User
+                | TerminalInputSource::ExternalInput
+                | TerminalInputSource::InitCommand
         ) && matches!(self.readiness, ShellCommandReadiness::Ready { .. })
         {
             if data.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {

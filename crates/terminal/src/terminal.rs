@@ -1168,6 +1168,12 @@ impl Terminal {
             .map(RecordingRuntime::tap)
     }
 
+    fn record_connection_generation_marker(&self, generation: u64) {
+        if let Some(tap) = self.recording_tap() {
+            let _ = tap.record_marker(&format!("connection_generation:{generation}"));
+        }
+    }
+
     fn recording_runtime(&self) -> std::result::Result<&RecordingRuntime, RecordingRuntimeError> {
         self.recording_runtime
             .as_ref()
@@ -2183,7 +2189,9 @@ impl Terminal {
 
     /// 写入来自外部集成的输入，例如 Public MCP。
     pub fn write_external_input(&self, data: &[u8]) {
-        self.write(data);
+        if let Some(handle) = self.external_input_handle() {
+            handle.write(data.to_vec());
+        }
     }
 
     pub fn external_input_handle(&self) -> Option<TerminalInputHandle> {
@@ -2238,12 +2246,16 @@ impl Terminal {
         self.term.lock().resize(TermDimensions { cols, rows });
 
         if let Some(ref backend) = self.backend {
-            backend.resize(TerminalSize {
+            let size = TerminalSize {
                 rows: rows as u16,
                 cols: cols as u16,
                 pixel_width,
                 pixel_height,
-            });
+            };
+            backend.resize(size);
+            if let Some(tap) = self.recording_tap() {
+                let _ = tap.record_resize(size);
+            }
         }
     }
 
@@ -2294,6 +2306,7 @@ impl Terminal {
             self.reset_terminal_surface();
 
             let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
             if let Some(responder) = &self.ssh_mfa_responder {
                 responder.cancel();
             }
@@ -2340,6 +2353,7 @@ impl Terminal {
             }
             self.reset_terminal_surface();
             let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
             let recording_tap = self.recording_tap();
 
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2528,7 +2542,7 @@ mod tests {
         RecordingStartRequest, RecordingState, RecordingTapOutcome, RecordingTransition,
         read_recording,
     };
-    use crate::{TerminalEvent, TerminalSize};
+    use crate::{TerminalBackend, TerminalEvent, TerminalInputHandle, TerminalSize};
     use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
@@ -2541,8 +2555,53 @@ mod tests {
     use std::path::PathBuf;
     #[cfg(not(target_os = "windows"))]
     use std::process::Command;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc::unbounded_channel;
+
+    struct ResizeProbe {
+        sizes: Arc<Mutex<Vec<TerminalSize>>>,
+    }
+
+    impl TerminalBackend for ResizeProbe {
+        fn write(&self, _data: Vec<u8>) {}
+
+        fn resize(&self, size: TerminalSize) {
+            self.sizes
+                .lock()
+                .expect("resize probe should lock")
+                .push(size);
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    struct InputRouteProbe {
+        direct_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        external_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl TerminalBackend for InputRouteProbe {
+        fn write(&self, data: Vec<u8>) {
+            self.direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .push(data);
+        }
+
+        fn resize(&self, _size: TerminalSize) {}
+
+        fn shutdown(&self) {}
+
+        fn input_handle(&self) -> Option<TerminalInputHandle> {
+            let external_writes = self.external_writes.clone();
+            Some(TerminalInputHandle::new(move |data| {
+                external_writes
+                    .lock()
+                    .expect("external input probe should lock")
+                    .push(data);
+            }))
+        }
+    }
 
     fn test_terminal_with_recording_runtime(
         recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
@@ -2656,22 +2715,23 @@ mod tests {
             RecordingTapOutcome::Inactive,
             first_tap.record_output(b"paused output")
         );
-
-        terminal.next_connection_generation();
-        terminal.reset_terminal_surface();
-
-        assert_eq!(
-            RecordingState::Paused,
-            terminal
-                .recording_snapshot()
-                .expect("recording state survives surface reset")
-                .state
-        );
         assert_eq!(
             RecordingTransition::Changed,
             terminal
                 .resume_recording()
                 .expect("resume terminal recording")
+        );
+        let generation = terminal.next_connection_generation();
+        assert_eq!(2, generation);
+        terminal.record_connection_generation_marker(generation);
+        terminal.reset_terminal_surface();
+
+        assert_eq!(
+            RecordingState::Recording,
+            terminal
+                .recording_snapshot()
+                .expect("recording state survives surface reset")
+                .state
         );
         let replacement_tap = terminal.recording_tap().expect("replacement backend tap");
         assert_eq!(
@@ -2685,20 +2745,131 @@ mod tests {
 
         let recording = read_recording(&final_path, RecordingFileLimits::default())
             .expect("read completed recording");
-        let output = recording
+        let events = recording
             .events
             .into_iter()
-            .filter_map(|event| match event.kind {
-                RecordingEventKind::Output(data) => Some(data),
-                _ => None,
-            })
+            .map(|event| event.kind)
             .collect::<Vec<_>>();
         assert_eq!(
             vec![
-                b"before reconnect\r\n".to_vec(),
-                b"after reconnect\r\n".to_vec()
+                RecordingEventKind::Output(b"before reconnect\r\n".to_vec()),
+                RecordingEventKind::Marker("connection_generation:2".to_string()),
+                RecordingEventKind::Output(b"after reconnect\r\n".to_vec()),
             ],
-            output
+            events
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_resize_records_only_cell_changes_delivered_to_a_backend() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let final_path = directory.path().join("resize.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(ResizeProbe {
+            sizes: sizes.clone(),
+        }));
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_recording(test_recording_start_request(final_path.clone()))
+                .expect("start terminal recording")
+        );
+
+        let recorded_size = TerminalSize {
+            rows: 40,
+            cols: 100,
+            pixel_width: 1_000,
+            pixel_height: 800,
+        };
+        terminal.resize(100, 40, 1_000, 800);
+
+        // Pixel-only changes are cached for the next backend nudge, but do not
+        // resize the grid or create another recording event.
+        terminal.resize(100, 40, 1_200, 900);
+        terminal.nudge_resize();
+
+        // A grid change that cannot be delivered to an active backend is not
+        // represented as if the remote/local session had accepted it.
+        terminal.backend = None;
+        terminal.resize(120, 50, 1_440, 1_000);
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal.stop_recording().expect("stop terminal recording")
+        );
+        assert_eq!(
+            vec![
+                recorded_size,
+                TerminalSize {
+                    rows: 40,
+                    cols: 100,
+                    pixel_width: 1_200,
+                    pixel_height: 900,
+                },
+            ],
+            *sizes.lock().expect("resize probe should lock")
+        );
+
+        let recording = read_recording(&final_path, RecordingFileLimits::default())
+            .expect("read completed recording");
+        assert_eq!(
+            vec![RecordingEventKind::Resize(TerminalSize {
+                rows: recorded_size.rows,
+                cols: recorded_size.cols,
+                // Asciicast v2 resize events carry cell dimensions only.
+                pixel_width: 0,
+                pixel_height: 0,
+            })],
+            recording
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_external_input_uses_the_backend_external_input_route() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let direct_writes = Arc::new(Mutex::new(Vec::new()));
+        let external_writes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(InputRouteProbe {
+            direct_writes: direct_writes.clone(),
+            external_writes: external_writes.clone(),
+        }));
+
+        terminal.write_external_input(b"public mcp input");
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert_eq!(
+            vec![b"public mcp input".to_vec()],
+            *external_writes
+                .lock()
+                .expect("external input probe should lock")
+        );
+
+        terminal.write(b"human input");
+        assert_eq!(
+            vec![b"human input".to_vec()],
+            *direct_writes
+                .lock()
+                .expect("direct input probe should lock")
         );
 
         terminal.shutdown();

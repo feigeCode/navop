@@ -217,6 +217,24 @@ fn partial_user_input_is_cleared_before_agent_command() {
 }
 
 #[test]
+fn partial_external_input_is_cleared_before_agent_command() {
+    let mut supervisor = ready_supervisor();
+    assert!(
+        supervisor
+            .on_input(TerminalInputSource::ExternalInput, b"git sta")
+            .is_empty()
+    );
+
+    assert!(matches!(
+        supervisor.start(132, request("pwd")).first(),
+        Some(ExecEffect::Write {
+            source: TerminalInputSource::AgentPreflight,
+            data,
+        }) if data == &[0x03]
+    ));
+}
+
+#[test]
 fn unsubmitted_agent_input_is_cleared_before_next_command() {
     let mut supervisor = ready_supervisor();
     let mut insert_only = request("git status");

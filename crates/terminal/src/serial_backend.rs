@@ -1,6 +1,7 @@
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
@@ -8,6 +9,7 @@ use alacritty_terminal::term::Term;
 
 use one_core::storage::models::SerialParams;
 
+use crate::exec_supervisor::TerminalInputSource;
 use crate::pty_backend::GpuiEventProxy;
 use crate::recording::RecordingTap;
 use crate::serial_ingress::{SerialParserIngress, run_serial_reader};
@@ -17,7 +19,10 @@ use crate::{
 };
 
 enum SerialCommand {
-    Write(Vec<u8>),
+    Write {
+        source: TerminalInputSource,
+        data: Vec<u8>,
+    },
     Shutdown,
 }
 
@@ -109,14 +114,14 @@ impl SerialBackend {
         // 克隆一份用于写入
         let write_port = port.try_clone()?;
 
-        let (command_tx, mut command_rx) = unbounded_channel::<SerialCommand>();
+        let (command_tx, command_rx) = unbounded_channel::<SerialCommand>();
         let shutdown = CancellationToken::new();
         let parser_ingress = SerialParserIngress::spawn_with_recording(
             term,
             event_proxy,
             performance_metrics.clone(),
             on_disconnect,
-            recording_tap,
+            recording_tap.clone(),
         )?;
 
         // 读取线程只负责串口 I/O 和有界入队；同步解析由 serial-parser 线程完成。
@@ -137,21 +142,7 @@ impl SerialBackend {
         // 写入线程：从 command channel 接收命令并写入串口
         let write_task = std::thread::Builder::new()
             .name("serial-write".into())
-            .spawn(move || {
-                let mut port = write_port;
-                while let Some(cmd) = command_rx.blocking_recv() {
-                    match cmd {
-                        SerialCommand::Write(data) => {
-                            if port.write_all(&data).is_err() {
-                                break;
-                            }
-                        }
-                        SerialCommand::Shutdown => {
-                            break;
-                        }
-                    }
-                }
-            });
+            .spawn(move || run_serial_writer(write_port, command_rx, recording_tap));
         if let Err(error) = write_task {
             shutdown.cancel();
             parser_ingress.abort();
@@ -183,7 +174,10 @@ impl TerminalBackend for SerialBackend {
     fn write(&self, data: Vec<u8>) {
         self.performance_metrics
             .record_input(TerminalInputMetricSource::User, data.len());
-        let _ = self.command_tx.send(SerialCommand::Write(data));
+        let _ = self.command_tx.send(SerialCommand::Write {
+            source: TerminalInputSource::User,
+            data,
+        });
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
@@ -191,7 +185,10 @@ impl TerminalBackend for SerialBackend {
         Some(TerminalInputHandle::with_metrics(
             self.performance_metrics.clone(),
             move |data| {
-                let _ = tx.send(SerialCommand::Write(data));
+                let _ = tx.send(SerialCommand::Write {
+                    source: TerminalInputSource::ExternalInput,
+                    data,
+                });
             },
         ))
     }
@@ -208,6 +205,28 @@ impl TerminalBackend for SerialBackend {
 impl Drop for SerialBackend {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+fn run_serial_writer(
+    mut port: impl Write,
+    mut command_rx: UnboundedReceiver<SerialCommand>,
+    recording_tap: Option<RecordingTap>,
+) {
+    while let Some(command) = command_rx.blocking_recv() {
+        match command {
+            SerialCommand::Write { source, data } => {
+                if port.write_all(&data).is_err() {
+                    break;
+                }
+                if source.is_recordable_user_input() {
+                    if let Some(tap) = &recording_tap {
+                        let _ = tap.record_input(&data);
+                    }
+                }
+            }
+            SerialCommand::Shutdown => break,
+        }
     }
 }
 
@@ -321,16 +340,85 @@ mod tests {
 
         assert!(matches!(
             command_rx.try_recv(),
-            Ok(SerialCommand::Write(data)) if data == b"direct"
+            Ok(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            }) if data == b"direct"
         ));
         assert!(matches!(
             command_rx.try_recv(),
-            Ok(SerialCommand::Write(data)) if data == b"handle"
+            Ok(SerialCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data,
+            }) if data == b"handle"
         ));
         assert!(command_rx.try_recv().is_err());
         assert_eq!(
             (b"direct".len() + b"handle".len()) as u64,
             metrics.snapshot().user_input_bytes
+        );
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("mock serial write failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn serial_input_recording_captures_only_successfully_written_user_bytes() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Serial,
+            true,
+        );
+        let (command_tx, command_rx) = unbounded_channel();
+        command_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data: b"user input".to_vec(),
+            })
+            .expect("queue user input");
+        command_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data: b"external input".to_vec(),
+            })
+            .expect("queue external input");
+        command_tx
+            .send(SerialCommand::Shutdown)
+            .expect("queue writer shutdown");
+
+        run_serial_writer(Vec::new(), command_rx, Some(recording.tap()));
+
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
+        ));
+
+        let failed_recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Serial,
+            true,
+        );
+        let (failed_tx, failed_rx) = unbounded_channel();
+        failed_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data: b"failed input".to_vec(),
+            })
+            .expect("queue failed input");
+        run_serial_writer(FailingWriter, failed_rx, Some(failed_recording.tap()));
+
+        assert!(
+            failed_recording.finish().events.is_empty(),
+            "a failed serial write must not be recorded"
         );
     }
 
