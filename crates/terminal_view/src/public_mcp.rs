@@ -187,7 +187,7 @@ impl TerminalPublicMcpRegistration {
 }
 
 pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublicMcpRegistration> {
-    let connection_kind = terminal.connection_kind();
+    let connection_kind = terminal.live_connection_kind()?;
     let connection_id = terminal.connection_id();
     let session_id = terminal_session_id(connection_kind, connection_id, Uuid::new_v4())?;
     let state = Arc::new(Mutex::new(snapshot_for_terminal(
@@ -515,11 +515,18 @@ fn map_state(state: &ConnectionState) -> McpConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{AppContext as _, TestAppContext};
+    use one_core::settings::AppSettings;
     use public_mcp::registry::{TerminalControlCancellation, TerminalControlSessionHandle};
     use public_mcp::terminal_control::{
         TerminalControlAction, TerminalControlReadiness, TerminalControlRequest,
     };
     use std::sync::{Arc, Mutex};
+    use terminal::recording::{
+        ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
+        RecordingBackend, RecordingCompleteness, RecordingHeader, RecordingHeaderMetadata,
+        RecordingPlaybackLimits,
+    };
     use terminal::{
         TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
         TerminalControlOutput as CoreTerminalControlOutput,
@@ -544,6 +551,89 @@ mod tests {
         assert!(
             terminal_session_id(TerminalConnectionKind::Serial, Some(42), Uuid::nil()).is_none()
         );
+    }
+
+    fn recording_playback(backend: RecordingBackend) -> ParsedRecording {
+        ParsedRecording {
+            header: RecordingHeader {
+                version: ASCIICAST_VERSION,
+                width: 80,
+                height: 24,
+                timestamp: 1_700_000_000,
+                navop: RecordingHeaderMetadata {
+                    format_version: NAVOP_RECORDING_FORMAT_VERSION,
+                    recording_id: "public-mcp-playback".to_string(),
+                    session_id: "recorded-ssh-session".to_string(),
+                    backend,
+                    application_version: "0.1.0-test".to_string(),
+                    started_at_unix_ms: 1_700_000_000_000,
+                    capture_input: false,
+                    event_stream: NAVOP_EVENT_STREAM.to_string(),
+                },
+            },
+            events: Vec::new(),
+            completeness: RecordingCompleteness::Complete,
+        }
+    }
+
+    #[gpui::test]
+    fn ssh_recording_playback_is_not_registered_with_public_mcp(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            one_core::gpui_tokio::init(cx);
+            init(cx);
+            let terminal = cx.new(|cx| {
+                Terminal::new_recording_playback(
+                    recording_playback(RecordingBackend::Ssh),
+                    RecordingPlaybackLimits::default(),
+                    cx,
+                )
+                .expect("create SSH recording playback")
+            });
+
+            assert_eq!(
+                TerminalConnectionKind::Ssh,
+                terminal.read(cx).connection_kind()
+            );
+            assert_eq!(None, terminal.read(cx).live_connection_kind());
+            assert!(register_terminal(terminal.read(cx), cx).is_none());
+            assert!(
+                registry(cx)
+                    .expect("public MCP registry")
+                    .list_sessions()
+                    .is_empty()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn local_recording_playback_is_not_registered_with_public_mcp(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            one_core::gpui_tokio::init(cx);
+            init(cx);
+            let terminal = cx.new(|cx| {
+                Terminal::new_recording_playback(
+                    recording_playback(RecordingBackend::Local),
+                    RecordingPlaybackLimits::default(),
+                    cx,
+                )
+                .expect("create local recording playback")
+            });
+
+            assert_eq!(
+                TerminalConnectionKind::Local,
+                terminal.read(cx).connection_kind()
+            );
+            assert_eq!(None, terminal.read(cx).live_connection_kind());
+            assert!(register_terminal(terminal.read(cx), cx).is_none());
+            assert!(
+                registry(cx)
+                    .expect("public MCP registry")
+                    .list_sessions()
+                    .is_empty()
+            );
+        });
     }
 
     #[test]
