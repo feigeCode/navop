@@ -174,6 +174,7 @@ impl TerminalView {
         state: CenterRegionState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let show_command_bar = self.accepts_live_terminal_input(cx);
         let workspace_editor = self
             .workspace_editor
             .as_ref()
@@ -194,7 +195,9 @@ impl TerminalView {
                 .min_w_0()
                 .overflow_hidden()
                 .child(self.render_terminal_viewport(state.font_family, cx))
-                .child(self.command_bar.clone())
+                .when(show_command_bar, |this| {
+                    this.child(self.command_bar.clone())
+                })
                 .into_any_element()
         };
         v_flex()

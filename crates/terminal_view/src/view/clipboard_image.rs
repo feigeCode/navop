@@ -7,6 +7,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         let Some(ssh_config) = self
             .terminal
             .read(cx)
@@ -45,6 +48,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         let remote_path = remote_clipboard_image_path(image.format, current_timestamp_millis());
         let bytes = image.bytes;
         let window_handle = window.window_handle();
@@ -109,6 +115,9 @@ impl TerminalView {
     }
 
     pub(super) fn paste_remote_image_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         let mode = self.terminal.read(cx).mode();
         self.apply_paste_to_history_prompt(path, cx);
         self.write_to_pty(terminal_paste_bytes(path, mode), cx);

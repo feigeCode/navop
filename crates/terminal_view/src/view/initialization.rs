@@ -24,7 +24,8 @@ impl TerminalView {
         // 获取初始颜色
         let colors = terminal.read(cx).term().lock().colors().clone();
         let connection_kind = terminal.read(cx).connection_kind();
-        let is_local_terminal = connection_kind == TerminalConnectionKind::Local;
+        let live_connection_kind = terminal.read(cx).live_connection_kind();
+        let is_local_terminal = live_connection_kind == Some(TerminalConnectionKind::Local);
 
         // 终端默认跟随应用主题（需要在创建侧边栏之前）。
         let default_theme = TerminalTheme::from_application_theme(cx.theme());
@@ -32,8 +33,16 @@ impl TerminalView {
         let default_font_family: SharedString = default_monospace_font().into();
         let default_font_fallbacks = default_font_fallbacks();
         let default_line_height_scale = DEFAULT_LINE_HEIGHT_SCALE;
-        let ssh_config = terminal.read(cx).ssh_config().cloned();
-        let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
+        let (ssh_config, ssh_session_manager) = if live_ssh_feature_supported(live_connection_kind)
+        {
+            let terminal = terminal.read(cx);
+            (
+                terminal.ssh_config().cloned(),
+                terminal.ssh_session_manager().cloned(),
+            )
+        } else {
+            (None, None)
+        };
         let history_scope = terminal_history_scope(connection_kind, connection_id);
         let public_mcp_registration = {
             let terminal = terminal.read(cx);

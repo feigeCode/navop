@@ -2,6 +2,9 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn write_to_pty(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         self.write_input_to_terminal(&data, cx);
         self.broadcast_user_input(&data, cx);
     }
@@ -14,6 +17,9 @@ impl TerminalView {
     }
 
     pub(super) fn write_input_to_terminal(&mut self, data: &[u8], cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         // 用户输入时自动滚动到底部
         let display_offset = self.terminal.read(cx).term().lock().grid().display_offset();
         if should_scroll_to_bottom_on_user_input(
@@ -31,6 +37,9 @@ impl TerminalView {
     }
 
     pub(super) fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         if !text.is_empty() {
             self.apply_inline_input_to_history_prompt(text, cx);
             self.write_to_pty(text.as_bytes().to_vec(), cx);
@@ -43,6 +52,9 @@ impl TerminalView {
         range: Option<std::ops::Range<usize>>,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         self.ime_state = Some(ImeState {
             marked_range: range,
         });
@@ -68,6 +80,18 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if keystroke_matches_shortcuts(
+            &event.keystroke,
+            &shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]),
+        ) {
+            self.copy(&Copy, _window, cx);
+            return;
+        }
+
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
+
         // 输入时暂停闪烁
         if self.cursor_blink_enabled {
             self.blink_manager.update(cx, BlinkCursor::pause);
@@ -78,14 +102,6 @@ impl TerminalView {
             &shortcuts_for(cx, action_id::TERMINAL_PASTE, &terminal_paste_defaults()),
         ) {
             self.paste(&Paste, _window, cx);
-            return;
-        }
-
-        if keystroke_matches_shortcuts(
-            &event.keystroke,
-            &shortcuts_for(cx, action_id::TERMINAL_COPY, &[TERMINAL_COPY_SHORTCUT]),
-        ) {
-            self.copy(&Copy, _window, cx);
             return;
         }
 

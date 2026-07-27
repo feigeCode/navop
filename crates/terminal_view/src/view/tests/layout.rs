@@ -73,6 +73,47 @@ fn terminal_context_menu_exposes_clear_screen() {
 }
 
 #[test]
+fn terminal_context_menu_disables_live_actions_during_playback() {
+    let source = include_str!("../terminal_render.rs");
+    let context_menu = source
+        .split("pub(super) fn build_context_menu")
+        .nth(1)
+        .expect("terminal context menu should exist");
+    let paste = context_menu
+        .find("ContextMenu.paste_with_shortcut")
+        .expect("paste item should remain available for live terminals");
+    let clear_screen = context_menu
+        .find("ContextMenu.clear_screen_with_shortcut")
+        .expect("clear-screen item should remain available for live terminals");
+    let paste_gate = context_menu[paste..clear_screen]
+        .find(".disabled(!accepts_live_input)")
+        .expect("paste must be disabled without a live input capability");
+    let select_all = context_menu
+        .find("ContextMenu.select_all_with_shortcut")
+        .expect("select-all should remain available during playback");
+    let clear_screen_gate = context_menu[clear_screen..select_all]
+        .find(".disabled(!accepts_live_input)")
+        .expect("clear screen must be disabled without a live input capability");
+
+    assert!(paste_gate > 0);
+    assert!(clear_screen_gate > 0);
+}
+
+#[test]
+fn terminal_right_click_paste_is_only_enabled_for_live_input() {
+    let source = include_str!("../render_surface.rs");
+    let viewport_state = source
+        .split("fn terminal_viewport_state")
+        .nth(1)
+        .and_then(|source| source.split("fn render_terminal_core").next())
+        .expect("terminal viewport state should exist");
+
+    assert!(
+        viewport_state.contains("right_click_paste: self.right_click_paste && accepts_live_input")
+    );
+}
+
+#[test]
 fn terminal_tools_are_not_exposed_as_external_sidebar_contributions() {
     let source = include_str!("../tab_content.rs");
     let sidebar_contributions = source
@@ -159,6 +200,29 @@ fn terminal_command_bar_is_between_viewport_and_optional_bottom_tool() {
 
     assert!(viewport < command_bar);
     assert!(command_bar < bottom_tool);
+}
+
+#[test]
+fn terminal_command_bar_is_only_rendered_for_live_terminal_input() {
+    let render_source = include_str!("../render_layout.rs");
+    let center_region = render_source
+        .split("fn render_center_region")
+        .nth(1)
+        .and_then(|source| source.split("fn render_bottom_region").next())
+        .expect("center region implementation should exist");
+
+    let capability = center_region
+        .find("let show_command_bar = self.accepts_live_terminal_input(cx);")
+        .expect("command bar visibility must use the live terminal capability");
+    let conditional = center_region
+        .find(".when(show_command_bar")
+        .expect("command bar must be conditionally rendered");
+    let command_bar = center_region
+        .find(".child(self.command_bar.clone())")
+        .expect("live terminals should retain the command bar");
+
+    assert!(capability < conditional);
+    assert!(conditional < command_bar);
 }
 
 #[test]

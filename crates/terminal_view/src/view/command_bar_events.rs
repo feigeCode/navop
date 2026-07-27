@@ -15,6 +15,9 @@ impl TerminalView {
     ) {
         match event {
             TerminalCommandBarEvent::Submit(command) => {
+                if !self.accepts_live_terminal_input(cx) {
+                    return;
+                }
                 let mut lines = command_batch_lines(command).into_iter();
                 let Some(first) = lines.next() else {
                     return;
@@ -37,6 +40,9 @@ impl TerminalView {
                 self.focus_terminal(window, cx);
             }
             TerminalCommandBarEvent::InputToPty(command) => {
+                if !self.accepts_live_terminal_input(cx) {
+                    return;
+                }
                 self.paste_text(command, window, cx);
             }
             TerminalCommandBarEvent::FocusTerminal => self.focus_terminal(window, cx),

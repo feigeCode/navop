@@ -6,6 +6,7 @@ struct TerminalViewportState {
     can_reconnect: bool,
     has_selection: bool,
     selection_text: Option<String>,
+    accepts_live_input: bool,
     right_click_paste: bool,
     show_scrollbar: bool,
 }
@@ -39,6 +40,7 @@ impl TerminalView {
         cx: &App,
     ) -> TerminalViewportState {
         let block_selection_text = self.block_selection_text(cx);
+        let accepts_live_input = self.accepts_live_terminal_input(cx);
         let terminal = self.terminal.read(cx);
         let connection_state = terminal.connection_state().clone();
         let can_reconnect = terminal.can_reconnect();
@@ -53,7 +55,8 @@ impl TerminalView {
             can_reconnect,
             has_selection,
             selection_text,
-            right_click_paste: self.right_click_paste,
+            accepts_live_input,
+            right_click_paste: self.right_click_paste && accepts_live_input,
             show_scrollbar: !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0,
         }
     }
@@ -172,12 +175,14 @@ impl TerminalView {
         }
         let has_selection = state.has_selection;
         let selection_text = state.selection_text.clone();
+        let accepts_live_input = state.accepts_live_input;
         terminal_surface
             .context_menu(move |menu, window, cx| {
                 Self::build_context_menu(
                     menu,
                     has_selection,
                     selection_text.clone(),
+                    accepts_live_input,
                     &view,
                     &sidebar,
                     window,

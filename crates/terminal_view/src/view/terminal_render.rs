@@ -62,6 +62,7 @@ impl TerminalView {
         menu: PopupMenu,
         has_selection: bool,
         selection_text: Option<String>,
+        accepts_live_input: bool,
         view: &Entity<Self>,
         sidebar: &Entity<TerminalSidebar>,
         _window: &mut Window,
@@ -100,6 +101,7 @@ impl TerminalView {
                     shortcut = paste_shortcut
                 ))
                 .action(Box::new(Paste))
+                .disabled(!accepts_live_input)
                 .on_click(move |_, window, cx| {
                     let _ = view_paste.update(cx, |this, cx| {
                         this.paste(&Paste, window, cx);
@@ -114,6 +116,7 @@ impl TerminalView {
                 ))
                 .icon(IconName::Delete)
                 .action(Box::new(ClearScreen))
+                .disabled(!accepts_live_input)
                 .on_click(move |_, window, cx| {
                     let _ = view_clear_screen.update(cx, |this, cx| {
                         this.clear_screen(&ClearScreen, window, cx);

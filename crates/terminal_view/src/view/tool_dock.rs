@@ -2,6 +2,9 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         if self.try_accept_explicit_history_prompt(cx) {
             return;
         }
@@ -15,6 +18,9 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         self.dismiss_history_prompt();
         self.write_to_pty(b"\x1b[Z".to_vec(), cx);
     }
