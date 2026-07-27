@@ -1,6 +1,80 @@
 use gpui::prelude::FluentBuilder;
 
 use super::*;
+use crate::pointer::scale_filled_remote_cursor_bounds;
+
+struct RemoteDesktopCanvasPaint {
+    frame: Option<Arc<RenderImage>>,
+    cursor: Option<cursor::RemoteCursorPaint>,
+}
+
+fn remote_desktop_frame_canvas(
+    frame: RemoteDesktopCanvasPaint,
+    focus_handle: FocusHandle,
+) -> impl IntoElement {
+    canvas(
+        move |_, _, _| frame,
+        move |bounds, frame, window, cx| {
+            window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
+            paint_remote_frame(bounds, frame.frame, window);
+            paint_remote_cursor(bounds, frame.cursor, window);
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+    .min_w_0()
+    .min_h_0()
+    .overflow_hidden()
+}
+
+fn paint_remote_frame(
+    bounds: Bounds<Pixels>,
+    frame: Option<Arc<RenderImage>>,
+    window: &mut Window,
+) {
+    let Some(frame) = frame else {
+        return;
+    };
+    if let Err(error) = window.paint_image(bounds, Corners::default(), frame, 0, false) {
+        tracing::warn!(?error, "failed to paint remote desktop frame");
+    }
+}
+
+fn paint_remote_cursor(
+    bounds: Bounds<Pixels>,
+    cursor: Option<cursor::RemoteCursorPaint>,
+    window: &mut Window,
+) {
+    let Some(cursor) = cursor else {
+        return;
+    };
+    let Some(bounds) = remote_cursor_bounds(bounds, cursor.geometry) else {
+        return;
+    };
+    if let Err(error) = window.paint_image(bounds, Corners::default(), cursor.image, 0, false) {
+        tracing::warn!(?error, "failed to paint remote desktop cursor");
+    }
+}
+
+fn remote_cursor_bounds(
+    bounds: Bounds<Pixels>,
+    geometry: crate::pointer::RemoteCursorGeometry,
+) -> Option<Bounds<Pixels>> {
+    let local = scale_filled_remote_cursor_bounds(
+        LocalBounds {
+            left: bounds.left().into(),
+            top: bounds.top().into(),
+            width: bounds.size.width.into(),
+            height: bounds.size.height.into(),
+        },
+        geometry,
+    )?;
+    Some(Bounds::new(
+        point(px(local.left), px(local.top)),
+        size(px(local.width), px(local.height)),
+    ))
+}
 
 impl Focusable for RemoteDesktopView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
@@ -36,6 +110,7 @@ impl TabContent for RemoteDesktopView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Task<bool> {
+        self.cursor.reset_session();
         close_runtime_once(&mut self.input_tx);
         Task::ready(true)
     }
@@ -43,7 +118,21 @@ impl TabContent for RemoteDesktopView {
 
 impl Render for RemoteDesktopView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.drain_output(cx);
+        // Only release frames retired by the previous render. A reconnect can
+        // reset the session while draining output below; delaying those drops
+        // until the next render keeps the image alive until the scene that
+        // referenced it has been replaced.
+        for frame in self.pending_frame_drops.drain(..) {
+            if let Err(error) = window.drop_image(frame) {
+                tracing::warn!(?error, "failed to release remote desktop frame");
+            }
+        }
+        for cursor in self.cursor.take_pending_images() {
+            if let Err(error) = window.drop_image(cursor) {
+                tracing::warn!(?error, "failed to release remote desktop cursor");
+            }
+        }
+        self.drain_output(window, cx);
         self.sync_local_clipboard(window, cx);
         self.flush_pending_start();
         self.flush_pending_resize();
@@ -53,15 +142,26 @@ impl Render for RemoteDesktopView {
         {
             tracing::warn!(?error, "failed to retire remote desktop frame");
         }
+        if let Some(retired) = self.cursor.promote_latest()
+            && let Err(error) = window.drop_image(retired)
+        {
+            tracing::warn!(?error, "failed to retire remote desktop cursor");
+        }
         let rendered_frame = self.rendered_frames.current().cloned();
+        let show_empty_status = rendered_frame.is_none();
+        let canvas_paint = RemoteDesktopCanvasPaint {
+            frame: rendered_frame,
+            cursor: self.cursor.paint_state(self.remote_size),
+        };
         let view = cx.entity();
         let focus_handle = self.focus_handle.clone();
-        let show_status_overlay = !self.connected;
 
         let content = div()
+            .id("remote-desktop-content")
             .size_full()
             .min_w_0()
             .min_h_0()
+            .relative()
             .flex()
             .items_center()
             .justify_center()
@@ -75,6 +175,9 @@ impl Render for RemoteDesktopView {
             .capture_key_down(cx.listener(Self::handle_key_down))
             .capture_key_up(cx.listener(Self::handle_key_up))
             .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
+            .on_hover(cx.listener(|this, hovered, _, _| {
+                this.cursor.set_pointer_hovered(*hovered);
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.send_pointer_move(event.position, window);
                 cx.stop_propagation();
@@ -134,28 +237,13 @@ impl Render for RemoteDesktopView {
                 this.send_scroll(event);
                 cx.stop_propagation();
             }))
-            .child(
-                canvas(
-                    |_, _, _| (),
-                    move |bounds, _, window, cx| {
-                        window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
-            .when_some(rendered_frame.clone(), |this, frame| {
-                this.child(
-                    img(frame)
-                        .size_full()
-                        .min_w_0()
-                        .min_h_0()
-                        .object_fit(ObjectFit::Fill),
-                )
-            })
-            .when(rendered_frame.is_none(), |this| {
+            .child(remote_desktop_frame_canvas(canvas_paint, focus_handle))
+            .when(show_empty_status, |this| {
                 this.child(
                     div()
+                        .min_w_0()
+                        .max_w_full()
+                        .overflow_hidden()
                         .px_4()
                         .py_2()
                         .text_color(cx.theme().muted_foreground)
@@ -177,29 +265,5 @@ impl Render for RemoteDesktopView {
                 }
             })
             .child(content)
-            .when(show_status_overlay, |this| {
-                this.child(
-                    div()
-                        .id("remote-desktop-status-overlay")
-                        .absolute()
-                        .top_2()
-                        .left_2()
-                        .max_w(px(520.0))
-                        .px_3()
-                        .py_1()
-                        .border_1()
-                        .rounded_sm()
-                        .bg(cx.theme().background)
-                        .border_color(cx.theme().border)
-                        .text_sm()
-                        .text_color(cx.theme().foreground)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_reconnect();
-                            cx.stop_propagation();
-                        }))
-                        .child(self.status.clone()),
-                )
-            })
     }
 }

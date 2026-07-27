@@ -1,10 +1,16 @@
 use super::*;
+use remote_desktop::RemoteDesktopCursor;
 
 impl RemoteDesktopView {
     pub(super) fn start_runtime(&mut self, size: (u16, u16)) {
         if self.input_tx.is_some() {
             return;
         }
+        self.frame_sync.reset_session();
+        self.capabilities = None;
+        self.framebuffer = None;
+        self.remote_size = None;
+        self.cursor.reset_session();
         let runtime = create_backend(self.options.clone())
             .start(RemoteDesktopSize {
                 width: size.0,
@@ -19,7 +25,7 @@ impl RemoteDesktopView {
         self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
     }
 
-    pub(super) fn drain_output(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn drain_output(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(output_rx) = self.output_rx.as_ref() else {
             return;
         };
@@ -30,15 +36,26 @@ impl RemoteDesktopView {
             .chain(batch.latest_frame)
             .chain(batch.latest_delta)
         {
-            self.apply_output(output, cx);
+            self.apply_output(output, window, cx);
         }
     }
 
-    fn apply_output(&mut self, output: RemoteDesktopOutput, cx: &mut Context<Self>) {
+    fn apply_output(
+        &mut self,
+        output: RemoteDesktopOutput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match output {
-            RemoteDesktopOutput::Connected { width, height, .. } => {
+            RemoteDesktopOutput::Connected {
+                width,
+                height,
+                capabilities,
+            } => {
                 self.remote_size = Some((width, height));
+                self.capabilities = Some(capabilities);
                 self.connected = true;
+                self.frame_sync.connected();
                 self.status = SharedString::from(t!("RemoteDesktop.status_connected").to_string());
             }
             RemoteDesktopOutput::Frame {
@@ -46,16 +63,26 @@ impl RemoteDesktopView {
                 height,
                 rgba,
             } => {
-                self.remote_size = Some((width, height));
-                self.install_frame(rgba_to_render_image(width, height, rgba));
+                if !self.connected {
+                    return;
+                }
+                if self.install_rgba_frame(width, height, rgba) {
+                    self.remote_size = Some((width, height));
+                    self.frame_sync.accept_base((width, height));
+                }
             }
             RemoteDesktopOutput::FrameBgra {
                 width,
                 height,
                 bgra,
             } => {
-                self.remote_size = Some((width, height));
-                self.install_bgra_frame(width, height, bgra);
+                if !self.connected {
+                    return;
+                }
+                if self.install_bgra_frame(width, height, bgra) {
+                    self.remote_size = Some((width, height));
+                    self.frame_sync.accept_base((width, height));
+                }
             }
             RemoteDesktopOutput::FrameBgraRects {
                 width,
@@ -63,135 +90,92 @@ impl RemoteDesktopView {
                 rects,
                 bgra,
             } => {
-                self.remote_size = Some((width, height));
+                if !self.connected {
+                    return;
+                }
                 self.apply_bgra_rects(width, height, &rects, bgra);
             }
+            RemoteDesktopOutput::Reconnecting(reconnect) => {
+                self.reset_session_state(None, SessionResetReason::Reconnecting);
+                self.notify_reconnecting(reconnect, window, cx);
+            }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
-            RemoteDesktopOutput::ConnectionFailure(message)
-            | RemoteDesktopOutput::Terminated(message) => self.handle_disconnect_status(message),
-            RemoteDesktopOutput::CursorDefault
-            | RemoteDesktopOutput::CursorHidden
-            | RemoteDesktopOutput::CursorPosition { .. } => {}
+            RemoteDesktopOutput::ConnectionFailure(message) => {
+                self.reset_session_state(Some(message), SessionResetReason::ConnectionFailure)
+            }
+            RemoteDesktopOutput::Terminated(message) => {
+                self.reset_session_state(Some(message), SessionResetReason::Terminated)
+            }
+            RemoteDesktopOutput::CursorDefault => self.apply_cursor_default(),
+            RemoteDesktopOutput::CursorHidden => self.apply_cursor_hidden(),
+            RemoteDesktopOutput::CursorPosition { x, y } => self.apply_cursor_position(x, y),
+            RemoteDesktopOutput::CursorBitmap(cursor) => self.apply_cursor_bitmap(cursor),
             RemoteDesktopOutput::ClipboardText { text } => self.apply_remote_clipboard(text, cx),
-        }
-    }
-
-    fn install_frame(&mut self, image: anyhow::Result<RenderImage>) {
-        match image {
-            Ok(image) => self.latest_frame = Some(Arc::new(image)),
-            Err(error) => self.status = SharedString::from(error.to_string()),
-        }
-    }
-
-    fn install_bgra_frame(&mut self, width: u16, height: u16, bgra: Vec<u8>) {
-        match RgbaFramebuffer::from_bgra(width, height, bgra) {
-            Ok(framebuffer) => {
-                let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
-                self.framebuffer = Some(framebuffer);
-                self.install_frame(image);
+            RemoteDesktopOutput::ClipboardFilesReady { transfer_id, paths } => {
+                self.apply_remote_clipboard_files(transfer_id, paths, window, cx)
             }
-            Err(error) => self.status = SharedString::from(error.to_string()),
-        }
-    }
-
-    fn apply_bgra_rects(
-        &mut self,
-        width: u16,
-        height: u16,
-        rects: &[RemoteDesktopFrameRect],
-        bgra: Vec<u8>,
-    ) {
-        let Some(framebuffer) = self.framebuffer.as_mut() else {
-            return;
-        };
-        if framebuffer.width() != width || framebuffer.height() != height {
-            return;
-        }
-        let mut offset: usize = 0;
-        for rect in rects {
-            let end = offset.saturating_add(rect.byte_len);
-            if end > bgra.len()
-                || framebuffer
-                    .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])
-                    .is_err()
-            {
-                return;
+            RemoteDesktopOutput::ClipboardTransferFailed {
+                transfer_id,
+                message,
+            } => {
+                tracing::warn!(
+                    transfer_id,
+                    error = %message,
+                    "remote desktop clipboard transfer failed"
+                );
+                self.notify_clipboard_transfer_failed(window, cx);
             }
-            offset = end;
         }
-        if offset != bgra.len() {
-            return;
-        }
-        let image = bgra_to_render_image(width, height, framebuffer.clone_rgba());
-        self.install_frame(image);
     }
 
-    fn apply_remote_clipboard(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.last_clipboard_text.as_deref() == Some(text.as_str()) {
-            return;
-        }
-        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        self.last_clipboard_text = Some(text);
-        self.last_clipboard_files = None;
-        self.last_clipboard_sync_at = Some(Instant::now());
-    }
-
-    pub(super) fn sync_local_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.focus_handle.is_focused(window) {
-            return;
-        }
-        if self
-            .last_clipboard_sync_at
-            .is_some_and(|synced_at| synced_at.elapsed() < CLIPBOARD_SYNC_INTERVAL)
-        {
-            return;
-        }
-        self.last_clipboard_sync_at = Some(Instant::now());
-        let Some(item) = cx.read_from_clipboard() else {
-            return;
-        };
-        let files = item.entries().iter().find_map(|entry| match entry {
-            ClipboardEntry::ExternalPaths(paths) => {
-                let paths: Vec<String> = paths
-                    .paths()
-                    .iter()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .collect();
-                (!paths.is_empty()).then_some(paths)
-            }
-            ClipboardEntry::Image(_) | ClipboardEntry::String(_) => None,
-        });
-        if let Some(paths) = files {
-            if self.last_clipboard_files.as_ref() == Some(&paths) {
-                return;
-            }
-            self.last_clipboard_files = Some(paths.clone());
-            self.last_clipboard_text = None;
-            self.send_input(RemoteDesktopInput::ClipboardFiles { paths });
-            return;
-        }
-        let Some(text) = item.text() else {
-            return;
-        };
-        if self.last_clipboard_text.as_deref() == Some(text.as_str()) {
-            return;
-        }
-        self.last_clipboard_text = Some(text.clone());
-        self.last_clipboard_files = None;
-        self.send_input(RemoteDesktopInput::ClipboardText { text });
-    }
-
-    fn handle_disconnect_status(&mut self, message: String) {
+    fn reset_session_state(&mut self, message: Option<String>, reason: SessionResetReason) {
         self.modifiers = Modifiers::default();
         self.connected = false;
-        self.status = SharedString::from(message);
+        if let Some(message) = message {
+            self.status = SharedString::from(message);
+        }
+        self.capabilities = None;
+        self.frame_sync.reset_session();
+        self.remote_size = None;
+        self.framebuffer = None;
+        self.cursor.reset_session();
+        if !preserve_presented_frame_during_session_reset(reason) {
+            self.pending_frame_drops.extend(
+                self.rendered_frames
+                    .take_all_distinct(self.latest_frame.take()),
+            );
+        }
+        self.last_resize_size = None;
+        self.pending_resize_size = None;
+        self.pending_resize_updated_at = None;
+        self.last_resize_sent_at = None;
     }
 
-    pub(super) fn request_reconnect(&mut self) {
-        self.modifiers = Modifiers::default();
-        self.connected = false;
-        self.status = SharedString::from(t!("RemoteDesktop.status_reconnecting").to_string());
-        self.send_input(RemoteDesktopInput::Reconnect);
+    fn apply_cursor_default(&mut self) {
+        if self.connected {
+            self.cursor.show_default();
+        }
+    }
+
+    fn apply_cursor_hidden(&mut self) {
+        if self.connected {
+            self.cursor.hide();
+        }
+    }
+
+    fn apply_cursor_position(&mut self, x: u16, y: u16) {
+        if self.connected {
+            self.cursor.set_position(x, y);
+        }
+    }
+
+    fn apply_cursor_bitmap(&mut self, cursor: RemoteDesktopCursor) {
+        if !self.connected {
+            return;
+        }
+        if let Err(error) = self.cursor.install(cursor) {
+            tracing::warn!(?error, "failed to install remote desktop cursor");
+        }
     }
 
     pub(super) fn update_content_bounds(
@@ -234,7 +218,22 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn flush_pending_resize(&mut self) {
-        if self.remote_size.is_none() {
+        if !resize::can_flush_pending_resize(self.connected, self.remote_size, self.capabilities) {
+            if resize::should_consume_local_resize(
+                self.connected,
+                self.remote_size,
+                self.capabilities,
+            ) {
+                if let (Some(size), Some(updated_at)) =
+                    (self.pending_resize_size, self.pending_resize_updated_at)
+                {
+                    if updated_at.elapsed() >= RESIZE_DEBOUNCE {
+                        self.pending_resize_size = None;
+                        self.pending_resize_updated_at = None;
+                        self.last_resize_size = Some(size);
+                    }
+                }
+            }
             return;
         }
         let (Some(size), Some(updated_at)) =

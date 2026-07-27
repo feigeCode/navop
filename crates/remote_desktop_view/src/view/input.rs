@@ -1,3 +1,7 @@
+use super::clipboard::{
+    LocalClipboardContent, allocate_local_clipboard_transfer_id, classify_local_clipboard,
+    clipboard_files_supported, clipboard_text_supported,
+};
 use super::*;
 
 impl RemoteDesktopView {
@@ -82,9 +86,15 @@ impl RemoteDesktopView {
         cx.stop_propagation();
     }
 
-    pub(super) fn remote_paste(&mut self, _: &RemotePaste, _: &mut Window, cx: &mut Context<Self>) {
-        self.send_local_clipboard_to_remote(cx);
-        self.send_clipboard_shortcut(ClipboardShortcut::Paste);
+    pub(super) fn remote_paste(
+        &mut self,
+        _: &RemotePaste,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.send_local_clipboard_to_remote(window, cx) {
+            self.send_clipboard_shortcut(ClipboardShortcut::Paste);
+        }
         cx.stop_propagation();
     }
 
@@ -105,13 +115,39 @@ impl RemoteDesktopView {
         }
     }
 
-    fn send_local_clipboard_to_remote(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
+    fn send_local_clipboard_to_remote(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(item) = cx.read_from_clipboard() else {
+            return true;
         };
-        self.last_clipboard_text = Some(text.clone());
         self.last_clipboard_sync_at = Some(Instant::now());
-        self.send_input(RemoteDesktopInput::ClipboardText { text });
+        match classify_local_clipboard(&item) {
+            LocalClipboardContent::Files(paths) => {
+                self.last_clipboard_files = Some(paths.clone());
+                self.last_clipboard_text = None;
+                if !clipboard_files_supported(self.options.protocol) {
+                    return false;
+                }
+                let transfer_id =
+                    allocate_local_clipboard_transfer_id(&mut self.next_clipboard_transfer_id);
+                self.send_input(RemoteDesktopInput::ClipboardFiles { transfer_id, paths });
+                true
+            }
+            LocalClipboardContent::Text(text) => {
+                self.last_clipboard_text = Some(text.clone());
+                self.last_clipboard_files = None;
+                if !clipboard_text_supported(self.options.protocol, &text) {
+                    self.notify_vnc_clipboard_ascii_warning(window, cx);
+                    return false;
+                }
+                self.send_input(RemoteDesktopInput::ClipboardText { text });
+                true
+            }
+            LocalClipboardContent::Other => true,
+        }
     }
 
     pub(super) fn handle_modifiers_changed(
@@ -131,6 +167,7 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn send_pointer_move(&mut self, position: Point<Pixels>, window: &mut Window) {
+        self.cursor.refresh_native_cursor();
         let Some((remote_width, remote_height)) = self.remote_size else {
             return;
         };
@@ -143,6 +180,13 @@ impl RemoteDesktopView {
         ) else {
             return;
         };
+        if should_track_local_cursor_position(
+            self.options.protocol,
+            self.connected,
+            self.options.read_only,
+        ) {
+            self.cursor.set_position(x, y);
+        }
         self.send_input(RemoteDesktopInput::MouseMove { x, y });
     }
 
@@ -200,6 +244,14 @@ fn map_mouse_button(button: MouseButton) -> Option<RemoteMouseButton> {
     }
 }
 
+fn should_track_local_cursor_position(
+    protocol: RemoteDesktopProtocol,
+    connected: bool,
+    read_only: bool,
+) -> bool {
+    protocol == RemoteDesktopProtocol::Vnc && connected && !read_only
+}
+
 fn pixels_to_f32(pixels: Pixels) -> f32 {
     pixels.into()
 }
@@ -212,3 +264,7 @@ fn bounds_to_local(bounds: Bounds<Pixels>) -> LocalBounds {
         height: pixels_to_f32(bounds.size.height),
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

@@ -18,5 +18,8 @@ image = { workspace = true }
 smallvec = { workspace = true }
 rust-i18n = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

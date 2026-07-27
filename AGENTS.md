@@ -366,6 +366,13 @@
 - **验证方式**：用源码 contract 约束 Windows native controls 先 occlude 再声明 control area；用真实 GPUI 布局测试覆盖普通 tab → RDP tab、超长错误状态和大尺寸首帧，确认标题栏控件 bounds 不变；最后在 Windows 实机验证切换 tab、点击 Min/Max/Close、最大化/还原和拖动空白标题栏。
 - **适用范围**：`crates/core/src/tab_container.rs` 以及其他包含 broad Drag 区的 Windows GPUI 自绘标题栏。
 
+- **标题**：RDP 自动重连必须保留最后呈现帧，瞬态状态不得替换 active tab 内容
+- **触发信号**：Windows 下 RDP 作为最后一个且当前激活的页签时，自动重连后窗口控件向内挤；打开其他页签后立即恢复；重连文案同时长期覆盖在远程桌面页面上。
+- **根因 / 约束**：RDP helper 会先发送 `ConnectionFailure` / `Terminated`，再经 backend signal 发送 `Reconnecting`。如果 View 在前一个终止事件里清掉 `RenderedFrameLifecycle::current`，或用 `connected` 门控当前图像，active view 会从大尺寸画面切换成状态文本/overlay，其 intrinsic layout 变化可继续影响 Windows window chrome。mailbox 丢弃旧 session 尚未呈现的 pending frame/delta 是正确隔离，不能与保留 View 已经呈现的最后一帧混为一谈。
+- **正确做法**：RDP 的 `ConnectionFailure`、`Terminated` 与 `Reconnecting` 都只重置输入、resize、remote size 和增量 framebuffer 等 session 瞬态，保留已经呈现的 current frame；新 session 的完整 frame 到达后再按正常 frame lifecycle 替换。渲染 current frame 不依赖瞬态 `connected` 标记。重连说明通过带稳定 ID、自动隐藏的窗口通知展示，并用 `window.defer` 避免 Render 期间重入 `Root`；不要把重连 badge/overlay 常驻到 tab 内容树。
+- **验证方式**：contract 测试覆盖 RDP 保帧而 VNC 终止仍清帧、current frame 不受 `connected` 门控、通知使用 stable ID + autohide 且页面不存在 reconnect overlay；真实 GPUI 布局测试显式保证 RDP 是最后一个 active tab，并比较首帧、重连、重连后新帧三个阶段的 window chrome bounds；最后在 Windows 实机触发自动连续重连。
+- **适用范围**：`crates/remote_desktop/src/backends/rdp*` 的事件顺序、`crates/remote_desktop/src/output_mailbox.rs`、`crates/remote_desktop_view/src/view/{output,render,frame_lifecycle}.rs` 与 `crates/core/src/tab_container.rs`。
+
 - **标题**：扩展管理器的 reload、安装和卸载刷新必须按 kind 且保持语言 WASM 惰性加载
 - **触发信号**：重新加载、安装或卸载一个静态 composite、数据库驱动或 provider 时，UI 长时间无响应，日志出现大量 `cranelift_codegen`、`wasmtime` 或 Tree-sitter 语言扩展编译记录。
 - **根因 / 约束**：统一刷新路径如果丢失扩展 kind，或调用 `load_language_extensions_from_root`，会在 GPUI 线程同步读取并编译全部语言 WASM；非语言扩展实际只需要刷新 runtime catalog 和贡献点，语言扩展也只需要更新 manifest 与文件后缀映射，parser 应在调用方首次请求语言时惰性加载。

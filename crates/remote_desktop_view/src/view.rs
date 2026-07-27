@@ -5,25 +5,29 @@ use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
-    RemoteDesktopConnectionOptions, RemoteDesktopFrameRect, RemoteDesktopInput,
+    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopInput,
     RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
     RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
-    RgbaFramebuffer, create_backend,
+    ResizeSupport, RgbaFramebuffer, create_backend,
 };
 use rust_i18n::t;
 
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::modifier_inputs;
-use crate::pixels::{bgra_to_render_image, rgba_to_render_image};
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
 use crate::shortcuts::{
     ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
 };
 use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 
+mod clipboard;
+mod cursor;
 mod frame_lifecycle;
+mod frame_sync;
+mod frames;
 mod input;
+mod notifications;
 mod output;
 mod render;
 mod resize;
@@ -32,7 +36,6 @@ const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(800);
-const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 
 #[cfg(target_os = "macos")]
@@ -57,6 +60,17 @@ fn remote_desktop_tab_title(title: &str, tab_index: Option<usize>) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionResetReason {
+    Reconnecting,
+    ConnectionFailure,
+    Terminated,
+}
+
+fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
+    matches!(reason, SessionResetReason::Reconnecting)
+}
+
 pub struct RemoteDesktopViewConfig {
     pub options: RemoteDesktopConnectionOptions,
     pub title: String,
@@ -72,6 +86,10 @@ pub struct RemoteDesktopView {
     latest_frame: Option<Arc<RenderImage>>,
     framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
+    pending_frame_drops: Vec<Arc<RenderImage>>,
+    cursor: cursor::RemoteCursorState,
+    frame_sync: frame_sync::FrameSyncTracker,
+    capabilities: Option<RemoteDesktopCapabilities>,
     remote_size: Option<(u16, u16)>,
     content_bounds: Option<Bounds<Pixels>>,
     initial_size: resize::InitialSize,
@@ -83,6 +101,7 @@ pub struct RemoteDesktopView {
     last_clipboard_text: Option<String>,
     last_clipboard_files: Option<Vec<String>>,
     last_clipboard_sync_at: Option<Instant>,
+    next_clipboard_transfer_id: u64,
     display_scale_factor: u32,
     status: SharedString,
     connected: bool,
@@ -110,13 +129,16 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
-            let frames = this
-                .rendered_frames
-                .take_all_distinct(this.latest_frame.take());
+            let mut images = std::mem::take(&mut this.pending_frame_drops);
+            images.extend(
+                this.rendered_frames
+                    .take_all_distinct(this.latest_frame.take()),
+            );
+            images.extend(this.cursor.release_all_images());
             let _ = window_handle.update(cx, move |_, window, _| {
-                for frame in frames {
-                    if let Err(error) = window.drop_image(frame) {
-                        tracing::warn!(?error, "failed to release remote desktop frame");
+                for image in images {
+                    if let Err(error) = window.drop_image(image) {
+                        tracing::warn!(?error, "failed to release remote desktop image");
                     }
                 }
             });
@@ -132,6 +154,10 @@ impl RemoteDesktopView {
             latest_frame: None,
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
+            pending_frame_drops: Vec::new(),
+            cursor: cursor::RemoteCursorState::default(),
+            frame_sync: frame_sync::FrameSyncTracker::default(),
+            capabilities: None,
             remote_size: None,
             content_bounds: None,
             initial_size: resize::InitialSize::default(),
@@ -143,6 +169,7 @@ impl RemoteDesktopView {
             last_clipboard_text: None,
             last_clipboard_files: None,
             last_clipboard_sync_at: None,
+            next_clipboard_transfer_id: clipboard::FIRST_LOCAL_CLIPBOARD_TRANSFER_ID,
             display_scale_factor: 100,
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             connected: false,
@@ -210,85 +237,9 @@ pub fn init(cx: &mut App) {
 pub fn refresh_keybindings(_cx: &mut App) {}
 
 #[cfg(test)]
-mod tests {
-    use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
+#[path = "view/render_contract_tests.rs"]
+mod render_contract_tests;
 
-    use super::close_runtime_once;
-
-    #[test]
-    fn closes_runtime_only_once() {
-        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut input_tx = Some(input_tx);
-
-        close_runtime_once(&mut input_tx);
-        close_runtime_once(&mut input_tx);
-
-        assert_eq!(
-            Some(remote_desktop::RemoteDesktopInput::Close),
-            input_rx.blocking_recv()
-        );
-        assert!(input_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn tab_title_uses_connection_name_and_duplicate_index() {
-        assert_eq!(
-            "prod-rdp",
-            super::remote_desktop_tab_title("prod-rdp", None)
-        );
-        assert_eq!(
-            "prod-rdp(2)",
-            super::remote_desktop_tab_title("prod-rdp", Some(2))
-        );
-    }
-
-    #[test]
-    fn provider_version_error_message_is_localized_after_context() {
-        let error = anyhow::Error::new(RemoteDesktopProviderVersionError {
-            protocol: RemoteDesktopProtocol::Vnc,
-            installed: "0.1.0".to_string(),
-            required: "0.1.1".to_string(),
-            invalid: false,
-        })
-        .context("VNC remote desktop provider");
-
-        assert_eq!(
-            "VNC provider version 0.1.0 is too old. Please update the provider to 0.1.1 or newer.",
-            super::remote_desktop_error_message(&error)
-        );
-    }
-
-    #[test]
-    fn rendered_frame_cannot_expand_its_tab_container() {
-        let source = include_str!("view/render.rs");
-
-        let content_start = source
-            .find("let content = div()")
-            .expect("remote desktop content");
-        let root_start = source[content_start..]
-            .find("\n        div()\n            .size_full()\n            .min_w_0()")
-            .map(|offset| content_start + offset)
-            .expect("remote desktop root");
-        let content = &source[content_start..root_start];
-        let root = &source[root_start..];
-
-        assert!(content.contains(".size_full()"));
-        assert!(content.contains(".min_w_0()"));
-        assert!(content.contains(".min_h_0()"));
-        assert!(content.contains(".overflow_hidden()"));
-        let frame_start = content.find("img(frame)").expect("rendered frame");
-        let frame_end = content[frame_start..]
-            .find(".object_fit(ObjectFit::Fill)")
-            .map(|offset| frame_start + offset)
-            .expect("rendered frame fit");
-        let frame = &content[frame_start..frame_end];
-        assert!(frame.contains(".size_full()"));
-        assert!(frame.contains(".min_w_0()"));
-        assert!(frame.contains(".min_h_0()"));
-
-        assert!(root.contains(".size_full()"));
-        assert!(root.contains(".min_w_0()"));
-        assert!(root.contains(".min_h_0()"));
-        assert!(root.contains(".overflow_hidden()"));
-    }
-}
+#[cfg(test)]
+#[path = "view/view_tests.rs"]
+mod tests;

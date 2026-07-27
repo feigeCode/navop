@@ -49,6 +49,7 @@ pub struct RemoteDesktopFormWindow {
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     read_only: bool,
+    audio_playback: bool,
     proxy_enabled: bool,
     proxy_type: ProxyType,
     sync_enabled: bool,
@@ -102,6 +103,7 @@ impl RemoteDesktopFormWindow {
             workspace_select: create_workspace_select(&config, window, cx),
             team_select: create_team_select(&config.teams, None, window, cx),
             read_only: false,
+            audio_playback: false,
             proxy_enabled: false,
             proxy_type: ProxyType::Socks5,
             sync_enabled: config
@@ -157,6 +159,7 @@ impl RemoteDesktopFormWindow {
         self.domain_input
             .update(cx, |state, cx| state.set_value(&domain, window, cx));
         self.read_only = params.read_only;
+        self.audio_playback = audio_playback_for_protocol(self.protocol, params.audio_playback);
         self.apply_proxy(params.proxy, window, cx);
     }
 
@@ -183,6 +186,7 @@ impl RemoteDesktopFormWindow {
             password: non_empty_text(&self.password_input, cx),
             domain: non_empty_text(&self.domain_input, cx),
             read_only: self.read_only,
+            audio_playback: audio_playback_for_protocol(self.protocol, self.audio_playback),
             proxy,
         })
     }
@@ -256,5 +260,32 @@ impl RemoteDesktopFormWindow {
 
     fn team_id(&self, cx: &App) -> Option<String> {
         selected_team_id(&self.team_select, cx)
+    }
+}
+
+fn audio_playback_for_protocol(protocol: RemoteDesktopProtocol, enabled: bool) -> bool {
+    protocol == RemoteDesktopProtocol::Rdp && enabled
+}
+
+#[cfg(test)]
+mod tests {
+    use one_core::storage::RemoteDesktopProtocol;
+
+    use super::audio_playback_for_protocol;
+
+    #[test]
+    fn audio_playback_is_only_enabled_for_rdp() {
+        assert!(audio_playback_for_protocol(
+            RemoteDesktopProtocol::Rdp,
+            true
+        ));
+        assert!(!audio_playback_for_protocol(
+            RemoteDesktopProtocol::Vnc,
+            true
+        ));
+        assert!(!audio_playback_for_protocol(
+            RemoteDesktopProtocol::Rdp,
+            false
+        ));
     }
 }

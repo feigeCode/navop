@@ -12,13 +12,25 @@ pub mod runtime;
 
 pub mod backends;
 
+mod helper_event_debug;
+mod helper_input;
+mod helper_protocol_debug;
+mod input_debug;
+mod output_debug;
+
 pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
-pub use config::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
+pub use config::{
+    RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSharedFolder,
+    RemoteDesktopSize,
+};
 pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
 pub use framebuffer::RgbaFramebuffer;
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};
-pub use output::{RemoteDesktopFrameRect, RemoteDesktopOutput};
+pub use output::{
+    RemoteDesktopCursor, RemoteDesktopFrameRect, RemoteDesktopOutput, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason,
+};
 pub use provider::{
     PROVIDER_MANIFEST_FILE, RemoteDesktopProviderEntry, RemoteDesktopProviderManifest,
     RemoteDesktopProviderUi,

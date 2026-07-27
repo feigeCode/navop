@@ -18,6 +18,7 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
+use one_core::storage::RemoteDesktopProtocol;
 
 impl RemoteDesktopFormWindow {
     fn render_form_row(&self, label: String, child: impl IntoElement) -> impl IntoElement {
@@ -80,6 +81,9 @@ impl RemoteDesktopFormWindow {
                 )
             })
             .child(self.render_read_only_row(cx))
+            .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
+                form.child(self.render_audio_playback_row(cx))
+            })
             .child(self.render_sync_row(cx))
     }
 
@@ -151,6 +155,18 @@ impl RemoteDesktopFormWindow {
                 .checked(self.read_only)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.read_only = !this.read_only;
+                    cx.notify();
+                })),
+        )
+    }
+
+    fn render_audio_playback_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_form_row(
+            t!("RemoteDesktopForm.label_audio_playback").to_string(),
+            Checkbox::new("remote-desktop-audio-playback")
+                .checked(self.audio_playback)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.audio_playback = !this.audio_playback;
                     cx.notify();
                 })),
         )
@@ -257,5 +273,15 @@ mod tests {
         assert!(render_source.contains(".overflow_hidden()"));
         assert!(render_source.matches(".size_full()").count() >= 2);
         assert!(render_source.contains(".overflow_y_scrollbar()"));
+    }
+
+    #[test]
+    fn audio_playback_checkbox_is_only_rendered_for_rdp() {
+        let source = include_str!("view.rs");
+
+        assert!(source.contains("self.protocol == RemoteDesktopProtocol::Rdp"));
+        assert!(source.contains("self.render_audio_playback_row(cx)"));
+        assert!(source.contains("remote-desktop-audio-playback"));
+        assert!(source.contains("RemoteDesktopForm.label_audio_playback"));
     }
 }

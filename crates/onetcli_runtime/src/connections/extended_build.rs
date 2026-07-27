@@ -69,6 +69,8 @@ pub(super) fn build_remote_desktop(
         password: optional_value_str(values, "password").map(str::to_string),
         domain: optional_value_str(values, "domain").map(str::to_string),
         read_only: optional_bool(values, "read_only").unwrap_or(false),
+        audio_playback: protocol == RemoteDesktopProtocol::Rdp
+            && optional_bool(values, "audio_playback").unwrap_or(false),
         proxy: None,
     };
     Ok(with_common_fields(

@@ -3,19 +3,26 @@ use std::time::Duration;
 
 use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
-    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopRuntime,
-    RemoteDesktopSize,
-    helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
+    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
+    helper_protocol::{HelperRequest, encode_request_line},
     output_mailbox::{OutputMailboxSender, output_mailbox},
 };
 
+mod helper_events;
 mod input;
-#[cfg(test)]
-mod tests;
+mod reconnect;
 mod transport;
+mod transport_frames;
 
-const RDP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
+const REMOTE_DESKTOP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const MAX_INPUTS_PER_POLL: usize = 256;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClipboardFilesSnapshot {
+    pub(super) transfer_id: u64,
+    pub(super) paths: Vec<String>,
+}
 
 pub struct RdpBackend {
     options: RemoteDesktopConnectionOptions,
@@ -65,20 +72,29 @@ impl RemoteDesktopBackend for RdpBackend {
         let protocol = options.protocol;
 
         std::thread::Builder::new()
-            .name("remote-desktop-rdp".to_string())
+            .name(format!("remote-desktop-{}", protocol.provider_id()))
             .spawn(move || {
                 let _proxy_guard = proxy_guard;
                 let mut latest_clipboard_text = None;
+                let mut latest_clipboard_files = None;
                 let mut reconnect_attempt = 0usize;
                 loop {
-                    match run_helper_session(
+                    let session_output_tx = output_tx.begin_session();
+                    let result = run_helper_session(
                         &helper,
                         &mut connect,
                         &mut latest_clipboard_text,
+                        &mut latest_clipboard_files,
                         &mut input_rx,
-                        &output_tx,
+                        &session_output_tx,
                         protocol,
-                    ) {
+                    );
+                    // The helper stdout reader is intentionally detached. Cut
+                    // off its generation before publishing a reconnect barrier
+                    // or starting the next process so late output cannot reset
+                    // or resize the new session.
+                    session_output_tx.end_session();
+                    match result {
                         HelperRunResult::Closed | HelperRunResult::InputClosed => break,
                         HelperRunResult::Reconnect {
                             reason,
@@ -89,23 +105,28 @@ impl RemoteDesktopBackend for RdpBackend {
                                 reconnect_attempt = 0;
                             }
                             if manual {
-                                transport::send_status(
+                                transport::send_reconnecting(
                                     &output_tx,
-                                    "reconnecting remote desktop session",
+                                    RemoteDesktopReconnect {
+                                        reason: RemoteDesktopReconnectReason::Manual,
+                                        delay_secs: None,
+                                    },
                                 );
                                 continue;
                             }
-                            let delay = input::reconnect_delay(reconnect_attempt);
+                            let delay = reconnect::reconnect_delay(reconnect_attempt);
                             reconnect_attempt = reconnect_attempt.saturating_add(1);
-                            transport::send_status(
+                            transport::send_reconnecting(
                                 &output_tx,
-                                &input::reconnect_status_message(&reason, delay),
+                                reconnect::reconnect_event(&reason, delay),
                             );
-                            if !input::wait_before_reconnect(
+                            if !reconnect::wait_before_reconnect(
                                 &mut connect,
                                 &mut latest_clipboard_text,
+                                &mut latest_clipboard_files,
                                 &mut input_rx,
                                 delay,
+                                protocol,
                             ) {
                                 break;
                             }
@@ -135,13 +156,19 @@ fn run_helper_session(
     helper: &HelperProcessConfig,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
+    latest_clipboard_files: &mut Option<ClipboardFilesSnapshot>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> HelperRunResult {
-    let Ok((mut helper, mut stdin, signal_rx)) =
-        transport::start_helper_session(helper, connect, latest_clipboard_text, output_tx)
-    else {
+    let Ok((mut helper, mut stdin, signal_rx)) = transport::start_helper_session(
+        helper,
+        connect,
+        latest_clipboard_text,
+        latest_clipboard_files,
+        output_tx,
+        protocol,
+    ) else {
         return HelperRunResult::Reconnect {
             reason: "failed to start remote desktop helper".to_string(),
             manual: false,
@@ -157,12 +184,14 @@ fn run_helper_session(
             &mut stdin,
             output_tx,
             &mut was_connected,
+            protocol,
         ) {
             return result;
         }
         let mut input_context = input::RemoteInputContext {
             connect,
             latest_clipboard_text,
+            latest_clipboard_files,
             helper: &mut helper,
             stdin: &mut stdin,
             output_tx,
@@ -173,9 +202,9 @@ fn run_helper_session(
         {
             return result;
         }
-        if let Some(result) = input::poll_helper_exit(&mut helper, was_connected) {
+        if let Some(result) = input::poll_helper_exit(&mut helper, was_connected, protocol) {
             return result;
         }
-        std::thread::sleep(RDP_BACKEND_POLL_INTERVAL);
+        std::thread::sleep(REMOTE_DESKTOP_BACKEND_POLL_INTERVAL);
     }
 }

@@ -2872,6 +2872,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "declarative-ui-demo"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "html5ever 0.27.0",
+ "markup5ever_rcdom",
+ "rust-embed",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9920,6 +9935,7 @@ dependencies = [
  "remote_desktop",
  "rust-i18n",
  "smallvec",
+ "tempfile",
  "tokio",
  "tracing",
 ]
