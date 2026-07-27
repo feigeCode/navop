@@ -602,16 +602,27 @@ fn resolve_default_windows_shell_from_env(
 }
 
 #[cfg(target_os = "windows")]
+fn resolve_default_windows_shell() -> String {
+    // Shell discovery can touch every entry in PATH. Resolve it once for the
+    // process so opening another terminal does not repeat potentially slow
+    // network/antivirus-backed filesystem checks.
+    static DEFAULT_SHELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DEFAULT_SHELL
+        .get_or_init(|| {
+            resolve_default_windows_shell_from_env(
+                env::var_os("PATH").as_deref(),
+                env::var_os("SystemRoot")
+                    .or_else(|| env::var_os("SYSTEMROOT"))
+                    .as_deref(),
+                env::var_os("COMSPEC").as_deref(),
+            )
+        })
+        .clone()
+}
+
+#[cfg(target_os = "windows")]
 fn build_local_shell(shell: Option<String>, extra_args: Vec<String>) -> Option<tty::Shell> {
-    let program = shell.unwrap_or_else(|| {
-        resolve_default_windows_shell_from_env(
-            env::var_os("PATH").as_deref(),
-            env::var_os("SystemRoot")
-                .or_else(|| env::var_os("SYSTEMROOT"))
-                .as_deref(),
-            env::var_os("COMSPEC").as_deref(),
-        )
-    });
+    let program = shell.unwrap_or_else(resolve_default_windows_shell);
     Some(tty::Shell::new(program, extra_args))
 }
 
@@ -736,15 +747,9 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 
 #[cfg(target_os = "windows")]
 fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
-    let program = shell.map(str::to_string).unwrap_or_else(|| {
-        resolve_default_windows_shell_from_env(
-            env::var_os("PATH").as_deref(),
-            env::var_os("SystemRoot")
-                .or_else(|| env::var_os("SYSTEMROOT"))
-                .as_deref(),
-            env::var_os("COMSPEC").as_deref(),
-        )
-    });
+    let program = shell
+        .map(str::to_string)
+        .unwrap_or_else(resolve_default_windows_shell);
     crate::windows_shell_integration::prepare(&program)
 }
 
@@ -1215,6 +1220,8 @@ impl Terminal {
             working_dir,
             env,
         } = config;
+        #[cfg(target_os = "windows")]
+        let shell = shell.or_else(|| Some(resolve_default_windows_shell()));
         let history_shell = shell.clone();
         let working_directory = resolve_local_working_dir(working_dir);
 
