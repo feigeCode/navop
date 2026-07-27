@@ -20,6 +20,8 @@ pub struct NotebookUiState {
     #[serde(default)]
     pub markdown_view_modes: BTreeMap<String, MarkdownViewMode>,
     #[serde(default)]
+    pub markdown_save_mode: MarkdownSaveMode,
+    #[serde(default)]
     pub last_created_format: DocumentFormat,
 }
 
@@ -43,6 +45,14 @@ pub enum MarkdownViewMode {
     #[default]
     Wysiwyg,
     Source,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownSaveMode {
+    #[default]
+    Automatic,
+    Manual,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +90,19 @@ mod tests {
         assert!(state.markdown_view_modes.is_empty());
         assert_eq!(DocumentFormat::Markdown, state.last_created_format);
         assert_eq!(MarkdownViewMode::Wysiwyg, MarkdownViewMode::default());
+        assert_eq!(MarkdownSaveMode::Automatic, state.markdown_save_mode);
+    }
+
+    #[test]
+    fn markdown_save_mode_round_trips_manual_choice() {
+        let mut state = NotebookUiState::default();
+        state.markdown_save_mode = MarkdownSaveMode::Manual;
+
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: NotebookUiState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(MarkdownSaveMode::Manual, restored.markdown_save_mode);
+        assert!(json.contains(r#""markdown_save_mode":"manual""#));
     }
 
     #[test]

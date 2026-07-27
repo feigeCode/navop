@@ -99,10 +99,7 @@ impl NotesView {
                     preview,
                     source_document,
                     save_generation: Default::default(),
-                    state: MarkdownSessionState {
-                        mode,
-                        ..MarkdownSessionState::default()
-                    },
+                    state: MarkdownSessionState::with_mode(mode),
                     _subscriptions: vec![preview_subscription, source_subscription],
                     _file_watcher: Some(file_watcher),
                 },
