@@ -1742,7 +1742,7 @@ impl Element for TextElement {
         let ghost_lines_height = ghost_line_count as f32 * line_height;
 
         let total_wrapped_lines = state.display_map.wrap_row_count();
-        let empty_bottom_height = if state.mode.is_code_editor() {
+        let empty_bottom_height = if state.mode.is_code_editor() && !state.mode.is_auto_grow() {
             bounds
                 .size
                 .height

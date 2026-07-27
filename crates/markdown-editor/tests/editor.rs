@@ -1,6 +1,6 @@
 use gpui::{
-    AppContext, Bounds, Modifiers, TestAppContext, VisualTestContext, WindowBounds, WindowOptions,
-    point, px, size,
+    AppContext, Bounds, Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext,
+    VisualTestContext, WindowBounds, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, highlighter::HighlightTheme, input::Position};
 use markdown_editor::{MarkdownEditor, MarkdownEditorTheme};
@@ -1743,6 +1743,52 @@ fn clicking_code_content_maps_to_content_lines_not_fence_lines(cx: &mut TestAppC
     assert_eq!(
         9..9,
         input.read_with(&cx, |input, _| input.selected_range())
+    );
+}
+
+#[gpui::test]
+fn fully_expanded_fenced_code_stays_at_the_top_when_scrolled(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "```rust\nfn main() {\n    println!(\"visible\");\n}\n```";
+    let code_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let (window, editor) = open_editor_with_size(source, size(px(800.), px(400.)), cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(code_id, window, cx));
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let input_bounds = input.read_with(&cx, |input, _| input.laid_out_input_bounds());
+    assert_eq!(
+        px(0.),
+        input.read_with(&cx, |input, _| input.scroll_offset().y)
+    );
+
+    cx.simulate_event(ScrollWheelEvent {
+        position: input_bounds.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
+        ..Default::default()
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let (scroll_offset, first_line) = input.read_with(&cx, |input, _| {
+        (input.scroll_offset(), input.range_to_bounds(&(0..1)))
+    });
+    assert_eq!(
+        px(0.),
+        scroll_offset.y,
+        "a fully expanded fenced code block must not retain an internal vertical scroll offset"
+    );
+    let first_line = first_line.expect("the first code line must remain laid out");
+    assert!(
+        first_line.top() >= input_bounds.top() && first_line.top() < input_bounds.bottom(),
+        "the first code line must remain inside the code viewport: {first_line:?} vs {input_bounds:?}"
     );
 }
 
