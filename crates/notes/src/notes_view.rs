@@ -454,6 +454,267 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
+    fn markdown_save_controls_switch_modes_and_save_immediately(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("save-controls.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let toolbar_height = cx
+            .debug_bounds("markdown-mode-toolbar")
+            .expect("the Markdown toolbar must be rendered")
+            .size
+            .height;
+        assert_eq!(
+            crate::MarkdownSaveMode::Automatic,
+            view.read_with(&cx, |view, _| view.tree.markdown_save_mode)
+        );
+        let auto_save = cx
+            .debug_bounds("markdown-auto-save")
+            .expect("the toolbar must expose an auto-save switch");
+        cx.debug_bounds("markdown-save-now")
+            .expect("the toolbar must expose an immediate-save button");
+
+        cx.simulate_click(auto_save.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(
+            crate::MarkdownSaveMode::Manual,
+            view.read_with(&cx, |view, _| view.tree.markdown_save_mode)
+        );
+        assert_eq!(
+            toolbar_height,
+            cx.debug_bounds("markdown-mode-toolbar")
+                .expect("switching save mode must keep the toolbar mounted")
+                .size
+                .height
+        );
+
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "manual edit",
+                        markdown_source::SourceSelection {
+                            anchor: 11,
+                            head: 11,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+        assert_eq!(
+            "before",
+            std::fs::read_to_string(&path).unwrap(),
+            "manual mode must not write after the automatic-save interval"
+        );
+
+        let save_now = cx
+            .debug_bounds("markdown-save-now")
+            .expect("the immediate-save button must remain visible while dirty");
+        cx.simulate_click(save_now.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!("manual edit", std::fs::read_to_string(&path).unwrap());
+        view.read_with(&cx, |view, _| {
+            assert_eq!(
+                MarkdownSyncState::Clean,
+                view.markdown_sessions
+                    .get(&document_id)
+                    .unwrap()
+                    .state
+                    .sync_state
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn changing_save_mode_cancels_and_restarts_the_throttle_window(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("save-mode-throttle.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "dirty",
+                        markdown_source::SourceSelection { anchor: 5, head: 5 },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+        cx.run_until_parked();
+        let automatic = cx
+            .debug_bounds("markdown-auto-save")
+            .expect("the auto-save switch must be rendered");
+        cx.simulate_click(automatic.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        cx.background_executor.advance_clock(Duration::from_secs(3));
+        cx.run_until_parked();
+        assert_eq!(
+            "before",
+            std::fs::read_to_string(&path).unwrap(),
+            "switching to manual mode must invalidate the pending timer"
+        );
+
+        let manual = cx
+            .debug_bounds("markdown-auto-save")
+            .expect("the save-mode switch must remain rendered");
+        cx.simulate_click(manual.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(
+            crate::MarkdownSaveMode::Automatic,
+            view.read_with(&cx, |view, _| view.tree.markdown_save_mode)
+        );
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            "before",
+            std::fs::read_to_string(&path).unwrap(),
+            "switching back to automatic mode must start a fresh interval"
+        );
+        cx.background_executor.advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!("dirty", std::fs::read_to_string(&path).unwrap());
+    }
+
+    #[gpui::test]
+    fn markdown_save_shortcut_saves_wysiwyg_and_source_modes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("save-shortcut.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let save_mode = cx
+            .debug_bounds("markdown-auto-save")
+            .expect("the auto-save switch must be rendered");
+        cx.simulate_click(save_mode.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+
+        let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.preview.update(cx, |editor, cx| {
+                editor
+                    .apply_source_value(
+                        "wysiwyg edit",
+                        markdown_source::SourceSelection {
+                            anchor: 12,
+                            head: 12,
+                        },
+                        window,
+                        cx,
+                    )
+                    .unwrap();
+                editor.focus(window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("secondary-s");
+        cx.run_until_parked();
+        assert_eq!("wysiwyg edit", std::fs::read_to_string(&path).unwrap());
+
+        let source_toggle = cx
+            .debug_bounds("markdown-source-mode")
+            .expect("the clean document must be able to switch to source mode");
+        cx.simulate_click(source_toggle.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(
+            crate::MarkdownViewMode::Source,
+            view.read_with(&cx, |view, _| view
+                .markdown_sessions
+                .get(&document_id)
+                .unwrap()
+                .state
+                .mode)
+        );
+        view.update_in(&mut cx, |view, window, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            session.source_editor.update(cx, |input, cx| {
+                let source_len = input.value().len();
+                input.set_selected_range(0..source_len, false, window, cx);
+                input.focus(window, cx);
+            });
+        });
+        cx.simulate_input("source edit");
+        cx.run_until_parked();
+        view.read_with(&cx, |view, _| {
+            assert_eq!(
+                MarkdownSyncState::SourceDirty,
+                view.markdown_sessions
+                    .get(&document_id)
+                    .unwrap()
+                    .state
+                    .sync_state
+            );
+        });
+        cx.simulate_keystrokes("secondary-s");
+        cx.run_until_parked();
+        assert_eq!("source edit", std::fs::read_to_string(&path).unwrap());
+    }
+
+    #[gpui::test]
     fn standalone_markdown_preview_uses_the_editable_wysiwyg_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);

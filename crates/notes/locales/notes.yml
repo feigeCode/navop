@@ -37,6 +37,30 @@ Notes:
     en: Saving…
     zh-CN: 正在保存…
     zh-HK: 正在保存…
+  markdown_auto_save:
+    en: Auto save
+    zh-CN: 自动保存
+    zh-HK: 自動儲存
+  markdown_auto_save_tooltip:
+    en: Save changes at a fixed interval while editing
+    zh-CN: 编辑时按固定时间间隔自动保存
+    zh-HK: 編輯時按固定時間間隔自動儲存
+  markdown_save_now:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 儲存
+  markdown_save_now_tooltip:
+    en: Save now (Cmd/Ctrl+S)
+    zh-CN: 立即保存（Cmd/Ctrl+S）
+    zh-HK: 立即儲存（Cmd/Ctrl+S）
+  markdown_unsaved:
+    en: Unsaved changes
+    zh-CN: 未保存
+    zh-HK: 尚未儲存
+  markdown_saved:
+    en: Saved
+    zh-CN: 已保存
+    zh-HK: 已儲存
   markdown_adjustment_required:
     en: Confirm formatting changes before editing (%{count} notice(s))
     zh-CN: 切换编辑前需要确认格式调整（%{count} 项提示）

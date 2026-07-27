@@ -5,7 +5,7 @@ use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyn
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
 use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
-use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
+use crate::{DocumentDescriptor, MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
 use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
 use markdown_source::SourceMarkdownDocument;
@@ -238,6 +238,37 @@ impl NotesView {
             return;
         };
         self.save_markdown_document(&document_id, window, cx);
+    }
+
+    pub(crate) fn set_markdown_save_mode(
+        &mut self,
+        mode: MarkdownSaveMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tree.markdown_save_mode == mode {
+            return;
+        }
+        self.tree.markdown_save_mode = mode;
+        let scheduled = self
+            .markdown_sessions
+            .iter_mut()
+            .filter_map(|(document_id, session)| {
+                session
+                    .state
+                    .save_mode_changed(mode)
+                    .map(|epoch| (document_id.clone(), epoch))
+            })
+            .collect::<Vec<_>>();
+        if let Some(storage) = self.storage.as_ref()
+            && let Err(error) = storage.save_state(&self.tree.to_ui_state())
+        {
+            notify_operation_error(window, cx, error);
+        }
+        for (document_id, epoch) in scheduled {
+            self.schedule_markdown_auto_save(document_id, epoch, window, cx);
+        }
+        cx.notify();
     }
 
     fn start_markdown_save(

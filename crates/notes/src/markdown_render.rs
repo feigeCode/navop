@@ -1,5 +1,5 @@
 use crate::markdown_session::MarkdownSyncState;
-use crate::{MarkdownViewMode, NotesView};
+use crate::{MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder,
@@ -9,6 +9,7 @@ use gpui_component::{
     button::Button,
     h_flex,
     input::{Input, LocalInputStyle},
+    switch::Switch,
     v_flex,
 };
 use rust_i18n::t;
@@ -37,6 +38,11 @@ impl NotesView {
                             view.apply_source_mode_history(false, window, cx);
                         },
                     ))
+                    .on_action(cx.listener(
+                        |view, _: &crate::markdown_source::SaveMarkdown, window, cx| {
+                            view.save_active_markdown(window, cx);
+                        },
+                    ))
                     .size_full()
                     .child(
                         Input::new(&session.source_editor)
@@ -53,19 +59,23 @@ impl NotesView {
                     )
                     .into_any_element()
             }
-            MarkdownViewMode::Wysiwyg => {
-                div()
-                    .id("markdown-wysiwyg-editor")
-                    .debug_selector(|| "markdown-wysiwyg-editor".to_owned())
-                    .size_full()
-                    .min_h_0()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(session.preview.clone())
-                    .into_any_element()
-            }
+            MarkdownViewMode::Wysiwyg => div()
+                .id("markdown-wysiwyg-editor")
+                .debug_selector(|| "markdown-wysiwyg-editor".to_owned())
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .overflow_hidden()
+                .child(session.preview.clone())
+                .into_any_element(),
         };
         v_flex()
+            .key_context(crate::markdown_source::MARKDOWN_CONTEXT)
+            .on_action(cx.listener(
+                |view, _: &crate::markdown_source::SaveMarkdown, window, cx| {
+                    view.save_active_markdown(window, cx);
+                },
+            ))
             .size_full()
             .min_h_0()
             .child(self.render_markdown_toolbar(document_id, mode, cx))
@@ -130,7 +140,13 @@ impl NotesView {
     ) -> impl IntoElement {
         let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
-        let status = markdown_status(session, mode);
+        let status = markdown_status(session, self.tree.markdown_save_mode);
+        let save_disabled = session.is_none_or(|session| {
+            !matches!(
+                session.state.sync_state,
+                MarkdownSyncState::SourceDirty | MarkdownSyncState::Failed(_)
+            )
+        });
         h_flex()
             .id("markdown-mode-toolbar")
             .debug_selector(|| "markdown-mode-toolbar".to_owned())
@@ -147,6 +163,39 @@ impl NotesView {
                     .text_color(theme.muted_foreground)
                     .child(status)
             }))
+            .child(
+                div()
+                    .debug_selector(|| "markdown-auto-save".to_owned())
+                    .child(
+                        Switch::new("markdown-auto-save-switch")
+                            .small()
+                            .checked(self.tree.markdown_save_mode == MarkdownSaveMode::Automatic)
+                            .label(t!("Notes.markdown_auto_save").to_string())
+                            .tooltip(t!("Notes.markdown_auto_save_tooltip").to_string())
+                            .on_click(cx.listener(|view, checked: &bool, window, cx| {
+                                view.set_markdown_save_mode(
+                                    if *checked {
+                                        MarkdownSaveMode::Automatic
+                                    } else {
+                                        MarkdownSaveMode::Manual
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
+            )
+            .child(
+                Button::new("markdown-save-now")
+                    .debug_selector(|| "markdown-save-now".to_owned())
+                    .label(t!("Notes.markdown_save_now").to_string())
+                    .tooltip(t!("Notes.markdown_save_now_tooltip").to_string())
+                    .small()
+                    .disabled(save_disabled)
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.save_active_markdown(window, cx);
+                    })),
+            )
     }
 
     fn render_source_toggle(
@@ -192,24 +241,15 @@ impl NotesView {
 
 fn markdown_status(
     session: Option<&crate::markdown_session::MarkdownSession>,
-    mode: MarkdownViewMode,
+    save_mode: MarkdownSaveMode,
 ) -> Option<String> {
-    if mode == MarkdownViewMode::Source {
-        return source_status(session);
-    }
-    let session = session?;
-    if !matches!(session.state.sync_state, MarkdownSyncState::Clean) {
-        return source_status(Some(session));
-    }
-    None
-}
-
-fn source_status(session: Option<&crate::markdown_session::MarkdownSession>) -> Option<String> {
-    use crate::markdown_session::MarkdownSyncState;
     match session.map(|session| &session.state.sync_state) {
-        Some(MarkdownSyncState::SourceDirty | MarkdownSyncState::SavingSource) => {
-            Some(t!("Notes.markdown_saving").to_string())
+        Some(MarkdownSyncState::Clean) => Some(t!("Notes.markdown_saved").to_string()),
+        Some(MarkdownSyncState::SourceDirty) if save_mode == MarkdownSaveMode::Automatic => {
+            Some(t!("Notes.markdown_waiting_autosave").to_string())
         }
+        Some(MarkdownSyncState::SourceDirty) => Some(t!("Notes.markdown_unsaved").to_string()),
+        Some(MarkdownSyncState::SavingSource) => Some(t!("Notes.markdown_saving").to_string()),
         Some(MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)) => None,
         _ => None,
     }

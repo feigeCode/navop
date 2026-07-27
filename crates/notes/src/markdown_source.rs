@@ -3,11 +3,17 @@ use gpui::{App, AppContext, Context, Entity, KeyBinding, Subscription, Window, a
 use gpui_component::input::{InputEvent, InputState};
 
 pub(crate) const SOURCE_CONTEXT: &str = "NotesMarkdownSource";
+pub(crate) const MARKDOWN_CONTEXT: &str = "NotesMarkdown";
 const SOURCE_INPUT_CONTEXT: &str = "NotesMarkdownSource > Input";
-actions!(notes_markdown_source, [UndoSourceMode, RedoSourceMode]);
+actions!(
+    notes_markdown_source,
+    [UndoSourceMode, RedoSourceMode, SaveMarkdown]
+);
 
 pub(crate) fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("secondary-s", SaveMarkdown, Some(MARKDOWN_CONTEXT)),
+        KeyBinding::new("secondary-s", SaveMarkdown, Some(SOURCE_INPUT_CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-z", UndoSourceMode, Some(SOURCE_INPUT_CONTEXT)),
         #[cfg(target_os = "macos")]
