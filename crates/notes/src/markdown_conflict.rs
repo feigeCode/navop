@@ -96,21 +96,16 @@ impl NotesView {
             return;
         };
         let result = session.store.load().and_then(|snapshot| {
-            {
-                let mut document = session
-                    .source_document
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
-                *document = document.replace_source(snapshot.source.clone())?;
-            }
-            session.source_editor.update(cx, |input, cx| {
-                input.set_value(snapshot.source.clone(), window, cx);
-            });
+            let source = snapshot.source;
             session.preview.update(cx, |editor, cx| {
                 editor
-                    .replace_source(snapshot.source, window, cx)
+                    .replace_source(source.clone(), window, cx)
                     .map_err(anyhow::Error::from)
-            })
+            })?;
+            session.source_editor.update(cx, |input, cx| {
+                input.set_value(source, window, cx);
+            });
+            Ok(())
         });
         match result {
             Ok(()) => {

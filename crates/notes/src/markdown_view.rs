@@ -9,7 +9,6 @@ use crate::{DocumentDescriptor, MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
 use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
 use markdown_source::SourceMarkdownDocument;
-use std::sync::Arc;
 use std::time::Duration;
 
 const MARKDOWN_SAVE_INTERVAL: Duration = Duration::from_secs(2);
@@ -63,24 +62,19 @@ impl NotesView {
                 .insert(document_id.clone(), mode);
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
+            let document = SourceMarkdownDocument::parse(snapshot.source.clone())?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let source_document = Arc::new(std::sync::Mutex::new(SourceMarkdownDocument::parse(
-                snapshot.source.clone(),
-            )?));
             let theme = markdown_editor_theme(self.resolved_editor_theme(cx));
-            let preview = cx.new(|cx| {
-                let mut editor = MarkdownEditor::new(snapshot.source.clone(), theme, window, cx)
-                    .expect("prevalidated Markdown must initialize the editor");
-                editor.set_block_render_provider(block_render_provider(cx), cx);
-                editor
+            let preview = cx.new({
+                let window = &mut *window;
+                move |cx| {
+                    let mut editor = MarkdownEditor::from_document(document, theme, window, cx);
+                    editor.set_block_render_provider(block_render_provider(cx), cx);
+                    editor
+                }
             });
-            let preview_subscription = subscribe_markdown_changes(
-                &preview,
-                &source_editor,
-                document_id.clone(),
-                window,
-                cx,
-            );
+            let preview_subscription =
+                subscribe_markdown_changes(&preview, document_id.clone(), window, cx);
             let source_subscription =
                 subscribe_source_changes(&source_editor, &preview, window, cx);
             let file_watcher = crate::markdown_watcher::watch_markdown_file(
@@ -96,7 +90,6 @@ impl NotesView {
                     store,
                     source_editor,
                     preview,
-                    source_document,
                     state: MarkdownSessionState::with_mode(mode),
                     _subscriptions: vec![preview_subscription, source_subscription],
                     _file_watcher: Some(file_watcher),
@@ -121,29 +114,28 @@ impl NotesView {
     pub(crate) fn markdown_source_changed(
         &mut self,
         document_id: &str,
-        source: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let save_mode = self.tree.markdown_save_mode;
-        let schedule_epoch = {
+        let (schedule_epoch, sync_state_changed) = {
             let Some(session) = self.markdown_sessions.get_mut(document_id) else {
                 return;
             };
-            let generation = session.state.source_changed();
-            if let Err(error) = replace_session_source(session, &source) {
-                session
-                    .state
-                    .source_save_failed(generation, error.to_string());
-                notify_operation_error(window, cx, error);
-                return;
-            }
-            session.state.save_mode_changed(save_mode)
+            let sync_state_changed =
+                !matches!(session.state.sync_state, MarkdownSyncState::SourceDirty);
+            session.state.source_changed();
+            (
+                session.state.save_mode_changed(save_mode),
+                sync_state_changed,
+            )
         };
         if let Some(epoch) = schedule_epoch {
             self.schedule_markdown_auto_save(document_id.to_owned(), epoch, window, cx);
         }
-        cx.notify();
+        if sync_state_changed {
+            cx.notify();
+        }
     }
 
     pub(crate) fn schedule_markdown_auto_save(
@@ -304,8 +296,8 @@ impl NotesView {
         else {
             return;
         };
-        if let Some(source) = source_commit {
-            self.markdown_source_changed(&document_id, source, window, cx);
+        if source_commit.is_some() {
+            self.markdown_source_changed(&document_id, window, cx);
         }
         self.tree.markdown_view_modes.insert(document_id, mode);
         if let Some(storage) = self.storage.as_ref()
@@ -384,38 +376,18 @@ impl NotesView {
     }
 }
 
-fn replace_session_source(session: &MarkdownSession, source: &str) -> anyhow::Result<()> {
-    let mut document = session
-        .source_document
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
-    *document = document.replace_source(source)?;
-    Ok(())
-}
-
 fn subscribe_markdown_changes(
     preview: &gpui::Entity<MarkdownEditor>,
-    source_editor: &gpui::Entity<gpui_component::input::InputState>,
     document_id: String,
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> gpui::Subscription {
-    let source_editor = source_editor.clone();
     cx.subscribe_in(
         preview,
         window,
         move |view, _, event: &MarkdownEditorEvent, window, cx| {
-            let MarkdownEditorEvent::Changed { source, .. } = event;
-            let source_mode = view
-                .markdown_sessions
-                .get(&document_id)
-                .is_some_and(|session| session.state.mode == MarkdownViewMode::Source);
-            if !source_mode {
-                source_editor.update(cx, |input, cx| {
-                    input.set_value(source.clone(), window, cx);
-                });
-            }
-            view.markdown_source_changed(&document_id, source.clone(), window, cx);
+            let MarkdownEditorEvent::Changed { .. } = event;
+            view.markdown_source_changed(&document_id, window, cx);
         },
     )
 }

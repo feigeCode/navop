@@ -71,6 +71,15 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> Result<Self, MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
+        Ok(Self::from_document(document, theme, window, cx))
+    }
+
+    pub fn from_document(
+        document: SourceMarkdownDocument,
+        theme: MarkdownEditorTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let source_len = document.source.len();
         let projection = MarkdownProjection::build(&document, None);
         let input = create_input(&projection.text, window, cx);
@@ -110,7 +119,7 @@ impl MarkdownEditor {
             measured_block_heights: HashMap::new(),
         };
         editor.initialize_surfaces(window, cx);
-        Ok(editor)
+        editor
     }
 
     pub fn source(&self) -> &str {

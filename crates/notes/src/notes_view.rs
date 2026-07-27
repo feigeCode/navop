@@ -358,10 +358,7 @@ mod external_markdown_tests {
         let document_id = view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.clone().unwrap();
             let session = view.markdown_sessions.get(&id).unwrap();
-            assert_eq!(
-                source,
-                session.source_document.lock().unwrap().source.as_str()
-            );
+            assert_eq!(source, session.preview.read(cx).source());
             assert_eq!(
                 concat!(
                     "<https://example.com/path_(item)>\n\n",
@@ -772,19 +769,35 @@ mod external_markdown_tests {
         cx.simulate_keystrokes("X");
         cx.run_until_parked();
 
-        view.read_with(&cx, |view, cx| {
+        let document_id = view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.as_ref().unwrap();
             let session = view.markdown_sessions.get(id).unwrap();
-            assert_eq!(
-                "# Title\n\nBodyX\n",
-                session.source_document.lock().unwrap().source.as_str()
-            );
             assert_eq!("# Title\n\nBodyX\n", session.preview.read(cx).source());
             assert_eq!(
-                "# Title\n\nBodyX\n",
-                session.source_editor.read(cx).value().as_ref()
+                source,
+                session.source_editor.read(cx).value().as_ref(),
+                "the hidden source editor must not be rewritten on every WYSIWYG keystroke"
             );
             assert!(session.preview.read(cx).is_dirty());
+            id.clone()
+        });
+
+        view.update_in(&mut cx, |view, window, cx| {
+            view.save_markdown_document(&document_id, window, cx);
+        });
+        cx.run_until_parked();
+        view.update_in(&mut cx, |view, window, cx| {
+            view.toggle_markdown_mode(document_id.clone(), window, cx);
+        });
+        cx.run_until_parked();
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!(crate::MarkdownViewMode::Source, session.state.mode);
+            assert_eq!(
+                "# Title\n\nBodyX\n",
+                session.source_editor.read(cx).value().as_ref(),
+                "switching to source mode must synchronize the latest source once"
+            );
         });
     }
 

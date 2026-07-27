@@ -18,12 +18,12 @@ impl MarkdownEditor {
         let projection = surface.projection.clone();
         let input = surface.input.read(cx);
         let display_cursor = input.selected_range().end;
-        let value = input.value().to_string();
-        if value == projection.text {
+        let value = input.value();
+        if value.as_ref() == projection.text {
             return;
         }
         let cursor = projection.display_to_source(display_cursor);
-        if let Some(edit) = projection.edit_for_value(&value)
+        if let Some(edit) = projection.edit_for_value(value.as_ref())
             && !self.surface_is_source_code(key)
             && edit.source_range.is_empty()
             && edit.replacement == "\n"
@@ -34,8 +34,7 @@ impl MarkdownEditor {
             // beginning of the next projected line. Use the post-edit caret
             // to recover the pre-edit display offset and split the source at
             // the user's actual line boundary instead.
-            let insertion_display_offset =
-                display_cursor.saturating_sub(edit.replacement.len());
+            let insertion_display_offset = display_cursor.saturating_sub(edit.replacement.len());
             let source_offset = projection.display_to_source(insertion_display_offset);
             self.pending_newline = Some((key, source_offset));
             cx.defer_in(window, move |editor, window, cx| {
@@ -44,7 +43,7 @@ impl MarkdownEditor {
             return;
         }
         if !matches!(
-            self.edit_value_with_projection(&projection, &value, window, cx),
+            self.edit_value_with_projection(&projection, value.as_ref(), window, cx),
             Ok(true)
         ) {
             self.resync_surface(key, cursor, window, cx);
@@ -66,11 +65,11 @@ impl MarkdownEditor {
                 return;
             };
             let projection = surface.projection.clone();
-            let value = surface.input.read(cx).value().to_string();
+            let value = surface.input.read(cx).value();
             let cursor =
                 projection.display_end_to_source(surface.input.read(cx).selected_range().end);
             if !matches!(
-                self.edit_value_with_projection(&projection, &value, window, cx),
+                self.edit_value_with_projection(&projection, value.as_ref(), window, cx),
                 Ok(true)
             ) {
                 self.resync_surface(key, cursor, window, cx);
@@ -92,9 +91,9 @@ impl MarkdownEditor {
             return;
         };
         let projection = surface.projection.clone();
-        let value = surface.input.read(cx).value().to_string();
+        let value = surface.input.read(cx).value();
         if !matches!(
-            self.edit_value_with_projection(&projection, &value, window, cx),
+            self.edit_value_with_projection(&projection, value.as_ref(), window, cx),
             Ok(true)
         ) {
             self.resync_surface(key, source_offset, window, cx);
@@ -118,9 +117,9 @@ impl MarkdownEditor {
             return;
         };
         let projection = surface.projection.clone();
-        let value = surface.input.read(cx).value().to_string();
+        let value = surface.input.read(cx).value();
         if !matches!(
-            self.edit_value_with_projection(&projection, &value, window, cx),
+            self.edit_value_with_projection(&projection, value.as_ref(), window, cx),
             Ok(true)
         ) {
             self.resync_surface(key, source_offset, window, cx);

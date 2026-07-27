@@ -28,7 +28,6 @@ pub(crate) struct MarkdownSession {
     pub store: MarkdownFileStore,
     pub source_editor: Entity<InputState>,
     pub preview: Entity<markdown_editor::MarkdownEditor>,
-    pub source_document: Arc<std::sync::Mutex<markdown_source::SourceMarkdownDocument>>,
     pub state: MarkdownSessionState,
     pub _subscriptions: Vec<Subscription>,
     pub _file_watcher: Option<notify::RecommendedWatcher>,
@@ -345,4 +344,3 @@ use crate::markdown_file_store::MarkdownFileStore;
 use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 use std::path::PathBuf;
-use std::sync::Arc;

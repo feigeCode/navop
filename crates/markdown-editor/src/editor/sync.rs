@@ -218,7 +218,6 @@ impl MarkdownEditor {
 
     pub(super) fn emit_changed(&self, cx: &mut Context<Self>) {
         cx.emit(MarkdownEditorEvent::Changed {
-            source: self.source().to_owned(),
             revision: self.revision(),
         });
     }

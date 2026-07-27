@@ -51,14 +51,15 @@ pub(crate) fn subscribe_source_changes(
         if !matches!(event, InputEvent::Change) {
             return;
         }
-        let source = input.read(cx).value().to_string();
-        let range = input.read(cx).selected_range();
+        let input = input.read(cx);
+        let source = input.value();
+        let range = input.selected_range();
         let selection = markdown_source::SourceSelection {
             anchor: range.start,
             head: range.end,
         };
         let applied = preview.update(cx, |editor, cx| {
-            editor.apply_source_value(&source, selection, window, cx)
+            editor.apply_source_value(source.as_ref(), selection, window, cx)
         });
         match applied {
             Ok(true) => {}
