@@ -23,6 +23,7 @@ use crate::ingress_queue::{
     TerminalIngressBudget, bounded_terminal_queue,
 };
 use crate::pty_backend::GpuiEventProxy;
+use crate::recording::RecordingTap;
 
 pub(crate) const SERIAL_READ_BUFFER_BYTES: usize = 4 * 1024;
 pub(crate) const SERIAL_PENDING_BYTES: u64 = 64 * 1024;
@@ -69,13 +70,30 @@ impl SerialParserIngress {
         metrics: Arc<TerminalPerformanceMetrics>,
         on_source_closed: Option<UnboundedSender<()>>,
     ) -> std::io::Result<Self> {
+        Self::spawn_with_recording(term, event_proxy, metrics, on_source_closed, None)
+    }
+
+    pub(crate) fn spawn_with_recording(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        metrics: Arc<TerminalPerformanceMetrics>,
+        on_source_closed: Option<UnboundedSender<()>>,
+        recording_tap: Option<RecordingTap>,
+    ) -> std::io::Result<Self> {
         let budget = TerminalIngressBudget::new(
             SERIAL_PENDING_BYTES,
             SERIAL_PENDING_CHUNKS,
             SERIAL_PENDING_CONTROLS,
         )
         .expect("static Serial ingress budget should be valid");
-        Self::spawn_with_budget_and_callback(term, event_proxy, metrics, budget, on_source_closed)
+        Self::spawn_with_budget_callback_and_recording(
+            term,
+            event_proxy,
+            metrics,
+            budget,
+            on_source_closed,
+            recording_tap,
+        )
     }
 
     #[cfg(test)]
@@ -94,6 +112,24 @@ impl SerialParserIngress {
         metrics: Arc<TerminalPerformanceMetrics>,
         budget: TerminalIngressBudget,
         on_source_closed: Option<UnboundedSender<()>>,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_budget_callback_and_recording(
+            term,
+            event_proxy,
+            metrics,
+            budget,
+            on_source_closed,
+            None,
+        )
+    }
+
+    pub(crate) fn spawn_with_budget_callback_and_recording(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        metrics: Arc<TerminalPerformanceMetrics>,
+        budget: TerminalIngressBudget,
+        on_source_closed: Option<UnboundedSender<()>>,
+        recording_tap: Option<RecordingTap>,
     ) -> std::io::Result<Self> {
         let (sender, mut receiver) = bounded_terminal_queue::<SerialIngressControl>(budget);
         let source_closed = Arc::new(AtomicBool::new(false));
@@ -124,6 +160,7 @@ impl SerialParserIngress {
                                     &mut processor,
                                     data.as_slice(),
                                     &task_metrics,
+                                    recording_tap.as_ref(),
                                 );
                                 // Keep the byte reservation aligned with the actual
                                 // synchronous parser boundary, not merely dequeue.
@@ -299,7 +336,11 @@ pub(crate) fn advance_serial_term(
     processor: &mut Processor<StdSyncHandler>,
     data: &[u8],
     performance_metrics: &TerminalPerformanceMetrics,
+    recording_tap: Option<&RecordingTap>,
 ) {
+    if let Some(recording_tap) = recording_tap {
+        let _ = recording_tap.record_output(data);
+    }
     performance_metrics.record_parser_chunk(data.len());
 
     let wait_started = Instant::now();

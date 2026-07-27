@@ -9,6 +9,7 @@ use alacritty_terminal::term::Term;
 use one_core::storage::models::SerialParams;
 
 use crate::pty_backend::GpuiEventProxy;
+use crate::recording::RecordingTap;
 use crate::serial_ingress::{SerialParserIngress, run_serial_reader};
 use crate::{
     TerminalBackend, TerminalInputHandle, TerminalInputMetricSource, TerminalPerformanceMetrics,
@@ -51,6 +52,24 @@ impl SerialBackend {
         on_disconnect: Option<UnboundedSender<()>>,
         performance_metrics: Arc<TerminalPerformanceMetrics>,
     ) -> anyhow::Result<Self> {
+        Self::connect_with_metrics_and_recording(
+            params,
+            term,
+            event_proxy,
+            on_disconnect,
+            performance_metrics,
+            None,
+        )
+    }
+
+    pub(crate) fn connect_with_metrics_and_recording(
+        params: SerialParams,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        on_disconnect: Option<UnboundedSender<()>>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+        recording_tap: Option<RecordingTap>,
+    ) -> anyhow::Result<Self> {
         let data_bits = match params.data_bits {
             5 => serialport::DataBits::Five,
             6 => serialport::DataBits::Six,
@@ -92,11 +111,12 @@ impl SerialBackend {
 
         let (command_tx, mut command_rx) = unbounded_channel::<SerialCommand>();
         let shutdown = CancellationToken::new();
-        let parser_ingress = SerialParserIngress::spawn(
+        let parser_ingress = SerialParserIngress::spawn_with_recording(
             term,
             event_proxy,
             performance_metrics.clone(),
             on_disconnect,
+            recording_tap,
         )?;
 
         // 读取线程只负责串口 I/O 和有界入队；同步解析由 serial-parser 线程完成。
@@ -271,7 +291,7 @@ mod tests {
         let mut processor = Processor::<StdSyncHandler>::new();
         let data = b"serial output\r\n";
 
-        advance_serial_term(&term, &mut processor, data, &metrics);
+        advance_serial_term(&term, &mut processor, data, &metrics, None);
 
         let snapshot = metrics.snapshot();
         assert_eq!(data.len() as u64, snapshot.ingress_bytes);

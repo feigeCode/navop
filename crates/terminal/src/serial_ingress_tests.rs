@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::TerminalPerformanceMetrics;
 use crate::ingress_queue::{TerminalDataSendError, TerminalIngressBudget};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
+use crate::recording::{RecordingBackend, RecordingEventKind, test_support::TestRecording};
 use crate::serial_ingress::{SerialParserIngress, SerialReaderExit, run_serial_reader};
 
 struct TestDimensions;
@@ -393,4 +394,36 @@ fn cancelled_reader_exits_without_performing_a_port_read() {
         .finish()
         .expect("cancelled Serial parser worker should stop without panicking");
     assert_eq!(producer.pending_bytes(), 0);
+}
+
+#[test]
+fn parser_worker_records_accepted_raw_output_at_the_parser_boundary() {
+    let recording = TestRecording::start(RecordingBackend::Serial, false);
+    let payload = b"\xffserial\x1b]133;A\x07output".to_vec();
+    let (term, event_proxy, metrics, _event_rx) = terminal_harness();
+    let ingress = SerialParserIngress::spawn_with_budget_callback_and_recording(
+        term,
+        event_proxy,
+        metrics,
+        test_budget(payload.len() as u64, 1),
+        None,
+        Some(recording.tap()),
+    )
+    .expect("spawn Serial recording parser worker");
+    let producer = ingress.producer();
+
+    producer
+        .send_data(payload.clone())
+        .expect("queue Serial output");
+    producer.close_source();
+    ingress
+        .finish()
+        .expect("Serial parser worker should drain without panicking");
+
+    let parsed = recording.finish();
+    assert_eq!(1, parsed.events.len());
+    assert!(matches!(
+        &parsed.events[0].kind,
+        RecordingEventKind::Output(data) if data == &payload
+    ));
 }

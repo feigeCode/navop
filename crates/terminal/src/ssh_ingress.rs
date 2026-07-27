@@ -23,6 +23,7 @@ use crate::ingress_queue::{
     TerminalIngressBudget, bounded_terminal_queue,
 };
 use crate::pty_backend::GpuiEventProxy;
+use crate::recording::RecordingTap;
 
 /// Maximum accepted SSH output bytes waiting for the parser worker.
 ///
@@ -56,10 +57,19 @@ impl SshParserIngress {
         event_proxy: GpuiEventProxy,
         metrics: Arc<TerminalPerformanceMetrics>,
     ) -> Self {
+        Self::spawn_with_recording(term, event_proxy, metrics, None)
+    }
+
+    pub(crate) fn spawn_with_recording(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        metrics: Arc<TerminalPerformanceMetrics>,
+        recording_tap: Option<RecordingTap>,
+    ) -> Self {
         let budget =
             TerminalIngressBudget::new(SSH_PENDING_BYTES, SSH_PENDING_CHUNKS, SSH_PENDING_CONTROLS)
                 .expect("static SSH ingress budget should be valid");
-        Self::spawn_with_budget(term, event_proxy, metrics, budget)
+        Self::spawn_with_budget_and_recording(term, event_proxy, metrics, budget, recording_tap)
     }
 
     pub(crate) fn spawn_with_budget(
@@ -67,6 +77,16 @@ impl SshParserIngress {
         event_proxy: GpuiEventProxy,
         metrics: Arc<TerminalPerformanceMetrics>,
         budget: TerminalIngressBudget,
+    ) -> Self {
+        Self::spawn_with_budget_and_recording(term, event_proxy, metrics, budget, None)
+    }
+
+    pub(crate) fn spawn_with_budget_and_recording(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        metrics: Arc<TerminalPerformanceMetrics>,
+        budget: TerminalIngressBudget,
+        recording_tap: Option<RecordingTap>,
     ) -> Self {
         let (sender, mut receiver) = bounded_terminal_queue::<()>(budget);
         let task_metrics = metrics.clone();
@@ -76,7 +96,13 @@ impl SshParserIngress {
                 let ReservedTerminalIngressItem::Data(data) = item else {
                     continue;
                 };
-                advance_terminal(&term, &mut processor, data.as_slice(), &task_metrics);
+                advance_terminal(
+                    &term,
+                    &mut processor,
+                    data.as_slice(),
+                    &task_metrics,
+                    recording_tap.as_ref(),
+                );
                 // Keep the byte reservation until the synchronous parser
                 // consumption boundary has completed.
                 drop(data);
@@ -197,7 +223,11 @@ fn advance_terminal(
     processor: &mut Processor<StdSyncHandler>,
     data: &[u8],
     metrics: &TerminalPerformanceMetrics,
+    recording_tap: Option<&RecordingTap>,
 ) {
+    if let Some(recording_tap) = recording_tap {
+        let _ = recording_tap.record_output(data);
+    }
     metrics.record_parser_chunk(data.len());
     let wait_started = Instant::now();
     let mut term = term.lock();

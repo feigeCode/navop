@@ -21,6 +21,7 @@ use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInpu
 #[cfg(test)]
 use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
+use crate::recording::RecordingTap;
 use crate::{
     TerminalBackend, TerminalControlError, TerminalControlHandle, TerminalControlOutput,
     TerminalControlRequest, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
@@ -177,6 +178,7 @@ struct OscTrackingReader<T: EventedPty> {
     command_tx: UnboundedSender<LocalPtyCommand>,
     capture_output: Arc<AtomicBool>,
     metrics: Arc<TerminalPerformanceMetrics>,
+    recording_tap: Option<RecordingTap>,
     osc_parser: OscStreamParser,
 }
 
@@ -191,6 +193,7 @@ impl<T: EventedPty> OscTrackingPty<T> {
         command_tx: UnboundedSender<LocalPtyCommand>,
         capture_output: Arc<AtomicBool>,
         metrics: Arc<TerminalPerformanceMetrics>,
+        recording_tap: Option<RecordingTap>,
     ) -> Self {
         let mut inner = Box::new(inner);
         let reader = OscTrackingReader {
@@ -199,6 +202,7 @@ impl<T: EventedPty> OscTrackingPty<T> {
             command_tx,
             capture_output,
             metrics,
+            recording_tap,
             osc_parser: OscStreamParser::default(),
         };
         Self { inner, reader }
@@ -210,6 +214,9 @@ impl<T: EventedPty> Read for OscTrackingReader<T> {
         let bytes_read = unsafe { (&mut *self.inner).reader().read(buf) }?;
         if bytes_read > 0 {
             let data = &buf[..bytes_read];
+            if let Some(recording_tap) = &self.recording_tap {
+                let _ = recording_tap.record_output(data);
+            }
             self.metrics.record_parser_chunk(bytes_read);
             let osc_events = self.osc_parser.push(data);
             if self.capture_output.load(Ordering::Acquire) || !osc_events.is_empty() {
@@ -332,6 +339,15 @@ impl LocalPtyBackend {
         event_proxy: GpuiEventProxy,
         pty_options: PtyOptions,
     ) -> anyhow::Result<Self> {
+        Self::new_with_recording(term, event_proxy, pty_options, None)
+    }
+
+    pub(crate) fn new_with_recording(
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        pty_options: PtyOptions,
+        recording_tap: Option<RecordingTap>,
+    ) -> anyhow::Result<Self> {
         let window_size = WindowSize {
             num_lines: 24,
             num_cols: 80,
@@ -357,6 +373,7 @@ impl LocalPtyBackend {
             command_tx.clone(),
             capture_output.clone(),
             performance_metrics.clone(),
+            recording_tap,
         );
         let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
@@ -872,6 +889,7 @@ mod tests {
             command_tx,
             Arc::new(AtomicBool::new(false)),
             metrics.clone(),
+            None,
         );
         let mut buffer = [0; 64];
 
@@ -884,6 +902,37 @@ mod tests {
         assert_eq!(1, snapshot.parser_chunks);
         assert_eq!(12, snapshot.parser_chunk_bytes);
         assert_eq!(12, snapshot.parser_chunk_max_bytes);
+    }
+
+    #[test]
+    fn osc_tracking_reader_records_raw_output_at_the_parser_boundary() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Local,
+            false,
+        );
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (command_tx, _command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let mut pty = OscTrackingPty::new(
+            TestEventedPty::new(b"\xffraw\x1b]133;A\x07output".to_vec()),
+            event_tx,
+            command_tx,
+            Arc::new(AtomicBool::new(false)),
+            metrics,
+            Some(recording.tap()),
+        );
+        let mut buffer = [0; 64];
+
+        let bytes_read = pty.reader().read(&mut buffer).expect("PTY read");
+        assert_eq!(b"\xffraw\x1b]133;A\x07output".len(), bytes_read);
+
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Output(data)
+                if data == b"\xffraw\x1b]133;A\x07output"
+        ));
     }
 
     #[test]

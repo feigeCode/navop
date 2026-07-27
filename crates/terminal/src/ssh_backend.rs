@@ -19,6 +19,7 @@ use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInpu
 use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
+use crate::recording::RecordingTap;
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
@@ -471,6 +472,33 @@ impl SshBackend {
         init_commands: Option<String>,
         disable_shell_integration: bool,
     ) -> anyhow::Result<Self> {
+        Self::connect_with_recording(
+            session_manager,
+            pty_config,
+            connection_id,
+            term,
+            event_proxy,
+            event_tx,
+            on_disconnect,
+            init_commands,
+            disable_shell_integration,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_with_recording(
+        session_manager: Arc<SshSessionManager>,
+        pty_config: PtyConfig,
+        connection_id: Option<i64>,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        event_tx: UnboundedSender<TerminalEvent>,
+        on_disconnect: Option<UnboundedSender<()>>,
+        init_commands: Option<String>,
+        disable_shell_integration: bool,
+        recording_tap: Option<RecordingTap>,
+    ) -> anyhow::Result<Self> {
         let (client, mut channel, shell_integration_active) = Self::establish_channel(
             &session_manager,
             &pty_config,
@@ -496,8 +524,12 @@ impl SshBackend {
         event_proxy.set_ssh_write_back(pty_write_tx);
         let performance_metrics = event_proxy.performance_metrics();
         let task_metrics = performance_metrics.clone();
-        let parser_ingress =
-            SshParserIngress::spawn(term, event_proxy.clone(), task_metrics.clone());
+        let parser_ingress = SshParserIngress::spawn_with_recording(
+            term,
+            event_proxy.clone(),
+            task_metrics.clone(),
+            recording_tap,
+        );
 
         tokio::spawn(async move {
             let mut shutdown = false;

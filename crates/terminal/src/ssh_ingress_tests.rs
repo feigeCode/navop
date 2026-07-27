@@ -18,6 +18,7 @@ use crate::ingress_queue::{
     TerminalDataSendError, TerminalIngressBudget, TerminalIngressItem, bounded_terminal_queue,
 };
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
+use crate::recording::{RecordingBackend, RecordingEventKind, test_support::TestRecording};
 use crate::ssh_ingress::{
     SSH_PENDING_BYTES, SshActorInput, SshParserIngress, SshPendingIngress, next_ssh_actor_input,
 };
@@ -541,4 +542,44 @@ async fn parser_worker_abort_discards_unconsumed_backlog_without_payload_metrics
         !format!("{snapshot:?}").contains("never-retain-this-payload"),
         "metrics must remain numeric-only"
     );
+}
+
+#[tokio::test]
+async fn parser_worker_records_accepted_raw_output_at_the_parser_boundary() {
+    let recording = TestRecording::start(RecordingBackend::Ssh, false);
+    let payload = b"\xffssh\x1b]133;A\x07output".to_vec();
+    let (event_tx, _event_rx) = unbounded_channel();
+    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
+    let term = Arc::new(FairMutex::new(Term::new(
+        TermConfig::default(),
+        &TestDimensions,
+        proxy.clone(),
+    )));
+    let ingress = SshParserIngress::spawn_with_budget_and_recording(
+        term,
+        proxy,
+        metrics,
+        TerminalIngressBudget::new(payload.len() as u64, 1, 1)
+            .expect("valid recording worker budget"),
+        Some(recording.tap()),
+    );
+    let sender = ingress.sender();
+
+    sender
+        .send_data(payload.clone())
+        .await
+        .expect("queue SSH output");
+    drop(sender);
+    timeout(Duration::from_secs(1), ingress.finish())
+        .await
+        .expect("worker should gracefully drain")
+        .expect("worker should not panic");
+
+    let parsed = recording.finish();
+    assert_eq!(1, parsed.events.len());
+    assert!(matches!(
+        &parsed.events[0].kind,
+        RecordingEventKind::Output(data) if data == &payload
+    ));
 }
