@@ -59,7 +59,7 @@ fn prepare_in_dir(program: &str, session_dir: &Path) -> (Vec<(String, String)>, 
         return (Vec::new(), Vec::new());
     }
     let path = session_dir.join(format!("shell_integration.{extension}"));
-    if let Err(error) = fs::write(&path, script) {
+    if let Err(error) = write_script_if_changed(&path, script) {
         tracing::warn!("写入 Windows shell integration 失败: {error}");
         return (Vec::new(), Vec::new());
     }
@@ -69,6 +69,17 @@ fn prepare_in_dir(program: &str, session_dir: &Path) -> (Vec<(String, String)>, 
         vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())],
         integration_args(kind, &path.to_string_lossy()),
     )
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn write_script_if_changed(path: &Path, script: &str) -> std::io::Result<()> {
+    // The integration files are process-scoped and identical for every new
+    // terminal.  Avoid rewriting them on every launch, since writes to a
+    // temporary .ps1/.cmd file may trigger another antivirus scan on Windows.
+    if fs::read(path).is_ok_and(|current| current == script.as_bytes()) {
+        return Ok(());
+    }
+    fs::write(path, script)
 }
 
 fn detect_shell_kind(program: &str) -> WindowsShellKind {
@@ -92,13 +103,26 @@ fn integration_file(kind: WindowsShellKind) -> Option<(&'static str, &'static st
 fn integration_args(kind: WindowsShellKind, path: &str) -> Vec<String> {
     match kind {
         WindowsShellKind::PowerShell => vec![
+            // `-File` lets CreateProcess/Alacritty quote the path as one
+            // argument.  Building a `-Command` string here would require
+            // another layer of PowerShell quoting (and used to add avoidable
+            // startup parsing work).
+            "-NoLogo".into(),
             "-NoExit".into(),
             "-ExecutionPolicy".into(),
             "Bypass".into(),
-            "-Command".into(),
-            format!(". '{}'", path.replace('\'', "''")),
+            "-File".into(),
+            path.into(),
         ],
-        WindowsShellKind::Cmd => vec!["/K".into(), format!("call \"{path}\"")],
+        WindowsShellKind::Cmd => {
+            // Keep the batch path as a separate argument.  Alacritty applies
+            // C-runtime escaping when `escape_args` is enabled; embedding
+            // quotes in a `/K` command string therefore turns them into
+            // `\"`, which cmd.exe treats literally instead of as quoting.
+            // With three arguments the final command line is the canonical:
+            // `cmd.exe /K call "C:\\path with spaces\\script.cmd"`.
+            vec!["/K".into(), "call".into(), path.into()]
+        }
         WindowsShellKind::Unsupported => Vec::new(),
     }
 }
@@ -143,11 +167,12 @@ mod tests {
         assert_eq!(
             args,
             vec![
+                "-NoLogo",
                 "-NoExit",
                 "-ExecutionPolicy",
                 "Bypass",
-                "-Command",
-                ". 'C:\\Temp\\onetcli.ps1'"
+                "-File",
+                r"C:\Temp\onetcli.ps1"
             ]
         );
     }
@@ -156,7 +181,31 @@ mod tests {
     fn cmd_arguments_run_integration_batch_and_keep_shell_open() {
         let args = integration_args(WindowsShellKind::Cmd, r"C:\Temp\onetcli.cmd");
 
-        assert_eq!(args, vec!["/K", r#"call "C:\Temp\onetcli.cmd""#]);
+        assert_eq!(args, vec!["/K", "call", r"C:\Temp\onetcli.cmd"]);
+    }
+
+    #[test]
+    fn cmd_arguments_keep_a_spaced_path_as_a_single_argument() {
+        let path = r"C:\Users\Wang\AppData\Local\Temp\onetcli session\shell_integration.cmd";
+        let args = integration_args(WindowsShellKind::Cmd, path);
+
+        assert_eq!(args, vec!["/K", "call", path]);
+        assert!(
+            args.iter().all(|arg| !arg.contains('"')),
+            "cmd integration arguments must not contain embedded quotes: {args:?}"
+        );
+    }
+
+    #[test]
+    fn powershell_arguments_keep_a_quoted_path_as_a_single_argument() {
+        let path = r"C:\Users\Wang\AppData\Local\Temp\onetcli session\shell's.ps1";
+        let args = integration_args(WindowsShellKind::PowerShell, path);
+
+        assert_eq!(args.last().map(String::as_str), Some(path));
+        assert!(
+            !args.iter().any(|arg| arg == "-Command"),
+            "PowerShell integration should not build a nested command string: {args:?}"
+        );
     }
 
     #[test]
@@ -186,8 +235,52 @@ mod tests {
         let (env, args) = prepare_in_dir("pwsh.exe", &session_dir);
 
         assert_eq!(env, vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())]);
-        assert_eq!(args.first().map(String::as_str), Some("-NoExit"));
+        assert_eq!(args.first().map(String::as_str), Some("-NoLogo"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(
+                session_dir
+                    .join("shell_integration.ps1")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
         assert!(session_dir.join("shell_integration.ps1").is_file());
+        let _ = fs::remove_dir_all(session_dir);
+    }
+
+    #[test]
+    fn reuses_an_unchanged_integration_script_without_rewriting_it() {
+        let session_dir = std::env::temp_dir().join(format!(
+            "onetcli-windows-integration-reuse-test-{}",
+            std::process::id()
+        ));
+        let integration_path = session_dir.join("shell_integration.ps1");
+        let _ = fs::remove_dir_all(&session_dir);
+        fs::create_dir_all(&session_dir).expect("should create integration test directory");
+        fs::write(&integration_path, powershell_integration_script())
+            .expect("should seed the integration script");
+
+        let mut permissions = fs::metadata(&integration_path)
+            .expect("should read integration script metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&integration_path, permissions)
+            .expect("should make integration script read-only");
+
+        let (env, args) = prepare_in_dir("pwsh.exe", &session_dir);
+
+        assert_eq!(env, vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())]);
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(integration_path.to_string_lossy().as_ref())
+        );
+
+        let mut permissions = fs::metadata(&integration_path)
+            .expect("should read integration script metadata")
+            .permissions();
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(&integration_path, permissions);
         let _ = fs::remove_dir_all(session_dir);
     }
 }

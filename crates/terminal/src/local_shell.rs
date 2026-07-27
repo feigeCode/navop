@@ -184,11 +184,44 @@ fn resolve_windows_profile(kind: LocalTerminalProfileKind) -> Result<(String, Ve
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn resolve_powershell() -> String {
-    find_in_path("pwsh.exe")
+fn resolve_powershell_uncached() -> String {
+    standard_powershell_path()
+        .or_else(|| find_in_path("pwsh.exe"))
         .or_else(|| system32_path(&["WindowsPowerShell", "v1.0", "powershell.exe"]))
         .or_else(|| find_in_path("powershell.exe"))
         .unwrap_or_else(|| "powershell.exe".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_powershell() -> String {
+    // PATH probing may synchronously query unavailable network locations.
+    // PowerShell installations do not change while the app is running, so
+    // retain the result for subsequent terminal tabs.
+    static POWERSHELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    POWERSHELL.get_or_init(resolve_powershell_uncached).clone()
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+fn resolve_powershell() -> String {
+    resolve_powershell_uncached()
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn standard_powershell_path() -> Option<String> {
+    let program_files = ["ProgramW6432", "ProgramFiles"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(std::path::PathBuf::from)
+        .map(|root| root.join("PowerShell").join("7").join("pwsh.exe"));
+
+    let windows_apps = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|root| root.join("Microsoft").join("WindowsApps").join("pwsh.exe"));
+
+    program_files
+        .chain(windows_apps)
+        .find(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(any(test, target_os = "windows"))]
