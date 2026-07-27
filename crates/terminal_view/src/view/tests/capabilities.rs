@@ -382,6 +382,97 @@ fn playback_clear_selection_never_changes_recorded_vi_mode() {
     assert!(capability < live_only_branch && live_only_branch < toggle);
 }
 
+#[test]
+fn playback_mouse_reporting_is_rejected_before_report_side_effects() {
+    let source = include_str!("../scroll.rs");
+
+    assert_function_guard_precedes(
+        source,
+        "pub(super) fn try_report_sgr_mouse_button",
+        "pub(super) fn write_sgr_mouse_button_report",
+        "if !self.accepts_live_terminal_input(cx)",
+        "self.terminal.read(cx).mode()",
+        "SGR mouse reporting",
+    );
+    assert_function_guard_precedes(
+        source,
+        "pub(super) fn write_sgr_mouse_button_report",
+        "\n}",
+        "if !self.accepts_live_terminal_input(cx)",
+        "mouse_button_code(button)",
+        "SGR mouse report construction",
+    );
+}
+
+#[test]
+fn playback_mouse_paste_handlers_reject_before_reporting_or_ui_side_effects() {
+    let source = include_str!("../mouse_down.rs");
+
+    assert_function_guard_precedes(
+        source,
+        "pub(super) fn handle_middle_mouse_down",
+        "pub(super) fn handle_right_mouse_down",
+        "if !self.accepts_live_terminal_input(cx)",
+        "self.try_report_sgr_mouse_button",
+        "middle-click reporting and paste",
+    );
+    assert_function_guard_precedes(
+        source,
+        "pub(super) fn handle_right_mouse_down",
+        "\n}",
+        "if !self.accepts_live_terminal_input(cx)",
+        "cx.stop_propagation()",
+        "right-click paste",
+    );
+}
+
+#[test]
+fn playback_stale_sgr_press_never_clears_the_local_selection() {
+    let source = include_str!("../mouse_selection.rs");
+    let mouse_up = function_region(
+        source,
+        "pub(super) fn handle_mouse_up",
+        "pub(super) fn handle_window_mouse_up",
+    );
+    let pending_press = mouse_up
+        .split("if let Some(pending)")
+        .nth(1)
+        .expect("mouse-up should retain pending SGR press handling");
+
+    assert_guard_precedes(
+        pending_press,
+        "if self.accepts_live_terminal_input(cx)",
+        "terminal.clear_selection()",
+        "pending SGR mouse press",
+    );
+}
+
+#[test]
+fn recorded_local_metadata_never_authorizes_local_path_addons() {
+    for (source, expected_live_checks, capability) in [
+        (
+            include_str!("../terminal_render.rs"),
+            1,
+            "terminal frame addons",
+        ),
+        (include_str!("../mouse_down.rs"), 1, "mouse-down addons"),
+        (
+            include_str!("../mouse_selection.rs"),
+            2,
+            "mouse move/up addons",
+        ),
+    ] {
+        assert!(
+            !source.contains(".connection_kind() == TerminalConnectionKind::Local"),
+            "{capability} must not authorize local paths from recording source metadata"
+        );
+        assert!(
+            source.matches("live_connection_kind()").count() >= expected_live_checks,
+            "{capability} must authorize local paths from the live connection kind"
+        );
+    }
+}
+
 fn assert_guard_precedes(source: &str, guard: &str, side_effect: &str, capability: &str) {
     let guard_position = source
         .find(guard)

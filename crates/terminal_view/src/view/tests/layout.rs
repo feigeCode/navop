@@ -114,6 +114,28 @@ fn terminal_right_click_paste_is_only_enabled_for_live_input() {
 }
 
 #[test]
+fn playback_alt_screen_history_can_show_a_local_scrollbar() {
+    let source = include_str!("../render_surface.rs");
+    let viewport_state = source
+        .split("fn terminal_viewport_state")
+        .nth(1)
+        .and_then(|source| source.split("fn render_terminal_core").next())
+        .expect("terminal viewport state should exist");
+    let scrollbar_policy = viewport_state
+        .split("show_scrollbar:")
+        .nth(1)
+        .and_then(|source| source.split(",\n").next())
+        .expect("terminal scrollbar policy should exist");
+
+    assert!(
+        scrollbar_policy.contains("!accepts_live_input"),
+        "playback must ignore recorded alt-screen mode when exposing local scrollback"
+    );
+    assert!(scrollbar_policy.contains("!terminal_mode.contains(TermMode::ALT_SCREEN)"));
+    assert!(scrollbar_policy.contains("history_size > 0"));
+}
+
+#[test]
 fn terminal_tools_are_not_exposed_as_external_sidebar_contributions() {
     let source = include_str!("../tab_content.rs");
     let sidebar_contributions = source

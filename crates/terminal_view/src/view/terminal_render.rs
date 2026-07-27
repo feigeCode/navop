@@ -8,8 +8,8 @@ impl TerminalView {
     ) -> impl IntoElement {
         // Prepare addons before rendering
         {
-            let is_local =
-                self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+            let is_local = self.terminal.read(cx).live_connection_kind()
+                == Some(TerminalConnectionKind::Local);
             let term = self.terminal.read(cx).term().lock();
             let display_offset = term.grid().display_offset();
             let visible_lines = 0..term.screen_lines();

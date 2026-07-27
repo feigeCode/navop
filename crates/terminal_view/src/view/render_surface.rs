@@ -57,7 +57,8 @@ impl TerminalView {
             selection_text,
             accepts_live_input,
             right_click_paste: self.right_click_paste && accepts_live_input,
-            show_scrollbar: !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0,
+            show_scrollbar: (!accepts_live_input || !terminal_mode.contains(TermMode::ALT_SCREEN))
+                && history_size > 0,
         }
     }
 
