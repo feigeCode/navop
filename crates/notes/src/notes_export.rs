@@ -4,10 +4,17 @@ use anyhow::Context as _;
 use futures::AsyncReadExt;
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
 use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
+use markdown_editor::{
+    MarkdownBlockRenderKind, MarkdownBlockRenderProvider, MarkdownBlockRenderRequest,
+};
+use markdown_source::{
+    SourceBlock, SourceBlockKind, SourceInlineKind, SourceInlineNode, SourceMarkdownDocument,
+};
 use one_core::tab_container::{TabContentEvent, TabItem, TabOpenMode};
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -84,22 +91,27 @@ impl NotesView {
                 return;
             }
         };
-        let request = extension_wasm::DocumentExportRequest {
-            exporter: String::new(),
-            format: format_name,
-            title: row.display_name,
-            source: source.source,
-            assets: source.assets,
-            theme: export_theme_from_app(cx),
+        let job = DocumentExportJob {
+            catalog,
+            request: extension_wasm::DocumentExportRequest {
+                exporter: String::new(),
+                format: format_name,
+                title: row.display_name,
+                source: source.source,
+                assets: source.assets,
+                theme: export_theme_from_app(cx),
+            },
+            pending_renders: source.pending_renders,
+            render_provider: crate::markdown_renderer::block_render_provider(cx),
+            render_theme: ExportRenderTheme::from_app(cx),
+            http_client: cx.http_client(),
         };
-        self.prompt_and_export(catalog, request, cx.http_client(), window, cx);
+        self.prompt_and_export(job, window, cx);
     }
 
     fn prompt_and_export(
         &self,
-        catalog: Arc<extension_runtime::ExtensionRuntimeCatalog>,
-        request: extension_wasm::DocumentExportRequest,
-        http_client: Arc<dyn gpui::http_client::HttpClient>,
+        job: DocumentExportJob,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -126,12 +138,7 @@ impl NotesView {
             let Some(directory) = directory else { return };
             notify_export_started(cx, window_handle);
             let result = cx
-                .background_spawn(run_document_export(
-                    catalog,
-                    request,
-                    directory,
-                    http_client,
-                ))
+                .background_spawn(run_document_export(job, directory))
                 .await;
             notify_export_finished(cx, window_handle, result);
         })
@@ -174,47 +181,266 @@ impl NotesView {
                 MarkdownViewMode::Wysiwyg => session.preview.read(cx).source().to_owned(),
             };
             let path = session.store.path()?;
-            return Ok(ExportSource::new(source, path.parent()));
+            return ExportSource::new(source, path.parent());
         }
 
         let descriptor = self.storage()?.descriptor(&row.relative_path)?;
         let source = fs::read_to_string(&descriptor.absolute_path)
             .with_context(|| format!("read Markdown {}", descriptor.absolute_path.display()))?;
-        Ok(ExportSource::new(source, descriptor.absolute_path.parent()))
+        ExportSource::new(source, descriptor.absolute_path.parent())
     }
+}
+
+struct DocumentExportJob {
+    catalog: Arc<extension_runtime::ExtensionRuntimeCatalog>,
+    request: extension_wasm::DocumentExportRequest,
+    pending_renders: Vec<PendingMarkdownRender>,
+    render_provider: Option<MarkdownBlockRenderProvider>,
+    render_theme: ExportRenderTheme,
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
 }
 
 struct ExportSource {
     source: String,
     assets: Vec<extension_wasm::DocumentExportAsset>,
+    pending_renders: Vec<PendingMarkdownRender>,
 }
 
 impl ExportSource {
-    fn new(source: String, base: Option<&Path>) -> Self {
-        let assets = collect_export_assets(&source, base);
-        Self { source, assets }
+    fn new(source: String, base: Option<&Path>) -> anyhow::Result<Self> {
+        let prepared = prepare_rendered_markdown(source)?;
+        let assets = collect_export_assets(&prepared.source, base);
+        Ok(Self {
+            source: prepared.source,
+            assets,
+            pending_renders: prepared.pending_renders,
+        })
+    }
+}
+
+struct PreparedMarkdown {
+    source: String,
+    pending_renders: Vec<PendingMarkdownRender>,
+}
+
+#[derive(Clone)]
+struct PendingMarkdownRender {
+    kind: MarkdownBlockRenderKind,
+    source: String,
+    path: String,
+}
+
+#[derive(Clone, Copy)]
+struct ExportRenderTheme {
+    background: Hsla,
+    foreground: Hsla,
+    border: Hsla,
+    muted: Hsla,
+    accent: Hsla,
+}
+
+impl ExportRenderTheme {
+    fn from_app(cx: &App) -> Self {
+        Self {
+            background: cx.theme().background,
+            foreground: cx.theme().foreground,
+            border: cx.theme().border,
+            muted: cx.theme().muted_foreground,
+            accent: cx.theme().primary,
+        }
+    }
+
+    fn request(self, pending: &PendingMarkdownRender) -> MarkdownBlockRenderRequest {
+        MarkdownBlockRenderRequest {
+            kind: pending.kind,
+            source: pending.source.clone(),
+            background: self.background,
+            foreground: self.foreground,
+            border: self.border,
+            muted: self.muted,
+            accent: self.accent,
+            available_width: 720.,
+            scale_factor: 1.,
+        }
     }
 }
 
 async fn run_document_export(
-    catalog: Arc<extension_runtime::ExtensionRuntimeCatalog>,
-    mut request: extension_wasm::DocumentExportRequest,
+    mut job: DocumentExportJob,
     directory: PathBuf,
-    http_client: Arc<dyn gpui::http_client::HttpClient>,
 ) -> anyhow::Result<PathBuf> {
-    request
+    job.request
         .assets
-        .extend(collect_remote_export_assets(&request.source, http_client).await);
-    prepare_export_image_assets(&request.format, &mut request.assets)?;
-    let title = request.title.clone();
-    let artifact = catalog
-        .export_document(request)
+        .extend(collect_remote_export_assets(&job.request.source, job.http_client).await);
+    job.request.assets.extend(
+        render_export_assets(job.pending_renders, job.render_provider, job.render_theme).await?,
+    );
+    prepare_export_image_assets(&job.request.format, &mut job.request.assets)?;
+    let title = job.request.title.clone();
+    let artifact = job
+        .catalog
+        .export_document(job.request)
         .await
         .map_err(|error| anyhow::anyhow!(error.to_string()))?
         .ok_or_else(|| anyhow::anyhow!("no document exporter supports this format"))?;
     let path = next_export_path(&directory, &title, &artifact.extension)?;
     fs::write(&path, artifact.bytes).with_context(|| format!("write export {}", path.display()))?;
     Ok(path)
+}
+
+async fn render_export_assets(
+    pending_renders: Vec<PendingMarkdownRender>,
+    provider: Option<MarkdownBlockRenderProvider>,
+    theme: ExportRenderTheme,
+) -> anyhow::Result<Vec<extension_wasm::DocumentExportAsset>> {
+    if pending_renders.is_empty() {
+        return Ok(Vec::new());
+    }
+    let provider = provider.context("Markdown block renderer is unavailable")?;
+    let mut assets = Vec::with_capacity(pending_renders.len());
+    for pending in pending_renders {
+        let artifact = provider(theme.request(&pending))
+            .await
+            .map_err(anyhow::Error::msg)?
+            .with_context(|| format!("renderer is unavailable for {}", pending.path))?;
+        assets.push(extension_wasm::DocumentExportAsset {
+            path: pending.path,
+            media_type: artifact.media_type,
+            bytes: artifact.bytes,
+        });
+    }
+    Ok(assets)
+}
+
+fn prepare_rendered_markdown(source: String) -> anyhow::Result<PreparedMarkdown> {
+    let document = SourceMarkdownDocument::parse(source.clone())?;
+    let mut replacements = Vec::new();
+    let mut pending_renders = Vec::new();
+    for block in &document.blocks {
+        if let Some(kind) = rendered_block_kind(block, &source) {
+            push_render_replacement(
+                kind,
+                block.id.0,
+                block.source_range.clone(),
+                block.content_range.as_ref(),
+                &source,
+                &mut replacements,
+                &mut pending_renders,
+            );
+            continue;
+        }
+        for inline in inline_math_nodes(block) {
+            push_render_replacement(
+                MarkdownBlockRenderKind::Math,
+                inline.id.0,
+                inline.source_range.clone(),
+                inline.content_range.as_ref(),
+                &source,
+                &mut replacements,
+                &mut pending_renders,
+            );
+        }
+    }
+    Ok(PreparedMarkdown {
+        source: apply_source_replacements(source, replacements),
+        pending_renders,
+    })
+}
+
+struct SourceReplacement {
+    range: Range<usize>,
+    value: String,
+}
+
+fn push_render_replacement(
+    kind: MarkdownBlockRenderKind,
+    id: u64,
+    range: Range<usize>,
+    content_range: Option<&Range<usize>>,
+    source: &str,
+    replacements: &mut Vec<SourceReplacement>,
+    pending_renders: &mut Vec<PendingMarkdownRender>,
+) {
+    let Some(content_range) = content_range else {
+        return;
+    };
+    let prefix = match kind {
+        MarkdownBlockRenderKind::Math => "formula",
+        MarkdownBlockRenderKind::Mermaid => "mermaid",
+    };
+    let path = format!("navop-export/rendered-{prefix}-{id}.svg");
+    let alt = match kind {
+        MarkdownBlockRenderKind::Math => "数学公式",
+        MarkdownBlockRenderKind::Mermaid => "Mermaid 图表",
+    };
+    replacements.push(SourceReplacement {
+        range,
+        value: format!("![{alt}](<{path}>)"),
+    });
+    pending_renders.push(PendingMarkdownRender {
+        kind,
+        source: normalize_render_source(&source[content_range.clone()]),
+        path,
+    });
+}
+
+fn normalize_render_source(source: &str) -> String {
+    let mut source = source.replace("\r\n", "\n");
+    if source.ends_with('\r') {
+        source.pop();
+    }
+    source
+}
+
+fn rendered_block_kind(block: &SourceBlock, source: &str) -> Option<MarkdownBlockRenderKind> {
+    match &block.kind {
+        SourceBlockKind::MathBlock { .. } => Some(MarkdownBlockRenderKind::Math),
+        SourceBlockKind::CodeFence {
+            language_range: Some(language),
+            ..
+        } => match source[language.clone()]
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "mermaid" => Some(MarkdownBlockRenderKind::Mermaid),
+            "math" | "latex" | "tex" | "katex" => Some(MarkdownBlockRenderKind::Math),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn inline_math_nodes(block: &SourceBlock) -> Vec<&SourceInlineNode> {
+    let mut nodes = block
+        .inline_nodes
+        .iter()
+        .filter(|node| matches!(node.kind, SourceInlineKind::InlineMath { .. }))
+        .collect::<Vec<_>>();
+    if let SourceBlockKind::Table(table) = &block.kind {
+        nodes.extend(
+            table
+                .rows
+                .iter()
+                .flat_map(|row| row.cells.iter())
+                .flat_map(|cell| cell.inline_nodes.iter())
+                .filter(|node| matches!(node.kind, SourceInlineKind::InlineMath { .. })),
+        );
+    }
+    let mut seen = HashSet::new();
+    nodes.retain(|node| seen.insert((node.source_range.start, node.source_range.end)));
+    nodes
+}
+
+fn apply_source_replacements(
+    mut source: String,
+    mut replacements: Vec<SourceReplacement>,
+) -> String {
+    replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.range.start));
+    for replacement in replacements {
+        source.replace_range(replacement.range, &replacement.value);
+    }
+    source
 }
 
 fn notify_async_export_error(
@@ -648,8 +874,10 @@ fn next_export_path(directory: &Path, title: &str, extension: &str) -> anyhow::R
 mod tests {
     use super::{
         ExportSource, NotesExportFormat, collect_export_assets, export_image_media_type,
-        next_export_path, prepare_export_image_assets, rasterize_export_svg,
+        next_export_path, prepare_export_image_assets, prepare_rendered_markdown,
+        rasterize_export_svg,
     };
+    use markdown_editor::MarkdownBlockRenderKind;
 
     #[test]
     fn export_submenu_exposes_html_pdf_and_word() {
@@ -678,8 +906,80 @@ mod tests {
     #[test]
     fn export_source_preserves_markdown_bytes_exactly() {
         let source = "\u{feff}# 标题\r\n\r\n结尾无换行".to_owned();
-        let export = ExportSource::new(source.clone(), None);
+        let export = ExportSource::new(source.clone(), None).unwrap();
         assert_eq!(source, export.source);
+    }
+
+    #[test]
+    fn rendered_blocks_become_export_assets_without_reformatting_surrounding_source() {
+        let source = concat!(
+            "\u{feff}Before\r\n\r\n",
+            "$$\r\nx^2 + y^2\r\n$$\r\n\r\n",
+            "```mermaid\r\ngraph TD\r\nA --> B\r\n```\r\n\r\n",
+            "After"
+        );
+        let prepared = prepare_rendered_markdown(source.to_owned()).unwrap();
+
+        assert_eq!(2, prepared.pending_renders.len());
+        assert_eq!(
+            MarkdownBlockRenderKind::Math,
+            prepared.pending_renders[0].kind
+        );
+        assert_eq!(
+            MarkdownBlockRenderKind::Mermaid,
+            prepared.pending_renders[1].kind
+        );
+        assert_eq!("x^2 + y^2", prepared.pending_renders[0].source);
+        assert_eq!("graph TD\nA --> B", prepared.pending_renders[1].source);
+        assert!(
+            prepared
+                .source
+                .starts_with("\u{feff}Before\r\n\r\n![数学公式]")
+        );
+        assert!(prepared.source.contains("\r\n\r\n![Mermaid 图表]"));
+        assert!(prepared.source.ends_with("\r\n\r\nAfter"));
+        assert!(!prepared.source.ends_with('\n'));
+    }
+
+    #[test]
+    fn inline_and_table_math_become_inline_export_assets() {
+        let source = "Before $x + 1$ after.\n\n| Formula |\n| --- |\n| $y^2$ |";
+        let prepared = prepare_rendered_markdown(source.to_owned()).unwrap();
+
+        assert_eq!(2, prepared.pending_renders.len());
+        assert!(prepared.source.starts_with("Before ![数学公式]"));
+        assert!(prepared.source.contains("| ![数学公式]"));
+        assert_eq!("x + 1", prepared.pending_renders[0].source);
+        assert_eq!("y^2", prepared.pending_renders[1].source);
+    }
+
+    #[test]
+    fn fenced_math_is_rendered_but_escaped_and_regular_code_are_preserved() {
+        let source = concat!(
+            "\\```mermaid\nA --> B\n\\```\n\n",
+            "```rust\nlet formula = \"$x$\";\n```\n\n",
+            "```latex\nx^2\n```"
+        );
+        let prepared = prepare_rendered_markdown(source.to_owned()).unwrap();
+
+        assert_eq!(1, prepared.pending_renders.len());
+        assert_eq!(
+            MarkdownBlockRenderKind::Math,
+            prepared.pending_renders[0].kind
+        );
+        assert_eq!("x^2", prepared.pending_renders[0].source);
+        assert!(prepared.source.starts_with("\\```mermaid\nA --> B\n\\```"));
+        assert!(
+            prepared
+                .source
+                .contains("```rust\nlet formula = \"$x$\";\n```")
+        );
+        assert!(
+            prepared
+                .source
+                .contains("![数学公式](<navop-export/rendered-formula-")
+        );
+        assert!(prepared.source.ends_with(".svg>)"));
     }
 
     #[test]
