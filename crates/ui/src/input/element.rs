@@ -1913,6 +1913,13 @@ impl Element for TextElement {
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
 
+        // Publish the geometry during prepaint so sibling overlays that follow this input
+        // observe the layout from the same frame instead of the previous painted frame.
+        self.state.update(cx, |state, _| {
+            state.last_layout = Some(last_layout.clone());
+            state.last_bounds = Some(bounds);
+        });
+
         PrepaintState {
             bounds,
             last_layout,
@@ -2262,8 +2269,6 @@ impl Element for TextElement {
         );
 
         self.state.update(cx, |state, cx| {
-            state.last_layout = Some(prepaint.last_layout.clone());
-            state.last_bounds = Some(bounds);
             state.last_cursor = Some(state.cursor());
             state.set_input_bounds(input_bounds, cx);
             state.last_selected_range = Some(selected_range);

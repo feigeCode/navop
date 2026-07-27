@@ -3178,7 +3178,8 @@ impl Render for InputState {
 mod tests {
     use super::*;
     use crate::theme::Theme;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext, canvas};
+    use std::cell::RefCell;
 
     /// Helper to create an InputState in a window for testing
     fn new_code_editor(cx: &mut TestAppContext) -> (Entity<InputState>, &mut VisualTestContext) {
@@ -3191,11 +3192,151 @@ mod tests {
         cx.add_window_view(|window, cx| InputState::new(window, cx).code_editor("sql"))
     }
 
+    fn new_detached_code_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputState>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let input =
+            cx.update(|window, cx| cx.new(|cx| InputState::new(window, cx).code_editor("sql")));
+        (input, cx)
+    }
+
     fn draw_input(cx: &mut VisualTestContext, input: &Entity<InputState>) {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(800.), px(240.)),
             |_, _| input.clone().into_any_element(),
+        );
+    }
+
+    #[gpui::test]
+    fn sibling_prepaint_sees_current_input_layout_on_first_frame(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("first line", window, cx);
+            });
+        });
+        assert!(cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state.last_layout.is_none() && state.last_bounds.is_none()
+            })
+        }));
+
+        let observed = Rc::new(RefCell::new(None));
+        let observed_in_overlay = observed.clone();
+        let input_in_surface = input.clone();
+        let input_in_overlay = input.clone();
+
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(800.), px(240.)),
+            move |_, _| {
+                div()
+                    .relative()
+                    .flex()
+                    .size_full()
+                    .child(input_in_surface)
+                    .child(
+                        canvas(
+                            move |_, _, cx| {
+                                *observed_in_overlay.borrow_mut() =
+                                    input_in_overlay.read(cx).range_to_bounds(&(0..0));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+            },
+        );
+
+        assert!(
+            observed.borrow().is_some(),
+            "a sibling overlay must see input geometry produced earlier in the same prepaint pass"
+        );
+    }
+
+    #[gpui::test]
+    fn sibling_prepaint_sees_current_input_layout_after_scroll(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let text = (0..40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+        });
+        draw_input(cx, &input);
+
+        let marker_offset =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.text.line_start_offset(5)));
+        let before_scroll = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .range_to_bounds(&(marker_offset..marker_offset))
+                    .expect("marker line should be visible before scrolling")
+            })
+        });
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, _| {
+                state.scroll_handle.set_offset(point(px(0.), px(-60.)));
+            });
+        });
+
+        let observed = Rc::new(RefCell::new(None));
+        let observed_in_overlay = observed.clone();
+        let input_in_surface = input.clone();
+        let input_in_overlay = input.clone();
+
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(800.), px(240.)),
+            move |_, _| {
+                div()
+                    .relative()
+                    .flex()
+                    .size_full()
+                    .child(input_in_surface)
+                    .child(
+                        canvas(
+                            move |_, _, cx| {
+                                *observed_in_overlay.borrow_mut() = input_in_overlay
+                                    .read(cx)
+                                    .range_to_bounds(&(marker_offset..marker_offset));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+            },
+        );
+
+        let after_scroll = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .range_to_bounds(&(marker_offset..marker_offset))
+                    .expect("marker line should remain visible after scrolling")
+            })
+        });
+        assert_ne!(
+            before_scroll, after_scroll,
+            "the test must move the marker geometry"
+        );
+        assert_eq!(
+            *observed.borrow(),
+            Some(after_scroll),
+            "a sibling overlay must not lag one frame behind the scrolled input"
         );
     }
 
