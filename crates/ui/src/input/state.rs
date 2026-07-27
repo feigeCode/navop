@@ -2606,6 +2606,112 @@ impl InputState {
         );
     }
 
+    fn dispatch_highlighter_work(
+        pending: super::mode::PendingHighlighterWork,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match pending {
+            super::mode::PendingHighlighterWork::Initialize(pending) => {
+                Self::dispatch_background_highlighter_initialization(pending, window, cx);
+            }
+            super::mode::PendingHighlighterWork::Parse(pending) => {
+                Self::dispatch_background_parse(pending, window, cx);
+            }
+        }
+    }
+
+    /// Build and initially parse a syntax highlighter away from the UI thread.
+    ///
+    /// `SyntaxHighlighter::new` may lazily read and compile a WASM grammar and
+    /// then construct several tree-sitter queries. Doing that from `render`
+    /// blocks the whole application, especially when a markdown document
+    /// mounts several code surfaces at once.
+    #[cfg(not(target_family = "wasm"))]
+    fn dispatch_background_highlighter_initialization(
+        pending: super::mode::PendingHighlighterInitialization,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let highlighter_rc = pending.highlighter;
+        let parse_task_rc = pending.parse_task;
+        let language = pending.language;
+        let text = pending.text;
+        let is_folding = pending.is_folding;
+        let initialized_highlighter = highlighter_rc.clone();
+
+        let task = cx.spawn_in(window, async move |entity, cx| {
+            let parsed_text = text.clone();
+            let initialized_language = language.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let started = std::time::Instant::now();
+                    let mut highlighter = crate::highlighter::SyntaxHighlighter::new(&language);
+                    highlighter.update(None, &text, None);
+                    let fold_ranges = if is_folding {
+                        highlighter
+                            .tree()
+                            .map(crate::input::display_map::extract_fold_ranges)
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    tracing::debug!(
+                        language = %language,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "initialized syntax highlighter in background"
+                    );
+                    (highlighter, fold_ranges)
+                })
+                .await;
+
+            let (highlighter, fold_ranges) = result;
+            _ = entity.update(cx, |state, cx| {
+                let Some(current_highlighter) = state.mode.highlighter() else {
+                    return;
+                };
+                if !Rc::ptr_eq(current_highlighter, &initialized_highlighter) {
+                    return;
+                }
+                if state.text != parsed_text {
+                    // The buffer changed while initialization was running.
+                    // Leave this highlighter uninstalled so the next render
+                    // schedules a fresh job for the current text.
+                    state._pending_update = true;
+                    cx.notify();
+                    return;
+                }
+
+                *current_highlighter.borrow_mut() = Some(highlighter);
+                if is_folding {
+                    state.display_map.set_fold_candidates(fold_ranges);
+                }
+                tracing::debug!(
+                    language = %initialized_language,
+                    "installed background syntax highlighter"
+                );
+                cx.notify();
+            });
+        });
+
+        // Replacing the task cancels an obsolete initialization when the
+        // language or buffer changes before it finishes.
+        parse_task_rc.borrow_mut().replace(task);
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn dispatch_background_highlighter_initialization(
+        pending: super::mode::PendingHighlighterInitialization,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut highlighter = crate::highlighter::SyntaxHighlighter::new(&pending.language);
+        highlighter.update(None, &pending.text, None);
+        *pending.highlighter.borrow_mut() = Some(highlighter);
+        cx.notify();
+    }
+
     /// Spawn a background parse after the synchronous parse timed out.
     ///
     /// Dropping the returned `Task` (stored in `parse_task`) cancels the
@@ -2863,7 +2969,7 @@ impl EntityInputHandler for InputState {
             self.mode
                 .update_highlighter(&range, &old_text, &self.text, &actual_text, true, cx);
         if let Some(bg) = bg {
-            Self::dispatch_background_parse(bg, window, cx);
+            Self::dispatch_highlighter_work(bg, window, cx);
         }
 
         self.update_fold_candidates_incremental(&range, &actual_text);
@@ -2930,7 +3036,7 @@ impl EntityInputHandler for InputState {
             .mode
             .update_highlighter(&range, &old_text, &self.text, &new_text, true, cx);
         if let Some(bg) = bg {
-            Self::dispatch_background_parse(bg, window, cx);
+            Self::dispatch_highlighter_work(bg, window, cx);
         }
 
         self.update_fold_candidates_incremental(&range, new_text);
@@ -3047,7 +3153,7 @@ impl Render for InputState {
                 .mode
                 .update_highlighter(&(0..0), &self.text, &self.text, "", false, cx);
             if let Some(bg) = bg {
-                Self::dispatch_background_parse(bg, window, cx);
+                Self::dispatch_highlighter_work(bg, window, cx);
             }
 
             self.update_fold_candidates();
@@ -3157,6 +3263,44 @@ mod tests {
                 assert_eq!(12, state.mode.max_rows());
             });
         });
+    }
+
+    #[gpui::test]
+    fn initial_syntax_highlighter_is_built_after_render_returns(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("SELECT 1;", window, cx);
+            });
+        });
+
+        draw_input(cx, &input);
+        let initialized_during_render = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .mode
+                    .highlighter()
+                    .is_some_and(|highlighter| highlighter.borrow().is_some())
+            })
+        });
+        assert!(
+            !initialized_during_render,
+            "render must not synchronously construct a syntax highlighter"
+        );
+
+        cx.run_until_parked();
+        let highlighted_text = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state.mode.highlighter().and_then(|highlighter| {
+                    highlighter
+                        .borrow()
+                        .as_ref()
+                        .map(|highlighter| highlighter.text().to_string())
+                })
+            })
+        });
+        assert_eq!(Some("SELECT 1;".to_owned()), highlighted_text);
     }
 
     #[gpui::test]
