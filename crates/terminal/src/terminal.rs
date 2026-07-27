@@ -52,12 +52,11 @@ use crate::history::{
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
-    ParsedRecording, RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingMetadata,
-    RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
-    RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchResults, RecordingPlaybackState,
-    RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError,
-    RecordingSnapshot, RecordingStartRequest, RecordingTap, RecordingTransition,
-    TerminalPlaybackRuntime,
+    RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingMetadata, RecordingPlayback,
+    RecordingPlaybackError, RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchResults,
+    RecordingPlaybackState, RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig,
+    RecordingRuntimeError, RecordingSnapshot, RecordingStartRequest, RecordingTap,
+    RecordingTransition, TerminalPlaybackRuntime,
 };
 #[cfg(not(target_os = "windows"))]
 #[cfg(not(target_os = "windows"))]
@@ -1541,16 +1540,11 @@ impl Terminal {
 
     /// Creates a terminal surface that renders an untrusted recording without
     /// recreating any live PTY, SSH, serial, input, exec, or control capability.
-    pub fn new_recording_playback(
-        recording: ParsedRecording,
-        limits: RecordingPlaybackLimits,
-        cx: &mut Context<Self>,
-    ) -> std::result::Result<Self, RecordingPlaybackError> {
+    pub fn new_recording_playback(playback: RecordingPlayback, cx: &mut Context<Self>) -> Self {
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (terminal, event_loop) =
-            Self::build_recording_playback(recording, limits, scrollback_lines)?;
+        let (terminal, event_loop) = Self::build_recording_playback(playback, scrollback_lines);
         Self::spawn_event_loop(event_loop.event_rx, event_loop.wakeup_pending, cx);
-        Ok(terminal)
+        terminal
     }
 
     /// Builds the capability-free playback model independently from its GPUI
@@ -1558,12 +1552,10 @@ impl Terminal {
     /// boundary unit-testable without starting a real Tokio worker inside
     /// GPUI's deterministic test scheduler.
     fn build_recording_playback(
-        recording: ParsedRecording,
-        limits: RecordingPlaybackLimits,
+        playback: RecordingPlayback,
         scrollback_lines: usize,
-    ) -> std::result::Result<(Self, PendingPlaybackEventLoop), RecordingPlaybackError> {
-        let timeline = RecordingPlayback::from_parsed(recording, limits)?;
-        let source_backend = timeline.recording().header.navop.backend;
+    ) -> (Self, PendingPlaybackEventLoop) {
+        let source_backend = playback.recording().header.navop.backend;
         let connection_kind = match source_backend {
             RecordingBackend::Local => TerminalConnectionKind::Local,
             RecordingBackend::Ssh => TerminalConnectionKind::Ssh,
@@ -1573,7 +1565,7 @@ impl Terminal {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let performance_metrics = Arc::new(TerminalPerformanceMetrics::default());
         let playback_runtime = TerminalPlaybackRuntime::new(
-            timeline,
+            playback,
             scrollback_lines,
             event_tx.clone(),
             performance_metrics.clone(),
@@ -1582,7 +1574,7 @@ impl Terminal {
         let term = playback_runtime.term().clone();
         let wakeup_pending = playback_runtime.wakeup_pending_handle();
 
-        Ok((
+        (
             Self {
                 term,
                 session_mode: TerminalSessionMode::RecordingPlayback,
@@ -1625,7 +1617,7 @@ impl Terminal {
                 event_rx,
                 wakeup_pending,
             },
-        ))
+        )
     }
 
     fn history_repository(cx: &mut Context<Self>) -> Option<Arc<TerminalCommandHistoryRepository>> {
@@ -2933,7 +2925,7 @@ mod tests {
         ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
         RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingEvent,
         RecordingEventKind, RecordingFileLimits, RecordingHeader, RecordingHeaderMetadata,
-        RecordingMetadata, RecordingPlaybackError, RecordingPlaybackLimits,
+        RecordingMetadata, RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
         RecordingPlaybackSearchKind, RecordingPlaybackState, RecordingPlaybackTransition,
         RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingStartRequest,
         RecordingState, RecordingTapOutcome, RecordingTransition, read_recording,
@@ -3079,7 +3071,10 @@ mod tests {
         }
     }
 
-    fn test_parsed_playback_recording(completeness: RecordingCompleteness) -> ParsedRecording {
+    fn test_parsed_playback_recording(
+        backend: RecordingBackend,
+        completeness: RecordingCompleteness,
+    ) -> ParsedRecording {
         ParsedRecording {
             header: RecordingHeader {
                 version: ASCIICAST_VERSION,
@@ -3090,7 +3085,7 @@ mod tests {
                     format_version: NAVOP_RECORDING_FORMAT_VERSION,
                     recording_id: "terminal-playback-test-recording".to_string(),
                     session_id: "terminal-playback-test-session".to_string(),
-                    backend: RecordingBackend::Ssh,
+                    backend,
                     application_version: "0.1.0-test".to_string(),
                     started_at_unix_ms: 1_700_000_000_123,
                     capture_input: true,
@@ -3525,12 +3520,12 @@ mod tests {
         let completeness = RecordingCompleteness::Partial {
             discarded_bytes: 42,
         };
-        let (mut terminal, _event_loop) = Terminal::build_recording_playback(
-            test_parsed_playback_recording(completeness.clone()),
+        let playback = RecordingPlayback::from_parsed(
+            test_parsed_playback_recording(RecordingBackend::Ssh, completeness.clone()),
             RecordingPlaybackLimits::default(),
-            100_000,
         )
-        .expect("create recording playback terminal");
+        .expect("validate recording playback");
+        let (mut terminal, _event_loop) = Terminal::build_recording_playback(playback, 100_000);
 
         assert_eq!(
             TerminalSessionMode::RecordingPlayback,
@@ -3656,6 +3651,39 @@ mod tests {
             RecordingPlaybackSearchKind::MarkerDisplayOnly,
             marker_results.matches[0].kind
         );
+    }
+
+    #[test]
+    fn recording_playback_source_kind_never_restores_live_capabilities() {
+        for (backend, expected_kind) in [
+            (RecordingBackend::Local, TerminalConnectionKind::Local),
+            (RecordingBackend::Ssh, TerminalConnectionKind::Ssh),
+            (RecordingBackend::Serial, TerminalConnectionKind::Serial),
+        ] {
+            let playback = RecordingPlayback::from_parsed(
+                test_parsed_playback_recording(backend, RecordingCompleteness::Complete),
+                RecordingPlaybackLimits::default(),
+            )
+            .expect("validate recording playback");
+            let (terminal, _event_loop) = Terminal::build_recording_playback(playback, 10_000);
+
+            assert_eq!(expected_kind, terminal.connection_kind());
+            assert_eq!(None, terminal.live_connection_kind());
+            assert!(terminal.backend.is_none());
+            assert!(terminal.ssh_config.is_none());
+            assert!(terminal.ssh_session_manager.is_none());
+            assert!(terminal.serial_params.is_none());
+            assert!(terminal.event_proxy.is_none());
+            assert_eq!(None, terminal.connection_id());
+            assert_eq!(None, terminal.connection_name());
+            assert!(terminal.history_repository.is_none());
+            assert!(terminal.history_scope.is_none());
+            assert_eq!(0, terminal.connection_generation);
+            assert!(!terminal.can_reconnect());
+            assert!(terminal.external_input_handle().is_none());
+            assert!(terminal.external_exec_handle().is_none());
+            assert!(terminal.external_control_handle().is_none());
+        }
     }
 
     #[test]
