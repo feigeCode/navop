@@ -3,6 +3,7 @@ mod controller;
 mod model;
 mod recorder;
 mod recovery;
+mod runtime;
 
 pub use asciicast::{
     ASCIICAST_VERSION, DEFAULT_MAX_DECODED_RECORDING_BYTES, DEFAULT_MAX_RECORDING_FILE_BYTES,
@@ -24,8 +25,17 @@ pub use recovery::{
     ParsedRecording, RecordingCompleteness, RecordingRecovery, read_recording,
     recover_partial_recording,
 };
+#[cfg(test)]
+use runtime::RecordingWorkerTestGate;
+pub use runtime::{
+    RecordingQueueLimits, RecordingQueueSnapshot, RecordingRuntime, RecordingRuntimeConfig,
+    RecordingRuntimeError, RecordingSnapshot, RecordingStartRequest, RecordingTap,
+    RecordingTapOutcome,
+};
 
 #[cfg(test)]
 mod persistence_tests;
+#[cfg(test)]
+mod runtime_tests;
 #[cfg(test)]
 mod tests;

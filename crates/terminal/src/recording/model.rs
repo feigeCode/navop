@@ -13,6 +13,8 @@ pub enum RecordingLimit {
     EventCount,
     EventBytes,
     PayloadBytes,
+    PendingEvents,
+    PendingBytes,
 }
 
 impl fmt::Display for RecordingLimit {
@@ -22,6 +24,8 @@ impl fmt::Display for RecordingLimit {
             Self::EventCount => "event_count",
             Self::EventBytes => "event_bytes",
             Self::PayloadBytes => "payload_bytes",
+            Self::PendingEvents => "pending_events",
+            Self::PendingBytes => "pending_bytes",
         })
     }
 }
