@@ -1,4 +1,5 @@
 use super::*;
+use remote_desktop::RemoteDesktopCursor;
 
 impl RemoteDesktopView {
     pub(super) fn start_runtime(&mut self, size: (u16, u16)) {
@@ -9,6 +10,7 @@ impl RemoteDesktopView {
         self.capabilities = None;
         self.framebuffer = None;
         self.remote_size = None;
+        self.cursor.reset_session();
         let runtime = create_backend(self.options.clone())
             .start(RemoteDesktopSize {
                 width: size.0,
@@ -104,9 +106,10 @@ impl RemoteDesktopView {
             RemoteDesktopOutput::Terminated(message) => {
                 self.reset_session_state(Some(message), SessionResetReason::Terminated)
             }
-            RemoteDesktopOutput::CursorDefault
-            | RemoteDesktopOutput::CursorHidden
-            | RemoteDesktopOutput::CursorPosition { .. } => {}
+            RemoteDesktopOutput::CursorDefault => self.apply_cursor_default(),
+            RemoteDesktopOutput::CursorHidden => self.apply_cursor_hidden(),
+            RemoteDesktopOutput::CursorPosition { x, y } => self.apply_cursor_position(x, y),
+            RemoteDesktopOutput::CursorBitmap(cursor) => self.apply_cursor_bitmap(cursor),
             RemoteDesktopOutput::ClipboardText { text } => self.apply_remote_clipboard(text, cx),
             RemoteDesktopOutput::ClipboardFilesReady { transfer_id, paths } => {
                 self.apply_remote_clipboard_files(transfer_id, paths, window, cx)
@@ -135,6 +138,7 @@ impl RemoteDesktopView {
         self.frame_sync.reset_session();
         self.remote_size = None;
         self.framebuffer = None;
+        self.cursor.reset_session();
         if !preserve_presented_frame_during_session_reset(reason) {
             self.pending_frame_drops.extend(
                 self.rendered_frames
@@ -145,6 +149,33 @@ impl RemoteDesktopView {
         self.pending_resize_size = None;
         self.pending_resize_updated_at = None;
         self.last_resize_sent_at = None;
+    }
+
+    fn apply_cursor_default(&mut self) {
+        if self.connected {
+            self.cursor.show_default();
+        }
+    }
+
+    fn apply_cursor_hidden(&mut self) {
+        if self.connected {
+            self.cursor.hide();
+        }
+    }
+
+    fn apply_cursor_position(&mut self, x: u16, y: u16) {
+        if self.connected {
+            self.cursor.set_position(x, y);
+        }
+    }
+
+    fn apply_cursor_bitmap(&mut self, cursor: RemoteDesktopCursor) {
+        if !self.connected {
+            return;
+        }
+        if let Err(error) = self.cursor.install(cursor) {
+            tracing::warn!(?error, "failed to install remote desktop cursor");
+        }
     }
 
     pub(super) fn update_content_bounds(

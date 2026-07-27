@@ -139,6 +139,13 @@ pub enum HelperEvent {
         x: u16,
         y: u16,
     },
+    CursorRgbaBytes {
+        width: u16,
+        height: u16,
+        hotspot_x: u16,
+        hotspot_y: u16,
+        rgba_len: usize,
+    },
     ClipboardText {
         text: String,
     },
@@ -178,6 +185,9 @@ impl HelperEvent {
             }
             Self::FrameBytes { .. } | Self::FrameBgraBytes { .. } | Self::FrameBgraRects { .. } => {
                 anyhow::bail!("binary frame payload is not in JSON event")
+            }
+            Self::CursorRgbaBytes { .. } => {
+                anyhow::bail!("binary cursor payload is not in JSON event")
             }
             _ => anyhow::bail!("helper event is not a frame"),
         }

@@ -1,13 +1,24 @@
 use std::io::{BufRead, Read};
 
 use crate::{
-    RemoteDesktopFrameRect,
+    RemoteDesktopCursor, RemoteDesktopFrameRect,
     helper_protocol::{HelperEvent, HelperFrameRect, decode_event_line},
 };
 
 use super::helper_events::{helper_disconnect_message, helper_event_to_output};
 use super::transport::HelperOutput;
 use super::*;
+
+const MAX_CURSOR_DIMENSION: u16 = 1024;
+
+#[derive(Clone, Copy)]
+struct CursorHeader {
+    width: u16,
+    height: u16,
+    hotspot_x: u16,
+    hotspot_y: u16,
+    rgba_len: usize,
+}
 
 pub(super) fn read_helper_output(
     reader: &mut impl BufRead,
@@ -35,12 +46,76 @@ pub(super) fn read_helper_output(
             rects,
             bgra_len,
         } => read_binary_bgra_rects_output(reader, width, height, rects, bgra_len).map(Some),
+        HelperEvent::CursorRgbaBytes {
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            rgba_len,
+        } => read_binary_cursor_output(
+            reader,
+            CursorHeader {
+                width,
+                height,
+                hotspot_x,
+                hotspot_y,
+                rgba_len,
+            },
+        )
+        .map(Some),
         event => Ok(Some(HelperOutput {
             output: helper_event_to_output(event, protocol)?,
             connected,
             disconnect_message,
         })),
     }
+}
+
+fn read_binary_cursor_output<R>(
+    reader: &mut R,
+    header: CursorHeader,
+) -> anyhow::Result<HelperOutput>
+where
+    R: Read + ?Sized,
+{
+    let expected_len = validate_cursor_header(header)?;
+    let mut rgba = vec![0; expected_len];
+    reader.read_exact(&mut rgba)?;
+    Ok(HelperOutput {
+        output: RemoteDesktopOutput::CursorBitmap(RemoteDesktopCursor {
+            width: header.width,
+            height: header.height,
+            hotspot_x: header.hotspot_x,
+            hotspot_y: header.hotspot_y,
+            rgba,
+        }),
+        connected: false,
+        disconnect_message: None,
+    })
+}
+
+fn validate_cursor_header(header: CursorHeader) -> anyhow::Result<usize> {
+    anyhow::ensure!(
+        header.width > 0
+            && header.height > 0
+            && header.width <= MAX_CURSOR_DIMENSION
+            && header.height <= MAX_CURSOR_DIMENSION,
+        "invalid cursor dimensions"
+    );
+    anyhow::ensure!(
+        header.hotspot_x < header.width && header.hotspot_y < header.height,
+        "cursor hotspot is outside bitmap"
+    );
+    let expected_len = usize::from(header.width)
+        .checked_mul(usize::from(header.height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("cursor payload length overflow"))?;
+    anyhow::ensure!(
+        header.rgba_len == expected_len,
+        "invalid cursor payload length: expected {expected_len}, got {}",
+        header.rgba_len
+    );
+    Ok(expected_len)
 }
 
 fn read_event_header(reader: &mut impl BufRead) -> anyhow::Result<Option<HelperEvent>> {

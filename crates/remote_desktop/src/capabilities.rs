@@ -30,7 +30,7 @@ impl RemoteDesktopCapabilities {
         Self {
             resize: ResizeSupport::RemoteResize,
             clipboard_text: true,
-            cursor_shape: false,
+            cursor_shape: true,
             audio: true,
             file_transfer: true,
             audio_playback: true,
@@ -103,6 +103,7 @@ mod tests {
         assert!(capabilities.audio_playback);
         assert!(!capabilities.audio_capture);
         assert!(capabilities.clipboard_text);
+        assert!(capabilities.cursor_shape);
         assert!(capabilities.file_transfer);
         assert!(capabilities.clipboard_files_to_remote);
         assert!(capabilities.clipboard_files_from_remote);
@@ -116,6 +117,7 @@ mod tests {
         let capabilities = RemoteDesktopCapabilities::vnc_mvp();
 
         assert!(capabilities.clipboard_text);
+        assert!(!capabilities.cursor_shape);
         assert!(!capabilities.file_transfer);
         assert!(!capabilities.audio);
         assert!(!capabilities.audio_playback);

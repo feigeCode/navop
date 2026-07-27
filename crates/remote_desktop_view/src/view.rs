@@ -22,6 +22,7 @@ use crate::shortcuts::{
 use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 
 mod clipboard;
+mod cursor;
 mod frame_lifecycle;
 mod frame_sync;
 mod frames;
@@ -86,6 +87,7 @@ pub struct RemoteDesktopView {
     framebuffer: Option<RgbaFramebuffer>,
     rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
     pending_frame_drops: Vec<Arc<RenderImage>>,
+    cursor: cursor::RemoteCursorState,
     frame_sync: frame_sync::FrameSyncTracker,
     capabilities: Option<RemoteDesktopCapabilities>,
     remote_size: Option<(u16, u16)>,
@@ -127,15 +129,16 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
-            let mut frames = std::mem::take(&mut this.pending_frame_drops);
-            frames.extend(
+            let mut images = std::mem::take(&mut this.pending_frame_drops);
+            images.extend(
                 this.rendered_frames
                     .take_all_distinct(this.latest_frame.take()),
             );
+            images.extend(this.cursor.release_all_images());
             let _ = window_handle.update(cx, move |_, window, _| {
-                for frame in frames {
-                    if let Err(error) = window.drop_image(frame) {
-                        tracing::warn!(?error, "failed to release remote desktop frame");
+                for image in images {
+                    if let Err(error) = window.drop_image(image) {
+                        tracing::warn!(?error, "failed to release remote desktop image");
                     }
                 }
             });
@@ -152,6 +155,7 @@ impl RemoteDesktopView {
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
             pending_frame_drops: Vec::new(),
+            cursor: cursor::RemoteCursorState::default(),
             frame_sync: frame_sync::FrameSyncTracker::default(),
             capabilities: None,
             remote_size: None,

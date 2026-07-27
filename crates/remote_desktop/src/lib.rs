@@ -28,7 +28,7 @@ pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
 pub use framebuffer::RgbaFramebuffer;
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};
 pub use output::{
-    RemoteDesktopFrameRect, RemoteDesktopOutput, RemoteDesktopReconnect,
+    RemoteDesktopCursor, RemoteDesktopFrameRect, RemoteDesktopOutput, RemoteDesktopReconnect,
     RemoteDesktopReconnectReason,
 };
 pub use provider::{

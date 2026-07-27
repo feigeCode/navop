@@ -70,6 +70,14 @@ impl fmt::Debug for RemoteDesktopOutput {
                 .field("x", x)
                 .field("y", y)
                 .finish(),
+            Self::CursorBitmap(cursor) => formatter
+                .debug_struct("CursorBitmap")
+                .field("width", &cursor.width)
+                .field("height", &cursor.height)
+                .field("hotspot_x", &cursor.hotspot_x)
+                .field("hotspot_y", &cursor.hotspot_y)
+                .field("byte_len", &cursor.rgba.len())
+                .finish(),
         }
     }
 }

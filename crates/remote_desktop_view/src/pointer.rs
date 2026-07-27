@@ -64,6 +64,53 @@ pub struct LocalBounds {
     pub height: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemoteCursorGeometry {
+    pub remote_width: u16,
+    pub remote_height: u16,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub hotspot_x: u16,
+    pub hotspot_y: u16,
+}
+
+pub fn scale_filled_remote_cursor_bounds(
+    bounds: LocalBounds,
+    cursor: RemoteCursorGeometry,
+) -> Option<LocalBounds> {
+    if !valid_cursor_geometry(bounds, cursor) {
+        return None;
+    }
+    let scale_x = bounds.width / f32::from(cursor.remote_width);
+    let scale_y = bounds.height / f32::from(cursor.remote_height);
+    let hotspot_x = bounds.left + f32::from(cursor.x) * scale_x;
+    let hotspot_y = bounds.top + f32::from(cursor.y) * scale_y;
+
+    Some(LocalBounds {
+        left: hotspot_x - f32::from(cursor.hotspot_x) * scale_x,
+        top: hotspot_y - f32::from(cursor.hotspot_y) * scale_y,
+        width: f32::from(cursor.width) * scale_x,
+        height: f32::from(cursor.height) * scale_y,
+    })
+}
+
+fn valid_cursor_geometry(bounds: LocalBounds, cursor: RemoteCursorGeometry) -> bool {
+    bounds.left.is_finite()
+        && bounds.top.is_finite()
+        && bounds.width.is_finite()
+        && bounds.height.is_finite()
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+        && cursor.remote_width > 0
+        && cursor.remote_height > 0
+        && cursor.width > 0
+        && cursor.height > 0
+        && cursor.hotspot_x < cursor.width
+        && cursor.hotspot_y < cursor.height
+}
+
 pub fn scale_window_pointer_position(
     window_x: f32,
     window_y: f32,
@@ -99,79 +146,5 @@ pub fn scale_filled_window_pointer_position(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scales_and_clamps_coordinate() {
-        assert_eq!(500, scale_coordinate(50.0, 100.0, 1000));
-        assert_eq!(0, scale_coordinate(-10.0, 100.0, 1000));
-        assert_eq!(999, scale_coordinate(120.0, 100.0, 1000));
-    }
-
-    #[test]
-    fn scales_pointer_inside_centered_letterboxed_frame() {
-        assert_eq!(
-            Some((640, 360)),
-            scale_pointer_position(640.0, 360.0, 1280.0, 720.0, 1280, 720)
-        );
-        assert_eq!(
-            Some((0, 0)),
-            scale_pointer_position(280.0, 0.0, 1280.0, 720.0, 720, 720)
-        );
-        assert_eq!(
-            None,
-            scale_pointer_position(279.0, 0.0, 1280.0, 720.0, 720, 720)
-        );
-    }
-
-    #[test]
-    fn subtracts_content_bounds_before_scaling_window_position() {
-        assert_eq!(
-            Some((640, 360)),
-            scale_window_pointer_position(
-                640.0,
-                456.0,
-                LocalBounds {
-                    left: 0.0,
-                    top: 96.0,
-                    width: 1280.0,
-                    height: 720.0,
-                },
-                1280,
-                720,
-            )
-        );
-    }
-
-    #[test]
-    fn scales_filled_pointer_against_full_content_bounds() {
-        assert_eq!(
-            Some((0, 0)),
-            scale_filled_pointer_position(0.0, 0.0, 1280.0, 720.0, 1024, 768)
-        );
-        assert_eq!(
-            Some((512, 384)),
-            scale_filled_pointer_position(640.0, 360.0, 1280.0, 720.0, 1024, 768)
-        );
-    }
-
-    #[test]
-    fn filled_window_position_subtracts_header_bounds() {
-        assert_eq!(
-            Some((512, 384)),
-            scale_filled_window_pointer_position(
-                640.0,
-                456.0,
-                LocalBounds {
-                    left: 0.0,
-                    top: 96.0,
-                    width: 1280.0,
-                    height: 720.0,
-                },
-                1024,
-                768,
-            )
-        );
-    }
-}
+#[path = "pointer_tests.rs"]
+mod tests;
