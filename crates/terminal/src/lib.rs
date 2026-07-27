@@ -34,7 +34,7 @@ pub use ssh_backend::SshBackend;
 pub use ssh_session_identity::{
     PersistedSshSessionIdentity, PersistedSshSessionIdentityError, SshSessionIdentityTransition,
 };
-pub use terminal::{TerminalScrollProxy, TerminalTextSnapshot};
+pub use terminal::{TerminalScrollProxy, TerminalSessionMode, TerminalTextSnapshot};
 pub use types::{
     LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
     TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,

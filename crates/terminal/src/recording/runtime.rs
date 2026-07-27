@@ -86,6 +86,7 @@ pub struct RecordingQueueSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordingRuntimeError {
     InvalidConfig(String),
+    ReadOnlyPlayback,
     Closed,
     ControlQueueFull,
     WorkerStopped,
@@ -97,6 +98,9 @@ impl fmt::Display for RecordingRuntimeError {
         match self {
             Self::InvalidConfig(reason) => {
                 write!(formatter, "invalid recording runtime config: {reason}")
+            }
+            Self::ReadOnlyPlayback => {
+                formatter.write_str("recording playback sessions are read-only")
             }
             Self::Closed => formatter.write_str("recording runtime is closed"),
             Self::ControlQueueFull => formatter.write_str("recording control queue is full"),

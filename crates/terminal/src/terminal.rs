@@ -116,6 +116,16 @@ pub enum TerminalConnectionKind {
     Serial,
 }
 
+/// Capability mode for a terminal surface.
+///
+/// A recording may describe output originally produced by SSH, but replaying
+/// that output must never recreate the source session's live capabilities.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TerminalSessionMode {
+    Live,
+    RecordingPlayback,
+}
+
 const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
 
 fn clear_screen_remote_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'static [u8]> {
@@ -902,6 +912,9 @@ async fn load_ssh_history(manager: Arc<SshSessionManager>) -> anyhow::Result<Vec
 pub struct Terminal {
     /// alacritty 终端状态
     term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    /// Whether this surface owns a live connection or renders an untrusted,
+    /// read-only recording.
+    session_mode: TerminalSessionMode,
     /// 当前终端实例的共享性能指标。
     performance_metrics: Arc<TerminalPerformanceMetrics>,
     /// PTY/SSH 后端
@@ -1170,6 +1183,9 @@ impl Terminal {
     }
 
     fn recording_tap(&self) -> Option<RecordingTap> {
+        if self.is_read_only() {
+            return None;
+        }
         self.recording_runtime
             .as_ref()
             .ok()
@@ -1183,6 +1199,9 @@ impl Terminal {
     }
 
     fn recording_runtime(&self) -> std::result::Result<&RecordingRuntime, RecordingRuntimeError> {
+        if self.is_read_only() {
+            return Err(RecordingRuntimeError::ReadOnlyPlayback);
+        }
         self.recording_runtime
             .as_ref()
             .map_err(RecordingRuntimeError::clone)
@@ -1203,6 +1222,7 @@ impl Terminal {
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime,
@@ -1305,6 +1325,7 @@ impl Terminal {
 
         Ok(Self {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: Some(Box::new(local_backend)),
             recording_runtime,
@@ -1338,6 +1359,9 @@ impl Terminal {
     }
 
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         let mut term = self.term.lock();
         term.grid_mut().reset::<Color>();
         term.selection = None;
@@ -1400,6 +1424,7 @@ impl Terminal {
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime,
@@ -1466,6 +1491,7 @@ impl Terminal {
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime,
@@ -2080,6 +2106,9 @@ impl Terminal {
     }
 
     pub fn record_command(&mut self, command: &str, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         self.record_successful_history_entry(command, 0, cx);
     }
 
@@ -2093,6 +2122,11 @@ impl Terminal {
     }
 
     pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {
+        if self.is_read_only() {
+            return Err(anyhow!(
+                "recording playback sessions cannot update SSH connections"
+            ));
+        }
         let event_tx = self
             .event_tx
             .clone()
@@ -2131,6 +2165,25 @@ impl Terminal {
     /// 获取连接类型
     pub fn connection_kind(&self) -> TerminalConnectionKind {
         self.connection_kind
+    }
+
+    pub fn session_mode(&self) -> TerminalSessionMode {
+        self.session_mode
+    }
+
+    pub fn is_recording_playback(&self) -> bool {
+        self.session_mode == TerminalSessionMode::RecordingPlayback
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.is_recording_playback()
+    }
+
+    /// Returns a connection kind only when the surface owns live connection
+    /// capabilities. Recording metadata must not be treated as a live SSH or
+    /// serial session by Public MCP or other integrations.
+    pub fn live_connection_kind(&self) -> Option<TerminalConnectionKind> {
+        (!self.is_read_only()).then_some(self.connection_kind)
     }
 
     /// 获取当前终端实例共享的性能指标。
@@ -2267,11 +2320,14 @@ impl Terminal {
 
     /// 是否可以重连
     pub fn can_reconnect(&self) -> bool {
-        self.ssh_config.is_some() || self.serial_params.is_some()
+        !self.is_read_only() && (self.ssh_config.is_some() || self.serial_params.is_some())
     }
 
     /// 写入数据到终端
     pub fn write(&self, data: &[u8]) {
+        if self.is_read_only() {
+            return;
+        }
         if let Some(ref backend) = self.backend {
             backend.write(data.to_vec());
         }
@@ -2285,18 +2341,27 @@ impl Terminal {
     }
 
     pub fn external_input_handle(&self) -> Option<TerminalInputHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.input_handle())
     }
 
     pub fn external_exec_handle(&self) -> Option<TerminalExecHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.exec_handle())
     }
 
     pub fn external_control_handle(&self) -> Option<TerminalControlHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.control_handle())
@@ -2377,6 +2442,9 @@ impl Terminal {
 
     /// 重新连接 SSH 或串口
     pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         if let Some(config) = self.ssh_config.clone() {
             let Some(session_manager) = self.ssh_session_manager.clone() else {
                 return;
@@ -2615,10 +2683,10 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, build_cd_command,
-        build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
-        compose_ssh_init_commands, format_connection_error, is_reconnect_generation,
-        keyboard_interactive_answers_for_terminal, merge_history_matches,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalSessionMode,
+        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
+        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, format_connection_error,
+        is_reconnect_generation, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
@@ -2632,7 +2700,10 @@ mod tests {
         RecordingStartRequest, RecordingState, RecordingTapOutcome, RecordingTransition,
         read_recording,
     };
-    use crate::{TerminalBackend, TerminalEvent, TerminalInputHandle, TerminalSize};
+    use crate::{
+        TerminalBackend, TerminalControlHandle, TerminalEvent, TerminalExecHandle,
+        TerminalInputHandle, TerminalSize,
+    };
     use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
@@ -2691,6 +2762,18 @@ mod tests {
                     .push(data);
             }))
         }
+
+        fn exec_handle(&self) -> Option<TerminalExecHandle> {
+            Some(TerminalExecHandle::new(|_, _| {
+                Box::pin(async { unreachable!("read-only test must not invoke exec") })
+            }))
+        }
+
+        fn control_handle(&self) -> Option<TerminalControlHandle> {
+            Some(TerminalControlHandle::new(|_, _| {
+                Box::pin(async { unreachable!("read-only test must not invoke control") })
+            }))
+        }
     }
 
     fn test_terminal_with_recording_runtime(
@@ -2702,6 +2785,7 @@ mod tests {
 
         Terminal {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime,
@@ -3080,6 +3164,67 @@ mod tests {
             *direct_writes
                 .lock()
                 .expect("direct input probe should lock")
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn recording_playback_mode_revokes_live_terminal_capabilities() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let direct_writes = Arc::new(Mutex::new(Vec::new()));
+        let external_writes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(InputRouteProbe {
+            direct_writes: direct_writes.clone(),
+            external_writes: external_writes.clone(),
+        }));
+        terminal.session_mode = TerminalSessionMode::RecordingPlayback;
+
+        assert_eq!(
+            TerminalSessionMode::RecordingPlayback,
+            terminal.session_mode()
+        );
+        assert!(terminal.is_recording_playback());
+        assert!(terminal.is_read_only());
+        assert_eq!(None, terminal.live_connection_kind());
+        assert!(!terminal.can_reconnect());
+        assert!(terminal.recording_tap().is_none());
+
+        terminal.write(b"human input");
+        terminal.write_external_input(b"public mcp input");
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert!(
+            external_writes
+                .lock()
+                .expect("external input probe should lock")
+                .is_empty()
+        );
+        assert!(terminal.external_input_handle().is_none());
+        assert!(terminal.external_exec_handle().is_none());
+        assert!(terminal.external_control_handle().is_none());
+
+        let expected = RecordingRuntimeError::ReadOnlyPlayback;
+        assert_eq!(Err(expected.clone()), terminal.recording_snapshot());
+        assert_eq!(
+            Some(expected.clone()),
+            terminal
+                .build_output_recording_start_request(PathBuf::from("unused-output.cast"))
+                .err()
+        );
+        assert_eq!(Err(expected.clone()), terminal.pause_recording());
+        assert_eq!(Err(expected.clone()), terminal.resume_recording());
+        assert_eq!(Err(expected.clone()), terminal.stop_recording());
+        assert_eq!(
+            Err(expected),
+            terminal.start_recording(test_recording_start_request(PathBuf::from("unused.cast")))
         );
 
         terminal.shutdown();
@@ -3735,6 +3880,7 @@ mod tests {
         let shared_metrics = performance_metrics.clone();
         let mut terminal = Terminal {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
@@ -3828,6 +3974,7 @@ mod tests {
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let mut terminal = Terminal {
             term,
+            session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
             recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
