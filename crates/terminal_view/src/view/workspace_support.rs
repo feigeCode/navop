@@ -39,8 +39,11 @@ impl TerminalView {
         )
     }
 
-    pub(crate) fn duplicate_supported(&self) -> bool {
-        terminal_tab_duplicate_supported(&self.duplicate_source)
+    pub(crate) fn duplicate_supported(&self, cx: &App) -> bool {
+        terminal_tab_duplicate_supported(
+            &self.duplicate_source,
+            self.terminal.read(cx).live_connection_kind(),
+        )
     }
 
     pub(crate) fn new_from_duplicate_source(

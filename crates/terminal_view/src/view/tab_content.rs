@@ -43,8 +43,8 @@ impl TabContent for TerminalView {
         true
     }
 
-    fn can_duplicate(&self, _cx: &App) -> bool {
-        terminal_tab_duplicate_supported(&self.duplicate_source)
+    fn can_duplicate(&self, cx: &App) -> bool {
+        self.duplicate_supported(cx)
     }
 
     fn duplicate(
@@ -52,6 +52,9 @@ impl TabContent for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn TabContentView>> {
+        if !self.duplicate_supported(cx) {
+            return None;
+        }
         let source = self.duplicate_source_snapshot(cx);
         let duplicate = cx.new(|cx| Self::new_from_duplicate_source(source, window, cx));
         Some(Arc::new(duplicate))

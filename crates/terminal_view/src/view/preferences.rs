@@ -134,6 +134,9 @@ impl TerminalView {
     }
 
     pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         let reconnect_source =
             resolve_ssh_reconnect_source(&self.duplicate_source, |connection_id| {
                 let storage = cx

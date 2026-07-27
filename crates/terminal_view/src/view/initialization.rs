@@ -249,7 +249,7 @@ impl TerminalView {
 
         let label = {
             let terminal = self.terminal.read(cx);
-            if terminal.connection_kind() != TerminalConnectionKind::Ssh {
+            if !live_ssh_feature_supported(terminal.live_connection_kind()) {
                 return;
             }
             let base = terminal
@@ -281,6 +281,9 @@ impl TerminalView {
     }
 
     pub(super) fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         let Some(client_id) = self.broadcast_client_id else {
             return;
         };

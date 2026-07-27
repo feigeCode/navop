@@ -62,13 +62,45 @@ pub(super) fn resolve_ssh_reconnect_source(
     }))
 }
 
-pub(super) fn terminal_tab_duplicate_supported(source: &TerminalDuplicateSource) -> bool {
+pub(super) fn live_terminal_input_supported(
+    live_connection_kind: Option<TerminalConnectionKind>,
+) -> bool {
+    live_connection_kind.is_some()
+}
+
+pub(super) fn live_ssh_feature_supported(
+    live_connection_kind: Option<TerminalConnectionKind>,
+) -> bool {
+    live_connection_kind == Some(TerminalConnectionKind::Ssh)
+}
+
+pub(super) fn terminal_tab_duplicate_supported(
+    source: &TerminalDuplicateSource,
+    live_connection_kind: Option<TerminalConnectionKind>,
+) -> bool {
     matches!(
-        source,
-        TerminalDuplicateSource::Local(_)
-            | TerminalDuplicateSource::Ssh { .. }
-            | TerminalDuplicateSource::Serial(_)
+        (source, live_connection_kind),
+        (
+            TerminalDuplicateSource::Local(_),
+            Some(TerminalConnectionKind::Local),
+        ) | (
+            TerminalDuplicateSource::Ssh { .. },
+            Some(TerminalConnectionKind::Ssh),
+        ) | (
+            TerminalDuplicateSource::Serial(_),
+            Some(TerminalConnectionKind::Serial),
+        )
     )
+}
+
+impl TerminalView {
+    pub(super) fn accepts_live_terminal_input(&self, cx: &App) -> bool {
+        live_terminal_input_supported(self.terminal.read(cx).live_connection_kind())
+    }
+
+    pub(super) fn is_live_ssh_terminal(&self, cx: &App) -> bool {
+        live_ssh_feature_supported(self.terminal.read(cx).live_connection_kind())
+    }
 }
 
 pub(super) fn terminal_duplicate_source_with_cwd(

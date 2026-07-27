@@ -53,7 +53,7 @@ fn local_terminal_close_does_not_confirm_when_shell_is_idle() {
 }
 
 #[test]
-fn tab_duplicate_is_supported_for_local_ssh_and_serial_terminals() {
+fn tab_duplicate_requires_a_live_local_ssh_or_serial_terminal() {
     let ssh = StoredConnection::new_ssh(
         "ssh".to_string(),
         SshParams {
@@ -83,20 +83,62 @@ fn tab_duplicate_is_supported_for_local_ssh_and_serial_terminals() {
         },
         None,
     );
+    let local_source = TerminalDuplicateSource::Local(LocalConfig::default());
+    let ssh_source = TerminalDuplicateSource::Ssh {
+        connection: ssh,
+        working_dir: None,
+        sync_path_with_terminal: true,
+    };
+    let serial_source = TerminalDuplicateSource::Serial(serial);
 
     assert!(terminal_tab_duplicate_supported(
-        &TerminalDuplicateSource::Local(LocalConfig::default())
+        &local_source,
+        Some(TerminalConnectionKind::Local),
     ));
     assert!(terminal_tab_duplicate_supported(
-        &TerminalDuplicateSource::Ssh {
-            connection: ssh,
-            working_dir: None,
-            sync_path_with_terminal: true,
-        },
+        &ssh_source,
+        Some(TerminalConnectionKind::Ssh),
     ));
     assert!(terminal_tab_duplicate_supported(
-        &TerminalDuplicateSource::Serial(serial)
+        &serial_source,
+        Some(TerminalConnectionKind::Serial),
     ));
+    assert!(!terminal_tab_duplicate_supported(&local_source, None));
+    assert!(!terminal_tab_duplicate_supported(
+        &local_source,
+        Some(TerminalConnectionKind::Ssh),
+    ));
+    assert!(!terminal_tab_duplicate_supported(
+        &ssh_source,
+        Some(TerminalConnectionKind::Serial),
+    ));
+    assert!(!terminal_tab_duplicate_supported(
+        &serial_source,
+        Some(TerminalConnectionKind::Local),
+    ));
+}
+
+#[test]
+fn recording_playback_has_no_live_input_or_ssh_capability() {
+    assert!(!live_terminal_input_supported(None));
+    assert!(!live_ssh_feature_supported(None));
+
+    for kind in [
+        TerminalConnectionKind::Local,
+        TerminalConnectionKind::Ssh,
+        TerminalConnectionKind::Serial,
+    ] {
+        assert!(live_terminal_input_supported(Some(kind)));
+    }
+    assert!(live_ssh_feature_supported(Some(
+        TerminalConnectionKind::Ssh
+    )));
+    assert!(!live_ssh_feature_supported(Some(
+        TerminalConnectionKind::Local
+    )));
+    assert!(!live_ssh_feature_supported(Some(
+        TerminalConnectionKind::Serial
+    )));
 }
 
 #[test]

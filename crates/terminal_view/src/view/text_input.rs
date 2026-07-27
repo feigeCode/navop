@@ -7,6 +7,9 @@ impl TerminalView {
     }
 
     pub(super) fn write_broadcast_input(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         self.write_input_to_terminal(&data, cx);
     }
 
