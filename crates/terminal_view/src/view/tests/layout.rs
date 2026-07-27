@@ -162,6 +162,181 @@ fn terminal_command_bar_is_between_viewport_and_optional_bottom_tool() {
 }
 
 #[test]
+fn terminal_recording_footer_is_a_fixed_non_overlay_flex_child() {
+    let footer_source = include_str!("../recording_footer.rs");
+
+    assert_eq!(RECORDING_FOOTER_HEIGHT, px(40.0));
+    for fixed_height_contract in [
+        ".h(RECORDING_FOOTER_HEIGHT)",
+        ".min_h(RECORDING_FOOTER_HEIGHT)",
+        ".max_h(RECORDING_FOOTER_HEIGHT)",
+        ".flex_shrink_0()",
+    ] {
+        assert!(
+            footer_source.contains(fixed_height_contract),
+            "recording footer must retain `{fixed_height_contract}`"
+        );
+    }
+    assert!(
+        !footer_source.contains(".absolute()"),
+        "recording footer must consume real flex height rather than overlay the terminal"
+    );
+}
+
+#[test]
+fn terminal_recording_footer_sits_between_primary_content_and_bottom_tool() {
+    let render_source = include_str!("../render_layout.rs");
+    let center_region = render_source
+        .split("fn render_center_region")
+        .nth(1)
+        .and_then(|source| source.split("fn render_bottom_region").next())
+        .expect("center region implementation should exist");
+    let primary_content = center_region
+        .find(".child(primary_content)")
+        .expect("primary terminal content should be rendered");
+    let recording_footer = center_region
+        .find(".child(self.render_recording_footer(cx))")
+        .expect("recording footer should be rendered");
+    let bottom_tool = center_region
+        .find(".when_some(state.bottom_panel")
+        .expect("optional bottom tool should be rendered");
+
+    assert!(primary_content < recording_footer);
+    assert!(recording_footer < bottom_tool);
+}
+
+#[test]
+fn recording_footer_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
+    let render_layout_source = include_str!("../render_layout.rs");
+    let render_surface_source = include_str!("../render_surface.rs");
+    let terminal_layout_source = include_str!("../terminal_layout.rs");
+    let footer_source = include_str!("../recording_footer.rs");
+
+    let viewport = render_surface_source
+        .split("pub(super) fn render_terminal_viewport")
+        .nth(1)
+        .and_then(|source| source.split("fn terminal_viewport_state").next())
+        .expect("terminal viewport implementation should exist");
+    assert!(viewport.contains(".flex_1()"));
+    assert!(viewport.contains(".min_h_0()"));
+
+    let canvas = render_surface_source
+        .split("fn render_input_canvas")
+        .nth(1)
+        .and_then(|source| source.split("fn render_terminal_surface").next())
+        .expect("terminal input canvas implementation should exist");
+    assert!(canvas.contains("this.resize_if_needed(bounds, cx);"));
+
+    assert!(terminal_layout_source.contains("bounds.size.width / self.cell_width"));
+    assert!(terminal_layout_source.contains("bounds.size.height / self.line_height"));
+    assert!(terminal_layout_source.contains("terminal.resize("));
+    assert!(
+        !render_layout_source.contains("RECORDING_FOOTER_HEIGHT"),
+        "the center layout must not manually subtract footer height"
+    );
+    assert!(
+        !footer_source.contains("resize_if_needed"),
+        "the footer must let the canvas bounds drive the existing resize path"
+    );
+}
+
+#[test]
+fn recording_footer_controls_are_pane_private_and_use_safe_terminal_apis() {
+    let view_source = include_str!("../../view.rs");
+    let footer_source = include_str!("../recording_footer.rs");
+    let render_source = include_str!("../render_layout.rs");
+
+    for pane_field in [
+        "recording_path_prompt_pending: bool",
+        "recording_control_error: Option<String>",
+        "recording_ticker: Option<Task<()>>",
+    ] {
+        assert!(
+            view_source.contains(pane_field),
+            "recording UI state must remain on each TerminalView: `{pane_field}`"
+        );
+    }
+    assert!(!footer_source.contains("Global<"));
+    assert!(footer_source.contains(".start_output_recording(output_path)"));
+    assert!(footer_source.contains(".pause_recording()"));
+    assert!(footer_source.contains(".resume_recording()"));
+    assert!(footer_source.contains(".stop_recording()"));
+    assert!(footer_source.contains("this.request_recording_start(cx);"));
+    assert!(footer_source.contains("this.request_recording_pause(cx);"));
+    assert!(footer_source.contains("this.request_recording_resume(cx);"));
+    assert!(footer_source.contains("this.request_recording_stop(cx);"));
+
+    for action_handler in [
+        ".on_action(cx.listener(Self::start_recording_action))",
+        ".on_action(cx.listener(Self::pause_recording_action))",
+        ".on_action(cx.listener(Self::resume_recording_action))",
+        ".on_action(cx.listener(Self::stop_recording_action))",
+    ] {
+        assert!(render_source.contains(action_handler));
+    }
+}
+
+#[test]
+fn recording_footer_discloses_output_only_capture_and_visible_failures() {
+    let footer_source = include_str!("../recording_footer.rs");
+
+    assert!(footer_source.contains("TerminalRecording.output_only"));
+    assert!(footer_source.contains("TerminalRecording.input_included"));
+    assert!(footer_source.contains("recording_snapshot_failure(&snapshot)"));
+    assert!(footer_source.contains("state.error.clone()"));
+    assert!(footer_source.contains("cx.theme().danger"));
+}
+
+#[test]
+fn recording_footer_formats_elapsed_time_and_safe_unique_paths() {
+    assert_eq!(
+        format_recording_elapsed(std::time::Duration::ZERO),
+        "00:00:00"
+    );
+    assert_eq!(
+        format_recording_elapsed(std::time::Duration::from_secs(3_661)),
+        "01:01:01"
+    );
+
+    let directory = std::path::Path::new("recordings");
+    let timestamp = "2026-07-27T15:30:12Z"
+        .parse()
+        .expect("fixed UTC timestamp should parse");
+    let recording_id = uuid::Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff")
+        .expect("fixed recording UUID should parse");
+    let output_path = recording_output_path(directory, timestamp, recording_id);
+
+    assert_eq!(output_path.parent(), Some(directory));
+    assert_eq!(
+        output_path.extension().and_then(|value| value.to_str()),
+        Some("cast")
+    );
+    assert_eq!(
+        output_path.file_name().and_then(|value| value.to_str()),
+        Some("navop-terminal-20260727-153012-00112233-4455-6677-8899-aabbccddeeff.cast")
+    );
+
+    let path_helper = include_str!("../recording_footer.rs")
+        .split("pub(super) fn recording_output_path")
+        .nth(1)
+        .expect("recording path helper should exist");
+    for sensitive_source in [
+        "hostname",
+        "username",
+        "connection_name",
+        "connection_string",
+        "credential",
+        "cwd",
+        "remote_path",
+    ] {
+        assert!(
+            !path_helper.contains(sensitive_source),
+            "recording filename must not incorporate `{sensitive_source}`"
+        );
+    }
+}
+
+#[test]
 fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     let interaction_source = include_str!("../command_bar/interaction.rs");
     let quick_interaction_source = include_str!("../command_bar/quick_interaction.rs");

@@ -1,3 +1,6 @@
+use super::recording_footer::{
+    RECORDING_FOOTER_HEIGHT, format_recording_elapsed, recording_output_path,
+};
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
     UnbracketedPasteHazard, WrappedLineSegment, block_selection_text_from_rows,
