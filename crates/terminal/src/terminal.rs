@@ -50,6 +50,10 @@ use crate::history::{
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
+use crate::recording::{
+    RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingSnapshot,
+    RecordingStartRequest, RecordingTap, RecordingTransition,
+};
 #[cfg(not(target_os = "windows"))]
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
@@ -900,6 +904,8 @@ pub struct Terminal {
     performance_metrics: Arc<TerminalPerformanceMetrics>,
     /// PTY/SSH 后端
     backend: Option<Box<dyn TerminalBackend>>,
+    /// 与终端实例同生命周期的录制运行时；重连只会克隆新的 tap，不会替换时间线。
+    recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
 
     /// 终端标题
     title: String,
@@ -1144,8 +1150,33 @@ fn is_reconnect_generation(generation: u64) -> bool {
 }
 
 impl Terminal {
+    fn create_recording_runtime(
+        event_tx: UnboundedSender<TerminalEvent>,
+    ) -> std::result::Result<RecordingRuntime, RecordingRuntimeError> {
+        RecordingRuntime::with_observer(RecordingRuntimeConfig::default(), move |_| {
+            // Recording control transitions and asynchronous failures must
+            // invalidate the pane, but they must never block the recording
+            // worker when the terminal has already gone away.
+            let _ = event_tx.send(TerminalEvent::Wakeup);
+        })
+    }
+
+    fn recording_tap(&self) -> Option<RecordingTap> {
+        self.recording_runtime
+            .as_ref()
+            .ok()
+            .map(RecordingRuntime::tap)
+    }
+
+    fn recording_runtime(&self) -> std::result::Result<&RecordingRuntime, RecordingRuntimeError> {
+        self.recording_runtime
+            .as_ref()
+            .map_err(RecordingRuntimeError::clone)
+    }
+
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
@@ -1160,6 +1191,7 @@ impl Terminal {
             term,
             performance_metrics,
             backend: None,
+            recording_runtime,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1207,6 +1239,8 @@ impl Terminal {
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
@@ -1243,7 +1277,12 @@ impl Terminal {
             #[cfg(target_os = "windows")]
             escape_args: true,
         };
-        let local_backend = LocalPtyBackend::new(term.clone(), event_proxy.clone(), pty_options)?;
+        let local_backend = LocalPtyBackend::new_with_recording(
+            term.clone(),
+            event_proxy.clone(),
+            pty_options,
+            recording_tap,
+        )?;
 
         Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
@@ -1253,6 +1292,7 @@ impl Terminal {
             term,
             performance_metrics,
             backend: Some(Box::new(local_backend)),
+            recording_runtime,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1300,6 +1340,8 @@ impl Terminal {
         sync_path_with_terminal: bool,
     ) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let resolved = resolve_ssh_connection(
             SshConnectionUpdate {
                 connection: conn,
@@ -1332,6 +1374,7 @@ impl Terminal {
             resolved.connection_id,
             Some(disconnect_tx),
             resolved.init_commands.clone(),
+            recording_tap,
             connection_generation,
             cx,
         );
@@ -1343,6 +1386,7 @@ impl Terminal {
             term,
             performance_metrics,
             backend: None,
+            recording_runtime,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1378,6 +1422,8 @@ impl Terminal {
             .expect("StoredConnection 应包含有效的 SerialParams");
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
@@ -1396,6 +1442,7 @@ impl Terminal {
             event_proxy.clone(),
             performance_metrics.clone(),
             Some(disconnect_tx),
+            recording_tap,
             connection_generation,
             cx,
         );
@@ -1404,6 +1451,7 @@ impl Terminal {
             term,
             performance_metrics,
             backend: None,
+            recording_runtime,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1615,6 +1663,7 @@ impl Terminal {
         connection_id: Option<i64>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
         init_commands: Option<String>,
+        recording_tap: Option<RecordingTap>,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
@@ -1628,7 +1677,7 @@ impl Terminal {
                 });
                 sender
             });
-            SshBackend::connect(
+            SshBackend::connect_with_recording(
                 session_manager,
                 config.pty_config,
                 connection_id,
@@ -1638,6 +1687,7 @@ impl Terminal {
                 disconnect_tx,
                 init_commands,
                 config.disable_shell_integration,
+                recording_tap,
             )
             .await
         });
@@ -1719,6 +1769,7 @@ impl Terminal {
         event_proxy: GpuiEventProxy,
         performance_metrics: Arc<TerminalPerformanceMetrics>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
+        recording_tap: Option<RecordingTap>,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
@@ -1733,12 +1784,13 @@ impl Terminal {
             sender
         });
 
-        let result = SerialBackend::connect_with_metrics(
+        let result = SerialBackend::connect_with_metrics_and_recording(
             params,
             term,
             event_proxy,
             disconnect_tx,
             performance_metrics,
+            recording_tap,
         );
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
@@ -2082,6 +2134,41 @@ impl Terminal {
         self.performance_snapshot().delta_since(previous, elapsed)
     }
 
+    /// Returns the current recording state, including initialization or
+    /// asynchronous persistence failures.
+    pub fn recording_snapshot(
+        &self,
+    ) -> std::result::Result<RecordingSnapshot, RecordingRuntimeError> {
+        Ok(self.recording_runtime()?.snapshot())
+    }
+
+    /// Starts a recording on this terminal's stable runtime. Reconnects reuse
+    /// the same runtime and therefore cannot silently replace the timeline.
+    pub fn start_recording(
+        &self,
+        request: RecordingStartRequest,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.start(request)
+    }
+
+    pub fn pause_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.pause()
+    }
+
+    pub fn resume_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.resume()
+    }
+
+    pub fn stop_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.stop()
+    }
+
     /// 是否可以重连
     pub fn can_reconnect(&self) -> bool {
         self.ssh_config.is_some() || self.serial_params.is_some()
@@ -2213,6 +2300,7 @@ impl Terminal {
             let term = self.term.clone();
             let connection_id = self.connection_id;
             let init_commands = self.init_commands.clone();
+            let recording_tap = self.recording_tap();
             let entity = cx.entity().downgrade();
             cx.spawn(async move |_, cx| {
                 let _ = session_manager.disconnect().await;
@@ -2232,6 +2320,7 @@ impl Terminal {
                         connection_id,
                         Some(disconnect_tx),
                         init_commands.clone(),
+                        recording_tap.clone(),
                         generation,
                         cx,
                     );
@@ -2251,6 +2340,7 @@ impl Terminal {
             }
             self.reset_terminal_surface();
             let generation = self.next_connection_generation();
+            let recording_tap = self.recording_tap();
 
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
             Self::spawn_disconnect_handler(disconnect_rx, generation, cx);
@@ -2260,6 +2350,7 @@ impl Terminal {
                 event_proxy,
                 self.performance_metrics.clone(),
                 Some(disconnect_tx),
+                recording_tap,
                 generation,
                 cx,
             );
@@ -2317,6 +2408,11 @@ impl Terminal {
     pub fn shutdown(&self) {
         if let Some(ref backend) = self.backend {
             backend.shutdown();
+        }
+        if let Ok(recording_runtime) = &self.recording_runtime {
+            if let Err(error) = recording_runtime.shutdown() {
+                tracing::warn!(%error, "failed to shut down terminal recording runtime");
+            }
         }
     }
 
@@ -2422,11 +2518,17 @@ mod tests {
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
-    use crate::TerminalEvent;
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
         parse_shell_history, push_history_entry,
     };
+    use crate::recording::{
+        RecordingBackend, RecordingConfig, RecordingEventKind, RecordingFileLimits,
+        RecordingMetadata, RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError,
+        RecordingStartRequest, RecordingState, RecordingTapOutcome, RecordingTransition,
+        read_recording,
+    };
+    use crate::{TerminalEvent, TerminalSize};
     use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
@@ -2436,10 +2538,72 @@ mod tests {
     use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth};
     use std::collections::VecDeque;
     use std::fs;
+    use std::path::PathBuf;
     #[cfg(not(target_os = "windows"))]
     use std::process::Command;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn test_terminal_with_recording_runtime(
+        recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+    ) -> Terminal {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors, performance_metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
+
+        Terminal {
+            term,
+            performance_metrics,
+            backend: None,
+            recording_runtime,
+            title: String::new(),
+            current_working_dir: None,
+            child_exited: None,
+            connection_state: ConnectionState::Connected,
+            cols: 80,
+            rows: 24,
+            pixel_width: 640,
+            pixel_height: 480,
+            ssh_config: None,
+            ssh_session_manager: None,
+            ssh_mfa_responder: None,
+            serial_params: None,
+            event_tx: Some(event_tx),
+            event_proxy: Some(event_proxy),
+            connection_id: Some(1),
+            connection_name: Some("test SSH".to_string()),
+            init_commands: None,
+            session_history: VecDeque::new(),
+            persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
+            connection_generation: 1,
+            connection_kind: TerminalConnectionKind::Ssh,
+            scrollback_lines: 10_000,
+        }
+    }
+
+    fn test_recording_start_request(final_path: PathBuf) -> RecordingStartRequest {
+        RecordingStartRequest {
+            final_path,
+            metadata: RecordingMetadata {
+                recording_id: "terminal-runtime-test-recording".to_string(),
+                session_id: "terminal-runtime-test-session".to_string(),
+                backend: RecordingBackend::Ssh,
+                application_version: "0.1.0-test".to_string(),
+                started_at_unix_ms: 1_700_000_000_123,
+                capture_input: false,
+            },
+            initial_size: TerminalSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 640,
+                pixel_height: 480,
+            },
+            recording: RecordingConfig::default(),
+        }
+    }
 
     #[test]
     fn shell_escape_arg_handles_single_quote() {
@@ -2453,6 +2617,110 @@ mod tests {
         assert!(!is_reconnect_generation(1));
         assert!(is_reconnect_generation(2));
         assert!(is_reconnect_generation(u64::MAX));
+    }
+
+    #[test]
+    fn terminal_recording_runtime_survives_surface_reset_and_generation_change() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let final_path = directory.path().join("session.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        assert_eq!(
+            RecordingState::Idle,
+            terminal
+                .recording_snapshot()
+                .expect("read initial recording state")
+                .state
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_recording(test_recording_start_request(final_path.clone()))
+                .expect("start terminal recording")
+        );
+
+        let first_tap = terminal.recording_tap().expect("first backend tap");
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            first_tap.record_output(b"before reconnect\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .pause_recording()
+                .expect("pause terminal recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Inactive,
+            first_tap.record_output(b"paused output")
+        );
+
+        terminal.next_connection_generation();
+        terminal.reset_terminal_surface();
+
+        assert_eq!(
+            RecordingState::Paused,
+            terminal
+                .recording_snapshot()
+                .expect("recording state survives surface reset")
+                .state
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .resume_recording()
+                .expect("resume terminal recording")
+        );
+        let replacement_tap = terminal.recording_tap().expect("replacement backend tap");
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            replacement_tap.record_output(b"after reconnect\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal.stop_recording().expect("stop terminal recording")
+        );
+
+        let recording = read_recording(&final_path, RecordingFileLimits::default())
+            .expect("read completed recording");
+        let output = recording
+            .events
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                RecordingEventKind::Output(data) => Some(data),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![
+                b"before reconnect\r\n".to_vec(),
+                b"after reconnect\r\n".to_vec()
+            ],
+            output
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_recording_api_preserves_initialization_error() {
+        let expected = RecordingRuntimeError::InvalidConfig(
+            "recording worker could not be initialized".to_string(),
+        );
+        let terminal = test_terminal_with_recording_runtime(Err(expected.clone()));
+        let request = test_recording_start_request(PathBuf::from("unused.cast"));
+
+        assert_eq!(Err(expected.clone()), terminal.recording_snapshot());
+        assert_eq!(Err(expected.clone()), terminal.start_recording(request));
+        assert_eq!(Err(expected.clone()), terminal.pause_recording());
+        assert_eq!(Err(expected.clone()), terminal.resume_recording());
+        assert_eq!(Err(expected.clone()), terminal.stop_recording());
+
+        terminal.shutdown();
+        terminal.shutdown();
     }
 
     #[test]
@@ -3078,6 +3346,7 @@ mod tests {
             term,
             performance_metrics,
             backend: None,
+            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
             title: "old title".to_string(),
             current_working_dir: Some("/tmp/project".to_string()),
             child_exited: Some(255),
@@ -3169,6 +3438,7 @@ mod tests {
             term,
             performance_metrics,
             backend: None,
+            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
