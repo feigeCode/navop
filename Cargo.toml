@@ -37,6 +37,7 @@ members = [
     "crates/remote_desktop",
     "crates/remote_desktop_view",
     "crates/notes",
+    "crates/declarative_ui_demo",
     "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 
