@@ -1747,6 +1747,74 @@ fn clicking_code_content_maps_to_content_lines_not_fence_lines(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn changing_fenced_code_language_preserves_input_selection_and_history(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "```rust\nfn main() {}\n```";
+    let code_id = markdown_source::SourceMarkdownDocument::parse(source)
+        .unwrap()
+        .blocks[0]
+        .id;
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.activate_block(code_id, window, cx));
+    });
+    cx.run_until_parked();
+
+    let input = editor.read_with(&cx, |editor, _| editor.input_state());
+    let input_id = input.entity_id();
+    input.update_in(&mut cx, |input, window, cx| {
+        input.set_selected_range(4..4, false, window, cx);
+    });
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(!editor
+            .set_code_fence_language(code_id, "rust", window, cx)
+            .unwrap());
+        assert!(editor
+            .set_code_fence_language(code_id, "python", window, cx)
+            .unwrap());
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        "```python\nfn main() {}\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        "fn main() {}",
+        editor.read_with(&cx, |editor, _| editor.projected_text().to_owned())
+    );
+    assert_eq!(
+        input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id())
+    );
+    assert_eq!(4..4, input.read_with(&cx, |input, _| input.selected_range()));
+
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.undo(window, cx).unwrap());
+    });
+    assert_eq!(
+        source,
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(4..4, input.read_with(&cx, |input, _| input.selected_range()));
+    editor.update_in(&mut cx, |editor, window, cx| {
+        assert!(editor.redo(window, cx).unwrap());
+    });
+    assert_eq!(
+        "```python\nfn main() {}\n```",
+        editor.read_with(&cx, |editor, _| editor.source().to_owned())
+    );
+    assert_eq!(
+        input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id())
+    );
+    assert_eq!(4..4, input.read_with(&cx, |input, _| input.selected_range()));
+}
+
+#[gpui::test]
 fn fully_expanded_fenced_code_stays_at_the_top_when_scrolled(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "```rust\nfn main() {\n    println!(\"visible\");\n}\n```";

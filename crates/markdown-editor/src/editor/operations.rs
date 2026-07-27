@@ -5,6 +5,8 @@ use markdown_source::{BlockMoveDirection, SourceSelection, SourceTransaction, Ta
 use markdown_source::{InlineFormat, ListFormat};
 use std::ops::Range;
 
+mod code_fence;
+
 impl MarkdownEditor {
     pub fn active_block(&self) -> Option<markdown_source::SourceNodeId> {
         self.active_block
