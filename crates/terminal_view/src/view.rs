@@ -152,6 +152,7 @@ mod mouse_selection;
 mod paste_confirmation;
 mod preferences;
 mod recording_footer;
+mod recording_playback_footer;
 mod render;
 mod render_layout;
 mod render_surface;
