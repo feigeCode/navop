@@ -1582,6 +1582,60 @@ mod tests {
     }
 
     #[test]
+    fn current_projection_keeps_pre_reconnect_operations_in_the_closed_generation() {
+        let session_id = OperationJournalSessionId::from("reconnect-history-session");
+        let mut journal = OperationJournal::new(session_id.clone(), generation(1), 1_000);
+        let previous_operation = journal
+            .queue_operation(OperationKind::UserInput, None, 1_010)
+            .expect("queue pre-reconnect input");
+        journal
+            .transition_operation(&previous_operation, OperationStatus::Sent, 1_020)
+            .expect("mark pre-reconnect input sent");
+        journal
+            .begin_generation(generation(2), 2_000)
+            .expect("begin reconnect generation");
+
+        let projection = OperationHistoryProjection::from_parts(Some(&journal), None, [], [], None);
+
+        assert_eq!(projection.sessions.len(), 1);
+        let projected_session = &projection.sessions[0];
+        assert_eq!(
+            projected_session.source,
+            OperationHistorySessionSource::Current
+        );
+        assert_eq!(projected_session.session.session_id, session_id);
+        assert_eq!(
+            projected_session
+                .session
+                .generations
+                .iter()
+                .map(|generation| generation.id.get())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+
+        let reconnect_generation = &projected_session.session.generations[0];
+        assert!(!reconnect_generation.is_closed);
+        assert!(
+            reconnect_generation.operations.is_empty(),
+            "the new SSH generation must not receive copied historical input"
+        );
+
+        let previous_generation = &projected_session.session.generations[1];
+        assert!(previous_generation.is_closed);
+        assert_eq!(previous_generation.operations.len(), 1);
+        let projected_operation = &previous_generation.operations[0];
+        assert_eq!(projected_operation.operation_id, previous_operation);
+        assert_eq!(projected_operation.status, OperationStatus::Unknown);
+        assert_eq!(projected_operation.key.session_id, session_id);
+        assert_eq!(projected_operation.key.generation_id, generation(1));
+        assert_eq!(
+            projected_operation.key.operation_id,
+            projected_operation.operation_id
+        );
+    }
+
+    #[test]
     fn projection_status_filter_is_exact_and_none_includes_every_operation() {
         let mut journal = journal("projection-filter");
         let succeeded = journal

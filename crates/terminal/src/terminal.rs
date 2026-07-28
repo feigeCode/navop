@@ -4349,7 +4349,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_history_request_combines_current_session_and_recovered_sessions() {
+    fn operation_history_request_keeps_pre_reconnect_operations_visible_with_recovered_sessions() {
         let directory = tempfile::tempdir().expect("temp directory");
         let scope = OperationJournalScope::local();
         let old_session_id =
@@ -4433,11 +4433,36 @@ mod tests {
         let current = load
             .current_journal()
             .expect("current session comes from the live FIFO snapshot");
-        assert_eq!(current.generations().len(), 2);
+        let generations = current.generations();
+        assert_eq!(generations.len(), 2);
+        assert_eq!(generations[0].id(), operation_generation(1));
+        assert!(
+            generations[0].is_closed(),
+            "the pre-reconnect generation remains visible as read-only history"
+        );
+        assert_eq!(generations[0].operations().len(), 1);
+        assert_eq!(
+            generations[0].operations()[0].operation_id(),
+            &current_operation_id
+        );
+        assert_eq!(
+            generations[0].operations()[0].status(),
+            OperationStatus::Unknown,
+            "an unacknowledged pre-reconnect operation must remain visible without being claimed successful"
+        );
+        assert_eq!(generations[1].id(), operation_generation(2));
+        assert!(
+            !generations[1].is_closed(),
+            "the reconnect generation is the current live generation"
+        );
+        assert!(
+            generations[1].operations().is_empty(),
+            "reconnect must not copy or automatically replay historical operations"
+        );
         assert_eq!(current.current_generation().id(), operation_generation(2));
         assert!(
             current.operation(&current_operation_id).is_some(),
-            "live snapshot contains operations queued before the request"
+            "the live history snapshot contains operations recorded before reconnect"
         );
         assert_eq!(load.recovered().histories().len(), 1);
         assert_eq!(
