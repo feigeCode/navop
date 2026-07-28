@@ -14,4 +14,9 @@
     <comment>Markdown document</comment>
     <glob pattern="*.md"/>
   </mime-type>
+  <mime-type type="application/x-asciicast">
+    <comment>Terminal recording</comment>
+    <glob pattern="*.cast"/>
+    <glob pattern="*.cast.partial"/>
+  </mime-type>
 </mime-info>

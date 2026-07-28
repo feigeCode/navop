@@ -70,6 +70,15 @@
               Argument="&quot;%1&quot;" />
           </Extension>
         </ProgId>
+        <ProgId Id="Navop.TerminalRecording" Description="Terminal Recording">
+          <Extension Id="cast" ContentType="application/x-asciicast">
+            <Verb
+              Id="open"
+              Command="Open with Navop"
+              TargetFile="NavopExecutable"
+              Argument="&quot;%1&quot;" />
+          </Extension>
+        </ProgId>
         <RegistryValue
           Id="FileAssociationRegistry"
           Root="HKCU"

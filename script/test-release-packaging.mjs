@@ -21,7 +21,7 @@ test("release packaging uses the navop executable on every platform", () => {
   assert.match(desktop, /^StartupWMClass=navop$/m);
 });
 
-test("installers register database and Markdown file associations", () => {
+test("installers register database, Markdown, and terminal recording file associations", () => {
   const release = read(".github/workflows/release.yml");
   const plist = read("resources/macos/Info.plist");
   const desktop = read("resources/linux/navop.desktop");
@@ -29,14 +29,49 @@ test("installers register database and Markdown file associations", () => {
   const mimePath = "resources/linux/navop.xml";
 
   assert.match(plist, /<key>CFBundleDocumentTypes<\/key>/);
-  for (const extension of ["db", "duckdb", "md"]) {
+  for (const extension of ["db", "duckdb", "md", "cast"]) {
     assert.match(plist, new RegExp(`<string>${extension}<\\/string>`));
     assert.match(wix, new RegExp(`<Extension[^>]*Id="${extension}"`));
   }
+  const macosRecordingDocument = plist.match(
+    /<dict>\s*<key>CFBundleTypeName<\/key>\s*<string>Terminal Recording<\/string>[\s\S]*?<\/dict>/,
+  )?.[0];
+  assert.ok(macosRecordingDocument, "missing macOS terminal recording document type");
+  assert.match(
+    macosRecordingDocument,
+    /<key>CFBundleTypeRole<\/key>\s*<string>Viewer<\/string>/,
+  );
+  assert.match(macosRecordingDocument, /<string>org\.asciinema\.cast<\/string>/);
+  assert.match(macosRecordingDocument, /<string>cast<\/string>/);
+
+  const macosRecordingUti = plist.match(
+    /<dict>\s*<key>UTTypeIdentifier<\/key>\s*<string>org\.asciinema\.cast<\/string>[\s\S]*?<\/dict>/,
+  )?.[0];
+  assert.ok(macosRecordingUti, "missing macOS terminal recording UTI");
+  assert.match(macosRecordingUti, /<string>public\.data<\/string>/);
+  assert.match(
+    macosRecordingUti,
+    /<key>public\.filename-extension<\/key>\s*<array><string>cast<\/string><\/array>/,
+  );
+  assert.match(
+    macosRecordingUti,
+    /<key>public\.mime-type<\/key>\s*<string>application\/x-asciicast<\/string>/,
+  );
+
+  const windowsRecordingProgId = wix.match(
+    /<ProgId[^>]*Id="Navop\.TerminalRecording"[\s\S]*?<\/ProgId>/,
+  )?.[0];
+  assert.ok(windowsRecordingProgId, "missing Windows terminal recording ProgId");
+  assert.match(
+    windowsRecordingProgId,
+    /<Extension[^>]*Id="cast"[^>]*ContentType="application\/x-asciicast"/,
+  );
+  assert.doesNotMatch(plist, /<string>(?:cast\.)?partial<\/string>/);
+  assert.doesNotMatch(wix, /<Extension[^>]*Id="(?:cast\.)?partial"/);
 
   assert.match(
     desktop,
-    /^MimeType=.*application\/vnd\.sqlite3;.*application\/x-duckdb;.*text\/markdown;/m,
+    /^MimeType=.*application\/vnd\.sqlite3;.*application\/x-duckdb;.*text\/markdown;.*application\/x-asciicast;/m,
   );
   assert.ok(fs.existsSync(mimePath), `${mimePath} must exist`);
   const mime = read(mimePath);
@@ -46,6 +81,10 @@ test("installers register database and Markdown file associations", () => {
   assert.match(mime, /pattern="\*\.duckdb"/);
   assert.match(mime, /type="text\/markdown"/);
   assert.match(mime, /pattern="\*\.md"/);
+  assert.match(mime, /type="application\/x-asciicast"/);
+  assert.match(mime, /pattern="\*\.cast"/);
+  assert.match(mime, /pattern="\*\.cast\.partial"/);
+  assert.doesNotMatch(mime, /pattern="\*\.partial"/);
   assert.match(release, /package\/usr\/share\/mime\/packages/);
   assert.match(release, /resources\/linux\/navop\.xml/);
   assert.match(release, /\/usr\/share\/mime\/packages\/navop\.xml/);

@@ -8,8 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const ASSOCIATION_SCHEMA_VERSION: u32 = 1;
-const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v1";
+const ASSOCIATION_SCHEMA_VERSION: u32 = 2;
+const REGISTRATION_STAMP_FILE: &str = "file-association-registration-v2";
 #[cfg(any(target_os = "linux", test))]
 const LINUX_DESKTOP_TEMPLATE: &str = include_str!("../../resources/linux/navop.desktop");
 #[cfg(any(target_os = "linux", test))]
@@ -31,6 +31,11 @@ const ASSOCIATIONS: &[AssociationSpec] = &[
         extension: ".md",
         prog_id: "Navop.MarkdownDocument",
         description: "Markdown Document",
+    },
+    AssociationSpec {
+        extension: ".cast",
+        prog_id: "Navop.TerminalRecording",
+        description: "Terminal Recording",
     },
 ];
 
@@ -352,6 +357,7 @@ fn linux_default_mime_types() -> Vec<&'static str> {
         "application/x-duckdb",
         "application/vnd.duckdb",
         "text/markdown",
+        "application/x-asciicast",
     ]
 }
 
@@ -508,16 +514,19 @@ mod tests {
             (".db", "Navop.SQLiteDatabase"),
             (".duckdb", "Navop.DuckDBDatabase"),
             (".md", "Navop.MarkdownDocument"),
+            (".cast", "Navop.TerminalRecording"),
         ] {
             assert!(rendered.contains(extension));
             assert!(rendered.contains(prog_id));
         }
         assert!(rendered.contains(r#""C:\Program Files\Navop\navop.exe" "%1""#));
         assert!(!rendered.contains("UserChoice"));
+        assert!(!rendered.contains(".partial"));
         for (extension, prog_id) in [
             (".db", "Navop.SQLiteDatabase"),
             (".duckdb", "Navop.DuckDBDatabase"),
             (".md", "Navop.MarkdownDocument"),
+            (".cast", "Navop.TerminalRecording"),
         ] {
             assert!(commands.iter().any(|command| {
                 command.key.ends_with(extension)
@@ -557,8 +566,20 @@ mod tests {
                 .desktop_contents
                 .contains("MimeType=application/vnd.sqlite3")
         );
+        assert!(files.desktop_contents.contains("application/x-asciicast"));
         assert!(files.mime_contents.contains("<glob pattern=\"*.duckdb\"/>"));
         assert!(files.mime_contents.contains("<glob pattern=\"*.md\"/>"));
+        assert!(files.mime_contents.contains("<glob pattern=\"*.cast\"/>"));
+        assert!(
+            files
+                .mime_contents
+                .contains("<glob pattern=\"*.cast.partial\"/>")
+        );
+        assert!(
+            !files
+                .mime_contents
+                .contains("<glob pattern=\"*.partial\"/>")
+        );
         assert_eq!(
             vec![
                 "application/vnd.sqlite3",
@@ -566,9 +587,16 @@ mod tests {
                 "application/x-duckdb",
                 "application/vnd.duckdb",
                 "text/markdown",
+                "application/x-asciicast",
             ],
             linux_default_mime_types()
         );
+    }
+
+    #[test]
+    fn terminal_recording_associations_bump_the_registration_schema() {
+        assert_eq!(2, ASSOCIATION_SCHEMA_VERSION);
+        assert_eq!("file-association-registration-v2", REGISTRATION_STAMP_FILE);
     }
 
     #[test]
