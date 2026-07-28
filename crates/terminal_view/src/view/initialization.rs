@@ -227,6 +227,7 @@ impl TerminalView {
             recording_playback_slider_dragging: false,
             recording_playback_control_error: None,
             recording_playback_ticker: None,
+            operation_history: OperationHistoryLoadState::default(),
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
@@ -255,6 +256,7 @@ impl TerminalView {
         let initial_settings = current_settings(cx);
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
+        this.sync_operation_history(cx);
         this
     }
 }
