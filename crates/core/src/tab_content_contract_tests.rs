@@ -23,3 +23,11 @@ fn tab_content_view_exposes_tab_action_contracts() {
 fn tab_content_event_exposes_content_changed_contract() {
     let _event = TabContentEvent::ContentChanged;
 }
+
+#[test]
+fn tab_content_event_exposes_close_request_contract() {
+    assert_eq!(
+        "CloseRequested",
+        format!("{:?}", TabContentEvent::CloseRequested)
+    );
+}

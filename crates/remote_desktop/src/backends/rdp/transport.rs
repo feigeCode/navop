@@ -3,9 +3,10 @@ use std::process::{Command, Stdio};
 
 use super::*;
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum BackendSignal {
     Connected,
-    Disconnected(String),
+    Disconnected(HelperDisconnect),
     OutputEnded,
 }
 
@@ -25,20 +26,20 @@ pub(super) fn start_helper_session(
     (),
 > {
     send_status(output_tx, &format!("starting {} helper", protocol.label()));
-    let Some(mut helper) = spawn_helper(helper, output_tx.clone(), protocol) else {
+    let Some(mut helper) = spawn_helper(helper, protocol) else {
         return Err(());
     };
     let Some(stdout) = helper.stdout.take() else {
-        send_failure(
-            output_tx,
-            &format!("{} helper stdout unavailable", protocol.label()),
+        tracing::warn!(
+            protocol = protocol.label(),
+            "remote desktop helper stdout unavailable"
         );
         return Err(());
     };
     let Some(mut stdin) = helper.stdin.take() else {
-        send_failure(
-            output_tx,
-            &format!("{} helper stdin unavailable", protocol.label()),
+        tracing::warn!(
+            protocol = protocol.label(),
+            "remote desktop helper stdin unavailable"
         );
         return Err(());
     };
@@ -75,7 +76,6 @@ pub(super) fn reconnect_replay_requests(
 
 fn spawn_helper(
     helper: &HelperProcessConfig,
-    output_tx: OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> Option<std::process::Child> {
     let mut command = Command::new(&helper.command);
@@ -90,13 +90,11 @@ fn spawn_helper(
     {
         Ok(child) => Some(child),
         Err(error) => {
-            send_failure(
-                &output_tx,
-                &format!(
-                    "failed to start {} helper {}: {error}",
-                    protocol.label(),
-                    helper.command.display()
-                ),
+            tracing::warn!(
+                protocol = protocol.label(),
+                command = %helper.command.display(),
+                ?error,
+                "failed to start remote desktop helper"
             );
             None
         }
@@ -118,10 +116,16 @@ fn spawn_output_reader(
                     Ok(Some(output)) => forward_helper_output(output, &output_tx, &signal_tx),
                     Ok(None) => break,
                     Err(error) => {
-                        send_failure(
-                            &output_tx,
-                            &format!("failed to read {} helper: {error}", protocol.label()),
+                        let reason = format!("failed to read {} helper: {error}", protocol.label());
+                        tracing::warn!(
+                            protocol = protocol.label(),
+                            ?error,
+                            "failed to read remote desktop helper output"
                         );
+                        let _ = signal_tx.send(BackendSignal::Disconnected(HelperDisconnect {
+                            kind: None,
+                            reason,
+                        }));
                         break;
                     }
                 }
@@ -131,9 +135,9 @@ fn spawn_output_reader(
 }
 
 pub(super) struct HelperOutput {
-    pub(super) output: RemoteDesktopOutput,
+    pub(super) output: Option<RemoteDesktopOutput>,
     pub(super) connected: bool,
-    pub(super) disconnect_message: Option<String>,
+    pub(super) disconnect: Option<HelperDisconnect>,
 }
 
 pub(super) fn forward_helper_output(
@@ -141,39 +145,38 @@ pub(super) fn forward_helper_output(
     output_tx: &OutputMailboxSender,
     signal_tx: &std::sync::mpsc::Sender<BackendSignal>,
 ) {
-    // Publish the output before notifying the backend loop. The loop reacts
-    // to a disconnect by starting the next helper session and emitting the
-    // `Reconnecting` barrier. If the signal were sent first, that barrier
-    // could overtake this session's terminal/connected output and let a stale
-    // event clear or overwrite state from the next session.
+    // Publish a connected output before notifying the backend loop so the
+    // session is marked ready before any subsequent signal is handled.
+    // Terminal helper diagnostics deliberately have no user-visible output;
+    // only the backend receives them for structured classification.
     let HelperOutput {
         output,
         connected,
-        disconnect_message,
+        disconnect,
     } = helper_output;
-    let _ = output_tx.send(output);
+    if let Some(output) = output {
+        let _ = output_tx.send(output);
+    }
     if connected {
         let _ = signal_tx.send(BackendSignal::Connected);
     }
-    if let Some(message) = disconnect_message {
-        let _ = signal_tx.send(BackendSignal::Disconnected(message));
+    if let Some(disconnect) = disconnect {
+        let _ = signal_tx.send(BackendSignal::Disconnected(disconnect));
     }
 }
 
 pub(super) fn write_request(
     stdin: &mut std::process::ChildStdin,
     request: &HelperRequest,
-    output_tx: &OutputMailboxSender,
+    _output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> anyhow::Result<()> {
     let line = encode_request_line(request)?;
     if let Err(error) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
-        send_failure(
-            output_tx,
-            &format!(
-                "failed to write {} helper request: {error}",
-                protocol.label()
-            ),
+        tracing::warn!(
+            protocol = protocol.label(),
+            ?error,
+            "failed to write remote desktop helper request"
         );
         anyhow::bail!(error);
     }
@@ -191,8 +194,12 @@ pub(super) fn send_reconnecting(
     let _ = output_tx.send(RemoteDesktopOutput::Reconnecting(reconnect));
 }
 
-pub(super) fn send_failure(output_tx: &OutputMailboxSender, message: &str) {
-    let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(message.to_string()));
+pub(super) fn send_failure(output_tx: &OutputMailboxSender, failure: RemoteDesktopFailure) {
+    let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(failure));
+}
+
+pub(super) fn send_terminated(output_tx: &OutputMailboxSender, failure: RemoteDesktopFailure) {
+    let _ = output_tx.send(RemoteDesktopOutput::Terminated(failure));
 }
 
 #[cfg(test)]

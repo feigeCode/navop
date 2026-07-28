@@ -157,11 +157,34 @@ fn rejects_truncated_binary_cursor_payload() {
     assert!(read_helper_output(&mut input, RemoteDesktopProtocol::Rdp).is_err());
 }
 
+#[test]
+fn terminal_helper_event_keeps_raw_diagnostics_out_of_user_output() {
+    let mut input = std::io::Cursor::new(
+        b"{\"type\":\"ConnectionFailure\",\"message\":\"[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP\"}\n"
+            .to_vec(),
+    );
+
+    let helper_output = read_helper_output(&mut input, RemoteDesktopProtocol::Rdp)
+        .expect("helper output reads")
+        .expect("helper output exists");
+
+    assert_eq!(None, helper_output.output);
+    assert_eq!(
+        Some(HelperDisconnect {
+            kind: Some(HelperDisconnectKind::ConnectionFailure),
+            reason: "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP"
+                .to_string(),
+        }),
+        helper_output.disconnect
+    );
+}
+
 fn read_output(input: &mut impl BufRead) -> RemoteDesktopOutput {
     read_helper_output(input, RemoteDesktopProtocol::Rdp)
         .expect("helper output reads")
         .expect("helper output exists")
         .output
+        .expect("helper event produces UI output")
 }
 
 fn read_error(input: &[u8]) -> String {

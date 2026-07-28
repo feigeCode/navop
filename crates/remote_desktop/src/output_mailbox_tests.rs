@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    RemoteDesktopCursor, RemoteDesktopFrameRect, RemoteDesktopReconnect,
+    RemoteDesktopCursor, RemoteDesktopFailure, RemoteDesktopFrameRect, RemoteDesktopReconnect,
     RemoteDesktopReconnectReason,
 };
 
@@ -60,14 +60,18 @@ fn preserves_clipboard_transfer_events_without_coalescing() {
 fn terminal_event_discards_pending_frame() {
     let (tx, rx) = output_mailbox();
     tx.send(frame(7)).unwrap();
-    tx.send(RemoteDesktopOutput::Terminated("closed".into()))
-        .unwrap();
+    tx.send(RemoteDesktopOutput::Terminated(
+        RemoteDesktopFailure::ServerEndedSession,
+    ))
+    .unwrap();
 
     let batch = rx.drain();
 
     assert_eq!(None, batch.latest_frame);
     assert_eq!(
-        vec![RemoteDesktopOutput::Terminated("closed".into())],
+        vec![RemoteDesktopOutput::Terminated(
+            RemoteDesktopFailure::ServerEndedSession
+        )],
         batch.control
     );
 }
@@ -166,7 +170,7 @@ fn old_session_output_is_ignored_after_the_next_session_starts() {
 
     first_session
         .send(RemoteDesktopOutput::Terminated(
-            "late output from the old helper".into(),
+            RemoteDesktopFailure::ServerEndedSession,
         ))
         .unwrap();
     first_session.send(frame(3)).unwrap();
@@ -263,11 +267,15 @@ fn reconnect_barrier_discards_pending_cursor_state() {
 fn terminal_barrier_discards_pending_cursor_state() {
     let (tx, rx) = output_mailbox();
     tx.send(RemoteDesktopOutput::CursorHidden).unwrap();
-    tx.send(RemoteDesktopOutput::ConnectionFailure("closed".into()))
-        .unwrap();
+    tx.send(RemoteDesktopOutput::ConnectionFailure(
+        RemoteDesktopFailure::ConnectionFailed,
+    ))
+    .unwrap();
 
     assert_eq!(
-        vec![RemoteDesktopOutput::ConnectionFailure("closed".into())],
+        vec![RemoteDesktopOutput::ConnectionFailure(
+            RemoteDesktopFailure::ConnectionFailed
+        )],
         rx.drain().control
     );
 }

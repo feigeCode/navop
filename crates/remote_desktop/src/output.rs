@@ -1,4 +1,4 @@
-use crate::capabilities::RemoteDesktopCapabilities;
+use crate::{RemoteDesktopProtocol, capabilities::RemoteDesktopCapabilities};
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum RemoteDesktopOutput {
@@ -46,8 +46,23 @@ pub enum RemoteDesktopOutput {
     /// localize it without parsing or exposing backend error text.
     Reconnecting(RemoteDesktopReconnect),
     Status(String),
-    ConnectionFailure(String),
-    Terminated(String),
+    ConnectionFailure(RemoteDesktopFailure),
+    Terminated(RemoteDesktopFailure),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum RemoteDesktopFailure {
+    AuthenticationFailed,
+    SessionTakenOver,
+    HostUnreachable,
+    ServerEndedSession,
+    ConnectionFailed,
+    ProviderVersion {
+        protocol: RemoteDesktopProtocol,
+        installed: String,
+        required: String,
+        invalid: bool,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -118,8 +133,8 @@ mod tests {
                 message: "private-transfer-error".to_string(),
             },
             RemoteDesktopOutput::Status("private-status".to_string()),
-            RemoteDesktopOutput::ConnectionFailure("private-connection-error".to_string()),
-            RemoteDesktopOutput::Terminated("private-termination".to_string()),
+            RemoteDesktopOutput::ConnectionFailure(RemoteDesktopFailure::AuthenticationFailed),
+            RemoteDesktopOutput::Terminated(RemoteDesktopFailure::SessionTakenOver),
         ];
 
         for output in outputs {

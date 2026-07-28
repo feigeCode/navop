@@ -10,6 +10,13 @@ const RECONNECT_DELAYS: [Duration; 4] = [
     Duration::from_secs(10),
 ];
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ReconnectDecision {
+    Retry(RemoteDesktopReconnectReason),
+    ConnectionFailure(RemoteDesktopFailure),
+    Terminated(RemoteDesktopFailure),
+}
+
 pub(super) fn wait_before_reconnect(
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
@@ -108,21 +115,109 @@ pub(super) fn reconnect_delay(attempt: usize) -> Duration {
     RECONNECT_DELAYS[attempt.min(RECONNECT_DELAYS.len() - 1)]
 }
 
-pub(super) fn reconnect_event(reason: &str, delay: Duration) -> RemoteDesktopReconnect {
+pub(super) fn reconnect_event(
+    reason: RemoteDesktopReconnectReason,
+    delay: Duration,
+) -> RemoteDesktopReconnect {
     RemoteDesktopReconnect {
-        reason: classify_disconnect_reason(reason),
+        reason,
         delay_secs: Some(delay.as_secs()),
     }
 }
 
+pub(super) fn reconnect_decision(
+    reason: &str,
+    was_connected: bool,
+    disconnect_kind: Option<HelperDisconnectKind>,
+) -> ReconnectDecision {
+    let normalized = reason.to_ascii_lowercase();
+    if contains_any(
+        &normalized,
+        &[
+            "another user connected to the server",
+            "forcing the disconnection of the current connection",
+            "disconnected by other connection",
+            "disconnectedbyotherconnection",
+        ],
+    ) {
+        return ReconnectDecision::Terminated(RemoteDesktopFailure::SessionTakenOver);
+    }
+    if contains_any(
+        &normalized,
+        &[
+            "credssp",
+            "access denied",
+            "logon failure",
+            "authentication failed",
+            "invalid credentials",
+            "wrong password",
+            "invalid password",
+            "status_logon_failure",
+            "sec_e_logon_denied",
+        ],
+    ) {
+        return ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::AuthenticationFailed);
+    }
+    if contains_any(
+        &normalized,
+        &[
+            "rpc initiated disconnect",
+            "rpc initiated logoff",
+            "server ended the session",
+            "server ended this session",
+            "administrator has ended",
+            "administratively disconnected",
+        ],
+    ) {
+        return ReconnectDecision::Terminated(RemoteDesktopFailure::ServerEndedSession);
+    }
+    if !was_connected
+        && contains_any(
+            &normalized,
+            &[
+                "connection refused",
+                "connection timed out",
+                "timed out",
+                "no route to host",
+                "host unreachable",
+                "network is unreachable",
+                "could not resolve",
+                "name or service not known",
+                "failed to lookup address",
+            ],
+        )
+    {
+        return ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::HostUnreachable);
+    }
+
+    match disconnect_kind {
+        Some(HelperDisconnectKind::Terminated) => {
+            ReconnectDecision::Terminated(RemoteDesktopFailure::ServerEndedSession)
+        }
+        Some(HelperDisconnectKind::ConnectionFailure) if !was_connected => {
+            ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::ConnectionFailed)
+        }
+        _ if !was_connected => {
+            ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::ConnectionFailed)
+        }
+        _ => ReconnectDecision::Retry(classify_disconnect_reason(&normalized)),
+    }
+}
+
 fn classify_disconnect_reason(reason: &str) -> RemoteDesktopReconnectReason {
-    if reason.contains("Fast-Path") {
+    if reason.contains("fast-path") {
         RemoteDesktopReconnectReason::DisplayUpdate
-    } else if reason.contains("/Users/") || reason.contains(".cargo/git/checkouts") {
+    } else if reason.contains("/users/") || reason.contains(".cargo/git/checkouts") {
         RemoteDesktopReconnectReason::SessionError
     } else {
         RemoteDesktopReconnectReason::ConnectionLost
     }
+}
+
+fn contains_any(reason: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| reason.contains(candidate))
 }
 
 #[cfg(test)]

@@ -1,7 +1,11 @@
-use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopReconnect, RemoteDesktopReconnectReason};
+use remote_desktop::{
+    RemoteDesktopFailure, RemoteDesktopProtocol, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason,
+};
 
 use super::{
-    localized_clipboard_files_received_for_locale, localized_reconnect_notification_for_locale,
+    localized_clipboard_files_received_for_locale, localized_failure_message_for_locale,
+    localized_reconnect_notification_for_locale, localized_session_taken_over_for_locale,
     localized_vnc_clipboard_ascii_warning_for_locale,
 };
 
@@ -87,4 +91,40 @@ fn notifications_are_deferred_and_auto_hidden() {
     assert!(source.contains("Notification::info(message)"));
     assert!(source.contains("RemoteDesktopReconnectNotification"));
     assert!(!source.contains("localized_reconnect_status"));
+}
+
+#[test]
+fn connection_failures_are_localized_without_backend_diagnostics() {
+    assert_eq!(
+        "身份验证失败，请检查用户名、密码和域。",
+        localized_failure_message_for_locale("zh-CN", &RemoteDesktopFailure::AuthenticationFailed,)
+    );
+    assert_eq!(
+        "无法连接远程主机，请检查主机地址、端口和网络。",
+        localized_failure_message_for_locale("zh-CN", &RemoteDesktopFailure::HostUnreachable)
+    );
+    assert_eq!(
+        "Remote desktop connection failed. Check the connection settings and try again.",
+        localized_failure_message_for_locale("en", &RemoteDesktopFailure::ConnectionFailed)
+    );
+
+    for failure in [
+        RemoteDesktopFailure::AuthenticationFailed,
+        RemoteDesktopFailure::HostUnreachable,
+        RemoteDesktopFailure::ConnectionFailed,
+    ] {
+        let message = localized_failure_message_for_locale("en", &failure);
+        assert!(!message.contains("/Users/"));
+        assert!(!message.contains(".cargo/git/checkouts"));
+        assert!(!message.contains("connector.rs"));
+        assert!(!message.contains("CredSSP @"));
+    }
+}
+
+#[test]
+fn session_takeover_notification_tells_the_user_that_the_tab_was_closed() {
+    assert_eq!(
+        "另一位用户已连接到远程服务器，当前 RDP 会话已断开，页签已自动关闭。",
+        localized_session_taken_over_for_locale("zh-CN")
+    );
 }

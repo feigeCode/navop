@@ -33,6 +33,26 @@ RemoteDesktop:
     en: connection lost
     zh-CN: 连接丢失
     zh-HK: 連線遺失
+  failure_authentication:
+    en: Authentication failed. Check the username, password, and domain.
+    zh-CN: 身份验证失败，请检查用户名、密码和域。
+    zh-HK: 身份驗證失敗，請檢查使用者名稱、密碼和網域。
+  failure_host_unreachable:
+    en: Unable to connect to the remote host. Check the address, port, and network.
+    zh-CN: 无法连接远程主机，请检查主机地址、端口和网络。
+    zh-HK: 無法連線遠端主機，請檢查主機地址、連接埠和網路。
+  failure_server_ended:
+    en: The remote server ended the session.
+    zh-CN: 远程服务器已结束当前会话。
+    zh-HK: 遠端伺服器已結束目前的工作階段。
+  failure_generic:
+    en: Remote desktop connection failed. Check the connection settings and try again.
+    zh-CN: 远程桌面连接失败，请检查连接配置后重试。
+    zh-HK: 遠端桌面連線失敗，請檢查連線設定後重試。
+  session_taken_over_notification:
+    en: Another user connected to the remote server. This RDP session was disconnected and the tab was closed.
+    zh-CN: 另一位用户已连接到远程服务器，当前 RDP 会话已断开，页签已自动关闭。
+    zh-HK: 另一位使用者已連線至遠端伺服器，目前的 RDP 工作階段已中斷，頁籤已自動關閉。
   vnc_clipboard_ascii_only:
     en: VNC clipboard currently supports ASCII text only
     zh-CN: VNC 剪贴板当前仅支持 ASCII 文本

@@ -169,6 +169,9 @@ pub enum TabContentEvent {
     StateChanged,
     /// Tab content changed while it may be inactive.
     ContentChanged,
+    /// Ask the owning container to close this content through its normal
+    /// close lifecycle.
+    CloseRequested,
     /// Insert a tab created by the current content into this container.
     OpenTab { tab: TabItem, mode: TabOpenMode },
 }
@@ -178,6 +181,7 @@ impl std::fmt::Debug for TabContentEvent {
         match self {
             Self::StateChanged => formatter.write_str("StateChanged"),
             Self::ContentChanged => formatter.write_str("ContentChanged"),
+            Self::CloseRequested => formatter.write_str("CloseRequested"),
             Self::OpenTab { tab, mode } => formatter
                 .debug_struct("OpenTab")
                 .field("tab_id", &tab.id())
@@ -1123,6 +1127,15 @@ impl TabContainer {
             TabContentEvent::ContentChanged => {
                 if self.mark_content_activity(content_id, cx) {
                     cx.notify();
+                }
+            }
+            TabContentEvent::CloseRequested => {
+                if let Some(index) = self
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.content().content_id(cx) == content_id)
+                {
+                    self.close_tab(index, window, cx).detach();
                 }
             }
             TabContentEvent::OpenTab { tab, mode } => {

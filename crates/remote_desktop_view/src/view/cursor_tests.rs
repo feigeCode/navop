@@ -84,9 +84,17 @@ fn third_cursor_generation_is_the_first_safe_immediate_retirement() {
 }
 
 #[test]
-fn native_cursor_is_hidden_only_for_remote_modes_while_hovered() {
-    assert!(!should_hide_native_cursor(RemoteCursorMode::Default, true));
-    assert!(!should_hide_native_cursor(RemoteCursorMode::Bitmap, false));
-    assert!(should_hide_native_cursor(RemoteCursorMode::Bitmap, true));
-    assert!(should_hide_native_cursor(RemoteCursorMode::Hidden, true));
+fn native_cursor_owns_the_pointer_while_remote_content_is_hovered() {
+    let mut state = RemoteCursorState::default();
+    state.install(cursor(1)).unwrap();
+    state.set_position(25, 40);
+    state.promote_latest();
+
+    assert!(state.paint_state(Some((100, 80))).is_some());
+
+    state.set_pointer_hovered(true);
+    assert!(state.paint_state(Some((100, 80))).is_none());
+
+    state.set_pointer_hovered(false);
+    assert!(state.paint_state(Some((100, 80))).is_some());
 }

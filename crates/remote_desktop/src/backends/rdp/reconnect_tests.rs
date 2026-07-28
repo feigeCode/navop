@@ -11,10 +11,15 @@ fn reconnect_delay_uses_bounded_backoff() {
 
 #[test]
 fn reconnect_event_classifies_fast_path_without_exposing_internal_details() {
-    let reconnect = reconnect_event(
+    let decision = reconnect_decision(
         "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",
-        Duration::from_secs(1),
+        true,
+        None,
     );
+    let ReconnectDecision::Retry(reason) = decision else {
+        panic!("fast-path failure should remain retryable");
+    };
+    let reconnect = reconnect_event(reason, Duration::from_secs(1));
 
     assert_eq!(
         RemoteDesktopReconnect {
@@ -35,7 +40,76 @@ fn reconnect_event_uses_a_protocol_neutral_connection_lost_reason() {
             reason: RemoteDesktopReconnectReason::ConnectionLost,
             delay_secs: Some(2),
         },
-        reconnect_event("socket closed", Duration::from_secs(2))
+        reconnect_event(
+            RemoteDesktopReconnectReason::ConnectionLost,
+            Duration::from_secs(2)
+        )
+    );
+}
+
+#[test]
+fn another_user_disconnect_is_a_terminal_session_takeover() {
+    let decision = reconnect_decision(
+        "[Protocol independent error] Another user connected to the server, \
+         forcing the disconnection of the current connection",
+        true,
+        Some(HelperDisconnectKind::Terminated),
+    );
+
+    assert_eq!(
+        ReconnectDecision::Terminated(RemoteDesktopFailure::SessionTakenOver),
+        decision
+    );
+}
+
+#[test]
+fn credssp_failure_is_a_terminal_authentication_failure_without_internal_details() {
+    let decision = reconnect_decision(
+        "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP",
+        false,
+        Some(HelperDisconnectKind::ConnectionFailure),
+    );
+
+    assert_eq!(
+        ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::AuthenticationFailed),
+        decision
+    );
+    let debug = format!("{decision:?}");
+    assert!(!debug.contains("/Users/"));
+    assert!(!debug.contains(".cargo/git/checkouts"));
+    assert!(!debug.contains("connector.rs"));
+    assert!(!debug.contains("CredSSP"));
+}
+
+#[test]
+fn initial_connection_refused_is_a_terminal_host_failure() {
+    assert_eq!(
+        ReconnectDecision::ConnectionFailure(RemoteDesktopFailure::HostUnreachable),
+        reconnect_decision(
+            "connection refused",
+            false,
+            Some(HelperDisconnectKind::ConnectionFailure),
+        )
+    );
+}
+
+#[test]
+fn established_socket_disconnect_remains_retryable() {
+    assert_eq!(
+        ReconnectDecision::Retry(RemoteDesktopReconnectReason::ConnectionLost),
+        reconnect_decision("socket closed", true, None)
+    );
+}
+
+#[test]
+fn explicit_server_termination_does_not_retry() {
+    assert_eq!(
+        ReconnectDecision::Terminated(RemoteDesktopFailure::ServerEndedSession),
+        reconnect_decision(
+            "remote session terminated",
+            true,
+            Some(HelperDisconnectKind::Terminated),
+        )
     );
 }
 
