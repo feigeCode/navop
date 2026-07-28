@@ -228,6 +228,7 @@ impl TerminalView {
             recording_playback_control_error: None,
             recording_playback_ticker: None,
             operation_history: OperationHistoryLoadState::default(),
+            operation_history_panel: OperationHistoryPanelState::default(),
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,

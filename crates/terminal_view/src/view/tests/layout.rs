@@ -298,6 +298,147 @@ fn terminal_recording_footer_sits_between_primary_content_and_bottom_tool() {
 }
 
 #[test]
+fn operation_history_panel_state_is_pane_private_and_fail_closed() {
+    let view_source = include_str!("../../view.rs");
+    let initialization_source = include_str!("../initialization.rs");
+    let history_source = include_str!("../operation_history.rs");
+    let sync = history_source
+        .split("pub(super) fn sync_operation_history")
+        .nth(1)
+        .and_then(|source| source.split("#[cfg(test)]").next())
+        .expect("operation history synchronization should exist");
+    let unavailable = sync
+        .split("let Some(request) = request else")
+        .nth(1)
+        .and_then(|source| source.split("};").next())
+        .expect("operation history must have an unavailable-capability branch");
+
+    assert!(view_source.contains("operation_history_panel: OperationHistoryPanelState"));
+    assert!(
+        initialization_source
+            .contains("operation_history_panel: OperationHistoryPanelState::default()")
+    );
+    assert!(unavailable.contains("self.operation_history.begin(None);"));
+    assert!(unavailable.contains("self.operation_history_panel.reset_unavailable();"));
+}
+
+#[test]
+fn operation_history_drawer_overlays_primary_content_without_resizing_the_terminal() {
+    let render_source = include_str!("../render_layout.rs");
+    let history_source = include_str!("../operation_history.rs");
+    let center_region = render_source
+        .split("fn render_center_region")
+        .nth(1)
+        .and_then(|source| source.split("fn render_bottom_region").next())
+        .expect("center region implementation should exist");
+    let history_host = center_region
+        .find("terminal-operation-history-host")
+        .expect("primary content must have a history overlay host");
+    let primary_content = center_region[history_host..]
+        .find(".child(primary_content)")
+        .map(|offset| history_host + offset)
+        .expect("overlay host must retain the primary terminal content");
+    let history_drawer = center_region[primary_content..]
+        .find("render_operation_history_drawer")
+        .map(|offset| primary_content + offset)
+        .expect("history drawer must be rendered inside the primary content host");
+    let history_host_child = center_region[history_drawer..]
+        .find(".child(primary_content_host)")
+        .map(|offset| history_drawer + offset)
+        .expect("center region must render the completed overlay host");
+    let session_footer = center_region
+        .find(".child(self.render_terminal_session_footer(cx))")
+        .expect("session footer should remain outside the overlay host");
+    let bottom_tool = center_region
+        .find(".when_some(state.bottom_panel")
+        .expect("optional bottom tool should remain after the session footer");
+
+    for host_contract in [
+        ".relative()",
+        ".flex_1()",
+        ".min_w_0()",
+        ".min_h_0()",
+        ".overflow_hidden()",
+    ] {
+        assert!(
+            center_region[history_host..history_host_child].contains(host_contract),
+            "operation history host must retain `{host_contract}`"
+        );
+    }
+    for drawer_contract in [
+        ".absolute()",
+        ".top_0()",
+        ".right_0()",
+        ".bottom_0()",
+        ".occlude()",
+        ".overflow_hidden()",
+    ] {
+        assert!(
+            history_source.contains(drawer_contract),
+            "operation history drawer must retain `{drawer_contract}`"
+        );
+    }
+
+    assert!(history_host < primary_content);
+    assert!(primary_content < history_drawer);
+    assert!(history_drawer < history_host_child);
+    assert!(history_host_child < session_footer);
+    assert!(session_footer < bottom_tool);
+    assert!(
+        !render_source.contains("OPERATION_HISTORY_DRAWER_WIDTH"),
+        "the center layout must not subtract drawer width from the terminal"
+    );
+    assert!(
+        !history_source.contains("resize_if_needed"),
+        "the overlay must leave PTY resizing on the existing canvas-bounds path"
+    );
+}
+
+#[test]
+fn operation_history_toggle_is_live_only_and_the_drawer_has_no_mutation_path() {
+    let footer_source = include_str!("../recording_footer.rs");
+    let playback_footer_source = include_str!("../recording_playback_render.rs");
+    let history_source = include_str!("../operation_history.rs");
+    let history_implementation = history_source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("operation history implementation should exist");
+
+    assert!(footer_source.contains("terminal-operation-history-toggle"));
+    assert!(footer_source.contains("operation_history_is_available(cx)"));
+    assert!(footer_source.contains("operation_history_panel_is_open()"));
+    assert!(footer_source.contains("this.toggle_operation_history_panel(cx);"));
+    assert!(!playback_footer_source.contains("terminal-operation-history-toggle"));
+
+    for forbidden_mutation in [
+        "write_to_pty",
+        "paste_text",
+        "send_input",
+        "send_control",
+        "duplicate",
+        "reconnect",
+        "structured_value()",
+    ] {
+        assert!(
+            !history_implementation.contains(forbidden_mutation),
+            "read-only operation history must not contain `{forbidden_mutation}`"
+        );
+    }
+    for safe_payload_accessor in [
+        "payload.preview()",
+        "payload.format()",
+        "payload.completeness()",
+        "payload.original_byte_len()",
+        "payload.redaction_applied()",
+    ] {
+        assert!(
+            history_implementation.contains(safe_payload_accessor),
+            "operation history projection must retain `{safe_payload_accessor}`"
+        );
+    }
+}
+
+#[test]
 fn recording_footer_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
     let render_layout_source = include_str!("../render_layout.rs");
     let render_surface_source = include_str!("../render_surface.rs");

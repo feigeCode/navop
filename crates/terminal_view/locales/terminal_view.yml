@@ -1925,3 +1925,373 @@ TerminalRecordingPlayback:
     en: Playback controls are unavailable
     zh-CN: 回放控制当前不可用
     zh-HK: 回放控制目前不可用
+
+TerminalOperationHistory:
+  title:
+    en: Operation History
+    zh-CN: 操作历史
+    zh-HK: 操作歷史
+  tooltip:
+    en: View read-only operation history
+    zh-CN: 查看只读操作历史
+    zh-HK: 檢視唯讀操作歷史
+  read_only:
+    en: Read-only history. Nothing is executed from this panel.
+    zh-CN: 此处仅供只读查看，不会执行任何历史操作。
+    zh-HK: 此處僅供唯讀檢視，不會執行任何歷史操作。
+  close:
+    en: Close operation history
+    zh-CN: 关闭操作历史
+    zh-HK: 關閉操作歷史
+  loading:
+    en: Loading operation history…
+    zh-CN: 正在加载操作历史…
+    zh-HK: 正在載入操作歷史…
+  refreshing:
+    en: Refreshing operation history…
+    zh-CN: 正在刷新操作历史…
+    zh-HK: 正在重新整理操作歷史…
+  stale:
+    en: Showing the previous snapshot until refresh completes.
+    zh-CN: 刷新完成前暂时显示上一份快照。
+    zh-HK: 重新整理完成前暫時顯示上一份快照。
+  load_failed:
+    en: "Failed to load operation history: %{error}"
+    zh-CN: "加载操作历史失败：%{error}"
+    zh-HK: "載入操作歷史失敗：%{error}"
+  empty:
+    en: No operations have been recorded.
+    zh-CN: 暂无已记录的操作。
+    zh-HK: 暫無已記錄的操作。
+  no_matches:
+    en: No operations match this status.
+    zh-CN: 没有符合此状态的操作。
+    zh-HK: 沒有符合此狀態的操作。
+  current_snapshot_unavailable:
+    en: "The current session snapshot is unavailable: %{error}"
+    zh-CN: "当前会话快照不可用：%{error}"
+    zh-HK: "目前工作階段快照無法使用：%{error}"
+  recovery_warning_for_session:
+    en: "%{warning} · Session %{session}"
+    zh-CN: "%{warning} · 会话 %{session}"
+    zh-HK: "%{warning} · 工作階段 %{session}"
+  current_session:
+    en: Current Session
+    zh-CN: 当前会话
+    zh-HK: 目前工作階段
+  recovered_session:
+    en: Recovered Session
+    zh-CN: 已恢复会话
+    zh-HK: 已復原工作階段
+  session_id:
+    en: Session ID
+    zh-CN: 会话 ID
+    zh-HK: 工作階段 ID
+  created_at:
+    en: Created
+    zh-CN: 创建时间
+    zh-HK: 建立時間
+  updated_at:
+    en: Updated
+    zh-CN: 更新时间
+    zh-HK: 更新時間
+  recovery_source:
+    en: Recovery Source
+    zh-CN: 恢复来源
+    zh-HK: 復原來源
+  generation:
+    en: "Generation %{generation}"
+    zh-CN: "连接代次 %{generation}"
+    zh-HK: "連線代次 %{generation}"
+  current_generation:
+    en: Current
+    zh-CN: 当前代次
+    zh-HK: 目前代次
+  closed_generation:
+    en: Closed
+    zh-CN: 已结束
+    zh-HK: 已結束
+  started_at:
+    en: Started
+    zh-CN: 开始时间
+    zh-HK: 開始時間
+  ended_at:
+    en: Ended
+    zh-CN: 结束时间
+    zh-HK: 結束時間
+  operation_id:
+    en: Operation ID
+    zh-CN: 操作 ID
+    zh-HK: 操作 ID
+  parent_operation:
+    en: Parent Operation
+    zh-CN: 来源操作
+    zh-HK: 來源操作
+  payload:
+    en: Payload
+    zh-CN: 载荷
+    zh-HK: 承載資料
+  no_payload:
+    en: No persisted payload
+    zh-CN: 未持久化载荷
+    zh-HK: 未持久化承載資料
+  payload_preview:
+    en: Redacted Preview
+    zh-CN: 脱敏预览
+    zh-HK: 已遮罩預覽
+  payload_format:
+    en: Payload Format
+    zh-CN: 载荷格式
+    zh-HK: 承載資料格式
+  payload_completeness:
+    en: Payload Completeness
+    zh-CN: 载荷完整度
+    zh-HK: 承載資料完整度
+  original_byte_len:
+    en: Original Size
+    zh-CN: 原始大小
+    zh-HK: 原始大小
+  transitions:
+    en: Status Transitions
+    zh-CN: 状态迁移
+    zh-HK: 狀態轉移
+  sequence:
+    en: "#%{sequence}"
+    zh-CN: "序号 %{sequence}"
+    zh-HK: "序號 %{sequence}"
+  discarded_tail:
+    en: Discarded Log Tail
+    zh-CN: 已丢弃日志尾部
+    zh-HK: 已捨棄日誌尾端
+  checkpoint_rejection:
+    en: Checkpoint Rejection
+    zh-CN: 检查点拒绝原因
+    zh-HK: 檢查點拒絕原因
+  bytes:
+    en: "%{bytes} bytes"
+    zh-CN: "%{bytes} 字节"
+    zh-HK: "%{bytes} 位元組"
+  redaction_applied:
+    en: Redaction Applied
+    zh-CN: 已执行脱敏
+    zh-HK: 已套用遮罩
+  yes:
+    en: "Yes"
+    zh-CN: 是
+    zh-HK: 是
+  no:
+    en: "No"
+    zh-CN: 否
+    zh-HK: 否
+  expand:
+    en: Expand operation details
+    zh-CN: 展开操作详情
+    zh-HK: 展開操作詳情
+  collapse:
+    en: Collapse operation details
+    zh-CN: 收起操作详情
+    zh-HK: 收合操作詳情
+  not_available:
+    en: Not available
+    zh-CN: 不可用
+    zh-HK: 無法使用
+  filter:
+    all:
+      en: All
+      zh-CN: 全部
+      zh-HK: 全部
+  status:
+    queued:
+      en: Queued
+      zh-CN: 已排队
+      zh-HK: 已排隊
+    sent:
+      en: Sent
+      zh-CN: 已发送
+      zh-HK: 已傳送
+    acknowledged:
+      en: Acknowledged
+      zh-CN: 已确认接收
+      zh-HK: 已確認接收
+    succeeded:
+      en: Succeeded
+      zh-CN: 已成功
+      zh-HK: 已成功
+    failed:
+      en: Failed
+      zh-CN: 已失败
+      zh-HK: 已失敗
+    unknown:
+      en: Unknown
+      zh-CN: 状态未知
+      zh-HK: 狀態未知
+    needsReview:
+      en: Needs Review
+      zh-CN: 需要人工检查
+      zh-HK: 需要人工檢查
+    canceled:
+      en: Canceled
+      zh-CN: 已取消
+      zh-HK: 已取消
+  kind:
+    userInput:
+      en: User Input
+      zh-CN: 用户输入
+      zh-HK: 使用者輸入
+    command:
+      en: Command
+      zh-CN: 命令
+      zh-HK: 命令
+    paste:
+      en: Paste
+      zh-CN: 粘贴
+      zh-HK: 貼上
+    controlSequence:
+      en: Control Sequence
+      zh-CN: 控制序列
+      zh-HK: 控制序列
+    fileOperation:
+      en: File Operation
+      zh-CN: 文件操作
+      zh-HK: 檔案操作
+    applicationOperation:
+      en: Application Operation
+      zh-CN: 应用级操作
+      zh-HK: 應用程式層級操作
+    unconfirmable:
+      en: Completion Unconfirmable
+      zh-CN: 无法确认完成状态
+      zh-HK: 無法確認完成狀態
+  recoverySource:
+    appendLog:
+      en: Append Log
+      zh-CN: 追加日志
+      zh-HK: 附加日誌
+    checkpoint:
+      en: Checkpoint
+      zh-CN: 检查点
+      zh-HK: 檢查點
+    checkpointAndAppendLog:
+      en: Checkpoint and Append Log
+      zh-CN: 检查点与追加日志
+      zh-HK: 檢查點與附加日誌
+  payloadFormat:
+    opaqueSummary:
+      en: Opaque Summary
+      zh-CN: 不透明摘要
+      zh-HK: 不透明摘要
+    structuredJson:
+      en: Structured JSON
+      zh-CN: 结构化 JSON
+      zh-HK: 結構化 JSON
+  payloadCompleteness:
+    complete:
+      en: Complete
+      zh-CN: 完整
+      zh-HK: 完整
+    redacted:
+      en: Redacted
+      zh-CN: 已脱敏
+      zh-HK: 已遮罩
+    summaryOnly:
+      en: Summary Only
+      zh-CN: 仅摘要
+      zh-HK: 僅摘要
+  corruption:
+    invalidRecord:
+      en: Invalid record
+      zh-CN: 无效记录
+      zh-HK: 無效記錄
+    checksumMismatch:
+      en: Checksum mismatch
+      zh-CN: 校验和不匹配
+      zh-HK: 校驗碼不符
+    unsupportedFormat:
+      en: Unsupported format
+      zh-CN: 不支持的格式
+      zh-HK: 不支援的格式
+    unsupportedSchemaVersion:
+      en: Unsupported schema version
+      zh-CN: 不支持的数据版本
+      zh-HK: 不支援的資料版本
+    sessionMismatch:
+      en: Session mismatch
+      zh-CN: 会话不匹配
+      zh-HK: 工作階段不符
+    invalidSequence:
+      en: Invalid sequence
+      zh-CN: 无效序列
+      zh-HK: 無效序列
+    conflictingSnapshot:
+      en: Conflicting snapshot
+      zh-CN: 快照冲突
+      zh-HK: 快照衝突
+    recordTooLarge:
+      en: Record too large
+      zh-CN: 记录过大
+      zh-HK: 記錄過大
+    unreadable:
+      en: Unreadable data
+      zh-CN: 数据不可读
+      zh-HK: 資料無法讀取
+    fileChanged:
+      en: File changed during recovery
+      zh-CN: 恢复期间文件发生变化
+      zh-HK: 復原期間檔案發生變化
+  warning:
+    directoryReadFailed:
+      en: The history directory could not be read.
+      zh-CN: 无法读取历史目录。
+      zh-HK: 無法讀取歷史目錄。
+    directoryEntryReadFailed:
+      en: A history directory entry could not be read.
+      zh-CN: 无法读取某个历史目录项。
+      zh-HK: 無法讀取某個歷史目錄項目。
+    directoryScanLimitReached:
+      en: The history directory scan limit was reached.
+      zh-CN: 已达到历史目录扫描上限。
+      zh-HK: 已達到歷史目錄掃描上限。
+    manifestNotRegularFile:
+      en: A history manifest is not a regular file.
+      zh-CN: 某个历史清单不是普通文件。
+      zh-HK: 某個歷史資訊清單不是一般檔案。
+    manifestTooLarge:
+      en: A history manifest exceeds the size limit.
+      zh-CN: 某个历史清单超过大小限制。
+      zh-HK: 某個歷史資訊清單超過大小限制。
+    manifestReadFailed:
+      en: A history manifest could not be read.
+      zh-CN: 无法读取某个历史清单。
+      zh-HK: 無法讀取某個歷史資訊清單。
+    invalidManifest:
+      en: A history manifest is invalid.
+      zh-CN: 某个历史清单无效。
+      zh-HK: 某個歷史資訊清單無效。
+    repeatedSessionId:
+      en: A repeated session ID was skipped.
+      zh-CN: 已跳过重复的会话 ID。
+      zh-HK: 已略過重複的工作階段 ID。
+    journalMissing:
+      en: A history journal file is missing.
+      zh-CN: 某个历史日志文件缺失。
+      zh-HK: 某個歷史日誌檔案遺失。
+    journalRecoveryFailed:
+      en: A history journal could not be recovered.
+      zh-CN: 无法恢复某个历史日志。
+      zh-HK: 無法復原某個歷史日誌。
+    journalSessionMismatch:
+      en: A recovered journal belongs to another session.
+      zh-CN: 恢复的日志属于其他会话。
+      zh-HK: 復原的日誌屬於其他工作階段。
+    checkpointRejected:
+      en: A checkpoint was rejected during recovery.
+      zh-CN: 恢复期间拒绝了某个检查点。
+      zh-HK: 復原期間拒絕了某個檢查點。
+    truncatedLogTailRecovered:
+      en: A truncated log tail was discarded during recovery.
+      zh-CN: 恢复时已丢弃截断的日志尾部。
+      zh-HK: 復原時已捨棄截斷的日誌尾端。
+    historyLimitReached:
+      en: The history recovery limit was reached.
+      zh-CN: 已达到历史恢复上限。
+      zh-HK: 已達到歷史復原上限。

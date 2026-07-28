@@ -359,7 +359,27 @@ impl TerminalView {
         path_prompt_pending: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let controls = h_flex().flex_shrink_0().items_center().gap_1();
+        let history_available = self.operation_history_is_available(cx);
+        let history_open = self.operation_history_panel_is_open();
+        let controls =
+            h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .when(history_available, |controls| {
+                    controls.child(
+                        Button::new("terminal-operation-history-toggle")
+                            .icon(IconName::TerminalHistoryColor)
+                            .label(t!("TerminalOperationHistory.title"))
+                            .xsmall()
+                            .when(history_open, |button| button.primary())
+                            .when(!history_open, |button| button.ghost())
+                            .tooltip(t!("TerminalOperationHistory.tooltip"))
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.toggle_operation_history_panel(cx);
+                            })),
+                    )
+                });
         match status {
             status if status.can_start() => controls
                 .child(

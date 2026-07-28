@@ -200,6 +200,18 @@ impl TerminalView {
                 })
                 .into_any_element()
         };
+        let render_operation_history = self.should_render_operation_history(cx);
+        let primary_content_host = v_flex()
+            .debug_selector(|| "terminal-operation-history-host".to_string())
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .child(primary_content)
+            .when(render_operation_history, |host| {
+                host.child(self.render_operation_history_drawer(cx))
+            });
         v_flex()
             .debug_selector(|| "terminal-tool-dock-center".to_string())
             .flex_1()
@@ -207,7 +219,7 @@ impl TerminalView {
             .min_h_0()
             .min_w_0()
             .overflow_hidden()
-            .child(primary_content)
+            .child(primary_content_host)
             .child(self.render_terminal_session_footer(cx))
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))
