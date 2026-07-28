@@ -11,6 +11,7 @@ use crate::{
     input_cache::InputCache,
     render_context::{ActionDispatcher, RenderContext, RenderEnvironment},
     resolve_bindings_checked,
+    slider_cache::SliderCache,
 };
 
 #[derive(Clone)]
@@ -40,6 +41,7 @@ pub struct DeclarativeView {
     registry: ComponentRegistry,
     runtime: Entity<Runtime>,
     input_cache: InputCache,
+    slider_cache: SliderCache,
     last_patches: Vec<Patch>,
     diagnostics: Diagnostics,
     warnings: Vec<String>,
@@ -62,6 +64,7 @@ impl DeclarativeView {
             registry: config.registry,
             runtime: config.runtime,
             input_cache: InputCache::default(),
+            slider_cache: SliderCache::default(),
             last_patches: Vec::new(),
             diagnostics,
             warnings: Vec::new(),
@@ -127,6 +130,7 @@ impl DeclarativeView {
         debug_assert_eq!(next, resolution.root);
         self.rendered = next;
         self.input_cache.retain_live(&self.rendered);
+        self.slider_cache.retain_live(&self.rendered);
         self.last_patches = patches;
         Ok(())
     }
@@ -164,6 +168,7 @@ impl Render for DeclarativeView {
         let environment = RenderEnvironment {
             registry: &self.registry,
             input_cache: &mut self.input_cache,
+            slider_cache: &mut self.slider_cache,
             runtime: self.runtime.clone(),
             dispatcher,
             diagnostics: &mut self.diagnostics,

@@ -113,6 +113,87 @@ fn repeated_reconciliation_replaces_instead_of_accumulating_binding_warnings(
     });
 }
 
+#[test]
+fn component_bindings_target_native_attributes_without_destroying_labels() {
+    let template = parse_html(
+        r#"
+        <div>
+            <checkbox bind="notifications">Email alerts</checkbox>
+            <switch bind="auto_sync">Auto-sync metadata</switch>
+            <radio bind="beta_mode">Beta channel</radio>
+            <progress bind="completion"></progress>
+            <badge bind="save_count"><span>Saved</span></badge>
+            <pagination bind="page" total-pages="20"></pagination>
+            <rating bind="score"></rating>
+            <tabs bind="selected_tab">
+                <tab>Overview</tab>
+                <tab>Activity</tab>
+            </tabs>
+            <stepper bind="selected_step">
+                <stepper-item>Configure</stepper-item>
+                <stepper-item>Review</stepper-item>
+            </stepper>
+            <slider bind="volume" min="0" max="100" step="1"></slider>
+            <accordion bind="open_sections" multiple>
+                <accordion-item title="General">
+                    <span>General settings</span>
+                </accordion-item>
+                <accordion-item title="Advanced">Advanced settings</accordion-item>
+            </accordion>
+            <collapsible bind="details_open">
+                <span>Summary</span>
+                <collapsible-content>Details</collapsible-content>
+            </collapsible>
+            <span bind="status">stale fallback</span>
+        </div>
+        "#,
+    )
+    .expect("valid component bindings");
+    let mut state = StateStore::default();
+    state.set("notifications", "true");
+    state.set("auto_sync", "false");
+    state.set("beta_mode", "1");
+    state.set("completion", "72.5");
+    state.set("save_count", "4");
+    state.set("page", "7");
+    state.set("score", "3");
+    state.set("selected_tab", "1");
+    state.set("selected_step", "1");
+    state.set("volume", "35");
+    state.set("open_sections", "[0,1]");
+    state.set("details_open", "true");
+    state.set("status", "ready");
+
+    let resolution = resolve_bindings_checked(&template, &state);
+    assert!(resolution.diagnostics.is_empty());
+    let children = &resolution.root.element().expect("root div").children;
+
+    assert_eq!(Some("true"), element_attr(&children[0], "checked"));
+    assert_eq!("Email alerts", children[0].text_content());
+    assert_eq!(Some("false"), element_attr(&children[1], "checked"));
+    assert_eq!("Auto-sync metadata", children[1].text_content());
+    assert_eq!(Some("1"), element_attr(&children[2], "checked"));
+    assert_eq!("Beta channel", children[2].text_content());
+    assert_eq!(Some("72.5"), element_attr(&children[3], "value"));
+    assert_eq!(Some("4"), element_attr(&children[4], "count"));
+    assert_eq!("Saved", children[4].text_content());
+    assert_eq!(Some("7"), element_attr(&children[5], "current-page"));
+    assert_eq!(Some("3"), element_attr(&children[6], "value"));
+    assert_eq!(Some("1"), element_attr(&children[7], "selected-index"));
+    assert_eq!("OverviewActivity", children[7].text_content());
+    assert_eq!(Some("1"), element_attr(&children[8], "selected-index"));
+    assert_eq!("ConfigureReview", children[8].text_content());
+    assert_eq!(Some("35"), element_attr(&children[9], "value"));
+    assert_eq!(Some("[0,1]"), element_attr(&children[10], "open-indices"));
+    assert_eq!(
+        "General settingsAdvanced settings",
+        children[10].text_content()
+    );
+    assert_eq!(Some("true"), element_attr(&children[11], "open"));
+    assert_eq!("SummaryDetails", children[11].text_content());
+    assert_eq!("ready", children[12].text_content());
+}
+
 fn element_attr<'a>(node: &'a VNode, name: &str) -> Option<&'a str> {
     node.element().and_then(|element| element.attr(name))
 }

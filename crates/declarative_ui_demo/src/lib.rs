@@ -28,6 +28,9 @@ pub mod parser;
 mod render_context;
 mod renderer;
 pub mod runtime;
+mod slider_cache;
+#[cfg(test)]
+mod slider_cache_tests;
 mod stateful_nodes;
 pub mod tailwind;
 mod tailwind_style;

@@ -16,6 +16,7 @@ markup5ever_rcdom = "0.3.0"
 # Feature-unification shim for `gpui-component-assets`' `#[include = ...]` derive.
 rust-embed = { version = "8.7.2", features = ["include-exclude"] }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

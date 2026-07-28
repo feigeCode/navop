@@ -1,4 +1,4 @@
-use gpui::{FontWeight, Hsla, Styled, px, rgb};
+use gpui::{FontWeight, Hsla, Overflow, Styled, px, rgb};
 
 use crate::{ColorToken, TailwindModifier};
 
@@ -32,7 +32,8 @@ fn apply_modifier<E: Styled>(element: E, modifier: TailwindModifier) -> E {
         | TailwindModifier::SizeFull
         | TailwindModifier::MinWidthZero
         | TailwindModifier::MinHeightZero
-        | TailwindModifier::OverflowHidden => apply_size(element, modifier),
+        | TailwindModifier::OverflowHidden
+        | TailwindModifier::OverflowYScroll => apply_size(element, modifier),
         _ => apply_visual(element, modifier),
     }
 }
@@ -78,6 +79,11 @@ fn apply_size<E: Styled>(element: E, modifier: TailwindModifier) -> E {
         TailwindModifier::MinWidthZero => element.min_w_0(),
         TailwindModifier::MinHeightZero => element.min_h_0(),
         TailwindModifier::OverflowHidden => element.overflow_hidden(),
+        TailwindModifier::OverflowYScroll => {
+            let mut element = element;
+            element.style().overflow.y = Some(Overflow::Scroll);
+            element
+        }
         _ => element,
     }
 }

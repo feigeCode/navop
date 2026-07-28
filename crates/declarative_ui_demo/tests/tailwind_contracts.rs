@@ -51,3 +51,11 @@ fn modifiers_preserve_source_order_for_last_setter_wins_semantics() {
         parsed.modifiers
     );
 }
+
+#[test]
+fn vertical_scroll_overflow_is_allowlisted() {
+    let parsed = parse_classes(&["overflow-y-scroll".to_owned()]);
+
+    assert_eq!(vec![TailwindModifier::OverflowYScroll], parsed.modifiers);
+    assert!(parsed.unsupported.is_empty());
+}

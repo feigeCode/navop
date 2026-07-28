@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     Diagnostic, DiagnosticCode, DiagnosticPhase, Diagnostics, NodePath, RenderContext, VElement,
+    binding::binding_attribute,
 };
 
 const GLOBAL_ATTRIBUTES: &[&str] = &["id", "key"];
@@ -201,10 +202,13 @@ fn validate_attribute_values(element: &VElement, path: &NodePath, diagnostics: &
             ));
         }
     }
-    if element.attr("bind").is_some() && element.attr("value").is_some() {
+    if element.attr("bind").is_some()
+        && let Some(attribute) = binding_attribute(&element.tag)
+        && element.attr(attribute).is_some()
+    {
         diagnostics.push(compile_diagnostic(
             DiagnosticCode::ConflictingAttributes,
-            "`bind` and `value` cannot be declared together",
+            format!("`bind` and `{attribute}` cannot be declared together"),
             path,
         ));
     }

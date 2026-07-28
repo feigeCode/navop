@@ -57,8 +57,8 @@ impl<'a> BindingResolver<'a> {
 
     fn resolve_bound_element(&mut self, resolved: &mut VElement, key: &str, path: &NodePath) {
         let value = self.binding_value(key, path);
-        if is_input(&resolved.tag) {
-            resolved.attrs.insert("value".to_owned(), value);
+        if let Some(attribute) = binding_attribute(&resolved.tag) {
+            resolved.attrs.insert(attribute.to_owned(), value);
             resolved.children = self.resolve_children(&resolved.children, path);
         } else {
             resolved.children = vec![VNode::Text(value)];
@@ -89,6 +89,15 @@ impl<'a> BindingResolver<'a> {
     }
 }
 
-fn is_input(tag: &str) -> bool {
-    tag.eq_ignore_ascii_case("input") || tag.eq_ignore_ascii_case("textarea")
+pub(crate) fn binding_attribute(tag: &str) -> Option<&'static str> {
+    match tag.to_ascii_lowercase().as_str() {
+        "input" | "textarea" | "progress" | "rating" | "slider" => Some("value"),
+        "checkbox" | "switch" | "radio" => Some("checked"),
+        "badge" => Some("count"),
+        "pagination" => Some("current-page"),
+        "tabs" | "stepper" => Some("selected-index"),
+        "accordion" => Some("open-indices"),
+        "collapsible" => Some("open"),
+        _ => None,
+    }
 }

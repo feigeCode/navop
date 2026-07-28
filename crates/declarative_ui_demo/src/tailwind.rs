@@ -49,6 +49,7 @@ pub enum TailwindModifier {
     TextSize(u16),
     FontSemibold,
     OverflowHidden,
+    OverflowYScroll,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -96,6 +97,7 @@ fn parse_class(class: &str) -> Option<TailwindModifier> {
         "text-xl" => Some(TailwindModifier::TextSize(TEXT_EXTRA_LARGE_PX)),
         "font-semibold" => Some(TailwindModifier::FontSemibold),
         "overflow-hidden" => Some(TailwindModifier::OverflowHidden),
+        "overflow-y-scroll" => Some(TailwindModifier::OverflowYScroll),
         _ => parse_value_class(class).or_else(|| parse_color_class(class)),
     }
 }

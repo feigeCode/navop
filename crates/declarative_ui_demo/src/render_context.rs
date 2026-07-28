@@ -3,21 +3,27 @@ use std::{
     rc::Rc,
 };
 
-use gpui::{AnyElement, App, Entity, IntoElement, ParentElement, Styled, Window, div};
+use gpui::{
+    AnyElement, App, Entity, IntoElement, ParentElement, ScrollHandle, Styled, Window, div,
+};
 use gpui_component::input::InputState;
+use gpui_component::slider::SliderState;
 
 use crate::{
     ActionEvent, ComponentProps, ComponentRegistry, Diagnostic, DiagnosticCode, DiagnosticPhase,
     DiagnosticSeverity, Diagnostics, NodePath, Runtime, VElement, VNode, apply_modifiers,
     input_cache::{InputCache, InputEnvironment, InputRequest},
     parse_classes,
+    slider_cache::{SliderCache, SliderEnvironment, SliderRequest},
 };
 
 pub(crate) type ActionDispatcher = Rc<dyn Fn(ActionEvent, &mut App)>;
+pub(crate) type StateDispatcher = Rc<dyn Fn(String, String, &mut App)>;
 
 pub(crate) struct RenderEnvironment<'a> {
     pub(crate) registry: &'a ComponentRegistry,
     pub(crate) input_cache: &'a mut InputCache,
+    pub(crate) slider_cache: &'a mut SliderCache,
     pub(crate) runtime: Entity<Runtime>,
     pub(crate) dispatcher: ActionDispatcher,
     pub(crate) diagnostics: &'a mut Diagnostics,
@@ -29,6 +35,7 @@ pub(crate) struct RenderEnvironment<'a> {
 pub struct RenderContext<'a> {
     registry: &'a ComponentRegistry,
     input_cache: &'a mut InputCache,
+    slider_cache: &'a mut SliderCache,
     runtime: Entity<Runtime>,
     dispatcher: ActionDispatcher,
     diagnostics: &'a mut Diagnostics,
@@ -42,6 +49,7 @@ impl<'a> RenderContext<'a> {
         Self {
             registry: environment.registry,
             input_cache: environment.input_cache,
+            slider_cache: environment.slider_cache,
             runtime: environment.runtime,
             dispatcher: environment.dispatcher,
             diagnostics: environment.diagnostics,
@@ -61,6 +69,10 @@ impl<'a> RenderContext<'a> {
             .collect()
     }
 
+    pub(crate) fn render_child(&mut self, props: &ComponentProps, index: usize) -> AnyElement {
+        self.render_node(&props.element.children[index], &props.path.child(index))
+    }
+
     pub fn style<E: Styled>(&mut self, element: E, props: &ComponentProps) -> E {
         let parsed = parse_classes(&props.element.classes);
         self.record_unsupported_classes(props, &parsed.unsupported);
@@ -75,6 +87,19 @@ impl<'a> RenderContext<'a> {
         self.dispatcher.clone()
     }
 
+    pub(crate) fn runtime_entity(&self) -> Entity<Runtime> {
+        self.runtime.clone()
+    }
+
+    pub(crate) fn state_dispatcher(&self) -> StateDispatcher {
+        let runtime = self.runtime.clone();
+        Rc::new(move |key, value, cx| {
+            runtime.update(cx, |runtime, cx| {
+                runtime.set(key, value, cx);
+            });
+        })
+    }
+
     pub(crate) fn input_state(
         &mut self,
         props: &ComponentProps,
@@ -86,6 +111,25 @@ impl<'a> RenderContext<'a> {
             cx: self.cx,
         };
         self.input_cache.resolve(request, environment)
+    }
+
+    pub(crate) fn slider_state(&mut self, request: SliderRequest) -> Entity<SliderState> {
+        let environment = SliderEnvironment {
+            runtime: self.runtime.clone(),
+            dispatcher: self.dispatcher.clone(),
+            window: self.window,
+            cx: self.cx,
+        };
+        self.slider_cache.resolve(request, environment)
+    }
+
+    pub(crate) fn scroll_handle(&mut self, props: &ComponentProps) -> ScrollHandle {
+        self.window
+            .use_keyed_state(scroll_handle_state_key(props), self.cx, |_, _| {
+                ScrollHandle::default()
+            })
+            .read(self.cx)
+            .clone()
     }
 
     fn render_node(&mut self, node: &VNode, path: &NodePath) -> AnyElement {
@@ -153,6 +197,10 @@ impl<'a> RenderContext<'a> {
     }
 }
 
+fn scroll_handle_state_key(props: &ComponentProps) -> String {
+    format!("{}:scroll-handle", props.stable_id())
+}
+
 struct RenderFailure {
     severity: DiagnosticSeverity,
     code: DiagnosticCode,
@@ -201,5 +249,35 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
         message.clone()
     } else {
         "non-string panic payload".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::{ComponentProps, NodePath, VElement};
+
+    use super::scroll_handle_state_key;
+
+    #[test]
+    fn explicit_scroll_identity_keeps_handle_state_independent_of_tree_path() {
+        let element = VElement {
+            tag: "scroll".to_owned(),
+            attrs: BTreeMap::from([("id".to_owned(), "audit-log".to_owned())]),
+            classes: Vec::new(),
+            children: Vec::new(),
+        };
+        let root = ComponentProps::new(element.clone(), NodePath::root());
+        let nested = ComponentProps::new(element, NodePath(vec![4, 2]));
+
+        assert_eq!(
+            "scroll:audit-log:scroll-handle",
+            scroll_handle_state_key(&root)
+        );
+        assert_eq!(
+            scroll_handle_state_key(&root),
+            scroll_handle_state_key(&nested)
+        );
     }
 }
