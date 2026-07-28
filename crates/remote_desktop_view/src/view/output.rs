@@ -106,10 +106,10 @@ impl RemoteDesktopView {
             RemoteDesktopOutput::Terminated(message) => {
                 self.reset_session_state(Some(message), SessionResetReason::Terminated)
             }
-            RemoteDesktopOutput::CursorDefault => self.apply_cursor_default(),
-            RemoteDesktopOutput::CursorHidden => self.apply_cursor_hidden(),
-            RemoteDesktopOutput::CursorPosition { x, y } => self.apply_cursor_position(x, y),
-            RemoteDesktopOutput::CursorBitmap(cursor) => self.apply_cursor_bitmap(cursor),
+            output @ (RemoteDesktopOutput::CursorDefault
+            | RemoteDesktopOutput::CursorHidden
+            | RemoteDesktopOutput::CursorPosition { .. }
+            | RemoteDesktopOutput::CursorBitmap(_)) => self.apply_cursor_output(output),
             RemoteDesktopOutput::ClipboardText { text } => self.apply_remote_clipboard(text, cx),
             RemoteDesktopOutput::ClipboardFilesReady { transfer_id, paths } => {
                 self.apply_remote_clipboard_files(transfer_id, paths, window, cx)
@@ -149,6 +149,19 @@ impl RemoteDesktopView {
         self.pending_resize_size = None;
         self.pending_resize_updated_at = None;
         self.last_resize_sent_at = None;
+    }
+
+    fn apply_cursor_output(&mut self, output: RemoteDesktopOutput) {
+        if !should_apply_remote_cursor_output(self.options.protocol) {
+            return;
+        }
+        match output {
+            RemoteDesktopOutput::CursorDefault => self.apply_cursor_default(),
+            RemoteDesktopOutput::CursorHidden => self.apply_cursor_hidden(),
+            RemoteDesktopOutput::CursorPosition { x, y } => self.apply_cursor_position(x, y),
+            RemoteDesktopOutput::CursorBitmap(cursor) => self.apply_cursor_bitmap(cursor),
+            _ => unreachable!("apply_cursor_output only accepts cursor outputs"),
+        }
     }
 
     fn apply_cursor_default(&mut self) {
@@ -259,3 +272,11 @@ impl RemoteDesktopView {
         });
     }
 }
+
+fn should_apply_remote_cursor_output(protocol: RemoteDesktopProtocol) -> bool {
+    protocol == RemoteDesktopProtocol::Rdp
+}
+
+#[cfg(test)]
+#[path = "output_tests.rs"]
+mod tests;
