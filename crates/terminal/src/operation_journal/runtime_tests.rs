@@ -211,6 +211,73 @@ fn reconnect_marks_unfinished_operations_unknown_before_starting_the_new_generat
 }
 
 #[test]
+fn journal_snapshot_observes_prior_operations_and_generation_boundaries() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string("terminal_session_live_runtime_snapshot"),
+        OperationJournalScope::local(),
+        generation(1),
+        2_200,
+    )
+    .expect("spawn journal runtime");
+
+    let operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            Some(SensitiveOperationPayload::opaque(b"pending command".to_vec()).redact()),
+            2_210,
+            OperationJournalAttempt::sent(2_220),
+        )
+        .expect("accept sent operation");
+    runtime
+        .begin_generation(generation(2), 2_300)
+        .expect("accept reconnect generation");
+
+    let journal = runtime
+        .journal_snapshot(Duration::from_secs(5))
+        .expect("read live journal without shutting down");
+
+    assert_eq!(journal.generations().len(), 2);
+    assert!(journal.generations()[0].is_closed());
+    assert_eq!(
+        journal
+            .operation(&operation_id)
+            .expect("snapshot pre-reconnect operation")
+            .status(),
+        OperationStatus::Unknown
+    );
+    assert_eq!(journal.current_generation().id(), generation(2));
+    assert!(!journal.current_generation().is_closed());
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+}
+
+#[test]
+fn journal_snapshot_fails_conservatively_after_runtime_shutdown() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string("terminal_session_live_runtime_closed_snapshot"),
+        OperationJournalScope::local(),
+        generation(1),
+        2_400,
+    )
+    .expect("spawn journal runtime");
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+
+    assert_eq!(
+        runtime.journal_snapshot(Duration::from_secs(5)),
+        Err(OperationJournalRuntimeError::Closed)
+    );
+}
+
+#[test]
 fn bounded_queue_fails_closed_without_blocking_flush_or_shutdown() {
     let directory = tempfile::tempdir().expect("temp directory");
     let scope = OperationJournalScope::local();

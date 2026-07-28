@@ -52,9 +52,10 @@ use crate::history::{
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
 use crate::operation_journal::{
-    OperationGenerationId, OperationJournalAttempt, OperationJournalRuntime,
-    OperationJournalRuntimeConfig, OperationJournalRuntimeError, OperationJournalScope,
-    OperationJournalSessionId, OperationKind, SensitiveOperationPayload,
+    OperationGenerationId, OperationJournal, OperationJournalAttempt,
+    OperationJournalHistoryConfig, OperationJournalHistoryDiscovery, OperationJournalHistoryStore,
+    OperationJournalRuntime, OperationJournalRuntimeConfig, OperationJournalRuntimeError,
+    OperationJournalScope, OperationJournalSessionId, OperationKind, SensitiveOperationPayload,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::recording::{
@@ -1032,13 +1033,138 @@ fn operation_journal_generation(connection_generation: u64) -> OperationGenerati
         .expect("mapped operation journal generation must be non-zero")
 }
 
+/// Identifies the live terminal generation for an operation-history load.
+///
+/// Views can compare this key with a newly requested key before applying an
+/// asynchronous result, preventing an older reconnect generation from
+/// overwriting newer history state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalOperationHistoryRequestKey {
+    scope: OperationJournalScope,
+    session_id: OperationJournalSessionId,
+    connection_generation: u64,
+    generation_id: OperationGenerationId,
+}
+
+impl TerminalOperationHistoryRequestKey {
+    pub fn new(
+        scope: OperationJournalScope,
+        session_id: OperationJournalSessionId,
+        connection_generation: u64,
+    ) -> Self {
+        Self {
+            scope,
+            session_id,
+            connection_generation,
+            generation_id: operation_journal_generation(connection_generation),
+        }
+    }
+
+    pub fn scope(&self) -> &OperationJournalScope {
+        &self.scope
+    }
+
+    pub fn session_id(&self) -> &OperationJournalSessionId {
+        &self.session_id
+    }
+
+    /// Returns the exact connection epoch used for stale-result comparison.
+    ///
+    /// This remains distinct from `generation_id`: local generation zero and
+    /// the first remote generation both map to non-zero journal generation one.
+    pub fn connection_generation(&self) -> u64 {
+        self.connection_generation
+    }
+
+    pub fn generation_id(&self) -> OperationGenerationId {
+        self.generation_id
+    }
+}
+
+/// A synchronous, read-only operation-history load request.
+///
+/// `load` scans bounded journal files and must therefore be called from a
+/// background task by UI code. The returned journals contain only the
+/// persistence model's already-redacted payloads.
+#[derive(Clone)]
+pub struct TerminalOperationHistoryRequest {
+    key: TerminalOperationHistoryRequestKey,
+    history_store: OperationJournalHistoryStore,
+    runtime: Option<OperationJournalRuntime>,
+}
+
+impl TerminalOperationHistoryRequest {
+    pub fn key(&self) -> &TerminalOperationHistoryRequestKey {
+        &self.key
+    }
+
+    pub fn load(self, current_snapshot_timeout: Duration) -> TerminalOperationHistoryLoad {
+        let mut excluded_session_ids = Vec::new();
+        let (current_journal, current_journal_error) = match self.runtime {
+            Some(runtime) => match runtime.journal_snapshot(current_snapshot_timeout) {
+                Ok(journal) => {
+                    excluded_session_ids.push(self.key.session_id.clone());
+                    (Some(journal), None)
+                }
+                Err(error) => (None, Some(error)),
+            },
+            None => (None, None),
+        };
+        let recovered = self
+            .history_store
+            .discover(&self.key.scope, &excluded_session_ids);
+
+        TerminalOperationHistoryLoad {
+            key: self.key,
+            current_journal,
+            current_journal_error,
+            recovered,
+        }
+    }
+}
+
+/// Read-only history recovered for one generation-keyed request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalOperationHistoryLoad {
+    key: TerminalOperationHistoryRequestKey,
+    current_journal: Option<OperationJournal>,
+    current_journal_error: Option<OperationJournalRuntimeError>,
+    recovered: OperationJournalHistoryDiscovery,
+}
+
+impl TerminalOperationHistoryLoad {
+    pub fn key(&self) -> &TerminalOperationHistoryRequestKey {
+        &self.key
+    }
+
+    pub fn current_journal(&self) -> Option<&OperationJournal> {
+        self.current_journal.as_ref()
+    }
+
+    pub fn current_journal_error(&self) -> Option<&OperationJournalRuntimeError> {
+        self.current_journal_error.as_ref()
+    }
+
+    pub fn recovered(&self) -> &OperationJournalHistoryDiscovery {
+        &self.recovered
+    }
+}
+
 enum TerminalOperationInputRoute {
     Backend,
     ExternalHandle,
 }
 
+#[derive(Clone)]
+struct TerminalOperationHistoryContext {
+    store: OperationJournalHistoryStore,
+    scope: OperationJournalScope,
+    session_id: OperationJournalSessionId,
+}
+
 struct TerminalOperationJournal {
     runtime: Option<OperationJournalRuntime>,
+    history_context: Option<TerminalOperationHistoryContext>,
     last_timestamp: AtomicU64,
     sequence: StdMutex<()>,
     shutdown_started: AtomicBool,
@@ -1049,6 +1175,7 @@ impl TerminalOperationJournal {
     fn disabled() -> Self {
         Self {
             runtime: None,
+            history_context: None,
             last_timestamp: AtomicU64::new(0),
             sequence: StdMutex::new(()),
             shutdown_started: AtomicBool::new(false),
@@ -1067,6 +1194,27 @@ impl TerminalOperationJournal {
         let Some(data_dir) = one_core::app_dirs::data_dir() else {
             return Self::disabled();
         };
+        let root = data_dir.join(OPERATION_JOURNAL_DIRECTORY_NAME);
+        let store = match OperationJournalHistoryStore::new(
+            &root,
+            OperationJournalHistoryConfig::default(),
+        ) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "terminal operation journal history is unavailable; live terminal remains enabled"
+                );
+                return Self::disabled();
+            }
+        };
+        let session_id = OperationJournalSessionId::from_string(session_id);
+        let history_context = TerminalOperationHistoryContext {
+            store,
+            scope: scope.clone(),
+            session_id: session_id.clone(),
+        };
+        let started_at_unix_ms = current_operation_journal_timestamp();
         let shutdown_dispatcher = match operation_journal_shutdown_dispatcher() {
             Ok(shutdown_dispatcher) => shutdown_dispatcher,
             Err(error) => {
@@ -1074,29 +1222,40 @@ impl TerminalOperationJournal {
                     %error,
                     "terminal operation journal shutdown dispatcher is unavailable; live terminal remains enabled"
                 );
-                return Self::disabled();
+                return Self::history_only(started_at_unix_ms, history_context);
             }
         };
-        let started_at_unix_ms = current_operation_journal_timestamp();
         match OperationJournalRuntime::new(
-            OperationJournalRuntimeConfig::new(data_dir.join(OPERATION_JOURNAL_DIRECTORY_NAME)),
-            OperationJournalSessionId::from_string(session_id),
+            OperationJournalRuntimeConfig::new(root),
+            session_id,
             scope,
             operation_journal_generation(connection_generation),
             started_at_unix_ms,
         ) {
-            Ok(runtime) => Self::from_runtime_with_shutdown_dispatcher(
+            Ok(runtime) => Self::from_runtime_with_shutdown_dispatcher_and_history(
                 runtime,
                 started_at_unix_ms,
                 shutdown_dispatcher,
+                Some(history_context),
             ),
             Err(error) => {
                 tracing::warn!(
                     %error,
                     "terminal operation journal is unavailable; live terminal remains enabled"
                 );
-                Self::disabled()
+                Self::history_only(started_at_unix_ms, history_context)
             }
+        }
+    }
+
+    fn history_only(last_timestamp: u64, history_context: TerminalOperationHistoryContext) -> Self {
+        Self {
+            runtime: None,
+            history_context: Some(history_context),
+            last_timestamp: AtomicU64::new(last_timestamp),
+            sequence: StdMutex::new(()),
+            shutdown_started: AtomicBool::new(false),
+            shutdown_dispatcher: None,
         }
     }
 
@@ -1107,13 +1266,51 @@ impl TerminalOperationJournal {
         Self::from_runtime_with_shutdown_dispatcher(runtime, last_timestamp, shutdown_dispatcher)
     }
 
+    #[cfg(test)]
     fn from_runtime_with_shutdown_dispatcher(
         runtime: OperationJournalRuntime,
         last_timestamp: u64,
         shutdown_dispatcher: OperationJournalShutdownDispatcher,
     ) -> Self {
+        Self::from_runtime_with_shutdown_dispatcher_and_history(
+            runtime,
+            last_timestamp,
+            shutdown_dispatcher,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    fn from_runtime_with_history(
+        runtime: OperationJournalRuntime,
+        last_timestamp: u64,
+        store: OperationJournalHistoryStore,
+        scope: OperationJournalScope,
+        session_id: OperationJournalSessionId,
+    ) -> Self {
+        let shutdown_dispatcher = operation_journal_shutdown_dispatcher()
+            .expect("operation journal shutdown dispatcher should start in tests");
+        Self::from_runtime_with_shutdown_dispatcher_and_history(
+            runtime,
+            last_timestamp,
+            shutdown_dispatcher,
+            Some(TerminalOperationHistoryContext {
+                store,
+                scope,
+                session_id,
+            }),
+        )
+    }
+
+    fn from_runtime_with_shutdown_dispatcher_and_history(
+        runtime: OperationJournalRuntime,
+        last_timestamp: u64,
+        shutdown_dispatcher: OperationJournalShutdownDispatcher,
+        history_context: Option<TerminalOperationHistoryContext>,
+    ) -> Self {
         Self {
             runtime: Some(runtime),
+            history_context,
             last_timestamp: AtomicU64::new(last_timestamp),
             sequence: StdMutex::new(()),
             shutdown_started: AtomicBool::new(false),
@@ -1121,6 +1318,7 @@ impl TerminalOperationJournal {
         }
     }
 
+    #[cfg(test)]
     fn is_disabled(&self) -> bool {
         self.runtime.is_none()
     }
@@ -2651,6 +2849,28 @@ impl Terminal {
         self.is_recording_playback()
     }
 
+    /// Creates a read-only history request for the terminal's current
+    /// reconnect generation.
+    ///
+    /// The request performs bounded disk I/O when loaded, so callers in the UI
+    /// layer must execute `TerminalOperationHistoryRequest::load` on a
+    /// background executor.
+    pub fn operation_history_request(&self) -> Option<TerminalOperationHistoryRequest> {
+        if self.is_read_only() {
+            return None;
+        }
+        let context = self.operation_journal.history_context.as_ref()?;
+        Some(TerminalOperationHistoryRequest {
+            key: TerminalOperationHistoryRequestKey::new(
+                context.scope.clone(),
+                context.session_id.clone(),
+                self.connection_generation,
+            ),
+            history_store: context.store.clone(),
+            runtime: self.operation_journal.runtime.clone(),
+        })
+    }
+
     /// Returns a connection kind only when the surface owns live connection
     /// capabilities. Recording metadata must not be treated as a live SSH or
     /// serial session by Public MCP or other integrations.
@@ -3334,11 +3554,11 @@ mod tests {
     use super::{
         CommandRecordGate, ConnectionState, OperationJournalShutdownDispatcher,
         SshConnectionUpdate, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
-        TerminalMfaRequest, TerminalMfaResponder, TerminalOperationJournal, TerminalSessionMode,
-        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
-        clamp_operation_journal_timestamp, clear_screen_remote_redraw_bytes,
-        compose_ssh_init_commands, format_connection_error, is_reconnect_generation,
-        keyboard_interactive_answers_for_terminal, merge_history_matches,
+        TerminalMfaRequest, TerminalMfaResponder, TerminalOperationHistoryRequestKey,
+        TerminalOperationJournal, TerminalSessionMode, build_cd_command,
+        build_ssh_base_init_commands, build_ssh_init_commands, clamp_operation_journal_timestamp,
+        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, format_connection_error,
+        is_reconnect_generation, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
@@ -3347,10 +3567,11 @@ mod tests {
         parse_shell_history, push_history_entry,
     };
     use crate::operation_journal::{
-        OperationGenerationId, OperationJournalHistoryConfig, OperationJournalHistorySnapshot,
-        OperationJournalHistoryStore, OperationJournalRuntime, OperationJournalRuntimeConfig,
-        OperationJournalRuntimeHealth, OperationJournalScope, OperationJournalSessionId,
-        OperationKind, OperationPayloadFormat, OperationStatus,
+        OperationGenerationId, OperationJournalAttempt, OperationJournalHistoryConfig,
+        OperationJournalHistorySnapshot, OperationJournalHistoryStore, OperationJournalRuntime,
+        OperationJournalRuntimeConfig, OperationJournalRuntimeError, OperationJournalRuntimeHealth,
+        OperationJournalScope, OperationJournalSessionId, OperationKind, OperationPayloadFormat,
+        OperationStatus,
     };
     use crate::recording::{
         ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
@@ -4128,6 +4349,296 @@ mod tests {
     }
 
     #[test]
+    fn operation_history_request_combines_current_session_and_recovered_sessions() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let scope = OperationJournalScope::local();
+        let old_session_id =
+            OperationJournalSessionId::from_string("terminal_session_terminal_history_old");
+        let old_runtime = OperationJournalRuntime::new(
+            OperationJournalRuntimeConfig::new(directory.path()),
+            old_session_id.clone(),
+            scope.clone(),
+            operation_generation(1),
+            2_000,
+        )
+        .expect("spawn old operation journal runtime");
+        let old_operation_id = old_runtime
+            .record_attempt(
+                OperationKind::ApplicationOperation,
+                None,
+                None,
+                2_010,
+                OperationJournalAttempt::sent(2_020),
+            )
+            .expect("record old operation");
+        old_runtime
+            .shutdown(Duration::from_secs(5))
+            .expect("publish old operation history");
+
+        let current_session_id =
+            OperationJournalSessionId::from_string("terminal_session_terminal_history_current");
+        let current_runtime = OperationJournalRuntime::new(
+            OperationJournalRuntimeConfig::new(directory.path()),
+            current_session_id.clone(),
+            scope.clone(),
+            operation_generation(1),
+            3_000,
+        )
+        .expect("spawn current operation journal runtime");
+        let current_operation_id = current_runtime
+            .record_attempt(
+                OperationKind::ApplicationOperation,
+                None,
+                None,
+                3_010,
+                OperationJournalAttempt::sent(3_020),
+            )
+            .expect("record current operation");
+        current_runtime
+            .begin_generation(operation_generation(2), 3_100)
+            .expect("start current reconnect generation");
+
+        let store = OperationJournalHistoryStore::new(
+            directory.path(),
+            OperationJournalHistoryConfig::default(),
+        )
+        .expect("valid operation journal history store");
+        let mut terminal = test_terminal_with_recording_runtime(RecordingRuntime::new(
+            RecordingRuntimeConfig::default(),
+        ));
+        terminal.connection_generation = 2;
+        terminal.operation_journal = TerminalOperationJournal::from_runtime_with_history(
+            current_runtime.clone(),
+            3_100,
+            store,
+            scope.clone(),
+            current_session_id.clone(),
+        );
+
+        let request = terminal
+            .operation_history_request()
+            .expect("live terminal exposes a read-only history request");
+        assert_eq!(
+            request.key(),
+            &TerminalOperationHistoryRequestKey::new(scope, current_session_id.clone(), 2,)
+        );
+
+        let load = request.load(Duration::from_secs(5));
+        assert_eq!(
+            load.key().session_id(),
+            &current_session_id,
+            "load result must preserve its stale-result guard"
+        );
+        assert!(load.current_journal_error().is_none());
+        let current = load
+            .current_journal()
+            .expect("current session comes from the live FIFO snapshot");
+        assert_eq!(current.generations().len(), 2);
+        assert_eq!(current.current_generation().id(), operation_generation(2));
+        assert!(
+            current.operation(&current_operation_id).is_some(),
+            "live snapshot contains operations queued before the request"
+        );
+        assert_eq!(load.recovered().histories().len(), 1);
+        assert_eq!(
+            load.recovered().histories()[0].session_id(),
+            &old_session_id
+        );
+        assert!(
+            load.recovered().histories()[0]
+                .journal()
+                .operation(&old_operation_id)
+                .is_some()
+        );
+        assert!(
+            load.recovered()
+                .histories()
+                .iter()
+                .all(|history| history.session_id() != &current_session_id),
+            "a successful live snapshot excludes the current persisted session"
+        );
+
+        current_runtime
+            .shutdown(Duration::from_secs(5))
+            .expect("stop current operation journal runtime");
+    }
+
+    #[test]
+    fn operation_history_request_keys_change_across_reconnect_generations() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let scope = OperationJournalScope::local();
+        let session_id =
+            OperationJournalSessionId::from_string("terminal_session_terminal_history_key");
+        let runtime = OperationJournalRuntime::new(
+            OperationJournalRuntimeConfig::new(directory.path()),
+            session_id.clone(),
+            scope.clone(),
+            operation_generation(1),
+            4_000,
+        )
+        .expect("spawn operation journal runtime");
+        let store = OperationJournalHistoryStore::new(
+            directory.path(),
+            OperationJournalHistoryConfig::default(),
+        )
+        .expect("valid operation journal history store");
+        let mut terminal = test_terminal_with_recording_runtime(RecordingRuntime::new(
+            RecordingRuntimeConfig::default(),
+        ));
+        terminal.connection_generation = 1;
+        terminal.operation_journal = TerminalOperationJournal::from_runtime_with_history(
+            runtime.clone(),
+            4_000,
+            store,
+            scope,
+            session_id,
+        );
+
+        let first_key = terminal
+            .operation_history_request()
+            .expect("first history request")
+            .key()
+            .clone();
+        let generation = terminal.next_connection_generation();
+        terminal.begin_operation_journal_generation(generation);
+        let second_key = terminal
+            .operation_history_request()
+            .expect("reconnect history request")
+            .key()
+            .clone();
+
+        assert_eq!(first_key.generation_id(), operation_generation(1));
+        assert_eq!(second_key.generation_id(), operation_generation(2));
+        assert_ne!(first_key, second_key);
+
+        runtime
+            .shutdown(Duration::from_secs(5))
+            .expect("stop operation journal runtime");
+    }
+
+    #[test]
+    fn operation_history_request_keys_preserve_the_raw_connection_epoch() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let scope = OperationJournalScope::local();
+        let session_id =
+            OperationJournalSessionId::from_string("terminal_session_terminal_history_epoch");
+        let runtime = OperationJournalRuntime::new(
+            OperationJournalRuntimeConfig::new(directory.path()),
+            session_id.clone(),
+            scope.clone(),
+            operation_generation(1),
+            4_250,
+        )
+        .expect("spawn operation journal runtime");
+        let store = OperationJournalHistoryStore::new(
+            directory.path(),
+            OperationJournalHistoryConfig::default(),
+        )
+        .expect("valid operation journal history store");
+        let mut terminal = test_terminal_with_recording_runtime(RecordingRuntime::new(
+            RecordingRuntimeConfig::default(),
+        ));
+        terminal.connection_generation = 0;
+        terminal.operation_journal = TerminalOperationJournal::from_runtime_with_history(
+            runtime.clone(),
+            4_250,
+            store,
+            scope,
+            session_id,
+        );
+
+        let initial_key = terminal
+            .operation_history_request()
+            .expect("initial history request")
+            .key()
+            .clone();
+        terminal.connection_generation = 1;
+        let connected_key = terminal
+            .operation_history_request()
+            .expect("connected history request")
+            .key()
+            .clone();
+
+        assert_eq!(initial_key.generation_id(), operation_generation(1));
+        assert_eq!(connected_key.generation_id(), operation_generation(1));
+        assert_eq!(initial_key.connection_generation(), 0);
+        assert_eq!(connected_key.connection_generation(), 1);
+        assert_ne!(
+            initial_key, connected_key,
+            "request keys must not collapse distinct connection epochs that map to the same non-zero journal generation"
+        );
+
+        runtime
+            .shutdown(Duration::from_secs(5))
+            .expect("stop operation journal runtime");
+    }
+
+    #[test]
+    fn operation_history_request_recovers_current_session_when_live_snapshot_fails() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let scope = OperationJournalScope::local();
+        let session_id =
+            OperationJournalSessionId::from_string("terminal_session_terminal_history_fallback");
+        let runtime = OperationJournalRuntime::new(
+            OperationJournalRuntimeConfig::new(directory.path()),
+            session_id.clone(),
+            scope.clone(),
+            operation_generation(1),
+            4_500,
+        )
+        .expect("spawn operation journal runtime");
+        let operation_id = runtime
+            .record_attempt(
+                OperationKind::ApplicationOperation,
+                None,
+                None,
+                4_510,
+                OperationJournalAttempt::sent(4_520),
+            )
+            .expect("record current operation");
+        runtime
+            .shutdown(Duration::from_secs(5))
+            .expect("publish current operation history");
+
+        let store = OperationJournalHistoryStore::new(
+            directory.path(),
+            OperationJournalHistoryConfig::default(),
+        )
+        .expect("valid operation journal history store");
+        let mut terminal = test_terminal_with_recording_runtime(RecordingRuntime::new(
+            RecordingRuntimeConfig::default(),
+        ));
+        terminal.connection_generation = 1;
+        terminal.operation_journal = TerminalOperationJournal::from_runtime_with_history(
+            runtime,
+            4_500,
+            store,
+            scope,
+            session_id.clone(),
+        );
+
+        let load = terminal
+            .operation_history_request()
+            .expect("live terminal history request")
+            .load(Duration::from_secs(5));
+
+        assert!(load.current_journal().is_none());
+        assert_eq!(
+            load.current_journal_error(),
+            Some(&OperationJournalRuntimeError::Closed)
+        );
+        assert_eq!(load.recovered().histories().len(), 1);
+        assert_eq!(load.recovered().histories()[0].session_id(), &session_id);
+        assert!(
+            load.recovered().histories()[0]
+                .journal()
+                .operation(&operation_id)
+                .is_some(),
+            "snapshot failure must not exclude the current persisted session"
+        );
+    }
+
+    #[test]
     fn operation_journal_generation_waits_for_in_flight_routed_attempt() {
         let directory = tempfile::tempdir().expect("temp directory");
         let scope = OperationJournalScope::local();
@@ -4410,6 +4921,7 @@ mod tests {
         assert!(terminal.external_exec_handle().is_none());
         assert!(terminal.external_control_handle().is_none());
         assert!(terminal.operation_journal.is_disabled());
+        assert!(terminal.operation_history_request().is_none());
         assert!(!terminal.can_reconnect());
         assert_eq!(None, terminal.connection_id());
         assert_eq!(None, terminal.connection_name());

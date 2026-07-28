@@ -362,6 +362,27 @@ impl OperationJournalRuntime {
         receive_control_result(receiver, timeout)
     }
 
+    /// Returns a read-only clone of the live journal after all earlier queued
+    /// operations and generation boundaries have been applied.
+    pub fn journal_snapshot(
+        &self,
+        timeout: Duration,
+    ) -> Result<OperationJournal, OperationJournalRuntimeError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        match self
+            .core
+            .queue
+            .enqueue_control(ControlAction::Snapshot(sender), false)
+        {
+            Ok(()) => {}
+            Err(QueueEnqueueError::Full) => {
+                return Err(OperationJournalRuntimeError::ControlQueueFull);
+            }
+            Err(error) => return Err(error.into_runtime_error()),
+        }
+        receive_control_result(receiver, timeout)
+    }
+
     /// Stops accepting new operation data and waits at most `timeout` for all
     /// already accepted work to be durably published.
     pub fn shutdown(&self, timeout: Duration) -> Result<(), OperationJournalRuntimeError> {
@@ -530,10 +551,10 @@ fn queued_operation_cost(
         })
 }
 
-fn receive_control_result(
-    receiver: Receiver<Result<(), OperationJournalRuntimeError>>,
+fn receive_control_result<T>(
+    receiver: Receiver<Result<T, OperationJournalRuntimeError>>,
     timeout: Duration,
-) -> Result<(), OperationJournalRuntimeError> {
+) -> Result<T, OperationJournalRuntimeError> {
     receiver
         .recv_timeout(timeout)
         .unwrap_or_else(|error| match error {
@@ -859,6 +880,7 @@ enum ControlAction {
         started_at_unix_ms: u64,
     },
     Flush(SyncSender<Result<(), OperationJournalRuntimeError>>),
+    Snapshot(SyncSender<Result<OperationJournal, OperationJournalRuntimeError>>),
     Shutdown(SyncSender<Result<(), OperationJournalRuntimeError>>),
 }
 
@@ -866,6 +888,9 @@ impl ControlAction {
     fn fail(self, error: OperationJournalRuntimeError) {
         match self {
             Self::Flush(sender) | Self::Shutdown(sender) => {
+                let _ = sender.send(Err(error));
+            }
+            Self::Snapshot(sender) => {
                 let _ = sender.send(Err(error));
             }
             Self::BeginGeneration { .. } => {}
@@ -1037,6 +1062,10 @@ fn operation_journal_worker(
             }) => state.begin_generation(generation_id, started_at_unix_ms),
             QueueEntry::Control(ControlAction::Flush(sender)) => {
                 let _ = sender.send(Ok(()));
+                continue;
+            }
+            QueueEntry::Control(ControlAction::Snapshot(sender)) => {
+                let _ = sender.send(Ok(state.journal.clone()));
                 continue;
             }
             QueueEntry::Control(ControlAction::Shutdown(sender)) => {
