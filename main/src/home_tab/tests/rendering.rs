@@ -79,8 +79,10 @@ fn connection_render_uses_cached_team_permissions() {
     let list_item = include_str!("../connection_list.rs");
     let card = include_str!("../connection_card.rs");
 
-    assert!(list_item.contains("can_edit_connection_with_cached_teams"));
-    assert!(card.contains("can_edit_connection_with_cached_teams"));
+    assert!(list_item.contains("team_permissions"));
+    assert!(list_item.contains("can_edit_connection"));
+    assert!(card.contains("team_permissions"));
+    assert!(card.contains("can_edit_connection"));
     assert!(!list_item.contains("can_edit_connection(&conn, cx)"));
     assert!(!card.contains("can_edit_connection(&conn, cx)"));
 }

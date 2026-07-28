@@ -1,5 +1,16 @@
 use super::*;
 
+pub(crate) fn can_manage_connection_with_permissions(
+    connections: &[StoredConnection],
+    connection_id: i64,
+    permissions: &TeamPermissionSnapshot,
+) -> bool {
+    connections
+        .iter()
+        .find(|connection| connection.id == Some(connection_id))
+        .is_some_and(|connection| permissions.can_edit_connection(connection.team_id.as_deref()))
+}
+
 impl HomePage {
     pub(crate) fn can_move_connection(&self, connection_id: i64) -> bool {
         self.can_manage_connection(connection_id)
@@ -18,25 +29,21 @@ impl HomePage {
             .connections
             .iter()
             .find(|connection| connection.id == Some(connection_id))?;
-        can_edit_connection_with_cached_teams(
-            connection.team_id.as_deref(),
-            &self.team_options,
-            self.current_user.is_some(),
-        )
-        .then(|| ConnectionCredentialExportIdentity::from_connection(connection))
+        self.team_permissions
+            .can_edit_connection(connection.team_id.as_deref())
+            .then(|| ConnectionCredentialExportIdentity::from_connection(connection))
     }
 
     fn can_manage_connection(&self, connection_id: i64) -> bool {
-        self.connections
-            .iter()
-            .find(|connection| connection.id == Some(connection_id))
-            .is_some_and(|connection| {
-                can_edit_connection_with_cached_teams(
-                    connection.team_id.as_deref(),
-                    &self.team_options,
-                    self.current_user.is_some(),
-                )
-            })
+        can_manage_connection_with_permissions(
+            &self.connections,
+            connection_id,
+            &self.team_permissions,
+        )
+    }
+
+    pub(crate) fn cached_team_options(&self) -> &[TeamOption] {
+        self.team_permissions.teams()
     }
 
     pub(crate) fn move_connection_to_workspace(

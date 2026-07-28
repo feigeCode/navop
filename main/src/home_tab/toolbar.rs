@@ -27,7 +27,7 @@ impl HomePage {
         };
         let has_master_key = crypto::has_master_key();
         let show_team_key_menu_item = is_feature_enabled(Feature::TeamManagement, cx)
-            && should_show_team_key_menu_item(route, self.team_options.len());
+            && should_show_team_key_menu_item(route, self.team_permissions.teams().len());
         let personal_conflict_count = if route == HomeSyncRoute::Personal {
             crate::personal_sync_conflicts::current_personal_conflict_count(cx)
         } else {

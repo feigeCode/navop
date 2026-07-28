@@ -63,12 +63,9 @@ impl HomePage {
     }
 
     pub(super) fn load_team_options(&mut self, cx: &mut Context<Self>) {
-        let Some(user) = self.current_user.as_ref() else {
-            self.team_options.clear();
-            cx.notify();
+        let Some(requested_user_id) = self.team_permissions.user_id().map(str::to_owned) else {
             return;
         };
-        let requested_user_id = user.id.clone();
         let scope = CloudAccountScope::new(
             self.auth_service.cloud_client().environment_id(),
             requested_user_id.clone(),
@@ -81,13 +78,12 @@ impl HomePage {
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let teams = load_task.await;
             _ = this.update(cx, |this, cx| {
-                if this.current_user.as_ref().map(|user| user.id.as_str())
-                    != Some(requested_user_id.as_str())
+                if this
+                    .team_permissions
+                    .replace_teams_for(&requested_user_id, teams)
                 {
-                    return;
+                    cx.notify();
                 }
-                this.team_options = teams;
-                cx.notify();
             });
         })
         .detach();

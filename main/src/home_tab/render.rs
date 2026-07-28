@@ -34,13 +34,12 @@ impl Render for HomePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let global_user = GlobalCurrentUser::get_user(cx);
         if global_user.is_none() && self.current_user.is_some() {
-            self.current_user = None;
-            self.team_options.clear();
+            self.clear_authenticated_state();
         }
         // 检测会话过期：token 刷新失败时由回调设置静态标志，在此处响应
         if crate::auth::check_and_reset_session_expired() {
-            self.current_user = None;
-            self.team_options.clear();
+            self.clear_authenticated_state();
+            GlobalCurrentUser::set_user(None, cx);
             // 延迟弹出登录对话框，避免在 render 中直接修改窗口
             let view = cx.entity();
             window.defer(cx, move |window, cx| {

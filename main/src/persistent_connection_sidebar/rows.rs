@@ -182,7 +182,7 @@ impl PersistentConnectionSidebar {
         let selected = home.read(cx).selected_connection_id == Some(id);
         let can_drag = home.read(cx).can_move_connection(id);
         let team_indicator = connection.as_ref().and_then(|connection| {
-            connection_team_indicator(connection, &home.read(cx).team_options, cx)
+            connection_team_indicator(connection, home.read(cx).cached_team_options(), cx)
         });
         let icon = connection
             .as_ref()
