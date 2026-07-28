@@ -33,7 +33,7 @@ pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,
 };
 pub use theme::{
-    DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors,
+    DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors, TerminalTheme,
     available_monospace_fonts, default_font_fallbacks,
 };
 pub use view::{TerminalView, init, refresh_keybindings};

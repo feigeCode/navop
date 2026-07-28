@@ -60,6 +60,30 @@ Theme:
     en: Crimson
     zh-CN: 赤红
     zh-HK: 赤紅
+  slate:
+    en: Slate
+    zh-CN: 石板
+    zh-HK: 石板
+  aurora:
+    en: Aurora
+    zh-CN: 极光
+    zh-HK: 極光
+  orchid:
+    en: Orchid
+    zh-CN: 兰紫
+    zh-HK: 蘭紫
+  ember:
+    en: Ember
+    zh-CN: 余烬
+    zh-HK: 餘燼
+  sandstone:
+    en: Sandstone
+    zh-CN: 砂岩
+    zh-HK: 砂岩
+  frost:
+    en: Frost
+    zh-CN: 霜白
+    zh-HK: 霜白
 
 # 通用文本
 Common:
