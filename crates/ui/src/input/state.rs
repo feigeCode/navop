@@ -2307,6 +2307,100 @@ impl InputState {
         self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
     }
 
+    fn utf16_offset_to_byte_offset(text: &str, offset_utf16: usize, bias: Bias) -> usize {
+        if offset_utf16 == 0 {
+            return 0;
+        }
+
+        let mut current_utf16 = 0;
+        for (byte_offset, ch) in text.char_indices() {
+            let next_utf16 = current_utf16 + ch.len_utf16();
+            if offset_utf16 < next_utf16 {
+                return if bias == Bias::Left {
+                    byte_offset
+                } else {
+                    byte_offset + ch.len_utf8()
+                };
+            }
+            if offset_utf16 == next_utf16 {
+                return byte_offset + ch.len_utf8();
+            }
+            current_utf16 = next_utf16;
+        }
+
+        text.len()
+    }
+
+    fn relative_utf16_range_to_byte_range(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
+        let start_utf16 = range_utf16.start.min(range_utf16.end);
+        let end_utf16 = range_utf16.start.max(range_utf16.end);
+        let start = Self::utf16_offset_to_byte_offset(text, start_utf16, Bias::Left);
+        let end = Self::utf16_offset_to_byte_offset(text, end_utf16, Bias::Right);
+        start..end
+    }
+
+    fn absolute_range_from_relative_utf16(
+        base_start: usize,
+        text: &str,
+        range_utf16: &Range<usize>,
+    ) -> Range<usize> {
+        let relative = Self::relative_utf16_range_to_byte_range(text, range_utf16);
+        base_start.saturating_add(relative.start)..base_start.saturating_add(relative.end)
+    }
+
+    fn clip_byte_range(&self, range: Range<usize>) -> Range<usize> {
+        let start = range.start.min(range.end).min(self.text.len());
+        let end = range.start.max(range.end).min(self.text.len());
+        self.text.clip_offset(start, Bias::Left)..self.text.clip_offset(end, Bias::Right)
+    }
+
+    fn unmarked_replacement_range_from_utf16(
+        &self,
+        range_utf16: Option<&Range<usize>>,
+    ) -> Range<usize> {
+        range_utf16
+            .map(|range_utf16| self.clip_byte_range(self.range_from_utf16(range_utf16)))
+            .unwrap_or_else(|| self.clip_byte_range(self.selected_range.into()))
+    }
+
+    /// Resolve a `setMarkedText` replacement range to an absolute UTF-8 byte range.
+    ///
+    /// AppKit reports document-relative UTF-16 ranges when no composition is active, but once
+    /// marked text exists, subsequent composition ranges are relative to that marked text.
+    fn composition_replacement_range_from_utf16(
+        &self,
+        range_utf16: Option<&Range<usize>>,
+    ) -> Range<usize> {
+        if let Some(marked_range) = self.ime_marked_range {
+            let marked_range = self.clip_byte_range(marked_range.into());
+            return range_utf16
+                .map(|range_utf16| {
+                    let marked_text = self.text.slice(marked_range.clone()).to_string();
+                    Self::absolute_range_from_relative_utf16(
+                        marked_range.start,
+                        &marked_text,
+                        range_utf16,
+                    )
+                })
+                .unwrap_or(marked_range);
+        }
+
+        self.unmarked_replacement_range_from_utf16(range_utf16)
+    }
+
+    /// Resolve an `insertText` replacement range to an absolute UTF-8 byte range.
+    ///
+    /// Committing or deleting an active composition replaces the complete marked range. This also
+    /// accepts platforms that pass the marked document range back as an absolute UTF-16 range.
+    fn committed_replacement_range_from_utf16(
+        &self,
+        range_utf16: Option<&Range<usize>>,
+    ) -> Range<usize> {
+        self.ime_marked_range
+            .map(|range| self.clip_byte_range(range.into()))
+            .unwrap_or_else(|| self.unmarked_replacement_range_from_utf16(range_utf16))
+    }
+
     /// If offset falls on a hidden (folded) line, clamp backward to the end of
     /// the fold header line (last visible position before the fold).
     fn clamp_offset_to_visible_backward(&self, offset: usize) -> usize {
@@ -2606,6 +2700,112 @@ impl InputState {
         );
     }
 
+    fn dispatch_highlighter_work(
+        pending: super::mode::PendingHighlighterWork,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match pending {
+            super::mode::PendingHighlighterWork::Initialize(pending) => {
+                Self::dispatch_background_highlighter_initialization(pending, window, cx);
+            }
+            super::mode::PendingHighlighterWork::Parse(pending) => {
+                Self::dispatch_background_parse(pending, window, cx);
+            }
+        }
+    }
+
+    /// Build and initially parse a syntax highlighter away from the UI thread.
+    ///
+    /// `SyntaxHighlighter::new` may lazily read and compile a WASM grammar and
+    /// then construct several tree-sitter queries. Doing that from `render`
+    /// blocks the whole application, especially when a markdown document
+    /// mounts several code surfaces at once.
+    #[cfg(not(target_family = "wasm"))]
+    fn dispatch_background_highlighter_initialization(
+        pending: super::mode::PendingHighlighterInitialization,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let highlighter_rc = pending.highlighter;
+        let parse_task_rc = pending.parse_task;
+        let language = pending.language;
+        let text = pending.text;
+        let is_folding = pending.is_folding;
+        let initialized_highlighter = highlighter_rc.clone();
+
+        let task = cx.spawn_in(window, async move |entity, cx| {
+            let parsed_text = text.clone();
+            let initialized_language = language.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let started = std::time::Instant::now();
+                    let mut highlighter = crate::highlighter::SyntaxHighlighter::new(&language);
+                    highlighter.update(None, &text, None);
+                    let fold_ranges = if is_folding {
+                        highlighter
+                            .tree()
+                            .map(crate::input::display_map::extract_fold_ranges)
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                    tracing::debug!(
+                        language = %language,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "initialized syntax highlighter in background"
+                    );
+                    (highlighter, fold_ranges)
+                })
+                .await;
+
+            let (highlighter, fold_ranges) = result;
+            _ = entity.update(cx, |state, cx| {
+                let Some(current_highlighter) = state.mode.highlighter() else {
+                    return;
+                };
+                if !Rc::ptr_eq(current_highlighter, &initialized_highlighter) {
+                    return;
+                }
+                if state.text != parsed_text {
+                    // The buffer changed while initialization was running.
+                    // Leave this highlighter uninstalled so the next render
+                    // schedules a fresh job for the current text.
+                    state._pending_update = true;
+                    cx.notify();
+                    return;
+                }
+
+                *current_highlighter.borrow_mut() = Some(highlighter);
+                if is_folding {
+                    state.display_map.set_fold_candidates(fold_ranges);
+                }
+                tracing::debug!(
+                    language = %initialized_language,
+                    "installed background syntax highlighter"
+                );
+                cx.notify();
+            });
+        });
+
+        // Replacing the task cancels an obsolete initialization when the
+        // language or buffer changes before it finishes.
+        parse_task_rc.borrow_mut().replace(task);
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn dispatch_background_highlighter_initialization(
+        pending: super::mode::PendingHighlighterInitialization,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mut highlighter = crate::highlighter::SyntaxHighlighter::new(&pending.language);
+        highlighter.update(None, &pending.text, None);
+        *pending.highlighter.borrow_mut() = Some(highlighter);
+        cx.notify();
+    }
+
     /// Spawn a background parse after the synchronous parse timed out.
     ///
     /// Dropping the returned `Task` (stored in `parse_task`) cancels the
@@ -2802,14 +3002,7 @@ impl EntityInputHandler for InputState {
             self.pause_blink_cursor(cx);
         }
 
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.ime_marked_range.map(|range| {
-                let range = self.range_to_utf16(&(range.start..range.end));
-                self.range_from_utf16(&range)
-            }))
-            .unwrap_or(self.selected_range.into());
+        let range = self.committed_replacement_range_from_utf16(range_utf16.as_ref());
 
         let (actual_text, cursor_offset_back, skip_insert) = if self.auto_pair {
             InputState::apply_auto_pair(new_text, range.start, &self.text)
@@ -2863,7 +3056,7 @@ impl EntityInputHandler for InputState {
             self.mode
                 .update_highlighter(&range, &old_text, &self.text, &actual_text, true, cx);
         if let Some(bg) = bg {
-            Self::dispatch_background_parse(bg, window, cx);
+            Self::dispatch_highlighter_work(bg, window, cx);
         }
 
         self.update_fold_candidates_incremental(&range, &actual_text);
@@ -2897,14 +3090,7 @@ impl EntityInputHandler for InputState {
 
         self.lsp.reset();
 
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.ime_marked_range.map(|range| {
-                let range = self.range_to_utf16(&(range.start..range.end));
-                self.range_from_utf16(&range)
-            }))
-            .unwrap_or(self.selected_range.into());
+        let range = self.composition_replacement_range_from_utf16(range_utf16.as_ref());
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
@@ -2930,7 +3116,7 @@ impl EntityInputHandler for InputState {
             .mode
             .update_highlighter(&range, &old_text, &self.text, &new_text, true, cx);
         if let Some(bg) = bg {
-            Self::dispatch_background_parse(bg, window, cx);
+            Self::dispatch_highlighter_work(bg, window, cx);
         }
 
         self.update_fold_candidates_incremental(&range, new_text);
@@ -2940,13 +3126,15 @@ impl EntityInputHandler for InputState {
             self.selected_range = (range.start..range.start).into();
             self.ime_marked_range = None;
         } else {
-            self.ime_marked_range = Some((range.start..range.start + new_text.len()).into());
-            self.selected_range = new_selected_range_utf16
+            let marked_range = range.start..range.start + new_text.len();
+            self.ime_marked_range = Some(marked_range.clone().into());
+            let selected_range = new_selected_range_utf16
                 .as_ref()
-                .map(|range_utf16| self.range_from_utf16(range_utf16))
-                .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-                .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len())
-                .into();
+                .map(|range_utf16| {
+                    Self::absolute_range_from_relative_utf16(range.start, new_text, range_utf16)
+                })
+                .unwrap_or_else(|| marked_range.end..marked_range.end);
+            self.selected_range = self.clip_byte_range(selected_range).into();
         }
         self.mode.update_auto_grow(&self.display_map);
         self.history.start_grouping();
@@ -3047,7 +3235,7 @@ impl Render for InputState {
                 .mode
                 .update_highlighter(&(0..0), &self.text, &self.text, "", false, cx);
             if let Some(bg) = bg {
-                Self::dispatch_background_parse(bg, window, cx);
+                Self::dispatch_highlighter_work(bg, window, cx);
             }
 
             self.update_fold_candidates();
@@ -3072,7 +3260,8 @@ impl Render for InputState {
 mod tests {
     use super::*;
     use crate::theme::Theme;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{TestAppContext, VisualTestContext, canvas};
+    use std::cell::RefCell;
 
     /// Helper to create an InputState in a window for testing
     fn new_code_editor(cx: &mut TestAppContext) -> (Entity<InputState>, &mut VisualTestContext) {
@@ -3085,11 +3274,270 @@ mod tests {
         cx.add_window_view(|window, cx| InputState::new(window, cx).code_editor("sql"))
     }
 
+    fn new_detached_code_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputState>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            super::super::init(cx);
+        });
+        let cx = cx.add_empty_window();
+        let input =
+            cx.update(|window, cx| cx.new(|cx| InputState::new(window, cx).code_editor("sql")));
+        (input, cx)
+    }
+
     fn draw_input(cx: &mut VisualTestContext, input: &Entity<InputState>) {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(800.), px(240.)),
             |_, _| input.clone().into_any_element(),
+        );
+    }
+
+    fn assert_valid_utf8_range(text: &Rope, range: Range<usize>) {
+        assert!(range.start <= range.end, "range is reversed: {range:?}");
+        assert!(
+            range.end <= text.len(),
+            "range {range:?} exceeds text length {}",
+            text.len()
+        );
+        assert!(
+            text.is_char_boundary(range.start),
+            "range start {} is not a UTF-8 boundary in {:?}",
+            range.start,
+            text.to_string()
+        );
+        assert!(
+            text.is_char_boundary(range.end),
+            "range end {} is not a UTF-8 boundary in {:?}",
+            range.end,
+            text.to_string()
+        );
+    }
+
+    #[test]
+    fn ime_relative_utf16_range_clips_to_utf8_boundaries() {
+        assert_eq!(
+            InputState::relative_utf16_range_to_byte_range("数据解读", &(1..3)),
+            "数".len().."数据解".len()
+        );
+        assert_eq!(
+            InputState::relative_utf16_range_to_byte_range("🎉", &(1..1)),
+            0.."🎉".len()
+        );
+        assert_eq!(
+            InputState::relative_utf16_range_to_byte_range("你", &(0..usize::MAX)),
+            0.."你".len()
+        );
+    }
+
+    #[gpui::test]
+    fn ime_selection_is_relative_to_inserted_text_after_cjk_prefix(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("前后", window, cx);
+                state.set_selected_range("前".len().."前".len(), false, window, cx);
+
+                state.replace_and_mark_text_in_range(None, "n", Some(0..1), window, cx);
+
+                assert_eq!(state.text.to_string(), "前n后");
+                assert_eq!(
+                    state.ime_marked_range,
+                    Some(("前".len().."前n".len()).into())
+                );
+                assert_eq!(state.selected_range(), "前".len().."前n".len());
+                assert_eq!(state.selected_text_string(), "n");
+                assert_valid_utf8_range(&state.text, state.selected_range());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn ime_caret_stays_on_utf8_boundary_after_cjk_prefix(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("前后", window, cx);
+                state.set_selected_range("前".len().."前".len(), false, window, cx);
+
+                state.replace_and_mark_text_in_range(None, "n", Some(1..1), window, cx);
+
+                assert_eq!(state.text.to_string(), "前n后");
+                assert_eq!(state.selected_range(), "前n".len().."前n".len());
+                assert_valid_utf8_range(&state.text, state.selected_range());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn ime_updates_and_commits_marked_text_relative_to_existing_mark(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("前后", window, cx);
+                state.set_selected_range("前".len().."前".len(), false, window, cx);
+
+                state.replace_and_mark_text_in_range(None, "n", Some(1..1), window, cx);
+                state.replace_and_mark_text_in_range(Some(0..1), "ni", Some(2..2), window, cx);
+                assert_eq!(state.text.to_string(), "前ni后");
+                assert_eq!(
+                    state.ime_marked_range,
+                    Some(("前".len().."前ni".len()).into())
+                );
+                assert_eq!(state.selected_range(), "前ni".len().."前ni".len());
+                assert_valid_utf8_range(&state.text, state.selected_range());
+
+                state.replace_and_mark_text_in_range(Some(0..2), "你", Some(1..1), window, cx);
+                assert_eq!(state.text.to_string(), "前你后");
+                assert_eq!(
+                    state.ime_marked_range,
+                    Some(("前".len().."前你".len()).into())
+                );
+                assert_eq!(state.selected_range(), "前你".len().."前你".len());
+                assert_valid_utf8_range(&state.text, state.selected_range());
+
+                state.replace_text_in_range(Some(1..2), "好", window, cx);
+                assert_eq!(state.text.to_string(), "前好后");
+                assert_eq!(state.ime_marked_range, None);
+                assert_eq!(state.selected_range(), "前好".len().."前好".len());
+                assert_valid_utf8_range(&state.text, state.selected_range());
+                assert_eq!(state.selected_text_string(), "");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sibling_prepaint_sees_current_input_layout_on_first_frame(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("first line", window, cx);
+            });
+        });
+        assert!(cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state.last_layout.is_none() && state.last_bounds.is_none()
+            })
+        }));
+
+        let observed = Rc::new(RefCell::new(None));
+        let observed_in_overlay = observed.clone();
+        let input_in_surface = input.clone();
+        let input_in_overlay = input.clone();
+
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(800.), px(240.)),
+            move |_, _| {
+                div()
+                    .relative()
+                    .flex()
+                    .size_full()
+                    .child(input_in_surface)
+                    .child(
+                        canvas(
+                            move |_, _, cx| {
+                                *observed_in_overlay.borrow_mut() =
+                                    input_in_overlay.read(cx).range_to_bounds(&(0..0));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+            },
+        );
+
+        assert!(
+            observed.borrow().is_some(),
+            "a sibling overlay must see input geometry produced earlier in the same prepaint pass"
+        );
+    }
+
+    #[gpui::test]
+    fn sibling_prepaint_sees_current_input_layout_after_scroll(cx: &mut TestAppContext) {
+        let (input, cx) = new_detached_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let text = (0..40)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+        });
+        draw_input(cx, &input);
+
+        let marker_offset =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.text.line_start_offset(5)));
+        let before_scroll = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .range_to_bounds(&(marker_offset..marker_offset))
+                    .expect("marker line should be visible before scrolling")
+            })
+        });
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, _| {
+                state.scroll_handle.set_offset(point(px(0.), px(-60.)));
+            });
+        });
+
+        let observed = Rc::new(RefCell::new(None));
+        let observed_in_overlay = observed.clone();
+        let input_in_surface = input.clone();
+        let input_in_overlay = input.clone();
+
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(800.), px(240.)),
+            move |_, _| {
+                div()
+                    .relative()
+                    .flex()
+                    .size_full()
+                    .child(input_in_surface)
+                    .child(
+                        canvas(
+                            move |_, _, cx| {
+                                *observed_in_overlay.borrow_mut() = input_in_overlay
+                                    .read(cx)
+                                    .range_to_bounds(&(marker_offset..marker_offset));
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+            },
+        );
+
+        let after_scroll = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .range_to_bounds(&(marker_offset..marker_offset))
+                    .expect("marker line should remain visible after scrolling")
+            })
+        });
+        assert_ne!(
+            before_scroll, after_scroll,
+            "the test must move the marker geometry"
+        );
+        assert_eq!(
+            *observed.borrow(),
+            Some(after_scroll),
+            "a sibling overlay must not lag one frame behind the scrolled input"
         );
     }
 
@@ -3157,6 +3605,44 @@ mod tests {
                 assert_eq!(12, state.mode.max_rows());
             });
         });
+    }
+
+    #[gpui::test]
+    fn initial_syntax_highlighter_is_built_after_render_returns(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("SELECT 1;", window, cx);
+            });
+        });
+
+        draw_input(cx, &input);
+        let initialized_during_render = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state
+                    .mode
+                    .highlighter()
+                    .is_some_and(|highlighter| highlighter.borrow().is_some())
+            })
+        });
+        assert!(
+            !initialized_during_render,
+            "render must not synchronously construct a syntax highlighter"
+        );
+
+        cx.run_until_parked();
+        let highlighted_text = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                state.mode.highlighter().and_then(|highlighter| {
+                    highlighter
+                        .borrow()
+                        .as_ref()
+                        .map(|highlighter| highlighter.text().to_string())
+                })
+            })
+        });
+        assert_eq!(Some("SELECT 1;".to_owned()), highlighted_text);
     }
 
     #[gpui::test]

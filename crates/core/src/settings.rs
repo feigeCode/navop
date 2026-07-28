@@ -734,6 +734,8 @@ pub struct AppSettings {
     pub terminal_paste_image_upload: bool,
     #[serde(default = "default_true")]
     pub terminal_sync_path_with_terminal: bool,
+    #[serde(default = "default_terminal_theme")]
+    pub terminal_theme: String,
     #[serde(default)]
     pub terminal_cursor_blink: bool,
     #[serde(default = "default_true")]
@@ -798,6 +800,7 @@ pub struct AppSettings {
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 pub const DEFAULT_SQL_QUERY_MAX_ROWS: u32 = 1000;
+pub const DEFAULT_TERMINAL_THEME: &str = "application";
 
 fn default_font_family() -> String {
     "Arial".to_string()
@@ -1021,6 +1024,10 @@ fn default_terminal_scrollback_lines() -> usize {
     AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES
 }
 
+fn default_terminal_theme() -> String {
+    DEFAULT_TERMINAL_THEME.to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -1072,6 +1079,7 @@ impl Default for AppSettings {
             terminal_right_click_paste: false,
             terminal_paste_image_upload: default_true(),
             terminal_sync_path_with_terminal: true,
+            terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
@@ -1167,6 +1175,12 @@ impl AppSettings {
     pub fn normalize_terminal_settings(&mut self) {
         self.terminal_scrollback_lines =
             Self::normalize_terminal_scrollback_lines(self.terminal_scrollback_lines);
+        let terminal_theme = self.terminal_theme.trim();
+        self.terminal_theme = if terminal_theme.is_empty() {
+            default_terminal_theme()
+        } else {
+            terminal_theme.to_string()
+        };
     }
 
     pub fn effective_theme_mode(&self, system_mode: ThemeMode) -> ThemeMode {
@@ -1317,10 +1331,10 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AppSettings, CustomFont, HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM,
-        LargeTextCellEditorOpenMode, LocalTerminalProfileKind, LocalTerminalProfileSettings,
-        McpPermissionMode, McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode,
-        StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
+        AppSettings, CustomFont, DEFAULT_TERMINAL_THEME, HomeConnectionLayout, HomePageStyle,
+        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
+        LocalTerminalProfileSettings, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
+        RemoteFileOpenMode, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
         default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
         is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
@@ -1967,6 +1981,42 @@ mod tests {
         settings.terminal_scrollback_lines = 2_000_000;
         settings.normalize_terminal_settings();
         assert_eq!(1_000_000, settings.terminal_scrollback_lines);
+    }
+
+    #[test]
+    fn legacy_app_settings_receive_default_terminal_theme() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(DEFAULT_TERMINAL_THEME, settings.terminal_theme);
+    }
+
+    #[test]
+    fn terminal_theme_round_trip_preserves_independent_selection() {
+        let settings = AppSettings {
+            terminal_theme: "ocean".to_string(),
+            ..AppSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).expect("应序列化终端主题");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化终端主题");
+
+        assert_eq!("ocean", restored.terminal_theme);
+    }
+
+    #[test]
+    fn terminal_theme_normalization_trims_and_defaults_empty_values() {
+        let mut settings = AppSettings {
+            terminal_theme: "  ocean  ".to_string(),
+            ..AppSettings::default()
+        };
+
+        settings.normalize_terminal_settings();
+        assert_eq!("ocean", settings.terminal_theme);
+
+        settings.terminal_theme = "   ".to_string();
+        settings.normalize_terminal_settings();
+        assert_eq!(DEFAULT_TERMINAL_THEME, settings.terminal_theme);
     }
 
     #[test]

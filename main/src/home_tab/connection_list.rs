@@ -14,15 +14,13 @@ impl HomePage {
         let is_active = conn
             .id
             .is_some_and(|id| cx.global::<ActiveConnections>().is_active(id));
-        let can_edit = can_edit_connection_with_cached_teams(
-            conn.team_id.as_deref(),
-            &self.team_options,
-            self.current_user.is_some(),
-        );
+        let can_edit = self
+            .team_permissions
+            .can_edit_connection(conn.team_id.as_deref());
         let team_badge = if cfg!(feature = "screenshot-safe") {
             None
         } else {
-            connection_team_badge(conn.team_id.as_deref(), &self.team_options)
+            connection_team_badge(conn.team_id.as_deref(), self.team_permissions.teams())
         };
         let actions = self.render_connection_list_actions(&conn, can_edit, cx);
         let display_name = connection_display_name(&conn);

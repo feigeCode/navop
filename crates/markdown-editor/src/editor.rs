@@ -2,9 +2,7 @@ use crate::{
     MarkdownBlockRenderArtifact, MarkdownBlockRenderProvider, MarkdownEditorTheme,
     MarkdownProjection,
 };
-use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
-};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Window};
 use gpui_component::{VirtualListScrollHandle, input::InputState};
 use markdown_source::{
     PatchError, SourceEdit, SourceEditOrigin, SourceHistory, SourceMarkdownDocument,
@@ -19,12 +17,14 @@ mod operations;
 mod projection_styles;
 mod render;
 mod setup;
+mod surface;
 mod sync;
 mod table_operations;
 mod text_diff;
 mod types;
 use projection_styles::projection_highlights;
-use setup::{apply_projection_styles, create_input, create_property_input, subscribe_to_input};
+use setup::{apply_projection_styles, create_input, create_property_input};
+use surface::{MarkdownEditSurface, MarkdownSurfaceKey};
 use text_diff::{common_prefix, common_suffix};
 pub use types::{MarkdownEditorError, MarkdownEditorEvent};
 
@@ -40,8 +40,11 @@ pub struct MarkdownEditor {
     theme: MarkdownEditorTheme,
     dirty: bool,
     syncing_input: bool,
+    surfaces: HashMap<MarkdownSurfaceKey, MarkdownEditSurface>,
+    active_surface: Option<MarkdownSurfaceKey>,
+    empty_surface_range: std::ops::Range<usize>,
     source_mode_selection: SourceSelection,
-    pending_newline: Option<usize>,
+    pending_newline: Option<(MarkdownSurfaceKey, usize)>,
     block_scroll: VirtualListScrollHandle,
     document_scroll: ScrollHandle,
     block_render_provider: Option<MarkdownBlockRenderProvider>,
@@ -58,7 +61,6 @@ pub struct MarkdownEditor {
     pending_inline_math_renders: HashSet<String>,
     failed_inline_math_renders: HashSet<String>,
     measured_block_heights: HashMap<markdown_source::SourceNodeId, gpui::Pixels>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl MarkdownEditor {
@@ -69,13 +71,22 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> Result<Self, MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
+        Ok(Self::from_document(document, theme, window, cx))
+    }
+
+    pub fn from_document(
+        document: SourceMarkdownDocument,
+        theme: MarkdownEditorTheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let source_len = document.source.len();
         let projection = MarkdownProjection::build(&document, None);
         let input = create_input(&projection.text, window, cx);
         let image_alt_input = create_property_input(window, cx);
         let image_destination_input = create_property_input(window, cx);
         apply_projection_styles(&input, &projection, &theme, cx);
-        let subscriptions = subscribe_to_input(&input, window, cx);
-        Ok(Self {
+        let mut editor = Self {
             input,
             image_alt_input,
             image_destination_input,
@@ -87,6 +98,9 @@ impl MarkdownEditor {
             theme,
             dirty: false,
             syncing_input: false,
+            surfaces: HashMap::new(),
+            active_surface: None,
+            empty_surface_range: 0..source_len,
             source_mode_selection: SourceSelection::default(),
             pending_newline: None,
             block_scroll: VirtualListScrollHandle::new(),
@@ -103,8 +117,9 @@ impl MarkdownEditor {
             pending_inline_math_renders: HashSet::new(),
             failed_inline_math_renders: HashSet::new(),
             measured_block_heights: HashMap::new(),
-            _subscriptions: subscriptions,
-        })
+        };
+        editor.initialize_surfaces(window, cx);
+        editor
     }
 
     pub fn source(&self) -> &str {
@@ -210,7 +225,18 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<bool, PatchError> {
-        let Some(edit) = self.projection.edit_for_value(value) else {
+        let projection = self.projection.clone();
+        self.edit_value_with_projection(&projection, value, window, cx)
+    }
+
+    fn edit_value_with_projection(
+        &mut self,
+        projection: &MarkdownProjection,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, PatchError> {
+        let Some(edit) = projection.edit_for_value(value) else {
             return Ok(false);
         };
         let selection_before = self.source_selection(cx);
@@ -277,12 +303,24 @@ impl MarkdownEditor {
         cx: &mut Context<Self>,
     ) -> Result<(), MarkdownEditorError> {
         let document = SourceMarkdownDocument::parse(source.into())?;
+        window.blur();
         self.history = SourceHistory::new(document);
         self.reset_block_renders();
         self.active_block = None;
         self.active_table_cell = None;
+        self.active_surface = None;
+        self.empty_surface_range = 0..self.source().len();
+        self.pending_newline = None;
         self.dirty = false;
-        self.sync_projection(0, window, cx);
+        self.reconcile_surfaces(window, cx);
+        let _ = self.set_active_surface(MarkdownSurfaceKey::Empty);
+        self.collapse_surface_projection(
+            MarkdownSurfaceKey::Empty,
+            SourceSelection::default(),
+            window,
+            cx,
+        );
+        self.sync_image_property_inputs(window, cx);
         Ok(())
     }
 
@@ -294,7 +332,7 @@ impl MarkdownEditor {
         if self.theme != theme {
             self.theme = theme;
             self.reset_block_renders();
-            apply_projection_styles(&self.input, &self.projection, &self.theme, cx);
+            self.refresh_projection_highlights(cx);
             cx.notify();
         }
     }

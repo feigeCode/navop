@@ -1,8 +1,10 @@
-use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
+use remote_desktop::{
+    RemoteDesktopFailure, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
+};
 
 use super::{
     SessionResetReason, close_runtime_once, preserve_presented_frame_during_session_reset,
-    remote_desktop_error_message, remote_desktop_tab_title,
+    remote_desktop_failure, remote_desktop_tab_title,
 };
 
 #[test]
@@ -27,7 +29,7 @@ fn tab_title_uses_connection_name_and_duplicate_index() {
 }
 
 #[test]
-fn provider_version_error_message_is_localized_after_context() {
+fn provider_version_error_is_preserved_as_structured_failure_after_context() {
     let error = anyhow::Error::new(RemoteDesktopProviderVersionError {
         protocol: RemoteDesktopProtocol::Vnc,
         installed: "0.1.0".to_string(),
@@ -37,8 +39,25 @@ fn provider_version_error_message_is_localized_after_context() {
     .context("VNC remote desktop provider");
 
     assert_eq!(
-        "VNC provider version 0.1.0 is too old. Please update the provider to 0.1.1 or newer.",
-        remote_desktop_error_message(&error)
+        RemoteDesktopFailure::ProviderVersion {
+            protocol: RemoteDesktopProtocol::Vnc,
+            installed: "0.1.0".to_string(),
+            required: "0.1.1".to_string(),
+            invalid: false,
+        },
+        remote_desktop_failure(&error)
+    );
+}
+
+#[test]
+fn arbitrary_backend_error_becomes_a_safe_generic_failure() {
+    let error = anyhow::anyhow!(
+        "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP"
+    );
+
+    assert_eq!(
+        RemoteDesktopFailure::ConnectionFailed,
+        remote_desktop_failure(&error)
     );
 }
 

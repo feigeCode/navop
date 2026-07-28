@@ -2872,6 +2872,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "declarative-ui-demo"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "gpui-component-assets",
+ "gpui_platform",
+ "html5ever 0.27.0",
+ "markup5ever_rcdom",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6745,7 +6761,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "main"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "agent_runtime",
  "ai_chat_view",
@@ -6860,6 +6876,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "markdown-source",
+ "ropey",
  "rust-embed",
  "thiserror 2.0.18",
 ]
@@ -7527,13 +7544,17 @@ dependencies = [
  "dirs 6.0.0",
  "dunce",
  "extension-runtime",
+ "extension-wasm",
+ "extension_view",
  "futures",
  "gpui",
  "gpui-component",
+ "image",
  "markdown-editor",
  "markdown-source",
  "notify",
  "one-core",
+ "resvg",
  "ropey",
  "rust-i18n",
  "serde",

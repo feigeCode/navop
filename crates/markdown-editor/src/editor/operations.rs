@@ -1,7 +1,11 @@
+use super::surface::MarkdownSurfaceKey;
 use super::{MarkdownEditor, MarkdownEditorError};
 use gpui::{Context, ScrollStrategy, Window};
 use markdown_source::{BlockMoveDirection, SourceSelection, SourceTransaction, TableCellAddress};
 use markdown_source::{InlineFormat, ListFormat};
+use std::ops::Range;
+
+mod code_fence;
 
 impl MarkdownEditor {
     pub fn active_block(&self) -> Option<markdown_source::SourceNodeId> {
@@ -19,7 +23,7 @@ impl MarkdownEditor {
             self.activate_block(block.id, window, cx);
             return;
         }
-        self.input.update(cx, |input, cx| input.focus(window, cx));
+        let _ = self.focus_surface(self.active_surface_key(), window, cx);
     }
 
     pub fn activate_block(
@@ -49,15 +53,25 @@ impl MarkdownEditor {
             self.block_scroll
                 .scroll_to_item(block_index, ScrollStrategy::Center);
         }
-        self.input.update(cx, |input, cx| input.focus(window, cx));
-        true
+        self.focus_surface(self.active_surface_key(), window, cx)
     }
 
-    pub fn deactivate_block(&mut self, cx: &mut Context<Self>) {
-        if self.active_block.take().is_some() {
-            self.active_table_cell = None;
-            cx.notify();
+    pub fn deactivate_block(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = self.active_surface_key();
+        if key == MarkdownSurfaceKey::Empty
+            && self.active_block.is_none()
+            && self.active_table_cell.is_none()
+        {
+            return;
         }
+        let selection = self.surface_selection(key, cx).unwrap_or_default();
+        self.pending_newline = None;
+        self.collapse_surface_projection(key, selection, window, cx);
+        self.empty_surface_range = 0..self.history.document().source.len();
+        let _ = self.set_active_surface(MarkdownSurfaceKey::Empty);
+        self.collapse_surface_projection(MarkdownSurfaceKey::Empty, selection, window, cx);
+        window.blur();
+        cx.notify();
     }
 
     pub fn select_all(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -125,6 +139,17 @@ impl MarkdownEditor {
             .toggle_list_format(block_id, format)?;
         let cursor = transaction.edits[0].range.start + transaction.edits[0].replacement.len();
         self.apply_block_transaction(transaction, cursor, window, cx)
+    }
+
+    pub(super) fn toggle_task_marker(
+        &mut self,
+        source_range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, MarkdownEditorError> {
+        let selection = self.source_selection(cx);
+        let transaction = self.history.document().toggle_task_checked(source_range)?;
+        self.apply_editor_transaction(transaction, selection, window, cx)
     }
 
     pub fn duplicate_active_block(
@@ -214,7 +239,8 @@ impl MarkdownEditor {
             .history
             .document()
             .split_block(block_id, source_offset)?;
-        let cursor = source_offset + transaction.edits[0].replacement.len();
+        let edit = &transaction.edits[0];
+        let cursor = edit.range.start + edit.replacement.len();
         self.apply_block_transaction(transaction, cursor, window, cx)
     }
 

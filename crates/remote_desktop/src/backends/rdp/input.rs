@@ -1,5 +1,5 @@
 use super::reconnect::remember_reconnect_state;
-use super::transport::{BackendSignal, send_failure, write_request};
+use super::transport::{BackendSignal, write_request};
 use super::*;
 
 enum RemoteInputBatch {
@@ -28,14 +28,14 @@ pub(super) fn handle_backend_signals(
     while let Ok(signal) = signal_rx.try_recv() {
         match signal {
             BackendSignal::Connected => *was_connected = true,
-            BackendSignal::Disconnected(reason) => {
+            BackendSignal::Disconnected(disconnect) => {
                 close_helper(helper, stdin, output_tx, protocol);
-                return Some(reconnect_result(reason, false, *was_connected));
+                return Some(reconnect_result(disconnect, false, *was_connected));
             }
             BackendSignal::OutputEnded => {
                 close_helper(helper, stdin, output_tx, protocol);
                 return Some(reconnect_result(
-                    format!("{} helper output ended", protocol.label()),
+                    internal_disconnect(format!("{} helper output ended", protocol.label())),
                     false,
                     *was_connected,
                 ));
@@ -82,7 +82,7 @@ pub(super) fn handle_remote_input(
                     context.protocol,
                 );
                 return Some(reconnect_result(
-                    "manual reconnect".to_string(),
+                    internal_disconnect("manual reconnect".to_string()),
                     true,
                     was_connected,
                 ));
@@ -104,7 +104,11 @@ pub(super) fn handle_remote_input(
                         context.output_tx,
                         context.protocol,
                     );
-                    return Some(reconnect_result(reason, false, was_connected));
+                    return Some(reconnect_result(
+                        internal_disconnect(reason),
+                        false,
+                        was_connected,
+                    ));
                 }
             }
         }
@@ -174,25 +178,37 @@ pub(super) fn poll_helper_exit(
 ) -> Option<HelperRunResult> {
     match helper.try_wait() {
         Ok(Some(status)) => Some(reconnect_result(
-            format!("{} helper exited with {status}", protocol.label()),
+            internal_disconnect(format!("{} helper exited with {status}", protocol.label())),
             false,
             was_connected,
         )),
         Ok(None) => None,
         Err(error) => Some(reconnect_result(
-            format!("failed to poll {} helper: {error}", protocol.label()),
+            internal_disconnect(format!(
+                "failed to poll {} helper: {error}",
+                protocol.label()
+            )),
             false,
             was_connected,
         )),
     }
 }
 
-fn reconnect_result(reason: String, manual: bool, was_connected: bool) -> HelperRunResult {
+fn reconnect_result(
+    disconnect: HelperDisconnect,
+    manual: bool,
+    was_connected: bool,
+) -> HelperRunResult {
     HelperRunResult::Reconnect {
-        reason,
+        reason: disconnect.reason,
         manual,
         was_connected,
+        disconnect_kind: disconnect.kind,
     }
+}
+
+fn internal_disconnect(reason: String) -> HelperDisconnect {
+    HelperDisconnect { kind: None, reason }
 }
 
 fn close_helper(
@@ -203,9 +219,10 @@ fn close_helper(
 ) {
     let _ = write_request(stdin, &HelperRequest::Close, output_tx, protocol);
     if let Err(error) = helper.wait() {
-        send_failure(
-            output_tx,
-            &format!("failed to wait {} helper: {error}", protocol.label()),
+        tracing::warn!(
+            protocol = protocol.label(),
+            ?error,
+            "failed to wait for remote desktop helper"
         );
     }
 }

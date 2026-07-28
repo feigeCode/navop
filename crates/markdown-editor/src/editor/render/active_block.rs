@@ -1,22 +1,40 @@
 use super::{MARKDOWN_BODY_FONT_SIZE, MARKDOWN_BODY_LINE_HEIGHT, MarkdownEditor};
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Styled, prelude::FluentBuilder as _,
-    px,
+    Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
+    prelude::FluentBuilder as _, px,
 };
 use gpui_component::{ElementExt, StyledExt, input::Input, v_flex};
 use markdown_source::{SourceBlock, SourceBlockKind};
 
 impl MarkdownEditor {
-    pub(super) fn render_active_block(
+    /// Renders the one long-lived edit surface owned by this block.
+    ///
+    /// Focus only changes projection/caret state and the compatibility debug
+    /// selector. It must never select a different child tree: doing so would
+    /// discard InputState layout/focus state and make the block jump between
+    /// preview and editing metrics.
+    pub(super) fn render_block_edit_surface(
         &self,
         block: &SourceBlock,
+        records_block_height: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let key = MarkdownSurfaceKey::block(block.id);
+        let surface = self
+            .surface(key)
+            .expect("every non-table markdown block must own an edit surface");
+        let input = surface.input.clone();
+        let active = self.active_block == Some(block.id) && self.active_surface_key() == key;
         let editor = cx.entity();
+        let click_editor = editor.clone();
         let block_id = block.id;
         let heading = heading_level(block);
         let source_code = is_source_code(block);
         let list_gutter = super::list_marker_source::list_gutter_width(block);
+        let language_header = records_block_height
+            .then(|| self.render_code_language_header(block, cx))
+            .flatten();
         let content = gpui::div()
             .flex()
             .flex_col()
@@ -30,35 +48,62 @@ impl MarkdownEditor {
                     .text_color(self.theme.muted_foreground)
             })
             .relative()
+            .children(language_header)
             .child(
                 gpui::div()
-                    .debug_selector(|| "markdown-active-input-slot".to_owned())
+                    .id(("markdown-block-input-slot", block.id.0))
+                    .debug_selector(move || format!("markdown-block-input-slot-{}", block_id.0))
                     .flex()
                     .w_full()
                     .min_w_0()
-                    .child(self.active_input(heading)),
+                    .child(self.surface_input(&input, heading)),
             )
-            .children(self.active_inline_math_overlays())
+            .children(self.inline_math_overlays(key))
             .when_some(list_gutter, |this, gutter| {
                 this.pl(px(gutter))
-                    .child(self.active_list_marker_overlay(block))
+                    .child(self.list_marker_overlay(key, block, active, cx))
             });
         v_flex()
-            .id(("markdown-active-block", block.id.0))
-            .debug_selector(|| format!("markdown-active-block-{}", block.id.0))
+            .id(("markdown-edit-surface", block.id.0))
+            .debug_selector(move || {
+                if active {
+                    format!("markdown-active-block-{}", block_id.0)
+                } else {
+                    format!("markdown-preview-block-{}", block_id.0)
+                }
+            })
             .w_full()
             .min_w_0()
-            .on_prepaint(move |bounds, _, cx| {
-                editor.update(cx, |editor, cx| {
-                    editor.record_measured_block_height(block_id, bounds.size.height, cx);
+            .cursor_text()
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                click_editor.update(cx, |editor, cx| {
+                    if editor.active_block == Some(block_id) && editor.active_surface_key() == key {
+                        return;
+                    }
+                    if event.click_count == 1 && !event.modifiers.shift {
+                        editor.activate_surface_at_position(key, event.position, window, cx);
+                    } else {
+                        editor.focus_surface(key, window, cx);
+                    }
                 });
+            })
+            .when(records_block_height, |this| {
+                this.on_prepaint(move |bounds, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                        editor.record_measured_block_height(block_id, bounds.size.height, cx);
+                    });
+                })
             })
             .child(content)
             .into_any_element()
     }
 
-    fn active_input(&self, heading: Option<u8>) -> Input {
-        Input::new(&self.input)
+    pub(super) fn surface_input(
+        &self,
+        input: &gpui::Entity<gpui_component::input::InputState>,
+        heading: Option<u8>,
+    ) -> Input {
+        Input::new(input)
             .w_full()
             .h_auto()
             .bare()
@@ -95,7 +140,9 @@ fn heading_level(block: &SourceBlock) -> Option<u8> {
 fn is_source_code(block: &SourceBlock) -> bool {
     matches!(
         block.kind,
-        SourceBlockKind::CodeFence { .. } | SourceBlockKind::MathBlock { .. }
+        SourceBlockKind::CodeFence { .. }
+            | SourceBlockKind::MathBlock { .. }
+            | SourceBlockKind::Html
     )
 }
 

@@ -51,15 +51,36 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
 }
 
 #[test]
-fn remote_cursor_never_calls_gpui_paint_only_cursor_apis_from_output_callbacks() {
-    let output = include_str!("output.rs");
+fn local_pointer_move_keeps_the_remote_cursor_in_sync_without_native_cursor_side_effects() {
+    let input = include_str!("input.rs");
     let cursor = include_str!("cursor.rs");
-    let native_cursor = include_str!("../native_cursor.rs");
+    let lib = include_str!("../lib.rs");
+    let move_start = input
+        .find("pub(super) fn send_pointer_move")
+        .expect("pointer move handler");
+    let move_end = input[move_start..]
+        .find("pub(super) fn send_mouse_button")
+        .map(|offset| move_start + offset)
+        .expect("mouse button handler");
+    let pointer_move = &input[move_start..move_end];
+    let pointer_hover = pointer_move
+        .find("self.cursor.set_pointer_hovered(true);")
+        .expect("pointer input must mark the remote content as hovered");
+    let remote_size = pointer_move
+        .find("let Some((remote_width, remote_height)) = self.remote_size")
+        .expect("pointer move must require the remote size");
+    let cursor_position = pointer_move
+        .find("self.cursor.set_position(x, y);")
+        .expect("local pointer position must update the rendered cursor");
+    let remote_input = pointer_move
+        .find("self.send_input(RemoteDesktopInput::MouseMove { x, y });")
+        .expect("local pointer position must be sent to the remote session");
 
-    assert!(!output.contains("set_cursor_style"));
-    assert!(!cursor.contains("set_cursor_style"));
-    assert!(!native_cursor.contains("ShowCursor"));
-    assert!(native_cursor.contains("SetCursor"));
+    assert!(pointer_hover < remote_size);
+    assert!(cursor_position < remote_input);
+    assert!(!input.contains("refresh_native_cursor"));
+    assert!(!cursor.contains("native_cursor::"));
+    assert!(!lib.contains("mod native_cursor;"));
 }
 
 fn assert_parent_bounded_remote_desktop_content(source: &str) {
@@ -135,4 +156,17 @@ fn reconnect_status_uses_a_transient_notification_outside_tab_content() {
     assert!(notifications.contains(".autohide(true)"));
     assert!(!render.contains("show_status_overlay"));
     assert!(!render.contains("remote-desktop-status-overlay"));
+}
+
+#[test]
+fn session_takeover_notifies_the_user_and_requests_tab_close_without_reconnecting() {
+    let output = include_str!("output.rs");
+    let notifications = include_str!("notifications.rs");
+
+    assert!(output.contains("RemoteDesktopFailure::SessionTakenOver"));
+    assert!(output.contains("self.notify_session_taken_over(window, cx)"));
+    assert!(output.contains("cx.emit(TabContentEvent::CloseRequested)"));
+    assert!(notifications.contains("Notification::warning(message)"));
+    assert!(notifications.contains("RemoteDesktopSessionNotification"));
+    assert!(notifications.contains("localized_session_taken_over"));
 }

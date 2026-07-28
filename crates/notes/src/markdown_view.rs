@@ -5,15 +5,13 @@ use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyn
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
 use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
-use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
+use crate::{DocumentDescriptor, MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
 use markdown_editor::{MarkdownEditor, MarkdownEditorEvent};
 use markdown_source::SourceMarkdownDocument;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-const MARKDOWN_SAVE_DELAY: Duration = Duration::from_millis(700);
+const MARKDOWN_SAVE_INTERVAL: Duration = Duration::from_secs(2);
 
 impl NotesView {
     pub(crate) fn apply_source_mode_history(
@@ -64,24 +62,19 @@ impl NotesView {
                 .insert(document_id.clone(), mode);
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
+            let document = SourceMarkdownDocument::parse(snapshot.source.clone())?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let source_document = Arc::new(std::sync::Mutex::new(SourceMarkdownDocument::parse(
-                snapshot.source.clone(),
-            )?));
             let theme = markdown_editor_theme(self.resolved_editor_theme(cx));
-            let preview = cx.new(|cx| {
-                let mut editor = MarkdownEditor::new(snapshot.source.clone(), theme, window, cx)
-                    .expect("prevalidated Markdown must initialize the editor");
-                editor.set_block_render_provider(block_render_provider(cx), cx);
-                editor
+            let preview = cx.new({
+                let window = &mut *window;
+                move |cx| {
+                    let mut editor = MarkdownEditor::from_document(document, theme, window, cx);
+                    editor.set_block_render_provider(block_render_provider(cx), cx);
+                    editor
+                }
             });
-            let preview_subscription = subscribe_markdown_changes(
-                &preview,
-                &source_editor,
-                document_id.clone(),
-                window,
-                cx,
-            );
+            let preview_subscription =
+                subscribe_markdown_changes(&preview, document_id.clone(), window, cx);
             let source_subscription =
                 subscribe_source_changes(&source_editor, &preview, window, cx);
             let file_watcher = crate::markdown_watcher::watch_markdown_file(
@@ -97,12 +90,7 @@ impl NotesView {
                     store,
                     source_editor,
                     preview,
-                    source_document,
-                    save_generation: Default::default(),
-                    state: MarkdownSessionState {
-                        mode,
-                        ..MarkdownSessionState::default()
-                    },
+                    state: MarkdownSessionState::with_mode(mode),
                     _subscriptions: vec![preview_subscription, source_subscription],
                     _file_watcher: Some(file_watcher),
                 },
@@ -126,46 +114,176 @@ impl NotesView {
     pub(crate) fn markdown_source_changed(
         &mut self,
         document_id: &str,
-        source: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
-            return;
+        let save_mode = self.tree.markdown_save_mode;
+        let (schedule_epoch, sync_state_changed) = {
+            let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+                return;
+            };
+            let sync_state_changed =
+                !matches!(session.state.sync_state, MarkdownSyncState::SourceDirty);
+            session.state.source_changed();
+            (
+                session.state.save_mode_changed(save_mode),
+                sync_state_changed,
+            )
         };
-        let generation = session.state.source_changed();
-        if let Err(error) = replace_session_source(session, &source) {
-            session
-                .state
-                .source_save_failed(generation, error.to_string());
-            notify_operation_error(window, cx, error);
-            return;
+        if let Some(epoch) = schedule_epoch {
+            self.schedule_markdown_auto_save(document_id.to_owned(), epoch, window, cx);
         }
-        session.save_generation.store(generation, Ordering::Release);
-        let _ = session.state.begin_source_save(generation);
-        let store = session.store.clone();
-        let generation_token = session.save_generation.clone();
+        if sync_state_changed {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn schedule_markdown_auto_save(
+        &self,
+        document_id: String,
+        epoch: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let weak = cx.entity().downgrade();
         let window_handle = window.window_handle();
-        let id = document_id.to_owned();
         let executor = cx.background_executor().clone();
         let task = cx.background_spawn(async move {
-            executor.timer(MARKDOWN_SAVE_DELAY).await;
-            if generation_token.load(Ordering::Acquire) != generation {
-                return Ok(None);
-            }
-            store.save(&source).map(Some)
+            executor.timer(MARKDOWN_SAVE_INTERVAL).await;
         });
         cx.spawn(async move |_, cx: &mut AsyncApp| {
-            let result = task.await;
+            task.await;
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = weak.update(cx, |view, cx| {
-                    view.finish_markdown_save(&id, generation, result, window, cx)
+                    view.fire_markdown_auto_save(&document_id, epoch, window, cx)
                 });
             });
         })
         .detach();
+    }
+
+    fn fire_markdown_auto_save(
+        &mut self,
+        document_id: &str,
+        epoch: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((generation, source, store)) = self
+            .markdown_sessions
+            .get_mut(document_id)
+            .and_then(|session| {
+                let generation = session.state.begin_scheduled_source_save(epoch)?;
+                Some((
+                    generation,
+                    session.preview.read(cx).source().to_owned(),
+                    session.store.clone(),
+                ))
+            })
+        else {
+            return;
+        };
+        self.start_markdown_save(
+            document_id.to_owned(),
+            generation,
+            source,
+            store,
+            window,
+            cx,
+        );
         cx.notify();
+    }
+
+    pub(crate) fn save_markdown_document(
+        &mut self,
+        document_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((generation, source, store)) = self
+            .markdown_sessions
+            .get_mut(document_id)
+            .and_then(|session| {
+                let generation = session.state.begin_manual_source_save()?;
+                Some((
+                    generation,
+                    session.preview.read(cx).source().to_owned(),
+                    session.store.clone(),
+                ))
+            })
+        else {
+            return;
+        };
+        self.start_markdown_save(
+            document_id.to_owned(),
+            generation,
+            source,
+            store,
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
+    pub(crate) fn save_active_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document_id) = self.active_document_id.clone() else {
+            return;
+        };
+        self.save_markdown_document(&document_id, window, cx);
+    }
+
+    pub(crate) fn set_markdown_save_mode(
+        &mut self,
+        mode: MarkdownSaveMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tree.markdown_save_mode == mode {
+            return;
+        }
+        self.tree.markdown_save_mode = mode;
+        let scheduled = self
+            .markdown_sessions
+            .iter_mut()
+            .filter_map(|(document_id, session)| {
+                session
+                    .state
+                    .save_mode_changed(mode)
+                    .map(|epoch| (document_id.clone(), epoch))
+            })
+            .collect::<Vec<_>>();
+        if let Some(storage) = self.storage.as_ref()
+            && let Err(error) = storage.save_state(&self.tree.to_ui_state())
+        {
+            notify_operation_error(window, cx, error);
+        }
+        for (document_id, epoch) in scheduled {
+            self.schedule_markdown_auto_save(document_id, epoch, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn start_markdown_save(
+        &mut self,
+        document_id: String,
+        generation: u64,
+        source: String,
+        store: crate::markdown_file_store::MarkdownFileStore,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        let window_handle = window.window_handle();
+        let task = cx.background_spawn(async move { store.save(&source) });
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            let result = task.await;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    view.finish_markdown_save(&document_id, generation, result, window, cx)
+                });
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn toggle_markdown_mode(
@@ -178,8 +296,8 @@ impl NotesView {
         else {
             return;
         };
-        if let Some(source) = source_commit {
-            self.markdown_source_changed(&document_id, source, window, cx);
+        if source_commit.is_some() {
+            self.markdown_source_changed(&document_id, window, cx);
         }
         self.tree.markdown_view_modes.insert(document_id, mode);
         if let Some(storage) = self.storage.as_ref()
@@ -240,7 +358,7 @@ impl NotesView {
     pub(crate) fn markdown_has_blocking_state(&self) -> bool {
         self.markdown_sessions
             .values()
-            .any(|session| !matches!(session.state.sync_state, MarkdownSyncState::Clean))
+            .any(|session| session.state.has_unpersisted_changes())
     }
 
     pub(crate) fn remove_markdown_sessions_under(&mut self, path: &std::path::Path) {
@@ -258,38 +376,18 @@ impl NotesView {
     }
 }
 
-fn replace_session_source(session: &MarkdownSession, source: &str) -> anyhow::Result<()> {
-    let mut document = session
-        .source_document
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
-    *document = document.replace_source(source)?;
-    Ok(())
-}
-
 fn subscribe_markdown_changes(
     preview: &gpui::Entity<MarkdownEditor>,
-    source_editor: &gpui::Entity<gpui_component::input::InputState>,
     document_id: String,
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> gpui::Subscription {
-    let source_editor = source_editor.clone();
     cx.subscribe_in(
         preview,
         window,
         move |view, _, event: &MarkdownEditorEvent, window, cx| {
-            let MarkdownEditorEvent::Changed { source, .. } = event;
-            let source_mode = view
-                .markdown_sessions
-                .get(&document_id)
-                .is_some_and(|session| session.state.mode == MarkdownViewMode::Source);
-            if !source_mode {
-                source_editor.update(cx, |input, cx| {
-                    input.set_value(source.clone(), window, cx);
-                });
-            }
-            view.markdown_source_changed(&document_id, source.clone(), window, cx);
+            let MarkdownEditorEvent::Changed { .. } = event;
+            view.markdown_source_changed(&document_id, window, cx);
         },
     )
 }

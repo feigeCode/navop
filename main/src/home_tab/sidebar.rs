@@ -7,12 +7,6 @@ impl HomePage {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let global_user = GlobalCurrentUser::get_user(cx);
-        if global_user.is_none() && self.current_user.is_some() {
-            self.current_user = None;
-            self.team_options.clear();
-        }
-
         let collapsed = self.sidebar_collapsed;
         let sidebar_width = if collapsed {
             HOME_SIDEBAR_COLLAPSED_WIDTH

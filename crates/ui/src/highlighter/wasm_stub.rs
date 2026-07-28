@@ -301,4 +301,25 @@ impl LanguageRegistry {
     pub fn language(&self, name: &str) -> Option<LanguageConfig> {
         self.languages.lock().unwrap().get(name).cloned()
     }
+
+    /// Resolves a registered language name without attempting syntax parsing.
+    ///
+    /// The browser build does not load tree-sitter grammars, but callers still
+    /// need the same metadata lookup API as the native registry.
+    pub fn resolve_language_name(&self, identifier: &str) -> Option<String> {
+        let normalized = identifier
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
+        }
+
+        self.languages
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(name, _)| name.to_string().eq_ignore_ascii_case(&normalized))
+            .map(|(_, config)| config.name.to_string())
+    }
 }

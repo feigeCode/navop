@@ -34,7 +34,7 @@ fn marker_for_line(
     let indent = line.len().saturating_sub(line.trim_start().len());
     let trimmed = &line[indent..];
     ordered_sequences.retain(|level, _| *level <= indent);
-    let (length, kind) = marker_kind(trimmed, indent, ordered_sequences)?;
+    let (length, kind) = marker_kind(trimmed, line_start + indent, indent, ordered_sequences)?;
     Some(ListMarker {
         display_offset: display(line_start + indent + length),
         kind,
@@ -43,6 +43,7 @@ fn marker_for_line(
 
 fn marker_kind(
     line: &str,
+    marker_start: usize,
     indent: usize,
     ordered_sequences: &mut BTreeMap<usize, OrderedSequence>,
 ) -> Option<(usize, MarkerKind)> {
@@ -50,13 +51,27 @@ fn marker_kind(
         ordered_sequences.remove(&indent);
         let base = line.len() - rest.len();
         if let Some(content) = rest.strip_prefix("[ ] ") {
-            return Some((line.len() - content.len(), MarkerKind::Task(false)));
+            let state = marker_start + base + 1;
+            return Some((
+                line.len() - content.len(),
+                MarkerKind::Task {
+                    checked: false,
+                    source_range: state..state + 1,
+                },
+            ));
         }
         if let Some(content) = rest
             .strip_prefix("[x] ")
             .or_else(|| rest.strip_prefix("[X] "))
         {
-            return Some((line.len() - content.len(), MarkerKind::Task(true)));
+            let state = marker_start + base + 1;
+            return Some((
+                line.len() - content.len(),
+                MarkerKind::Task {
+                    checked: true,
+                    source_range: state..state + 1,
+                },
+            ));
         }
         return Some((base, MarkerKind::Text("•".to_owned())));
     }
@@ -139,7 +154,7 @@ mod tests {
             .into_iter()
             .map(|marker| match marker.kind {
                 MarkerKind::Text(text) => text,
-                MarkerKind::Task(_) => panic!("ordered marker must be text"),
+                MarkerKind::Task { .. } => panic!("ordered marker must be text"),
             })
             .collect::<Vec<_>>();
 
@@ -155,7 +170,7 @@ mod tests {
             .into_iter()
             .map(|marker| match marker.kind {
                 MarkerKind::Text(text) => text,
-                MarkerKind::Task(_) => panic!("ordered marker must be text"),
+                MarkerKind::Task { .. } => panic!("ordered marker must be text"),
             })
             .collect::<Vec<_>>();
 
@@ -173,7 +188,7 @@ mod tests {
             .into_iter()
             .map(|marker| match marker.kind {
                 MarkerKind::Text(text) => text,
-                MarkerKind::Task(_) => panic!("ordered marker must be text"),
+                MarkerKind::Task { .. } => panic!("ordered marker must be text"),
             })
             .collect::<Vec<_>>();
 
@@ -195,5 +210,19 @@ mod tests {
             vec![0, 6, 11],
             markers.iter().map(|m| m.display_offset).collect::<Vec<_>>()
         );
+        assert!(matches!(
+            &markers[1].kind,
+            MarkerKind::Task {
+                checked: false,
+                source_range
+            } if source_range == &(11..12)
+        ));
+        assert!(matches!(
+            &markers[2].kind,
+            MarkerKind::Task {
+                checked: true,
+                source_range
+            } if source_range == &(22..23)
+        ));
     }
 }

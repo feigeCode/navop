@@ -40,6 +40,7 @@ impl HomePage {
                 .placeholder(t!("Home.search_placeholder"))
                 .clean_on_escape()
         });
+        let persisted_user_id = load_auth_data().map(|(_, _, user_id, _)| user_id);
 
         // 订阅搜索输入变化
         let query_clone = search_query.clone();
@@ -88,12 +89,15 @@ impl HomePage {
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
             sidebar_collapsed: false,
-            team_options: Vec::new(),
+            team_permissions: TeamPermissionSnapshot::from_persisted_user_id(persisted_user_id),
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
             external_driver_registry: IpcDriverRegistry::empty(),
         };
+
+        // 使用持久化身份预载本地团队权限，不等待在线会话恢复。
+        page.load_team_options(cx);
 
         // 异步加载工作区
         page.load_workspaces(cx);

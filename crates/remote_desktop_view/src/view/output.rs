@@ -1,3 +1,4 @@
+use super::notifications::localized_failure_message;
 use super::*;
 use remote_desktop::RemoteDesktopCursor;
 
@@ -100,11 +101,16 @@ impl RemoteDesktopView {
                 self.notify_reconnecting(reconnect, window, cx);
             }
             RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
-            RemoteDesktopOutput::ConnectionFailure(message) => {
-                self.reset_session_state(Some(message), SessionResetReason::ConnectionFailure)
+            RemoteDesktopOutput::ConnectionFailure(failure) => {
+                self.apply_terminal_failure(
+                    failure,
+                    SessionResetReason::ConnectionFailure,
+                    window,
+                    cx,
+                );
             }
-            RemoteDesktopOutput::Terminated(message) => {
-                self.reset_session_state(Some(message), SessionResetReason::Terminated)
+            RemoteDesktopOutput::Terminated(failure) => {
+                self.apply_terminal_failure(failure, SessionResetReason::Terminated, window, cx);
             }
             output @ (RemoteDesktopOutput::CursorDefault
             | RemoteDesktopOutput::CursorHidden
@@ -126,6 +132,24 @@ impl RemoteDesktopView {
                 self.notify_clipboard_transfer_failed(window, cx);
             }
         }
+    }
+
+    fn apply_terminal_failure(
+        &mut self,
+        failure: RemoteDesktopFailure,
+        reason: SessionResetReason,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if failure == RemoteDesktopFailure::SessionTakenOver {
+            self.reset_session_state(None, SessionResetReason::Terminated);
+            self.notify_session_taken_over(window, cx);
+            cx.emit(TabContentEvent::CloseRequested);
+            return;
+        }
+
+        let message = localized_failure_message(&failure);
+        self.reset_session_state(Some(message), reason);
     }
 
     fn reset_session_state(&mut self, message: Option<String>, reason: SessionResetReason) {

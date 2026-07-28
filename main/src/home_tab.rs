@@ -28,8 +28,8 @@ use gpui_component::{
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict,
-    SyncEngine, TeamOption, UserInfo, can_edit_connection_with_cached_teams,
-    get_cached_team_display_options_for_scope, get_cached_team_options,
+    SyncEngine, TeamOption, UserInfo, get_cached_team_display_options_for_scope,
+    get_cached_team_options,
 };
 use one_core::config::{team_management_url_template, website_base_url};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
@@ -171,7 +171,7 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     sidebar_collapsed: bool,
-    pub(crate) team_options: Vec<TeamOption>,
+    team_permissions: TeamPermissionSnapshot,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
 }
@@ -224,6 +224,7 @@ mod modern_home_shortcuts;
 mod render;
 mod sidebar;
 mod sync_route;
+mod team_permissions;
 mod toolbar;
 mod workspace;
 mod workspace_filter;
@@ -231,6 +232,8 @@ mod workspace_filter;
 use connection_badge::ConnectionTeamBadge;
 pub(crate) use connection_badge::connection_team_badge;
 use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
+#[cfg(test)]
+pub(crate) use connection_grouping::can_manage_connection_with_permissions;
 use connection_info::{
     card_connection_info, connection_display_name, generate_duplicate_name,
     port_forwarding_connection_info,
@@ -244,6 +247,7 @@ use sync_route::{
     HomeSyncRoute, refreshed_pending_conflicts, should_auto_onet_cloud_sync,
     should_show_team_key_menu_item, sync_route,
 };
+pub(crate) use team_permissions::TeamPermissionSnapshot;
 
 #[cfg(test)]
 use connection_info::remote_desktop_connection_info;

@@ -12,10 +12,14 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
-        let Ok(snapshot) = session.store.load() else {
-            session.state.conflict();
-            cx.notify();
-            return;
+        let snapshot = match session.store.load_external_change() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return,
+            Err(_) => {
+                session.state.conflict();
+                cx.notify();
+                return;
+            }
         };
         if snapshot.source == session.preview.read(cx).source() {
             return;
@@ -92,21 +96,16 @@ impl NotesView {
             return;
         };
         let result = session.store.load().and_then(|snapshot| {
-            {
-                let mut document = session
-                    .source_document
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("Markdown source document lock is poisoned"))?;
-                *document = document.replace_source(snapshot.source.clone())?;
-            }
-            session.source_editor.update(cx, |input, cx| {
-                input.set_value(snapshot.source.clone(), window, cx);
-            });
+            let source = snapshot.source;
             session.preview.update(cx, |editor, cx| {
                 editor
-                    .replace_source(snapshot.source, window, cx)
+                    .replace_source(source.clone(), window, cx)
                     .map_err(anyhow::Error::from)
-            })
+            })?;
+            session.source_editor.update(cx, |input, cx| {
+                input.set_value(source, window, cx);
+            });
+            Ok(())
         });
         match result {
             Ok(()) => {
@@ -115,30 +114,5 @@ impl NotesView {
             }
             Err(error) => notify_operation_error(window, cx, error),
         }
-    }
-
-    /// Ids of documents whose local changes conflict with external
-    /// modifications or failed to save.
-    pub(crate) fn blocked_markdown_document_ids(&self) -> Vec<String> {
-        self.markdown_sessions
-            .iter()
-            .filter(|(_, session)| {
-                matches!(
-                    session.state.sync_state,
-                    MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)
-                )
-            })
-            .map(|(id, _)| id.clone())
-            .collect()
-    }
-
-    /// Discard local changes of every blocked session so the view can close.
-    pub(crate) fn discard_blocked_markdown_sessions(&mut self, cx: &mut Context<Self>) {
-        for id in self.blocked_markdown_document_ids() {
-            if let Some(session) = self.markdown_sessions.get_mut(&id) {
-                session.state.external_reloaded();
-            }
-        }
-        cx.notify();
     }
 }

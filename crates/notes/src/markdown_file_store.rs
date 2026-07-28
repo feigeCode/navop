@@ -65,6 +65,28 @@ impl MarkdownFileStore {
         Ok(snapshot)
     }
 
+    /// Load a watcher event only when the on-disk fingerprint differs from the
+    /// fingerprint already observed or written by this store.
+    ///
+    /// A local save can finish after the editor has already produced a newer
+    /// dirty revision. Its watcher event must not be mistaken for an external
+    /// edit merely because the current editor source is newer than the bytes
+    /// that were just written.
+    pub(crate) fn load_external_change(&self) -> Result<Option<MarkdownSnapshot>> {
+        let mut state = self.state()?;
+        let path = state.path.clone();
+        let snapshot = snapshot(
+            &path,
+            fs::read_to_string(&path)
+                .with_context(|| format!("read Markdown {}", path.display()))?,
+        )?;
+        if state.fingerprint.as_ref() == Some(&snapshot.fingerprint) {
+            return Ok(None);
+        }
+        state.fingerprint = Some(snapshot.fingerprint.clone());
+        Ok(Some(snapshot))
+    }
+
     pub(crate) fn save(&self, source: &str) -> Result<MarkdownSaveOutcome> {
         let mut state = self.state()?;
         let path = state.path.clone();

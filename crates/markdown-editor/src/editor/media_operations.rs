@@ -1,4 +1,5 @@
 use super::{MarkdownEditor, MarkdownEditorError};
+use super::surface::MarkdownSurfaceKey;
 use gpui::{Context, Pixels, Point, Window};
 use markdown_source::{SourceSelection, TableCellAddress};
 
@@ -13,8 +14,7 @@ impl MarkdownEditor {
             return false;
         };
         self.sync_table_cell(address, cell.content_range.end, window, cx);
-        self.input.update(cx, |input, cx| input.focus(window, cx));
-        true
+        self.focus_surface(MarkdownSurfaceKey::table_cell(address), window, cx)
     }
 
     pub fn activate_table_cell_at(
@@ -24,23 +24,15 @@ impl MarkdownEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.activate_table_cell(address, window, cx) {
+        if self.history.document().table_cell(address).is_err() {
             return false;
         }
-        cx.defer_in(window, move |editor, window, cx| {
-            if editor.active_table_cell != Some(address) {
-                return;
-            }
-            let offset = editor
-                .input
-                .read(cx)
-                .offset_for_position(position)
-                .unwrap_or_else(|| editor.input.read(cx).value().len());
-            editor.input.update(cx, |input, cx| {
-                input.set_selected_range(offset..offset, false, window, cx);
-            });
-        });
-        true
+        self.activate_surface_at_position(
+            MarkdownSurfaceKey::table_cell(address),
+            position,
+            window,
+            cx,
+        )
     }
 
     pub fn delete_active_image(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {

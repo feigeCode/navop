@@ -24,11 +24,11 @@ fn converts_helper_connected_event_to_protocol_capabilities() {
         .expect("event converts");
 
         assert_eq!(
-            RemoteDesktopOutput::Connected {
+            Some(RemoteDesktopOutput::Connected {
                 width: 1280,
                 height: 720,
                 capabilities,
-            },
+            }),
             output
         );
     }
@@ -45,9 +45,9 @@ fn converts_helper_clipboard_text_event_to_output() {
     .expect("event converts");
 
     assert_eq!(
-        RemoteDesktopOutput::ClipboardText {
+        Some(RemoteDesktopOutput::ClipboardText {
             text: "remote 中文".to_string()
-        },
+        }),
         output
     );
 }
@@ -55,20 +55,26 @@ fn converts_helper_clipboard_text_event_to_output() {
 #[test]
 fn helper_events_identify_disconnect_signals() {
     assert_eq!(
-        Some("network".to_string()),
-        helper_disconnect_message(&HelperEvent::ConnectionFailure {
+        Some(HelperDisconnect {
+            kind: Some(HelperDisconnectKind::ConnectionFailure),
+            reason: "network".to_string(),
+        }),
+        helper_disconnect(&HelperEvent::ConnectionFailure {
             message: "network".to_string(),
         })
     );
     assert_eq!(
-        Some("closed".to_string()),
-        helper_disconnect_message(&HelperEvent::Terminated {
+        Some(HelperDisconnect {
+            kind: Some(HelperDisconnectKind::Terminated),
+            reason: "closed".to_string(),
+        }),
+        helper_disconnect(&HelperEvent::Terminated {
             message: "closed".to_string(),
         })
     );
     assert_eq!(
         None,
-        helper_disconnect_message(&HelperEvent::Connected {
+        helper_disconnect(&HelperEvent::Connected {
             width: 1,
             height: 1
         })
@@ -106,10 +112,44 @@ fn converts_helper_reconnect_reasons_to_structured_outputs() {
             delay_secs,
         };
 
-        assert_eq!(None, helper_disconnect_message(&event));
+        assert_eq!(None, helper_disconnect(&event));
         assert_eq!(
-            RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect { reason, delay_secs }),
+            Some(RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
+                reason,
+                delay_secs
+            })),
             helper_event_to_output(event, RemoteDesktopProtocol::Rdp).expect("event converts")
         );
     }
+}
+
+#[test]
+fn terminal_helper_events_do_not_create_user_visible_outputs() {
+    for event in [
+        HelperEvent::ConnectionFailure {
+            message: "[CredSSP @ /Users/runner/connector.rs:107] CredSSP".to_string(),
+        },
+        HelperEvent::Terminated {
+            message: "Another user connected to the server".to_string(),
+        },
+    ] {
+        assert_eq!(
+            None,
+            helper_event_to_output(event, RemoteDesktopProtocol::Rdp).expect("event converts")
+        );
+    }
+}
+
+#[test]
+fn helper_status_diagnostics_do_not_create_user_visible_outputs() {
+    let event = HelperEvent::Status {
+        message:
+            "[CredSSP @ /Users/runner/.cargo/git/checkouts/ironrdp/src/connector.rs:107] CredSSP"
+                .to_string(),
+    };
+
+    assert_eq!(
+        None,
+        helper_event_to_output(event, RemoteDesktopProtocol::Rdp).expect("event converts")
+    );
 }

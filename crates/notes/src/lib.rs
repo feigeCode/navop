@@ -14,6 +14,7 @@ mod markdown_watcher;
 mod model;
 mod notes_actions;
 mod notes_close;
+mod notes_export;
 mod notes_notifications;
 mod notes_render;
 mod notes_setup;
@@ -31,8 +32,8 @@ mod tree_state;
 mod storage_tests;
 
 pub use model::{
-    DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, MarkdownViewMode, NodeKind,
-    NotebookMetadata, NotebookUiState,
+    DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, MarkdownSaveMode,
+    MarkdownViewMode, NodeKind, NotebookMetadata, NotebookUiState,
 };
 pub use notes_view::{NotesView, NotesViewEvent};
 pub use path_policy::validate_node_name;

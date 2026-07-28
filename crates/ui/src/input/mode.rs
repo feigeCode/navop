@@ -19,6 +19,20 @@ pub(super) struct PendingBackgroundParse {
     pub is_folding: bool,
 }
 
+#[allow(dead_code)]
+pub(super) struct PendingHighlighterInitialization {
+    pub highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
+    pub parse_task: Rc<RefCell<Option<Task<()>>>>,
+    pub language: SharedString,
+    pub text: Rope,
+    pub is_folding: bool,
+}
+
+pub(super) enum PendingHighlighterWork {
+    Initialize(PendingHighlighterInitialization),
+    Parse(PendingBackgroundParse),
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct AutoGrowBounds {
     min_rows: usize,
@@ -272,9 +286,14 @@ impl InputMode {
 
     /// Update the syntax highlighter with new text.
     ///
-    /// Returns `Some(PendingBackgroundParse)` when the synchronous parse
-    /// timed out and the caller should dispatch a background parse.
-    /// Returns `None` when parsing completed (or no highlighter is active).
+    /// Highlighter construction can read and compile a lazy WASM grammar, build
+    /// tree-sitter queries and create a parser. None of that work belongs on
+    /// the UI thread, so an uninitialized code editor always returns an
+    /// initialization job for the caller to dispatch in the background.
+    ///
+    /// Once initialized, this returns a parse job only when the short
+    /// synchronous incremental-parse budget is exhausted. It returns `None`
+    /// when parsing completed (or no highlighter is active).
     pub(super) fn update_highlighter(
         &mut self,
         selected_range: &Range<usize>,
@@ -283,7 +302,7 @@ impl InputMode {
         change_text: &str,
         force: bool,
         cx: &mut App,
-    ) -> Option<PendingBackgroundParse> {
+    ) -> Option<PendingHighlighterWork> {
         match &self {
             InputMode::CodeEditor {
                 language,
@@ -298,8 +317,15 @@ impl InputMode {
 
                 let mut highlighter_ref = highlighter.borrow_mut();
                 if highlighter_ref.is_none() {
-                    let new_highlighter = SyntaxHighlighter::new(language);
-                    highlighter_ref.replace(new_highlighter);
+                    return Some(PendingHighlighterWork::Initialize(
+                        PendingHighlighterInitialization {
+                            language: language.clone(),
+                            text: new_text.clone(),
+                            highlighter: highlighter.clone(),
+                            parse_task: parse_task.clone(),
+                            is_folding: *folding,
+                        },
+                    ));
                 }
 
                 let Some(h) = highlighter_ref.as_mut() else {
@@ -324,7 +350,7 @@ impl InputMode {
                         is_folding: *folding,
                     };
                     drop(highlighter_ref);
-                    Some(pending)
+                    Some(PendingHighlighterWork::Parse(pending))
                 }
             }
             _ => None,

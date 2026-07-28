@@ -37,6 +37,8 @@ pub struct TerminalSettings {
     pub font_size: f32,
     #[serde(default = "default_terminal_font_family")]
     pub font_family: String,
+    #[serde(default = "default_terminal_theme")]
+    pub theme: String,
     #[serde(default = "default_terminal_scrollback_lines")]
     pub scrollback_lines: usize,
     pub auto_copy: bool,
@@ -66,6 +68,10 @@ fn default_terminal_font_family() -> String {
     AppSettings::default().terminal_font_family
 }
 
+fn default_terminal_theme() -> String {
+    AppSettings::default().terminal_theme
+}
+
 fn default_terminal_scrollback_lines() -> usize {
     AppSettings::DEFAULT_TERMINAL_SCROLLBACK_LINES
 }
@@ -81,6 +87,7 @@ impl TerminalSettings {
         Self {
             font_size: app_settings.terminal_font_size as f32,
             font_family: normalize_terminal_primary_font(&app_settings.terminal_font_family),
+            theme: app_settings.terminal_theme.clone(),
             scrollback_lines: app_settings.terminal_scrollback_lines,
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
@@ -284,6 +291,7 @@ fn update_app_settings<T>(
     AppSettings::update_and_save(cx, |settings| {
         settings.terminal_font_size = next.font_size as f64;
         settings.terminal_font_family = next.font_family.clone();
+        settings.terminal_theme = next.theme.clone();
         settings.terminal_scrollback_lines = next.scrollback_lines;
         settings.terminal_auto_copy = next.auto_copy;
         settings.terminal_enable_autocomplete = next.enable_autocomplete;
@@ -300,6 +308,7 @@ fn update_app_settings<T>(
 fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) -> bool {
     left.font_size == right.font_size
         && left.font_family == right.font_family
+        && left.theme == right.theme
         && left.scrollback_lines == right.scrollback_lines
         && left.auto_copy == right.auto_copy
         && left.enable_autocomplete == right.enable_autocomplete
@@ -317,8 +326,9 @@ mod tests {
     use super::{
         TerminalHighlightRule, TerminalLocalSettings, TerminalSettings, TerminalSettingsStore,
         load_settings_from_path, resolve_initial_settings, save_settings_to_path,
+        terminal_app_fields_equal,
     };
-    use crate::theme::default_monospace_font;
+    use crate::theme::{APPLICATION_THEME_NAME, default_monospace_font};
     use one_core::settings::AppSettings;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -380,6 +390,7 @@ mod tests {
     fn terminal_settings_default_includes_builtin_highlight_rules() {
         let settings = TerminalSettings::default();
 
+        assert_eq!(APPLICATION_THEME_NAME, settings.theme);
         assert!(settings.builtin_highlights_initialized);
         assert!(!settings.custom_highlights.is_empty());
         assert!(
@@ -401,6 +412,28 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert_eq!("JetBrains Mono", settings.font_family);
+    }
+
+    #[test]
+    fn terminal_settings_reads_theme_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_theme: "ocean".to_string(),
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert_eq!("ocean", settings.theme);
+    }
+
+    #[test]
+    fn terminal_theme_is_an_app_settings_field() {
+        let left = TerminalSettings::default();
+        let mut right = left.clone();
+        right.theme = "ocean".to_string();
+
+        assert!(!terminal_app_fields_equal(&left, &right));
     }
 
     #[test]

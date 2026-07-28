@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::RemoteDesktopOutput;
+use crate::{RemoteDesktopFailure, RemoteDesktopOutput};
 
 struct FrameDebugFields {
     width: u16,
@@ -54,9 +54,7 @@ impl fmt::Debug for RemoteDesktopOutput {
                 .debug_tuple("Reconnecting")
                 .field(reconnect)
                 .finish(),
-            Self::Status(message)
-            | Self::ConnectionFailure(message)
-            | Self::Terminated(message) => debug_message(
+            Self::Status(message) => debug_message(
                 output_name(self),
                 MessageDebugFields {
                     transfer_id: None,
@@ -64,6 +62,10 @@ impl fmt::Debug for RemoteDesktopOutput {
                 },
                 formatter,
             ),
+            Self::ConnectionFailure(failure) | Self::Terminated(failure) => formatter
+                .debug_tuple(output_name(self))
+                .field(failure)
+                .finish(),
             Self::CursorDefault | Self::CursorHidden => formatter.write_str(output_name(self)),
             Self::CursorPosition { x, y } => formatter
                 .debug_struct("CursorPosition")
@@ -78,6 +80,25 @@ impl fmt::Debug for RemoteDesktopOutput {
                 .field("hotspot_y", &cursor.hotspot_y)
                 .field("byte_len", &cursor.rgba.len())
                 .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for RemoteDesktopFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AuthenticationFailed => formatter.write_str("AuthenticationFailed"),
+            Self::SessionTakenOver => formatter.write_str("SessionTakenOver"),
+            Self::HostUnreachable => formatter.write_str("HostUnreachable"),
+            Self::ServerEndedSession => formatter.write_str("ServerEndedSession"),
+            Self::ConnectionFailed => formatter.write_str("ConnectionFailed"),
+            Self::ProviderVersion {
+                protocol, invalid, ..
+            } => formatter
+                .debug_struct("ProviderVersion")
+                .field("protocol", protocol)
+                .field("invalid", invalid)
+                .finish_non_exhaustive(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use super::active_block::active_block_height;
+use super::{active_block::active_block_height, code_language::CODE_LANGUAGE_HEADER_HEIGHT};
 use gpui::{Pixels, Size, px};
 use markdown_source::{SourceBlock, SourceBlockKind};
 
@@ -9,6 +9,8 @@ pub(super) const DOCUMENT_BOTTOM_PADDING: f32 = 80.;
 const APPROXIMATE_TEXT_COLUMNS: usize = 72;
 const VIRTUALIZATION_HEIGHT_THRESHOLD: f32 = 12_000.;
 const VIRTUALIZATION_BLOCK_THRESHOLD: usize = 80;
+const MATH_RENDER_SURFACE_HEIGHT: f32 = 230.;
+const MERMAID_RENDER_SURFACE_HEIGHT: f32 = 260.;
 
 pub(crate) fn should_virtualize(blocks: &[SourceBlock]) -> bool {
     blocks.len() >= VIRTUALIZATION_BLOCK_THRESHOLD
@@ -52,6 +54,9 @@ pub(super) fn block_size(block: &SourceBlock) -> Size<Pixels> {
 }
 
 fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
+    if let Some(height) = render_surface_reserved_height(block) {
+        return height + artifact_shell_header_height(block);
+    }
     match &block.kind {
         SourceBlockKind::Heading { level, .. } => match level {
             1 => 58.,
@@ -60,8 +65,6 @@ fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
             _ => 34.,
         },
         SourceBlockKind::Table(table) => estimated_table_height(table),
-        SourceBlockKind::MathBlock { .. } => 230.,
-        SourceBlockKind::CodeFence { .. } if is_mermaid(block) => 260.,
         SourceBlockKind::CodeFence { .. }
         | SourceBlockKind::FrontMatter
         | SourceBlockKind::Html
@@ -70,6 +73,27 @@ fn preview_height(block: &SourceBlock, lines: f32) -> f32 {
         | SourceBlockKind::UnorderedList
         | SourceBlockKind::BlockQuote => lines.mul_add(25., 6.),
         _ => lines.mul_add(24., 6.),
+    }
+}
+
+fn artifact_shell_header_height(block: &SourceBlock) -> f32 {
+    matches!(block.kind, SourceBlockKind::CodeFence { .. })
+        .then_some(CODE_LANGUAGE_HEADER_HEIGHT)
+        .unwrap_or_default()
+}
+
+/// Height reserved by the permanent rich-render/source-edit shell.
+///
+/// The asynchronous renderer often returns a shorter SVG than the source
+/// editor. Reserving one shared minimum for pending, success and error states
+/// prevents the following blocks from moving when the renderer completes.
+pub(super) fn render_surface_reserved_height(block: &SourceBlock) -> Option<f32> {
+    match &block.kind {
+        SourceBlockKind::MathBlock { .. } => Some(MATH_RENDER_SURFACE_HEIGHT),
+        SourceBlockKind::CodeFence { .. } if is_mermaid(block) => {
+            Some(MERMAID_RENDER_SURFACE_HEIGHT)
+        }
+        _ => None,
     }
 }
 
@@ -219,5 +243,18 @@ mod tests {
             estimated + px(DOCUMENT_TOP_PADDING + DOCUMENT_BOTTOM_PADDING),
             sizes[0].height
         );
+    }
+
+    #[test]
+    fn math_and_mermaid_share_their_render_surface_reservations_with_virtual_layout() {
+        let source = "$$\nx + y\n$$\n\n```mermaid\ngraph TD\nA --> B\n```";
+        let document = markdown_source::SourceMarkdownDocument::parse(source).unwrap();
+        let math = &document.blocks[0];
+        let mermaid = &document.blocks[1];
+
+        assert_eq!(Some(230.), render_surface_reserved_height(math));
+        assert_eq!(Some(260.), render_surface_reserved_height(mermaid));
+        assert_eq!(px(230.), block_size(math).height);
+        assert_eq!(px(288.), block_size(mermaid).height);
     }
 }

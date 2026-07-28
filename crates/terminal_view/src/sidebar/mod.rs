@@ -521,6 +521,8 @@ pub enum TerminalSidebarEvent {
     FontSizeChanged(f32),
     /// 字体变更
     FontFamilyChanged(String),
+    /// 主题变更
+    ThemeChanged(TerminalTheme),
     /// 滚屏历史保留行数变更
     ScrollbackLinesChanged(usize),
     /// 粘贴命令到终端输入区（不自动回车）
@@ -755,6 +757,10 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::FontFamilyChanged(family) => {
                     cx.emit(TerminalSidebarEvent::FontFamilyChanged(family.clone()));
+                }
+                settings_panel::SettingsPanelEvent::ThemeChanged(theme) => {
+                    this.colors = theme.colors();
+                    cx.emit(TerminalSidebarEvent::ThemeChanged(theme.clone()));
                 }
                 settings_panel::SettingsPanelEvent::ScrollbackLinesChanged(lines) => {
                     cx.emit(TerminalSidebarEvent::ScrollbackLinesChanged(*lines));

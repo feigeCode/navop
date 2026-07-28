@@ -1,11 +1,11 @@
 use super::{
     MarkdownEditor,
-    active_block::active_block_height,
     layout_metrics::{
         DOCUMENT_BOTTOM_PADDING, DOCUMENT_MAX_WIDTH, DOCUMENT_SIDE_PADDING, DOCUMENT_TOP_PADDING,
-        estimated_visual_lines, should_virtualize, virtual_item_sizes,
+        should_virtualize, virtual_item_sizes,
     },
 };
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
     prelude::FluentBuilder as _, px,
@@ -15,8 +15,7 @@ use gpui_component::{
     scroll::{Scrollbar, ScrollbarShow},
     v_flex, v_virtual_list,
 };
-use markdown_source::{SourceBlock, SourceBlockKind};
-use std::cell::Cell;
+use markdown_source::SourceBlock;
 use std::rc::Rc;
 
 impl MarkdownEditor {
@@ -40,11 +39,16 @@ impl MarkdownEditor {
     }
 
     fn render_virtual_blocks(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let active_block = self.active_block;
-        let item_sizes = Rc::new(virtual_item_sizes(
+        let mut item_sizes = virtual_item_sizes(
             &self.history.document().blocks,
             &self.measured_block_heights,
-        ));
+        );
+        if let Some((index, _)) = self.active_empty_gap_placement()
+            && let Some(size) = item_sizes.get_mut(index)
+        {
+            size.height += px(super::MARKDOWN_BODY_LINE_HEIGHT);
+        }
+        let item_sizes = Rc::new(item_sizes);
         let blocks = v_virtual_list(
             cx.entity(),
             "markdown-block-list",
@@ -53,7 +57,7 @@ impl MarkdownEditor {
                 editor.request_block_renders(visible_range.clone(), cx);
                 editor.request_inline_math_renders(visible_range.clone(), cx);
                 visible_range
-                    .map(|index| editor.render_block(index, &item_sizes, active_block, cx))
+                    .map(|index| editor.render_block(index, &item_sizes, cx))
                     .collect()
             },
         )
@@ -80,7 +84,8 @@ impl MarkdownEditor {
         let content = document_column().children(
             blocks
                 .into_iter()
-                .map(|block| self.render_standard_block(&block, cx)),
+                .enumerate()
+                .map(|(index, block)| self.render_standard_block(index, &block, cx)),
         );
         let blocks = gpui::div()
             .id("markdown-standard-block-list")
@@ -133,13 +138,13 @@ impl MarkdownEditor {
         &self,
         index: usize,
         item_sizes: &[gpui::Size<gpui::Pixels>],
-        active_block: Option<markdown_source::SourceNodeId>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let Some(block) = self.history.document().blocks.get(index).cloned() else {
             return gpui::div().into_any_element();
         };
         let block_count = self.history.document().blocks.len();
+        let empty_gap = self.active_empty_gap_placement();
         gpui::div()
             .id(("markdown-block-frame", block.id.0))
             .debug_selector(move || format!("markdown-block-frame-{}", block.id.0))
@@ -155,9 +160,44 @@ impl MarkdownEditor {
                     .when(index + 1 == block_count, |this| {
                         this.pb(px(DOCUMENT_BOTTOM_PADDING))
                     })
-                    .child(self.render_block_content(&block, active_block, cx)),
+                    .when(empty_gap == Some((index, true)), |this| {
+                        this.child(self.render_empty_gap_surface())
+                    })
+                    .child(self.render_natural_block(&block, cx))
+                    .when(empty_gap == Some((index, false)), |this| {
+                        this.child(self.render_empty_gap_surface())
+                    }),
             )
             .into_any_element()
+    }
+
+    /// Places the transient empty Input next to its neighboring parsed block.
+    ///
+    /// Markdown parsers intentionally do not create an AST paragraph for an
+    /// empty line. Keeping that line inside an adjacent virtual item lets the
+    /// user continue typing without inventing placeholder source characters or
+    /// replacing the document's scrolling implementation.
+    pub(super) fn active_empty_gap_placement(&self) -> Option<(usize, bool)> {
+        if self.active_surface_key() != MarkdownSurfaceKey::Empty
+            || self.active_block.is_some()
+            || self.history.document().blocks.is_empty()
+        {
+            return None;
+        }
+        let range = &self
+            .surface(MarkdownSurfaceKey::Empty)?
+            .projection
+            .source_range;
+        if !range.is_empty() {
+            return None;
+        }
+        let blocks = &self.history.document().blocks;
+        let insertion_index = blocks.partition_point(|block| block.source_range.end <= range.start);
+        if insertion_index < blocks.len() {
+            Some((insertion_index, true))
+        } else {
+            Some((blocks.len() - 1, false))
+        }
     }
 
     fn rendered_block_height(
@@ -165,71 +205,75 @@ impl MarkdownEditor {
         block: &SourceBlock,
         preview_height: gpui::Pixels,
     ) -> gpui::Pixels {
-        if self.active_block != Some(block.id) {
-            return preview_height;
-        }
-        if let Some(measured) = self.measured_block_heights.get(&block.id) {
-            return preview_height.max(*measured);
-        }
-        let rows = estimated_visual_lines(&self.projection.text) as f32;
-        let heading = match block.kind {
-            SourceBlockKind::Heading { level, .. } => Some(level),
-            _ => None,
-        };
-        let source_code = matches!(
-            block.kind,
-            SourceBlockKind::CodeFence { .. } | SourceBlockKind::MathBlock { .. }
-        );
-        let active = px(active_block_height(rows, heading, source_code) * 16.);
-        preview_height.max(active)
+        self.measured_block_heights
+            .get(&block.id)
+            .copied()
+            .map_or(preview_height, |measured| preview_height.max(measured))
     }
 
-    fn render_block_content(
-        &self,
-        block: &SourceBlock,
-        active_block: Option<markdown_source::SourceNodeId>,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        if active_block != Some(block.id)
-            && let Some(rendered) = self.render_block_output(block, cx)
-        {
-            return self.render_artifact_preview(block, rendered, cx);
-        }
-        match &block.kind {
-            SourceBlockKind::Table(table) => self.render_table(block, table, cx),
-            _ if active_block == Some(block.id) => self.render_active_block(block, cx),
-            _ => self.render_preview_block(block, cx),
-        }
-    }
-
-    pub(super) fn render_artifact_preview(
+    /// Keeps the rendered artifact and its source Input in one permanent grid
+    /// cell. Both layers participate in layout from the first render, so
+    /// activating the source can only change focus/visibility, never the
+    /// block's reserved geometry or InputState identity.
+    pub(super) fn render_artifact_shell(
         &self,
         block: &SourceBlock,
         rendered: gpui::AnyElement,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let key = MarkdownSurfaceKey::block(block.id);
+        let active = self.active_block == Some(block.id) && self.active_surface_key() == key;
         let editor = cx.entity();
+        let click_editor = editor.clone();
         let block_id = block.id;
-        let bounds = Rc::new(Cell::new(gpui::Bounds::default()));
-        let click_bounds = bounds.clone();
-        gpui::div()
-            .id(("markdown-preview-block", block.id.0))
-            .debug_selector(|| format!("markdown-preview-block-{}", block.id.0))
+        let language_header = self.render_code_language_header(block, cx);
+        let input_layer = gpui::div()
+            .id(("markdown-artifact-input-layer", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-input-layer-{}", block_id.0))
+            .col_start(1)
+            .row_start(1)
+            .w_full()
+            .min_w_0()
+            .opacity(if active { 1. } else { 0. })
+            .child(self.render_block_edit_surface(block, false, cx));
+        let rendered_layer = gpui::div()
+            .id(("markdown-artifact-rendered-layer", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-rendered-layer-{}", block_id.0))
+            .col_start(1)
+            .row_start(1)
             .w_full()
             .min_w_0()
             .cursor_text()
-            .on_prepaint(move |value, _, _| bounds.set(value))
+            .when(active, |this| this.invisible())
             .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                let line = ((event.position.y - click_bounds.get().top())
-                    .as_f32()
-                    .max(0.)
-                    / 24.)
-                    .floor() as usize;
-                editor.update(cx, |editor, cx| {
-                    editor.activate_block_line(block_id, line, window, cx);
+                click_editor.update(cx, |editor, cx| {
+                    if event.click_count == 1 && !event.modifiers.shift {
+                        editor.activate_surface_at_position(key, event.position, window, cx);
+                    } else {
+                        editor.focus_surface(key, window, cx);
+                    }
                 });
             })
-            .child(rendered)
+            .child(rendered);
+        let layers = gpui::div()
+            .grid()
+            .grid_cols(1)
+            .w_full()
+            .min_w_0()
+            .child(input_layer)
+            .child(rendered_layer);
+        v_flex()
+            .id(("markdown-artifact-shell", block.id.0))
+            .debug_selector(move || format!("markdown-artifact-shell-{}", block_id.0))
+            .w_full()
+            .min_w_0()
+            .on_prepaint(move |bounds, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.record_measured_block_height(block_id, bounds.size.height, cx);
+                });
+            })
+            .children(language_header)
+            .child(layers)
             .into_any_element()
     }
 

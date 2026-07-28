@@ -29,6 +29,27 @@ pub(super) fn active_marker_style_spans(
         .collect()
 }
 
+pub(super) fn reserved_inline_math_marker_style_spans(
+    document: &SourceMarkdownDocument,
+    active_inline: Option<SourceNodeId>,
+    projection: &MarkdownProjection,
+) -> Vec<ProjectionStyleSpan> {
+    document
+        .blocks
+        .iter()
+        .flat_map(block_inline_nodes)
+        .filter(|node| range_contains(&projection.source_range, &node.source_range))
+        .filter(|node| Some(node.id) != active_inline)
+        .filter(|node| matches!(node.kind, SourceInlineKind::InlineMath { .. }))
+        .flat_map(|node| {
+            marker_source_ranges(node)
+                .into_iter()
+                .filter_map(|range| style_span(range, ProjectionStyle::Marker, node.id, projection))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn node_style_span(
     node: &SourceInlineNode,
     projection: &MarkdownProjection,

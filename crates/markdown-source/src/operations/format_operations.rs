@@ -89,6 +89,30 @@ impl SourceMarkdownDocument {
         ))
     }
 
+    pub fn toggle_task_checked(
+        &self,
+        state_range: Range<usize>,
+    ) -> Result<SourceTransaction, SourceOperationError> {
+        let checked = task_marker_checked(&self.source, &state_range)
+            .ok_or(SourceOperationError::NotTaskMarker)?;
+        let block = self
+            .block_at(state_range.start)
+            .filter(|block| matches!(block.kind, SourceBlockKind::UnorderedList))
+            .filter(|block| state_range.end <= block.source_range.end)
+            .ok_or(SourceOperationError::NotTaskMarker)?;
+        let expected_range =
+            task_state_range_on_line(&self.source, block.source_range.start, state_range.start)
+                .ok_or(SourceOperationError::NotTaskMarker)?;
+        if expected_range != state_range {
+            return Err(SourceOperationError::NotTaskMarker);
+        }
+        Ok(self.single_edit(
+            state_range,
+            if checked { " " } else { "x" },
+            SourceEditOrigin::Formatting,
+        ))
+    }
+
     pub fn duplicate_block(
         &self,
         block_id: SourceNodeId,
@@ -150,4 +174,43 @@ fn strip_ordered_marker(line: &str) -> Option<&str> {
         .then(|| marker[..marker.len() - 1].parse::<u64>().ok())
         .flatten()?;
     Some(line[marker_end..].trim_start())
+}
+
+fn task_marker_checked(source: &str, state_range: &Range<usize>) -> Option<bool> {
+    if state_range.end != state_range.start.checked_add(1)?
+        || state_range.end > source.len()
+        || !source.is_char_boundary(state_range.start)
+        || !source.is_char_boundary(state_range.end)
+    {
+        return None;
+    }
+    match source.as_bytes()[state_range.start] {
+        b' ' => Some(false),
+        b'x' | b'X' => Some(true),
+        _ => None,
+    }
+}
+
+fn task_state_range_on_line(
+    source: &str,
+    block_start: usize,
+    state_offset: usize,
+) -> Option<Range<usize>> {
+    let line_start = source[block_start..state_offset]
+        .rfind('\n')
+        .map_or(block_start, |offset| block_start + offset + 1);
+    let before_state = &source[line_start..state_offset];
+    let indent = before_state
+        .len()
+        .saturating_sub(before_state.trim_start().len());
+    let marker = &before_state[indent..];
+    let marker = marker
+        .strip_prefix("- ")
+        .or_else(|| marker.strip_prefix("* "))
+        .or_else(|| marker.strip_prefix("+ "))?;
+    let suffix = source.as_bytes().get(state_offset + 2).copied();
+    (marker == "["
+        && source.as_bytes().get(state_offset + 1) == Some(&b']')
+        && suffix.is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n')))
+    .then_some(state_offset..state_offset + 1)
 }

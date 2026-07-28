@@ -1742,7 +1742,7 @@ impl Element for TextElement {
         let ghost_lines_height = ghost_line_count as f32 * line_height;
 
         let total_wrapped_lines = state.display_map.wrap_row_count();
-        let empty_bottom_height = if state.mode.is_code_editor() {
+        let empty_bottom_height = if state.mode.is_code_editor() && !state.mode.is_auto_grow() {
             bounds
                 .size
                 .height
@@ -1912,6 +1912,13 @@ impl Element for TextElement {
             )));
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
+
+        // Publish the geometry during prepaint so sibling overlays that follow this input
+        // observe the layout from the same frame instead of the previous painted frame.
+        self.state.update(cx, |state, _| {
+            state.last_layout = Some(last_layout.clone());
+            state.last_bounds = Some(bounds);
+        });
 
         PrepaintState {
             bounds,
@@ -2262,8 +2269,6 @@ impl Element for TextElement {
         );
 
         self.state.update(cx, |state, cx| {
-            state.last_layout = Some(prepaint.last_layout.clone());
-            state.last_bounds = Some(bounds);
             state.last_cursor = Some(state.cursor());
             state.set_input_bounds(input_bounds, cx);
             state.last_selected_range = Some(selected_range);

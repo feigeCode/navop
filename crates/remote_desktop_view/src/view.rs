@@ -5,10 +5,10 @@ use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
-    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopInput,
-    RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopProviderVersionError,
-    RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
-    ResizeSupport, RgbaFramebuffer, create_backend,
+    RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopFailure,
+    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
+    RemoteDesktopProviderVersionError, RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey,
+    RemoteMouseButton, RemoteNamedKey, ResizeSupport, RgbaFramebuffer, create_backend,
 };
 use rust_i18n::t;
 
@@ -188,10 +188,11 @@ fn close_runtime_once(
 }
 
 fn failed_runtime(error: anyhow::Error) -> RemoteDesktopRuntime {
+    tracing::warn!(?error, "failed to create remote desktop backend");
     let (input_tx, _input_rx) = tokio::sync::mpsc::unbounded_channel();
     let (output_tx, output_rx) = remote_desktop::output_mailbox::output_mailbox();
     let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(
-        remote_desktop_error_message(&error),
+        remote_desktop_failure(&error),
     ));
     RemoteDesktopRuntime {
         input_tx,
@@ -199,22 +200,16 @@ fn failed_runtime(error: anyhow::Error) -> RemoteDesktopRuntime {
     }
 }
 
-fn remote_desktop_error_message(error: &anyhow::Error) -> String {
+fn remote_desktop_failure(error: &anyhow::Error) -> RemoteDesktopFailure {
     if let Some(error) = error.downcast_ref::<RemoteDesktopProviderVersionError>() {
-        let key = if error.invalid {
-            "RemoteDesktop.provider_version_invalid"
-        } else {
-            "RemoteDesktop.provider_version_too_old"
+        return RemoteDesktopFailure::ProviderVersion {
+            protocol: error.protocol,
+            installed: error.installed.clone(),
+            required: error.required.clone(),
+            invalid: error.invalid,
         };
-        return t!(
-            key,
-            protocol = error.protocol.label(),
-            installed = error.installed.as_str(),
-            required = error.required.as_str()
-        )
-        .to_string();
     }
-    error.to_string()
+    RemoteDesktopFailure::ConnectionFailed
 }
 
 pub fn init(cx: &mut App) {

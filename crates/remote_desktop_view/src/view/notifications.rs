@@ -1,12 +1,16 @@
 use gpui::{Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
-use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopReconnect, RemoteDesktopReconnectReason};
+use remote_desktop::{
+    RemoteDesktopFailure, RemoteDesktopProtocol, RemoteDesktopReconnect,
+    RemoteDesktopReconnectReason,
+};
 use rust_i18n::t;
 
 use super::RemoteDesktopView;
 
 pub(super) struct RemoteDesktopReconnectNotification;
 pub(super) struct RemoteDesktopClipboardNotification;
+pub(super) struct RemoteDesktopSessionNotification;
 
 impl RemoteDesktopView {
     pub(super) fn notify_reconnecting(
@@ -21,6 +25,19 @@ impl RemoteDesktopView {
             window.push_notification(
                 Notification::info(message)
                     .id1::<RemoteDesktopReconnectNotification>(notification_id)
+                    .autohide(true),
+                cx,
+            );
+        });
+    }
+
+    pub(super) fn notify_session_taken_over(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let message = localized_session_taken_over();
+        let notification_id = ("remote-desktop-session", cx.entity_id());
+        window.defer(cx, move |window, cx| {
+            window.push_notification(
+                Notification::warning(message)
+                    .id1::<RemoteDesktopSessionNotification>(notification_id)
                     .autohide(true),
                 cx,
             );
@@ -147,6 +164,79 @@ fn localized_reconnect_notification_for_locale(
         protocol = protocol.label(),
         reason = reason,
         seconds = seconds
+    )
+    .to_string()
+}
+
+pub(super) fn localized_failure_message(failure: &RemoteDesktopFailure) -> String {
+    let locale = rust_i18n::locale();
+    localized_failure_message_for_locale(locale.as_ref(), failure)
+}
+
+pub(super) fn localized_failure_message_for_locale(
+    locale: &str,
+    failure: &RemoteDesktopFailure,
+) -> String {
+    match failure {
+        RemoteDesktopFailure::AuthenticationFailed => {
+            t!("RemoteDesktop.failure_authentication", locale = locale).to_string()
+        }
+        RemoteDesktopFailure::SessionTakenOver => localized_session_taken_over_for_locale(locale),
+        RemoteDesktopFailure::HostUnreachable => {
+            t!("RemoteDesktop.failure_host_unreachable", locale = locale).to_string()
+        }
+        RemoteDesktopFailure::ServerEndedSession => {
+            t!("RemoteDesktop.failure_server_ended", locale = locale).to_string()
+        }
+        RemoteDesktopFailure::ConnectionFailed => {
+            t!("RemoteDesktop.failure_generic", locale = locale).to_string()
+        }
+        RemoteDesktopFailure::ProviderVersion {
+            protocol,
+            installed,
+            required,
+            invalid,
+        } => localized_provider_version_failure(locale, *protocol, installed, required, *invalid),
+    }
+}
+
+fn localized_provider_version_failure(
+    locale: &str,
+    protocol: RemoteDesktopProtocol,
+    installed: &str,
+    required: &str,
+    invalid: bool,
+) -> String {
+    if invalid {
+        t!(
+            "RemoteDesktop.provider_version_invalid",
+            locale = locale,
+            protocol = protocol.label(),
+            installed = installed,
+            required = required
+        )
+        .to_string()
+    } else {
+        t!(
+            "RemoteDesktop.provider_version_too_old",
+            locale = locale,
+            protocol = protocol.label(),
+            installed = installed,
+            required = required
+        )
+        .to_string()
+    }
+}
+
+fn localized_session_taken_over() -> String {
+    let locale = rust_i18n::locale();
+    localized_session_taken_over_for_locale(locale.as_ref())
+}
+
+pub(super) fn localized_session_taken_over_for_locale(locale: &str) -> String {
+    t!(
+        "RemoteDesktop.session_taken_over_notification",
+        locale = locale
     )
     .to_string()
 }

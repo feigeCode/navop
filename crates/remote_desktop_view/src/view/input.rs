@@ -167,7 +167,7 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn send_pointer_move(&mut self, position: Point<Pixels>, window: &mut Window) {
-        self.cursor.refresh_native_cursor();
+        self.cursor.set_pointer_hovered(true);
         let Some((remote_width, remote_height)) = self.remote_size else {
             return;
         };
@@ -180,6 +180,7 @@ impl RemoteDesktopView {
         ) else {
             return;
         };
+        self.cursor.set_position(x, y);
         self.send_input(RemoteDesktopInput::MouseMove { x, y });
     }
 

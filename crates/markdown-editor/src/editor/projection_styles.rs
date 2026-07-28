@@ -1,34 +1,35 @@
-use crate::{
-    MarkdownBlockRenderArtifact, MarkdownEditorTheme, MarkdownProjection, ProjectionStyle,
-};
+use crate::{MarkdownEditorTheme, MarkdownProjection, ProjectionStyle};
 use gpui::{FontStyle, FontWeight, HighlightStyle, StrikethroughStyle, UnderlineStyle, px};
 use gpui_component::input::InputTextHighlight;
-use std::collections::HashMap;
 
 pub(super) fn projection_highlights(
     projection: &MarkdownProjection,
     theme: &MarkdownEditorTheme,
-    inline_math_artifacts: &HashMap<String, MarkdownBlockRenderArtifact>,
 ) -> Vec<InputTextHighlight> {
     projection
         .styles
         .iter()
         .map(|span| {
-            let mut style = projection_style(span.style, theme);
-            if span.style == ProjectionStyle::InlineMath
-                && projection.active_inline != Some(span.node_id)
-                && inline_math_artifacts.contains_key(&projection.text[span.range.clone()])
-            {
-                style.color = Some(theme.foreground.opacity(0.));
-                style.background_color = None;
-            }
-            (span.range.clone(), style)
+            let reserved_marker = span.style == ProjectionStyle::Marker
+                && projection.active_inline != Some(span.node_id);
+            (
+                span.range.clone(),
+                projection_style(span.style, reserved_marker, theme),
+            )
         })
         .collect()
 }
 
-fn projection_style(style: ProjectionStyle, theme: &MarkdownEditorTheme) -> HighlightStyle {
+fn projection_style(
+    style: ProjectionStyle,
+    reserved_marker: bool,
+    theme: &MarkdownEditorTheme,
+) -> HighlightStyle {
     match style {
+        ProjectionStyle::Marker if reserved_marker => HighlightStyle {
+            color: Some(theme.background),
+            ..Default::default()
+        },
         ProjectionStyle::Marker => HighlightStyle {
             color: Some(theme.muted_foreground),
             ..Default::default()

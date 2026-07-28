@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
-    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopReconnect,
-    RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
+    RemoteDesktopFailure, RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
+    RemoteDesktopReconnect, RemoteDesktopReconnectReason, RemoteDesktopRuntime, RemoteDesktopSize,
     helper_protocol::{HelperRequest, encode_request_line},
     output_mailbox::{OutputMailboxSender, output_mailbox},
 };
@@ -22,6 +22,18 @@ const MAX_INPUTS_PER_POLL: usize = 256;
 pub(super) struct ClipboardFilesSnapshot {
     pub(super) transfer_id: u64,
     pub(super) paths: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HelperDisconnectKind {
+    ConnectionFailure,
+    Terminated,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HelperDisconnect {
+    pub(super) kind: Option<HelperDisconnectKind>,
+    pub(super) reason: String,
 }
 
 pub struct RdpBackend {
@@ -100,11 +112,10 @@ impl RemoteDesktopBackend for RdpBackend {
                             reason,
                             manual,
                             was_connected,
+                            disconnect_kind,
                         } => {
-                            if was_connected || manual {
-                                reconnect_attempt = 0;
-                            }
                             if manual {
+                                reconnect_attempt = 0;
                                 transport::send_reconnecting(
                                     &output_tx,
                                     RemoteDesktopReconnect {
@@ -114,21 +125,50 @@ impl RemoteDesktopBackend for RdpBackend {
                                 );
                                 continue;
                             }
-                            let delay = reconnect::reconnect_delay(reconnect_attempt);
-                            reconnect_attempt = reconnect_attempt.saturating_add(1);
-                            transport::send_reconnecting(
-                                &output_tx,
-                                reconnect::reconnect_event(&reason, delay),
-                            );
-                            if !reconnect::wait_before_reconnect(
-                                &mut connect,
-                                &mut latest_clipboard_text,
-                                &mut latest_clipboard_files,
-                                &mut input_rx,
-                                delay,
-                                protocol,
+                            match reconnect::reconnect_decision(
+                                &reason,
+                                was_connected,
+                                disconnect_kind,
                             ) {
-                                break;
+                                reconnect::ReconnectDecision::Retry(reconnect_reason) => {
+                                    if was_connected {
+                                        reconnect_attempt = 0;
+                                    }
+                                    let delay = reconnect::reconnect_delay(reconnect_attempt);
+                                    reconnect_attempt = reconnect_attempt.saturating_add(1);
+                                    transport::send_reconnecting(
+                                        &output_tx,
+                                        reconnect::reconnect_event(reconnect_reason, delay),
+                                    );
+                                    if !reconnect::wait_before_reconnect(
+                                        &mut connect,
+                                        &mut latest_clipboard_text,
+                                        &mut latest_clipboard_files,
+                                        &mut input_rx,
+                                        delay,
+                                        protocol,
+                                    ) {
+                                        break;
+                                    }
+                                }
+                                reconnect::ReconnectDecision::ConnectionFailure(failure) => {
+                                    tracing::warn!(
+                                        error = %reason,
+                                        ?failure,
+                                        "remote desktop connection failed without reconnect"
+                                    );
+                                    transport::send_failure(&output_tx, failure);
+                                    break;
+                                }
+                                reconnect::ReconnectDecision::Terminated(failure) => {
+                                    tracing::warn!(
+                                        error = %reason,
+                                        ?failure,
+                                        "remote desktop session terminated without reconnect"
+                                    );
+                                    transport::send_terminated(&output_tx, failure);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -149,6 +189,7 @@ pub(super) enum HelperRunResult {
         reason: String,
         manual: bool,
         was_connected: bool,
+        disconnect_kind: Option<HelperDisconnectKind>,
     },
 }
 
@@ -173,6 +214,7 @@ fn run_helper_session(
             reason: "failed to start remote desktop helper".to_string(),
             manual: false,
             was_connected: false,
+            disconnect_kind: None,
         };
     };
 

@@ -1,30 +1,72 @@
 use super::MarkdownEditor;
 use super::list_marker_source::list_markers;
+use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
-    App, Bounds, Corners, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
-    Pixels, SharedString, Styled, TextAlign, TextRun, Window, canvas, point, px,
+    App, Bounds, Context, Corners, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, PathBuilder, Pixels, SharedString, Styled, TextAlign, TextRun, Window, canvas,
+    point, px,
 };
 use markdown_source::SourceBlock;
+use std::ops::Range;
 
 const LINE_HEIGHT: f32 = 24.;
 const FONT_SIZE: f32 = 16.;
 const MARKER_GAP: f32 = 6.;
 
 impl MarkdownEditor {
-    pub(super) fn active_list_marker_overlay(&self, block: &SourceBlock) -> gpui::AnyElement {
-        let markers = list_markers(block, |offset| self.projection.source_to_display(offset));
-        let input = self.input.clone();
+    pub(super) fn list_marker_overlay(
+        &self,
+        key: MarkdownSurfaceKey,
+        block: &SourceBlock,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let surface = self
+            .surface(key)
+            .expect("a list marker overlay must use its block surface");
+        let markers = list_markers(block, |offset| surface.projection.source_to_display(offset));
+        let input = surface.input.clone();
+        let block_id = block.id;
         let foreground = self.theme.foreground;
         let primary = self.theme.primary;
         let check = self.theme.background;
+        let task_markers = markers.clone();
+        let hit_test_input = input.clone();
+        let editor = cx.entity();
         gpui::div()
-            .id(("markdown-active-list-markers", block.id.0))
-            .debug_selector(|| format!("markdown-active-list-markers-{}", block.id.0))
+            .id(("markdown-list-markers", block.id.0))
+            .debug_selector(move || {
+                if active {
+                    format!("markdown-active-list-markers-{}", block_id.0)
+                } else {
+                    format!("markdown-list-markers-{}", block_id.0)
+                }
+            })
             .absolute()
             .top_0()
             .right_0()
             .bottom_0()
             .left_0()
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                let Some(task_range) = task_markers.iter().find_map(|marker| {
+                    let MarkerKind::Task { source_range, .. } = &marker.kind else {
+                        return None;
+                    };
+                    let caret = hit_test_input
+                        .read(cx)
+                        .range_to_bounds(&(marker.display_offset..marker.display_offset))?;
+                    task_marker_bounds(caret)
+                        .contains(&event.position)
+                        .then(|| source_range.clone())
+                }) else {
+                    return;
+                };
+                window.prevent_default();
+                cx.stop_propagation();
+                editor.update(cx, |editor, cx| {
+                    let _ = editor.toggle_task_marker(task_range, window, cx);
+                });
+            })
             .child(
                 canvas(
                     move |_, _, cx| marker_layouts(&input, &markers, cx),
@@ -51,7 +93,10 @@ pub(super) struct ListMarker {
 #[derive(Clone)]
 pub(super) enum MarkerKind {
     Text(String),
-    Task(bool),
+    Task {
+        checked: bool,
+        source_range: Range<usize>,
+    },
 }
 
 struct MarkerLayout {
@@ -92,7 +137,7 @@ fn paint_markers(
             MarkerKind::Text(text) => {
                 paint_text_marker(&text, layout.caret, foreground, window, cx)
             }
-            MarkerKind::Task(checked) => {
+            MarkerKind::Task { checked, .. } => {
                 paint_task_marker(checked, layout.caret, foreground, primary, check, window)
             }
         }

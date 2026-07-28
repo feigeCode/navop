@@ -39,7 +39,48 @@ pub(super) fn connection_menu_actions(
 
 #[cfg(test)]
 mod tests {
+    use one_core::cloud_sync::{TeamKeyCacheStatus, TeamOption};
+    use one_core::storage::{StoredConnection, TeamMembershipState};
+
     use super::*;
+    use crate::home_tab::{TeamPermissionSnapshot, can_manage_connection_with_permissions};
+    use crate::persistent_connection_sidebar::tree_model::{
+        ConnectionNodeInput, WorkspaceNodeInput, filter_connection_tree_inputs,
+    };
+
+    fn searched_team_ssh() -> StoredConnection {
+        StoredConnection {
+            id: Some(50),
+            name: "186华为云服务器".to_string(),
+            connection_type: ConnectionType::SshSftp,
+            params: "{}".to_string(),
+            workspace_id: Some(1),
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: Some("cloud-1".to_string()),
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: Some("team-1".to_string()),
+            owner_id: Some("user-1".to_string()),
+        }
+    }
+
+    fn owner_team() -> TeamOption {
+        TeamOption {
+            id: "team-1".to_string(),
+            name: "CoMi团队".to_string(),
+            key_status: TeamKeyCacheStatus::Missing,
+            key_version: 0,
+            key_verification: None,
+            last_verified_at: None,
+            role: Some("owner".to_string()),
+            membership_state: TeamMembershipState::Active,
+        }
+    }
 
     #[test]
     fn ssh_menu_has_terminal_sftp_and_management_actions() {
@@ -55,6 +96,54 @@ mod tests {
                 ConnectionMenuAction::Delete,
             ]
         );
+    }
+
+    #[test]
+    fn searched_team_ssh_uses_stable_id_and_cached_permission_snapshot() {
+        let connections = vec![searched_team_ssh()];
+        let mut permissions =
+            TeamPermissionSnapshot::from_persisted_user_id(Some("user-1".to_string()));
+        assert!(permissions.replace_teams_for("user-1", vec![owner_team()]));
+        let expected = vec![
+            ConnectionMenuAction::OpenInBackground,
+            ConnectionMenuAction::OpenSftp,
+            ConnectionMenuAction::CopyConnection,
+            ConnectionMenuAction::MoveToGroup,
+            ConnectionMenuAction::Edit,
+            ConnectionMenuAction::Duplicate,
+            ConnectionMenuAction::Delete,
+        ];
+
+        for query in ["", "华为"] {
+            let mut workspaces = vec![WorkspaceNodeInput {
+                id: 1,
+                parent_id: None,
+                name: "生产环境".to_string(),
+            }];
+            let mut tree_connections = vec![ConnectionNodeInput {
+                id: 50,
+                workspace_id: Some(1),
+                name: "186华为云服务器".to_string(),
+            }];
+            filter_connection_tree_inputs(
+                &mut workspaces,
+                &mut tree_connections,
+                query,
+                |connection| connection.name.contains(query),
+            );
+            let visible_ids = tree_connections
+                .iter()
+                .map(|connection| connection.id)
+                .collect::<Vec<_>>();
+            assert_eq!(vec![50], visible_ids);
+
+            let can_edit =
+                can_manage_connection_with_permissions(&connections, visible_ids[0], &permissions);
+            assert_eq!(
+                expected,
+                connection_menu_actions(ConnectionType::SshSftp, can_edit)
+            );
+        }
     }
 
     #[test]

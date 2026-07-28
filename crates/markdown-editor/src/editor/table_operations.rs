@@ -1,3 +1,4 @@
+use super::surface::MarkdownSurfaceKey;
 use super::{MarkdownEditor, MarkdownEditorError};
 use gpui::{Context, Window};
 use markdown_source::{
@@ -179,6 +180,6 @@ impl MarkdownEditor {
             .content_range
             .end;
         self.sync_table_cell(address, cursor, window, cx);
-        self.input.update(cx, |input, cx| input.focus(window, cx));
+        let _ = self.focus_surface(MarkdownSurfaceKey::table_cell(address), window, cx);
     }
 }

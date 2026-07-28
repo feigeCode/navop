@@ -3,6 +3,7 @@ use crate::{
     SourceBlock, SourceBlockKind, SourceEditOrigin, SourceMarkdownDocument, SourceNodeId,
     SourceTransaction,
 };
+use std::ops::Range;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockMoveDirection {
@@ -62,12 +63,8 @@ impl SourceMarkdownDocument {
         if byte_offset < block.source_range.start || byte_offset > block.source_range.end {
             return Err(SourceOperationError::CannotSplitBlock);
         }
-        let separator = split_separator(&self.source, block, byte_offset)?;
-        Ok(self.single_edit(
-            byte_offset..byte_offset,
-            separator,
-            SourceEditOrigin::InsertBlock,
-        ))
+        let edit = split_edit(&self.source, block, byte_offset)?;
+        Ok(self.single_edit(edit.range, edit.replacement, SourceEditOrigin::InsertBlock))
     }
 
     pub fn toggle_blockquote(
@@ -122,6 +119,33 @@ impl SourceMarkdownDocument {
             SourceEditOrigin::Formatting,
         ))
     }
+
+    pub fn set_code_fence_language(
+        &self,
+        block_id: SourceNodeId,
+        language: &str,
+    ) -> Result<SourceTransaction, SourceOperationError> {
+        if language.is_empty()
+            || language
+                .chars()
+                .any(|character| character.is_whitespace() || character == '`')
+        {
+            return Err(SourceOperationError::InvalidCodeFenceLanguage);
+        }
+        let block = find_block(self, block_id)?;
+        let SourceBlockKind::CodeFence {
+            opening_fence,
+            language_range,
+            ..
+        } = &block.kind
+        else {
+            return Err(SourceOperationError::NotCodeFence);
+        };
+        let range = language_range
+            .clone()
+            .unwrap_or(opening_fence.end..opening_fence.end);
+        Ok(self.single_edit(range, language, SourceEditOrigin::Formatting))
+    }
 }
 
 fn block_index(
@@ -146,41 +170,101 @@ fn find_block(
         .ok_or(SourceOperationError::NodeNotFound)
 }
 
-fn split_separator(
+struct SplitEdit {
+    range: Range<usize>,
+    replacement: String,
+}
+
+fn split_edit(
     source: &str,
     block: &SourceBlock,
     byte_offset: usize,
-) -> Result<String, SourceOperationError> {
+) -> Result<SplitEdit, SourceOperationError> {
     match block.kind {
         SourceBlockKind::OrderedList { .. } | SourceBlockKind::UnorderedList => {
-            list_item_separator(source, block, byte_offset)
+            list_item_edit(source, block, byte_offset)
         }
-        SourceBlockKind::BlockQuote => Ok("\n> ".to_owned()),
-        SourceBlockKind::CodeFence { .. } => Ok("\n".to_owned()),
-        SourceBlockKind::Paragraph | SourceBlockKind::Heading { .. } => Ok("\n\n".to_owned()),
+        SourceBlockKind::BlockQuote => Ok(insertion(byte_offset, "\n> ")),
+        SourceBlockKind::CodeFence { .. } => Ok(insertion(byte_offset, "\n")),
+        SourceBlockKind::Paragraph | SourceBlockKind::Heading { .. } => {
+            Ok(insertion(byte_offset, "\n\n"))
+        }
         _ => Err(SourceOperationError::CannotSplitBlock),
     }
 }
 
-fn list_item_separator(
+fn insertion(byte_offset: usize, replacement: &str) -> SplitEdit {
+    SplitEdit {
+        range: byte_offset..byte_offset,
+        replacement: replacement.to_owned(),
+    }
+}
+
+fn list_item_edit(
     source: &str,
     block: &SourceBlock,
     byte_offset: usize,
-) -> Result<String, SourceOperationError> {
+) -> Result<SplitEdit, SourceOperationError> {
     let line_start = source[block.source_range.start..byte_offset]
         .rfind('\n')
         .map_or(block.source_range.start, |offset| {
             block.source_range.start + offset + 1
         });
-    let line = &source[line_start..byte_offset];
+    let line_end = source[byte_offset..block.source_range.end]
+        .find('\n')
+        .map_or(block.source_range.end, |offset| byte_offset + offset);
+    let line = &source[line_start..line_end];
     let indent_len = line.len() - line.trim_start().len();
     let trimmed = &line[indent_len..];
     let marker_end = trimmed
         .find(char::is_whitespace)
         .ok_or(SourceOperationError::CannotSplitBlock)?;
     let marker = &trimmed[..marker_end];
+    if list_item_content_is_empty(marker, &trimmed[marker_end..]) {
+        return Ok(SplitEdit {
+            range: line_start..line_end,
+            replacement: "\n".to_owned(),
+        });
+    }
     let next_marker = ordered_next_marker(marker).unwrap_or_else(|| marker.to_owned());
-    Ok(format!("\n{}{} ", &line[..indent_len], next_marker))
+    let task = unordered_task_continuation(marker, &trimmed[marker_end..]);
+    Ok(insertion(
+        byte_offset,
+        &format!(
+            "\n{}{} {}",
+            &line[..indent_len],
+            next_marker,
+            task.unwrap_or_default()
+        ),
+    ))
+}
+
+fn list_item_content_is_empty(marker: &str, after_marker: &str) -> bool {
+    let content = after_marker.trim_start();
+    if matches!(marker, "-" | "*" | "+") {
+        return content.is_empty()
+            || ["[ ]", "[x]", "[X]"].into_iter().any(|task| {
+                content
+                    .strip_prefix(task)
+                    .is_some_and(|rest| rest.trim().is_empty())
+            });
+    }
+    content.trim().is_empty()
+}
+
+fn unordered_task_continuation<'a>(marker: &str, after_marker: &'a str) -> Option<&'a str> {
+    if !matches!(marker, "-" | "*" | "+") {
+        return None;
+    }
+    let content = after_marker.trim_start();
+    ["[ ]", "[x]", "[X]"]
+        .into_iter()
+        .find(|task| {
+            content.strip_prefix(task).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with(char::is_whitespace)
+            })
+        })
+        .map(|_| "[ ] ")
 }
 
 fn ordered_next_marker(marker: &str) -> Option<String> {

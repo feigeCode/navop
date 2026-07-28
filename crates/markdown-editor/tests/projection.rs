@@ -100,6 +100,72 @@ fn structural_block_syntax_is_projected_as_content() {
 }
 
 #[test]
+fn fenced_code_display_end_edits_stay_before_the_closing_fence() {
+    let source = "```rust\nlet value = 1;\n```";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let block = &document.blocks[0];
+    let content_end = block.content_range.as_ref().unwrap().end;
+    let projection = MarkdownProjection::build_range(&document, None, block.source_range.clone());
+
+    assert_eq!("let value = 1;", projection.text);
+    assert_eq!(
+        content_end,
+        projection.display_to_source(projection.text.len()),
+        "the final projected caret must stay inside the closing fence"
+    );
+
+    for (value, replacement) in [("let value = 1;x", "x"), ("let value = 1;\n", "\n")] {
+        let edit = projection
+            .edit_for_value(value)
+            .expect("an edit at the final code position must map back to source");
+        assert_eq!(content_end..content_end, edit.source_range);
+        assert_eq!(replacement, edit.replacement);
+    }
+}
+
+#[test]
+fn empty_fenced_code_inserts_at_its_content_boundary() {
+    let source = "```rust\n\n```";
+    let document = SourceMarkdownDocument::parse(source).unwrap();
+    let block = &document.blocks[0];
+    let content = block.content_range.as_ref().unwrap();
+    assert!(content.is_empty());
+    let projection = MarkdownProjection::build_range(&document, None, block.source_range.clone());
+
+    assert!(projection.text.is_empty());
+    assert_eq!(content.start, projection.display_to_source(0));
+    let edit = projection
+        .edit_for_value("x")
+        .expect("an empty code block must accept its first character");
+    assert_eq!(content.start..content.start, edit.source_range);
+}
+
+#[test]
+fn empty_prefix_only_blocks_insert_after_their_markers() {
+    for source in ["# ", "- ", "> "] {
+        let document = SourceMarkdownDocument::parse(source).unwrap();
+        let block = &document.blocks[0];
+        let projection =
+            MarkdownProjection::build_range(&document, None, block.source_range.clone());
+
+        assert!(projection.text.is_empty(), "{source:?}");
+        assert_eq!(
+            block.source_range.end,
+            projection.display_to_source(0),
+            "{source:?}"
+        );
+        let edit = projection
+            .edit_for_value("x")
+            .expect("an empty prefixed block must accept its first character");
+        assert_eq!(
+            block.source_range.end..block.source_range.end,
+            edit.source_range,
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
 fn math_syntax_is_projected_like_typora_source_blocks() {
     let slash = char::from(92);
     let source = format!("Euler: $e^{{i{slash}pi}} + 1 = 0$\n\n$$\n{slash}frac{{a}}{{b}}\n$$");

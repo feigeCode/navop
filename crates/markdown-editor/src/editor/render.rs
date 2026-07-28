@@ -1,18 +1,11 @@
 use super::MarkdownEditor;
-use gpui::{
-    Context, Image, ImageFormat, InteractiveElement, IntoElement, MouseButton, ObjectFit,
-    ParentElement, SharedString, Styled, StyledImage, img, rems,
-};
+use gpui::{Context, InteractiveElement, IntoElement, ParentElement, Styled, px, rems};
 use gpui_component::{
-    ElementExt, Sizable,
+    Sizable,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
-    text::{MarkdownPalette, TextView, TextViewStyle},
-    v_flex,
 };
-use markdown_source::{SourceBlock, SourceBlockKind};
-use std::{cell::Cell, rc::Rc, sync::Arc};
 
 mod action_handlers;
 mod active_block;
@@ -20,6 +13,8 @@ mod active_inline_math;
 mod active_list_markers;
 pub(super) mod block_renderer;
 mod blocks;
+mod code_language;
+mod html;
 pub(super) mod layout_metrics;
 mod list_marker_source;
 mod natural_blocks;
@@ -50,98 +45,18 @@ impl MarkdownEditor {
             .into_any_element()
     }
 
-    fn render_preview_block(
-        &self,
-        block: &SourceBlock,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let editor = cx.entity();
-        let block_id = block.id;
-        let bounds = Rc::new(Cell::new(gpui::Bounds::default()));
-        let click_bounds = bounds.clone();
+    fn render_empty_gap_surface(&self) -> gpui::AnyElement {
+        let surface = self
+            .surface(crate::editor::surface::MarkdownSurfaceKey::Empty)
+            .expect("the empty markdown surface must remain mounted");
         gpui::div()
-            .id(("markdown-preview-block", block.id.0))
-            .debug_selector(|| format!("markdown-preview-block-{}", block.id.0))
+            .id("markdown-empty-gap")
+            .debug_selector(|| "markdown-empty-gap".to_owned())
             .w_full()
             .min_w_0()
+            .min_h(px(MARKDOWN_BODY_LINE_HEIGHT))
             .cursor_text()
-            .on_prepaint(move |value, _, _| bounds.set(value))
-            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                let line = clicked_line(event.position.y, click_bounds.get().top());
-                editor.update(cx, |editor, cx| {
-                    editor.activate_block_line(block_id, line, window, cx);
-                });
-            })
-            .child(self.preview_content(block))
-            .into_any_element()
-    }
-
-    fn preview_content(&self, block: &SourceBlock) -> gpui::AnyElement {
-        match block.kind {
-            SourceBlockKind::Html => TextView::html(
-                SharedString::from(format!("markdown-html-block-{}", block.id.0)),
-                block.original_source.clone(),
-            )
-            .style(self.text_view_style())
-            .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-            .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-            .into_any_element(),
-            SourceBlockKind::FrontMatter | SourceBlockKind::RawMarkdown => self.raw_card(block),
-            _ => self.markdown_preview(block),
-        }
-    }
-
-    fn markdown_preview(&self, block: &SourceBlock) -> gpui::AnyElement {
-        let math_artifacts = self.inline_math_artifacts.clone();
-        TextView::markdown(
-            SharedString::from(format!("markdown-block-{}", block.id.0)),
-            block.original_source.clone(),
-        )
-        .style(self.text_view_style())
-        .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-        .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-        .inline_math_renderer(move |source, _, _| {
-            let Some(artifact) = math_artifacts.get(source) else {
-                return gpui::div().child(source.to_owned()).into_any_element();
-            };
-            let image = Arc::new(Image::from_bytes(ImageFormat::Svg, artifact.bytes.clone()));
-            let width = artifact.intrinsic_width.unwrap_or(96.).clamp(24., 360.);
-            let height = artifact.intrinsic_height.unwrap_or(24.).clamp(16., 64.);
-            img(image)
-                .w(gpui::px(width))
-                .h(gpui::px(height))
-                .object_fit(ObjectFit::Contain)
-                .into_any_element()
-        })
-        .into_any_element()
-    }
-
-    fn raw_card(&self, block: &SourceBlock) -> gpui::AnyElement {
-        let label = match block.kind {
-            SourceBlockKind::FrontMatter => "Frontmatter",
-            _ => "Raw Markdown",
-        };
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .gap_2()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.border.opacity(0.08))
-            .child(
-                gpui::div()
-                    .text_xs()
-                    .text_color(self.theme.muted_foreground)
-                    .child(label),
-            )
-            .children(block.original_source.lines().map(|line| {
-                gpui::div()
-                    .text_sm()
-                    .text_color(self.theme.foreground)
-                    .child(line.to_owned())
-            }))
+            .child(self.surface_input(&surface.input, None))
             .into_any_element()
     }
 
@@ -152,31 +67,6 @@ impl MarkdownEditor {
             muted_foreground: self.theme.muted_foreground,
             border: self.theme.border,
         }
-    }
-
-    fn text_view_style(&self) -> TextViewStyle {
-        TextViewStyle::default()
-            .paragraph_gap(rems(0.62))
-            .heading_font_size(|level, _| match level {
-                1 => gpui::px(30.),
-                2 => gpui::px(24.),
-                3 => gpui::px(20.),
-                4 => gpui::px(17.),
-                _ => gpui::px(16.),
-            })
-            .markdown_palette(MarkdownPalette {
-                is_dark: self.theme.background.l < 0.5,
-                foreground: self.theme.foreground,
-                muted_foreground: self.theme.muted_foreground,
-                border: self.theme.border,
-                code_background: self.theme.border.opacity(0.2),
-                code_foreground: self.theme.foreground,
-                table_header: self.theme.border.opacity(0.24),
-                table_row: self.theme.background,
-                table_row_alt: self.theme.border.opacity(0.1),
-                quote_border: self.theme.border,
-                link: self.theme.primary,
-            })
     }
 
     fn render_image_properties(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -223,8 +113,4 @@ impl MarkdownEditor {
             )
             .into_any_element()
     }
-}
-
-fn clicked_line(position: gpui::Pixels, top: gpui::Pixels) -> usize {
-    ((position - top).as_f32().max(0.) / 24.).floor() as usize
 }

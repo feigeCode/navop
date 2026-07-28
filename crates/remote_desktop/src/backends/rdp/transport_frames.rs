@@ -5,7 +5,7 @@ use crate::{
     helper_protocol::{HelperEvent, HelperFrameRect, decode_event_line},
 };
 
-use super::helper_events::{helper_disconnect_message, helper_event_to_output};
+use super::helper_events::{helper_disconnect, helper_event_to_output};
 use super::transport::HelperOutput;
 use super::*;
 
@@ -28,7 +28,7 @@ pub(super) fn read_helper_output(
         return Ok(None);
     };
     let connected = matches!(event, HelperEvent::Connected { .. });
-    let disconnect_message = helper_disconnect_message(&event);
+    let disconnect = helper_disconnect(&event);
     match event {
         HelperEvent::FrameBytes {
             width,
@@ -66,7 +66,7 @@ pub(super) fn read_helper_output(
         event => Ok(Some(HelperOutput {
             output: helper_event_to_output(event, protocol)?,
             connected,
-            disconnect_message,
+            disconnect,
         })),
     }
 }
@@ -82,15 +82,15 @@ where
     let mut rgba = vec![0; expected_len];
     reader.read_exact(&mut rgba)?;
     Ok(HelperOutput {
-        output: RemoteDesktopOutput::CursorBitmap(RemoteDesktopCursor {
+        output: Some(RemoteDesktopOutput::CursorBitmap(RemoteDesktopCursor {
             width: header.width,
             height: header.height,
             hotspot_x: header.hotspot_x,
             hotspot_y: header.hotspot_y,
             rgba,
-        }),
+        })),
         connected: false,
-        disconnect_message: None,
+        disconnect: None,
     })
 }
 
@@ -140,14 +140,14 @@ where
     let mut bgra = vec![0; bgra_len];
     reader.read_exact(&mut bgra)?;
     Ok(HelperOutput {
-        output: RemoteDesktopOutput::FrameBgraRects {
+        output: Some(RemoteDesktopOutput::FrameBgraRects {
             width,
             height,
             rects: rects.into_iter().map(remote_frame_rect).collect(),
             bgra,
-        },
+        }),
         connected: false,
-        disconnect_message: None,
+        disconnect: None,
     })
 }
 
@@ -200,13 +200,13 @@ where
     let mut rgba = vec![0; rgba_len];
     reader.read_exact(&mut rgba)?;
     Ok(HelperOutput {
-        output: RemoteDesktopOutput::Frame {
+        output: Some(RemoteDesktopOutput::Frame {
             width,
             height,
             rgba,
-        },
+        }),
         connected: false,
-        disconnect_message: None,
+        disconnect: None,
     })
 }
 
@@ -223,13 +223,13 @@ where
     let mut bgra = vec![0; bgra_len];
     reader.read_exact(&mut bgra)?;
     Ok(HelperOutput {
-        output: RemoteDesktopOutput::FrameBgra {
+        output: Some(RemoteDesktopOutput::FrameBgra {
             width,
             height,
             bgra,
-        },
+        }),
         connected: false,
-        disconnect_message: None,
+        disconnect: None,
     })
 }
 

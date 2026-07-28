@@ -5,19 +5,23 @@ use super::*;
 pub(super) fn helper_event_to_output(
     event: HelperEvent,
     protocol: RemoteDesktopProtocol,
-) -> anyhow::Result<RemoteDesktopOutput> {
+) -> anyhow::Result<Option<RemoteDesktopOutput>> {
     Ok(match event {
-        HelperEvent::Status { message } => RemoteDesktopOutput::Status(message),
-        HelperEvent::Connected { width, height } => RemoteDesktopOutput::Connected {
+        // Helper status text is an untrusted diagnostic boundary. Keep the
+        // backend-owned status messages user-visible, but never forward
+        // arbitrary helper text that may contain source paths or protocol
+        // implementation details.
+        HelperEvent::Status { .. } => None,
+        HelperEvent::Connected { width, height } => Some(RemoteDesktopOutput::Connected {
             width,
             height,
             capabilities: capabilities_for_protocol(protocol),
-        },
-        HelperEvent::Frame { width, height, .. } => RemoteDesktopOutput::Frame {
+        }),
+        HelperEvent::Frame { width, height, .. } => Some(RemoteDesktopOutput::Frame {
             width,
             height,
             rgba: event.into_rgba()?,
-        },
+        }),
         HelperEvent::FrameBytes { .. }
         | HelperEvent::FrameBgraBytes { .. }
         | HelperEvent::FrameBgraRects { .. } => {
@@ -26,30 +30,27 @@ pub(super) fn helper_event_to_output(
         HelperEvent::CursorRgbaBytes { .. } => {
             anyhow::bail!("binary cursor payload is missing")
         }
-        HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
-        HelperEvent::CursorHidden => RemoteDesktopOutput::CursorHidden,
-        HelperEvent::CursorPosition { x, y } => RemoteDesktopOutput::CursorPosition { x, y },
-        HelperEvent::ClipboardText { text } => RemoteDesktopOutput::ClipboardText { text },
+        HelperEvent::CursorDefault => Some(RemoteDesktopOutput::CursorDefault),
+        HelperEvent::CursorHidden => Some(RemoteDesktopOutput::CursorHidden),
+        HelperEvent::CursorPosition { x, y } => Some(RemoteDesktopOutput::CursorPosition { x, y }),
+        HelperEvent::ClipboardText { text } => Some(RemoteDesktopOutput::ClipboardText { text }),
         HelperEvent::ClipboardFilesReady { transfer_id, paths } => {
-            RemoteDesktopOutput::ClipboardFilesReady { transfer_id, paths }
+            Some(RemoteDesktopOutput::ClipboardFilesReady { transfer_id, paths })
         }
         HelperEvent::ClipboardTransferFailed {
             transfer_id,
             message,
-        } => RemoteDesktopOutput::ClipboardTransferFailed {
+        } => Some(RemoteDesktopOutput::ClipboardTransferFailed {
             transfer_id,
             message,
-        },
+        }),
         HelperEvent::Reconnecting { reason, delay_secs } => {
-            RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
+            Some(RemoteDesktopOutput::Reconnecting(RemoteDesktopReconnect {
                 reason: reconnect_reason(reason),
                 delay_secs,
-            })
+            }))
         }
-        HelperEvent::ConnectionFailure { message } => {
-            RemoteDesktopOutput::ConnectionFailure(message)
-        }
-        HelperEvent::Terminated { message } => RemoteDesktopOutput::Terminated(message),
+        HelperEvent::ConnectionFailure { .. } | HelperEvent::Terminated { .. } => None,
     })
 }
 
@@ -69,11 +70,16 @@ fn capabilities_for_protocol(protocol: RemoteDesktopProtocol) -> RemoteDesktopCa
     }
 }
 
-pub(super) fn helper_disconnect_message(event: &HelperEvent) -> Option<String> {
+pub(super) fn helper_disconnect(event: &HelperEvent) -> Option<HelperDisconnect> {
     match event {
-        HelperEvent::ConnectionFailure { message } | HelperEvent::Terminated { message } => {
-            Some(message.clone())
-        }
+        HelperEvent::ConnectionFailure { message } => Some(HelperDisconnect {
+            kind: Some(HelperDisconnectKind::ConnectionFailure),
+            reason: message.clone(),
+        }),
+        HelperEvent::Terminated { message } => Some(HelperDisconnect {
+            kind: Some(HelperDisconnectKind::Terminated),
+            reason: message.clone(),
+        }),
         _ => None,
     }
 }

@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkdownEditorEvent {
-    Changed { source: String, revision: u64 },
+    Changed { revision: u64 },
 }
 
 #[derive(Debug, thiserror::Error)]

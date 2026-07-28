@@ -1,4 +1,6 @@
-use crate::{DocumentFormat, FileNode, MarkdownViewMode, NodeKind, NotebookUiState};
+use crate::{
+    DocumentFormat, FileNode, MarkdownSaveMode, MarkdownViewMode, NodeKind, NotebookUiState,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -17,6 +19,7 @@ pub struct TreeState {
     pub selected_document: Option<PathBuf>,
     pub expanded_directories: BTreeSet<PathBuf>,
     pub markdown_view_modes: BTreeMap<String, MarkdownViewMode>,
+    pub markdown_save_mode: MarkdownSaveMode,
     pub last_created_format: DocumentFormat,
 }
 
@@ -26,6 +29,7 @@ impl TreeState {
             selected_document: state.selected_document,
             expanded_directories: state.expanded_directories,
             markdown_view_modes: state.markdown_view_modes,
+            markdown_save_mode: state.markdown_save_mode,
             last_created_format: state.last_created_format,
         }
     }
@@ -35,6 +39,7 @@ impl TreeState {
             selected_document: self.selected_document.clone(),
             expanded_directories: self.expanded_directories.clone(),
             markdown_view_modes: self.markdown_view_modes.clone(),
+            markdown_save_mode: self.markdown_save_mode,
             last_created_format: self.last_created_format,
         }
     }
