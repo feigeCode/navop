@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use gpui::{App, AppContext, Context, Entity, WeakEntity};
 
-use crate::broadcast_input::{BroadcastClientId, BroadcastInputHub, BroadcastInputSnapshot};
+use crate::broadcast_input::{
+    BroadcastClientId, BroadcastInputHub, BroadcastInputSnapshot, TerminalInputKind,
+};
 use crate::view::TerminalView;
 
 #[derive(Default)]
@@ -66,16 +68,17 @@ impl BroadcastInputRegistry {
     pub(crate) fn deliveries_from(
         &self,
         source: BroadcastClientId,
+        kind: TerminalInputKind,
         data: &[u8],
-    ) -> Vec<(WeakEntity<TerminalView>, Vec<u8>)> {
+    ) -> Vec<(WeakEntity<TerminalView>, TerminalInputKind, Vec<u8>)> {
         self.hub
-            .deliveries_from(source, data)
+            .deliveries_from(source, kind, data)
             .into_iter()
             .filter_map(|delivery| {
                 self.clients
                     .get(&delivery.target)
                     .cloned()
-                    .map(|view| (view, delivery.data))
+                    .map(|view| (view, delivery.kind, delivery.data))
             })
             .collect()
     }

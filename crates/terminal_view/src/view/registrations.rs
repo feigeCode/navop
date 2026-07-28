@@ -39,7 +39,12 @@ impl TerminalView {
         }
     }
 
-    pub(super) fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
+    pub(super) fn broadcast_input(
+        &self,
+        kind: TerminalInputKind,
+        data: &[u8],
+        cx: &mut Context<Self>,
+    ) {
         if !self.is_live_ssh_terminal(cx) {
             return;
         }
@@ -49,10 +54,10 @@ impl TerminalView {
         let Some(registry) = broadcast_input_registry(cx) else {
             return;
         };
-        let deliveries = registry.read(cx).deliveries_from(client_id, data);
-        for (view, data) in deliveries {
+        let deliveries = registry.read(cx).deliveries_from(client_id, kind, data);
+        for (view, kind, data) in deliveries {
             let _ = view.update(cx, |view, cx| {
-                view.write_broadcast_input(data, cx);
+                view.write_broadcast_input(kind, data, cx);
             });
         }
     }

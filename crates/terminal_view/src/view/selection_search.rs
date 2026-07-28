@@ -89,7 +89,7 @@ impl TerminalView {
             cx.notify();
         } else {
             drop(term_lock);
-            self.write_to_pty(b"\x1b".to_vec(), cx);
+            self.write_control_sequence_to_pty(b"\x1b".to_vec(), cx);
         }
     }
 

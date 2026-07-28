@@ -42,7 +42,7 @@ use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext, register_default_addons,
 };
-use crate::broadcast_input::BroadcastClientId;
+use crate::broadcast_input::{BroadcastClientId, TerminalInputKind};
 use crate::broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry};
 use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,

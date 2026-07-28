@@ -9,7 +9,7 @@ impl TerminalView {
             return;
         }
         self.dismiss_history_prompt();
-        self.write_to_pty(b"\x09".to_vec(), cx);
+        self.write_control_sequence_to_pty(b"\x09".to_vec(), cx);
     }
 
     pub(super) fn send_shift_tab(
@@ -22,7 +22,7 @@ impl TerminalView {
             return;
         }
         self.dismiss_history_prompt();
-        self.write_to_pty(b"\x1b[Z".to_vec(), cx);
+        self.write_control_sequence_to_pty(b"\x1b[Z".to_vec(), cx);
     }
 
     pub(super) fn render_sidebar_resize_handle(

@@ -33,7 +33,7 @@ impl TerminalView {
                     sgr_mouse_wheel_report(lines, point.column.0, point.line.0 as usize)
                 {
                     for _ in 0..lines.unsigned_abs() {
-                        self.write_to_pty(report.as_bytes().to_vec(), cx);
+                        self.write_control_sequence_to_pty(report.as_bytes().to_vec(), cx);
                     }
                 }
             } else if self.vim_scroll_to_arrow_keys && lines != 0 {
@@ -47,7 +47,7 @@ impl TerminalView {
                     b"\x1b[B"
                 };
                 for _ in 0..lines.unsigned_abs() {
-                    self.write_to_pty(seq.to_vec(), cx);
+                    self.write_control_sequence_to_pty(seq.to_vec(), cx);
                 }
             }
             return;
@@ -162,7 +162,7 @@ impl TerminalView {
         let encoded = base | encode_mouse_modifiers(modifiers);
         let report =
             sgr_mouse_button_report(encoded, point.column.0, point.line.0 as usize, pressed);
-        self.write_to_pty(report.into_bytes(), cx);
+        self.write_control_sequence_to_pty(report.into_bytes(), cx);
         true
     }
 }

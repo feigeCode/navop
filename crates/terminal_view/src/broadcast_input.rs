@@ -15,9 +15,17 @@ pub struct BroadcastInputSnapshot {
     pub targets: Vec<BroadcastTarget>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalInputKind {
+    UserInput,
+    Paste,
+    ControlSequence,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BroadcastDelivery {
     pub target: BroadcastClientId,
+    pub kind: TerminalInputKind,
     pub data: Vec<u8>,
 }
 
@@ -110,6 +118,7 @@ impl BroadcastInputHub {
     pub fn deliveries_from(
         &self,
         source: BroadcastClientId,
+        kind: TerminalInputKind,
         data: &[u8],
     ) -> Vec<BroadcastDelivery> {
         if data.is_empty() || !self.enabled || !self.clients.contains_key(&source) {
@@ -121,6 +130,7 @@ impl BroadcastInputHub {
             .filter(|target| **target != source && self.clients.contains_key(target))
             .map(|target| BroadcastDelivery {
                 target: *target,
+                kind,
                 data: data.to_vec(),
             })
             .collect()
@@ -140,11 +150,12 @@ mod tests {
         hub.set_enabled(true);
         hub.set_selected(selected, true);
 
-        let deliveries = hub.deliveries_from(source, b"uptime\n");
+        let deliveries = hub.deliveries_from(source, TerminalInputKind::UserInput, b"uptime\n");
 
         assert_eq!(
             vec![BroadcastDelivery {
                 target: selected,
+                kind: TerminalInputKind::UserInput,
                 data: b"uptime\n".to_vec(),
             }],
             deliveries
@@ -159,7 +170,10 @@ mod tests {
         let target = hub.register("target");
         hub.set_selected(target, true);
 
-        assert!(hub.deliveries_from(source, b"ls\n").is_empty());
+        assert!(
+            hub.deliveries_from(source, TerminalInputKind::UserInput, b"ls\n")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -169,7 +183,35 @@ mod tests {
         hub.set_enabled(true);
         hub.set_selected(source, true);
 
-        assert!(hub.deliveries_from(source, b"pwd\n").is_empty());
+        assert!(
+            hub.deliveries_from(source, TerminalInputKind::UserInput, b"pwd\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn broadcast_deliveries_preserve_input_kind() {
+        let mut hub = BroadcastInputHub::default();
+        let source = hub.register("source");
+        let target = hub.register("target");
+        hub.set_enabled(true);
+        hub.set_selected(source, true);
+        hub.set_selected(target, true);
+
+        for (kind, data) in [
+            (TerminalInputKind::UserInput, b"echo typed\n".as_slice()),
+            (TerminalInputKind::Paste, b"pasted text\n".as_slice()),
+            (TerminalInputKind::ControlSequence, b"\x1b[A".as_slice()),
+        ] {
+            assert_eq!(
+                vec![BroadcastDelivery {
+                    target,
+                    kind,
+                    data: data.to_vec(),
+                }],
+                hub.deliveries_from(source, kind, data)
+            );
+        }
     }
 
     #[test]
@@ -182,7 +224,10 @@ mod tests {
 
         hub.unregister(target);
 
-        assert!(hub.deliveries_from(source, b"pwd\n").is_empty());
+        assert!(
+            hub.deliveries_from(source, TerminalInputKind::UserInput, b"pwd\n")
+                .is_empty()
+        );
         assert_eq!(
             vec![BroadcastTarget {
                 id: source,

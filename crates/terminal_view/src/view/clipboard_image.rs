@@ -120,7 +120,7 @@ impl TerminalView {
         }
         let mode = self.terminal.read(cx).mode();
         self.apply_paste_to_history_prompt(path, cx);
-        self.write_to_pty(terminal_paste_bytes(path, mode), cx);
+        self.write_paste_to_pty(terminal_paste_bytes(path, mode), cx);
     }
 
     /// 粘贴代码块到终端（用于AI生成的代码）

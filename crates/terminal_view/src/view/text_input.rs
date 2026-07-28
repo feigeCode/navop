@@ -2,21 +2,48 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn write_to_pty(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        self.write_to_pty_with_kind(TerminalInputKind::UserInput, data, cx);
+    }
+
+    pub(super) fn write_paste_to_pty(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        self.write_to_pty_with_kind(TerminalInputKind::Paste, data, cx);
+    }
+
+    pub(super) fn write_control_sequence_to_pty(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        self.write_to_pty_with_kind(TerminalInputKind::ControlSequence, data, cx);
+    }
+
+    fn write_to_pty_with_kind(
+        &mut self,
+        kind: TerminalInputKind,
+        data: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.accepts_live_terminal_input(cx) {
             return;
         }
-        self.write_input_to_terminal(&data, cx);
-        self.broadcast_user_input(&data, cx);
+        self.write_input_to_terminal(kind, &data, cx);
+        self.broadcast_input(kind, &data, cx);
     }
 
-    pub(super) fn write_broadcast_input(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+    pub(super) fn write_broadcast_input(
+        &mut self,
+        kind: TerminalInputKind,
+        data: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.is_live_ssh_terminal(cx) {
             return;
         }
-        self.write_input_to_terminal(&data, cx);
+        self.write_input_to_terminal(kind, &data, cx);
     }
 
-    pub(super) fn write_input_to_terminal(&mut self, data: &[u8], cx: &mut Context<Self>) {
+    pub(super) fn write_input_to_terminal(
+        &mut self,
+        kind: TerminalInputKind,
+        data: &[u8],
+        cx: &mut Context<Self>,
+    ) {
         if !self.accepts_live_terminal_input(cx) {
             return;
         }
@@ -33,7 +60,12 @@ impl TerminalView {
                     .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
             });
         }
-        self.terminal.read(cx).write(data);
+        let terminal = self.terminal.read(cx);
+        match kind {
+            TerminalInputKind::UserInput => terminal.write(data),
+            TerminalInputKind::Paste => terminal.write_paste(data),
+            TerminalInputKind::ControlSequence => terminal.write_control_sequence(data),
+        }
     }
 
     pub(super) fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -228,7 +260,7 @@ impl TerminalView {
                 Cow::Borrowed(s) => s.as_bytes().to_vec(),
                 Cow::Owned(s) => s.into_bytes(),
             };
-            self.write_to_pty(bytes, cx);
+            self.write_control_sequence_to_pty(bytes, cx);
         }
     }
 }

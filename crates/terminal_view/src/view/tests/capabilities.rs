@@ -37,7 +37,7 @@ fn playback_never_registers_or_uses_ssh_broadcast_input() {
 
     let broadcast = function_region(
         source,
-        "fn broadcast_user_input",
+        "fn broadcast_input",
         "fn refresh_public_mcp_session",
     );
     let guard = broadcast
@@ -47,6 +47,58 @@ fn playback_never_registers_or_uses_ssh_broadcast_input() {
         .find("deliveries_from")
         .expect("broadcast delivery lookup should remain");
     assert!(guard < delivery, "the live SSH guard must precede delivery");
+}
+
+#[test]
+fn typed_terminal_input_preserves_operation_kind_without_rebroadcasting_deliveries() {
+    let source = include_str!("../text_input.rs");
+
+    for (start, end, expected_kind) in [
+        (
+            "pub(super) fn write_to_pty",
+            "pub(super) fn write_paste_to_pty",
+            "TerminalInputKind::UserInput",
+        ),
+        (
+            "pub(super) fn write_paste_to_pty",
+            "pub(super) fn write_control_sequence_to_pty",
+            "TerminalInputKind::Paste",
+        ),
+        (
+            "pub(super) fn write_control_sequence_to_pty",
+            "fn write_to_pty_with_kind",
+            "TerminalInputKind::ControlSequence",
+        ),
+    ] {
+        assert!(
+            function_region(source, start, end).contains(expected_kind),
+            "{start} must preserve {expected_kind}"
+        );
+    }
+
+    let dispatch = function_region(
+        source,
+        "pub(super) fn write_input_to_terminal",
+        "pub(super) fn commit_text",
+    );
+    assert!(dispatch.contains("TerminalInputKind::UserInput => terminal.write(data)"));
+    assert!(dispatch.contains("TerminalInputKind::Paste => terminal.write_paste(data)"));
+    assert!(
+        dispatch.contains(
+            "TerminalInputKind::ControlSequence => terminal.write_control_sequence(data)"
+        )
+    );
+
+    let delivery = function_region(
+        source,
+        "pub(super) fn write_broadcast_input",
+        "pub(super) fn write_input_to_terminal",
+    );
+    assert!(delivery.contains("self.write_input_to_terminal(kind, &data, cx)"));
+    assert!(
+        !delivery.contains("self.broadcast_input"),
+        "a broadcast delivery must not be broadcast again"
+    );
 }
 
 #[test]

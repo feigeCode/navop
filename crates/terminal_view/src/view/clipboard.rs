@@ -177,7 +177,7 @@ impl TerminalView {
         // 原样送进不支持的程序（例如 Vim 未开启时可能导致光标/位置异常）。
         let mode = self.terminal.read(cx).mode();
         self.apply_paste_to_history_prompt(text, cx);
-        self.write_to_pty(terminal_paste_bytes(text, mode), cx);
+        self.write_paste_to_pty(terminal_paste_bytes(text, mode), cx);
         self.focus_terminal(window, cx);
     }
 }
