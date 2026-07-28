@@ -1,4 +1,4 @@
-use gpui::{App, IntoElement, ParentElement, Window, div, px};
+use gpui::{App, IntoElement, ParentElement, Rems, Window, div, px};
 use gpui_component::{
     Disableable, Sizable,
     checkbox::Checkbox,
@@ -9,7 +9,7 @@ use gpui_component::{
 
 use crate::{
     ComponentError, ComponentProps, ComponentRegistry, ComponentRenderer, ComponentResult,
-    ComponentSchema, RegistryError, RenderContext, VNode,
+    ComponentSchema, RegistryError, RenderContext, VElement, VNode,
 };
 
 use super::{
@@ -43,6 +43,7 @@ fn form_schema() -> ComponentSchema {
         .attribute("layout")
         .attribute("columns")
         .attribute("label-width")
+        .attribute("label-text-size")
         .attribute("size")
 }
 
@@ -54,6 +55,9 @@ fn field_schema() -> ComponentSchema {
         .attribute("visible")
         .attribute("label-indent")
         .attribute("col-span")
+        .attribute("col-start")
+        .attribute("col-end")
+        .attribute("label-justify")
         .attribute("align")
 }
 
@@ -94,6 +98,9 @@ impl ComponentRenderer for FormComponent {
             let width = parse_non_negative_f32(&props.element, "label-width", width)?;
             form = form.label_width(px(width));
         }
+        if let Some(size) = parse_label_text_size(&props.element)? {
+            form = form.label_text_size(size);
+        }
         if let Some(size) = parse_size_attribute(&props.element)? {
             form = form.with_size(size);
         }
@@ -131,6 +138,19 @@ fn build_field(
     if let Some(description) = props.element.attr("description") {
         field = field.description(description.to_owned());
     }
+    if let Some(justify) = props.element.attr("label-justify") {
+        field = match justify.trim().to_ascii_lowercase().as_str() {
+            "start" => field.label_justify_start(),
+            "center" => field.label_justify_center(),
+            "end" => field.label_justify_end(),
+            _ => {
+                return Err(ComponentError::new(format!(
+                    "attribute `label-justify` on <field> must be start, center, or end, got \
+                     `{justify}`"
+                )));
+            }
+        };
+    }
     if let Some(span) = parse_positive_usize_attribute(&props.element, "col-span")? {
         let span = u16::try_from(span).map_err(|_| {
             ComponentError::new(format!(
@@ -138,6 +158,12 @@ fn build_field(
             ))
         })?;
         field = field.col_span(span);
+    }
+    if let Some(start) = parse_i16_attribute(&props.element, "col-start")? {
+        field = field.col_start(start);
+    }
+    if let Some(end) = parse_i16_attribute(&props.element, "col-end")? {
+        field = field.col_end(end);
     }
     if let Some(align) = props.element.attr("align") {
         field = match align.trim().to_ascii_lowercase().as_str() {
@@ -153,6 +179,39 @@ fn build_field(
     }
     field = field.children(context.render_children(&props));
     Ok(context.style(field, &props))
+}
+
+fn parse_label_text_size(element: &VElement) -> Result<Option<Rems>, ComponentError> {
+    let Some(value) = element.attr("label-text-size") else {
+        return Ok(None);
+    };
+    let size = value
+        .parse::<f32>()
+        .map_err(|_| invalid_label_text_size(value))?;
+    if !size.is_finite() || size <= 0.0 {
+        return Err(invalid_label_text_size(value));
+    }
+    Ok(Some(Rems(size)))
+}
+
+fn invalid_label_text_size(value: &str) -> ComponentError {
+    ComponentError::new(format!(
+        "attribute `label-text-size` on <form> must be a finite positive rem value, got `{value}`"
+    ))
+}
+
+fn parse_i16_attribute(element: &VElement, name: &str) -> Result<Option<i16>, ComponentError> {
+    let Some(value) = element.attr(name) else {
+        return Ok(None);
+    };
+    value.parse::<i16>().map(Some).map_err(|_| {
+        ComponentError::new(format!(
+            "attribute `{name}` on <{}> must be an integer from {} to {}, got `{value}`",
+            element.tag,
+            i16::MIN,
+            i16::MAX
+        ))
+    })
 }
 
 struct StructuralFormComponent;

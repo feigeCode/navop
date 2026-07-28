@@ -40,8 +40,20 @@ const DEMO_HTML: &str = r#"
             ></alert>
 
             <group-box title="Profile and automation" variant="outline">
-                <form layout="vertical" columns="2" size="sm" class="w-full">
-                    <field label="Username" required>
+                <form
+                    layout="vertical"
+                    columns="2"
+                    label-text-size="0.875"
+                    size="sm"
+                    class="w-full"
+                >
+                    <field
+                        label="Username"
+                        label-justify="start"
+                        col-start="1"
+                        col-end="2"
+                        required
+                    >
                         <input
                             id="username-input"
                             bind="username"
@@ -230,6 +242,12 @@ const DEMO_HTML: &str = r#"
                             Production PostgreSQL · selected
                         </list-item>
                         <list-item
+                            secondary-selected
+                            class="border border-zinc-700 rounded-md"
+                        >
+                            Staging PostgreSQL · secondary selection
+                        </list-item>
+                        <list-item
                             confirmed
                             action="select-connection"
                             data-connection="Analytics Replica"
@@ -243,6 +261,9 @@ const DEMO_HTML: &str = r#"
                             class="border border-zinc-700 rounded-md"
                         >
                             Local Cache · actionable
+                        </list-item>
+                        <list-item separator>
+                            Archived connections
                         </list-item>
                         <list-item
                             disabled

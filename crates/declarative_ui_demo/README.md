@@ -594,12 +594,12 @@ identity namespace。
 | `label` | `bind`、`secondary`、`masked` |
 | `tag` | `variant`、`outline`、`size` |
 | `skeleton` | `secondary` |
-| `form` | `layout=vertical\|horizontal`、`columns`、`label-width`、`size` |
-| `field` | `label`、`description`、`required`、`visible`、`label-indent`、`col-span`、`align=start\|center\|end` |
+| `form` | `layout=vertical\|horizontal`、`columns`、`label-width`、`label-text-size`、`size` |
+| `field` | `label`、`description`、`required`、`visible`、`label-indent`、`col-span`、`col-start`、`col-end`、`label-justify=start\|center\|end`、`align=start\|center\|end` |
 | `checkbox`、`switch`、`radio` | `bind`、`checked`、`disabled`、`action`、`data-*`、`size`、`tooltip` |
 | `table` | `size` |
 | `th`、`td` | `colspan`、`align=left\|center\|right` |
-| `list-item` | `selected`、`disabled`、`confirmed`、`action`、`data-*` |
+| `list-item` | `selected`、`secondary-selected`、`disabled`、`confirmed`、`separator`、`action`、`data-*` |
 | `alert` | `bind`、`variant=default\|info\|success\|warning\|error\|danger`、`title`、`banner`、`visible`、`size` |
 | `badge` | `bind`、`count`、`max`、`dot`、`size` |
 | `progress` | `bind`、`value`、`loading`、`size` |
@@ -640,8 +640,14 @@ GPUI div-like 容器。`section` 等标签也不会引入 HTML 默认 margin、A
 `Vec<Field>`：
 
 ```html
-<form layout="vertical" columns="2">
-    <field label="Username" required>
+<form layout="vertical" columns="2" label-text-size="0.875">
+    <field
+        label="Username"
+        label-justify="start"
+        col-start="1"
+        col-end="2"
+        required
+    >
         <input bind="username" />
     </field>
     <field label="Notifications" label-indent="false">
@@ -653,7 +659,13 @@ GPUI div-like 容器。`section` 等标签也不会引入 HTML 默认 margin、A
 - `field` 必须是 `form` 的直接 element child；
 - `field` 内部可以渲染普通声明式 children；
 - 单独渲染 `<field>` 或把其他 element 直接放到 `<form>` 下会返回结构错误；
-- `columns` 和 `col-span` 必须是正整数；`label-width` 必须是有限非负像素值。
+- `columns` 和 `col-span` 必须是正整数；`label-width` 必须是有限非负像素值；
+- `label-text-size` 是有限且严格大于零的 rem 数值，直接映射
+  `Form::label_text_size(Rems)`；
+- `col-start` / `col-end` 是 `-32768..=32767` 的 signed grid line，负数保留
+  GPUI grid 的反向索引语义；DSL 不额外要求 start 小于 end；
+- `label-justify` 控制 label 内容在 label 区域内的水平对齐，`align` 控制整个
+  field children 的 item alignment，两者不是同一属性。
 
 这不是浏览器 form submission，也不生成 HTTP request；状态和提交行为仍分别由
 `bind` 与宿主注册的 Action handler 管理。
@@ -687,8 +699,9 @@ path 并应用自己的受限 class。非法层级或单独渲染结构标签会
 `ComponentRenderFailed` 错误边界。
 
 这是**静态声明式 Table 组合**：没有 dataset delegate、排序、筛选、分页、编辑模型
-或虚拟滚动。HTML5 parser 可能按标准 table 规则规范化节点，因此模板应像上例一样
-显式给出 section / row 层级。
+或虚拟滚动。结构标签按照与 Component Registry 相同的 ASCII 大小写无关规则匹配；
+HTML5 parser 通常也会把源码标签规范化为小写。模板仍应像上例一样显式给出
+section / row 层级。
 
 ### List 的准确边界
 
@@ -701,12 +714,17 @@ path 并应用自己的受限 class。非法层级或单独渲染结构标签会
     >
         Production
     </list-item>
+    <list-item secondary-selected>Staging</list-item>
+    <list-item separator>Archived connections</list-item>
 </list>
 ```
 
 `list` 是一个默认 `flex-column` 的静态声明式容器；每个 `list-item` 使用原生
-`gpui_component::list::ListItem`，可以显示 selected / confirmed / disabled 状态并
-派发结构化 Action。
+`gpui_component::list::ListItem`，可以显示 selected / secondary-selected /
+confirmed / disabled 状态并派发结构化 Action。`separator` 进入原生 separator
+mode，因此不可交互，也不显示 selected / secondary-selected 高亮；即使模板同时
+声明 selection state 或 `action`，DSL 也不发明冲突错误，而是保持上游 renderer
+自然忽略这些交互与高亮。
 
 它**不是** `gpui_component::list::List<D>`，不支持 delegate、search、数据驱动 row
 recycling 或 virtual scroll。需要大数据列表时应由可信宿主 Rust component 提供
@@ -1028,7 +1046,7 @@ state；只有用户触发 native callback 时才按 binding 合同写回新值�
 
 | 分类 | 上游组件 / 模块 | standalone v1 状态与边界 |
 | --- | --- | --- |
-| **已映射** | `Button`、`Input`、`Checkbox`、`Switch`、`Radio`、`Form` / `Field`、`GroupBox`、`Label`、`Tag`、`Skeleton` | 使用公共原生 API；输入和布尔控件具有明确字符串 binding |
+| **已映射** | `Button`、`Input`、`Checkbox`、`Switch`、`Radio`、`Form` / `Field`、`GroupBox`、`Label`、`Tag`、`Skeleton` | 使用公共原生 API；Form / Field 映射 label rem size、label 对齐和 signed grid line；输入和布尔控件具有明确字符串 binding |
 | **已映射** | `Alert`、`Badge`、`Progress`、`Spinner`、`Separator` | 使用公共原生 API；无 `Styled` 的组件通过稳定 wrapper 接收 class |
 | **已映射** | `Avatar`、`AvatarGroup`、`DescriptionList` / `DescriptionItem` | 使用公共原生 API；资源、结构和 wrapper 边界见上文 |
 | **已映射** | `Breadcrumb` / `BreadcrumbItem`、`Pagination`、`Rating`、`TabBar` / `Tab`、`Stepper` / `StepperItem` | 使用公共原生 API；navigation 只产生 Runtime Action，不直接执行导航 |
@@ -1036,8 +1054,8 @@ state；只有用户触发 native callback 时才按 binding 合同写回新值�
 | **已映射** | `Accordion` / `AccordionItem` | 使用公共原生 API；controlled open state 使用 canonical JSON binding，Action 在写回后派发 |
 | **已映射** | `Collapsible`、`ResizablePanelGroup` / `ResizablePanel` | 使用公共原生 API；Collapsible 是 controlled primitive，Resizable drag state 按 stable ID 存在 window keyed state |
 | **已映射 / 明确受限** | `ScrollHandle` / `Scrollbar` | DSL `<scroll>` 映射原生 overflow viewport 和 overlay scrollbar；显式 ID 保持 handle state，仅支持轴向、显示模式和 pixel viewport 合同 |
-| **部分映射 / 明确受限** | table primitives 与 `DataTable<D>` | DSL 只映射静态 `Table` / section / row / cell / caption；没有映射 `DataTable<D>`、`TableState<D>` 或 `TableDelegate` |
-| **部分映射 / 明确受限** | `ListItem` 与 `List<D>` | DSL 只映射静态 flex-column list + `ListItem`；没有映射 delegate、search、row recycling 或 virtual scroll |
+| **部分映射 / 明确受限** | table primitives 与 `DataTable<D>` | DSL 只映射大小写无关的静态 `Table` / section / row / cell / caption；没有映射 `DataTable<D>`、`TableState<D>` 或 `TableDelegate` |
+| **部分映射 / 明确受限** | `ListItem` 与 `List<D>` | DSL 只映射静态 flex-column list + 原生 selected / secondary-selected / confirmed / disabled / separator 状态；没有映射 delegate、search、row recycling 或 virtual scroll |
 | **部分映射 / 明确受限** | `Divider` | 上游 module 未从公共 crate API 导出；DSL 的 `divider` 是公共 `Separator` alias |
 | **尚未映射，可继续评估** | `Sidebar`、`Setting`、`Text` | 不能因上游存在类型就视为 DSL 已支持；需要逐个定义 schema、结构、state 和错误边界 |
 | **delegate / entity / data 型** | `DataTable<D>`、`List<D>`、`Select<D>`、`Tree`、`Chart`、`Plot` | 不把任意 dataset/delegate/entity 塞入字符串 HTML；应由可信宿主 Rust component 提供有配额的数据和 lifecycle |

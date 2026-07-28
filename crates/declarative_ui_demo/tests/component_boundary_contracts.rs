@@ -81,8 +81,15 @@ fn structured_builtin_components_render_without_crossing_the_error_boundary(
 ) {
     let source = r#"
         <main class="flex flex-col gap-2">
-            <form columns="2" size="sm">
-                <field label="Name"><input value="admin" /></field>
+            <form columns="2" label-text-size="0.875" size="sm">
+                <field
+                    label="Name"
+                    label-justify="center"
+                    col-start="-2"
+                    col-end="2"
+                >
+                    <input value="admin" />
+                </field>
                 <field label="Controls">
                     <checkbox checked="true">Notify</checkbox>
                     <switch checked="false">Sync</switch>
@@ -102,8 +109,18 @@ fn structured_builtin_components_render_without_crossing_the_error_boundary(
             </table>
             <list>
                 <list-item selected>Selected</list-item>
+                <list-item secondary-selected>Secondary selected</list-item>
                 <list-item confirmed>Confirmed</list-item>
                 <list-item disabled>Disabled</list-item>
+                <list-item
+                    separator
+                    selected
+                    confirmed
+                    secondary-selected
+                    action="ignored-separator-action"
+                >
+                    Separator
+                </list-item>
             </list>
             <alert variant="success" title="Status">Ready</alert>
             <badge count="3" max="9"><span>Saved</span></badge>
@@ -202,11 +219,18 @@ fn structured_builtin_components_render_without_crossing_the_error_boundary(
             !matches!(
                 diagnostic.code,
                 DiagnosticCode::UnknownTag
+                    | DiagnosticCode::UnsupportedAttribute
                     | DiagnosticCode::ComponentRenderFailed
                     | DiagnosticCode::ComponentPanicked
             )
         }),
         "built-in render diagnostics: {diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != DiagnosticSeverity::Error),
+        "built-in render produced an unexpected error diagnostic: {diagnostics:?}"
     );
 }
 
@@ -528,6 +552,150 @@ fn collapsible_and_resizable_validate_structure_and_values_without_panicking(
             "missing `{expected}` in render diagnostics: {diagnostics:?}"
         );
     }
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != DiagnosticCode::ComponentPanicked),
+        "invalid declarative input must not panic: {diagnostics:?}"
+    );
+}
+
+#[gpui::test]
+fn form_grid_and_list_item_attributes_reject_invalid_values_without_panicking(
+    cx: &mut TestAppContext,
+) {
+    let source = r#"
+        <div>
+            <form label-text-size="NaN"><field></field></form>
+            <form label-text-size="0"><field></field></form>
+            <form><field label-justify="diagonal"></field></form>
+            <form><field col-start="32768"></field></form>
+            <form><field col-end="-32769"></field></form>
+            <list><list-item separator="maybe"></list-item></list>
+            <list><list-item secondary-selected="maybe"></list-item></list>
+        </div>
+    "#;
+
+    let diagnostics = render_diagnostics(source, ComponentRegistry::with_defaults(), cx);
+    let failures = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.phase == DiagnosticPhase::Render
+                && diagnostic.code == DiagnosticCode::ComponentRenderFailed
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(7, failures.len(), "render diagnostics: {diagnostics:?}");
+
+    for expected in [
+        "label-text-size",
+        "label-justify",
+        "col-start",
+        "col-end",
+        "separator",
+        "secondary-selected",
+    ] {
+        assert!(
+            failures
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing `{expected}` in render diagnostics: {diagnostics:?}"
+        );
+    }
+    assert_eq!(
+        2,
+        failures
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("label-text-size"))
+            .count(),
+        "label text size must reject both non-finite and non-positive values"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != DiagnosticCode::ComponentPanicked),
+        "invalid declarative input must not panic: {diagnostics:?}"
+    );
+}
+
+#[gpui::test]
+fn form_table_and_list_reject_invalid_structure_and_values_without_panicking(
+    cx: &mut TestAppContext,
+) {
+    let source = r#"
+        <div>
+            <form layout="diagonal"><field></field></form>
+            <form columns="0"><field></field></form>
+            <form label-width="-1"><field></field></form>
+            <form><div></div></form>
+            <form><field align="middle"></field></form>
+            <form><field col-span="0"></field></form>
+            <field></field>
+
+            <table>
+                <tbody><tr><td align="middle"></td></tr></tbody>
+            </table>
+            <table>
+                <tbody><tr><td colspan="0"></td></tr></tbody>
+            </table>
+            <table>
+                <thead><tr><th align="middle"></th></tr></thead>
+            </table>
+            <table>
+                <thead><tr><th colspan="0"></th></tr></thead>
+            </table>
+
+            <list><list-item selected="sometimes"></list-item></list>
+            <list><list-item confirmed="sometimes"></list-item></list>
+            <list><list-item disabled="sometimes"></list-item></list>
+        </div>
+    "#;
+
+    let diagnostics = render_diagnostics(source, ComponentRegistry::with_defaults(), cx);
+    let failures = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.phase == DiagnosticPhase::Render
+                && diagnostic.code == DiagnosticCode::ComponentRenderFailed
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(14, failures.len(), "render diagnostics: {diagnostics:?}");
+
+    for expected in [
+        "layout",
+        "columns",
+        "label-width",
+        "only accepts direct <field>",
+        "align",
+        "col-span",
+        "<field> must be a direct child",
+        "colspan",
+        "selected",
+        "confirmed",
+        "disabled",
+    ] {
+        assert!(
+            failures
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing `{expected}` in render diagnostics: {diagnostics:?}"
+        );
+    }
+    assert_eq!(
+        3,
+        failures
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("align"))
+            .count(),
+        "field, table head, and table cell alignment should all be validated"
+    );
+    assert_eq!(
+        2,
+        failures
+            .iter()
+            .filter(|diagnostic| diagnostic.message.contains("colspan"))
+            .count(),
+        "table heads and cells should both validate colspan"
+    );
     assert!(
         diagnostics
             .iter()

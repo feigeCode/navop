@@ -194,8 +194,20 @@ fn strict_compilation_accepts_structured_component_templates() {
     let registry = ComponentRegistry::with_defaults();
     let source = r#"
         <main class="flex flex-col gap-4 min-h-0 overflow-y-scroll">
-            <form layout="horizontal" columns="2" label-width="120" size="sm">
-                <field label="Name" required>
+            <form
+                layout="horizontal"
+                columns="2"
+                label-width="120"
+                label-text-size="0.875"
+                size="sm"
+            >
+                <field
+                    label="Name"
+                    label-justify="end"
+                    col-start="-2"
+                    col-end="2"
+                    required
+                >
                     <input bind="name" />
                 </field>
                 <field label="Enabled" label-indent="false">
@@ -219,6 +231,8 @@ fn strict_compilation_accepts_structured_component_templates() {
             </table>
             <list>
                 <list-item selected action="select" data-id="primary">Primary</list-item>
+                <list-item secondary-selected>Secondary</list-item>
+                <list-item separator>Archived</list-item>
             </list>
             <alert variant="info">Ready</alert>
             <badge count="2"><span>Saved</span></badge>

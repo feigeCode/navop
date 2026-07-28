@@ -50,7 +50,8 @@ impl ComponentRenderer for TableComponent {
                 child,
                 &["thead", "tbody", "tfoot", "caption"],
             )?;
-            table = match child_props.element.tag.as_str() {
+            let tag = normalize_structural_tag(&child_props.element.tag);
+            table = match tag.as_str() {
                 "thead" => table.child(build_header(child_props, context)?),
                 "tbody" => table.child(build_body(child_props, context)?),
                 "tfoot" => table.child(build_footer(child_props, context)?),
@@ -110,7 +111,8 @@ fn build_row(
     let mut row = TableRow::new();
     for (index, child) in props.element.children.iter().enumerate() {
         let child_props = structural_child_props(&props, index, child, &["th", "td"])?;
-        row = match child_props.element.tag.as_str() {
+        let tag = normalize_structural_tag(&child_props.element.tag);
+        row = match tag.as_str() {
             "th" => row.child(build_head(child_props, context)?),
             "td" => row.child(build_cell(child_props, context)?),
             _ => unreachable!("structural_child_props validated the row child"),
@@ -207,7 +209,10 @@ fn structural_child_props(
             parent.element.tag
         )));
     };
-    if !expected_tags.contains(&element.tag.as_str()) {
+    if !expected_tags
+        .iter()
+        .any(|expected| element.tag.trim().eq_ignore_ascii_case(expected))
+    {
         return Err(ComponentError::new(format!(
             "<{}> only accepts direct {expected} children, found <{}>",
             parent.element.tag, element.tag
@@ -217,4 +222,47 @@ fn structural_child_props(
         element.clone(),
         parent.path.child(index),
     ))
+}
+
+fn normalize_structural_tag(tag: &str) -> String {
+    tag.trim().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::{ComponentProps, NodePath, VElement, VNode};
+
+    use super::structural_child_props;
+
+    #[test]
+    fn structural_table_tags_follow_registry_case_normalization() {
+        for (index, (parent_tag, child_tag, expected_tag)) in [
+            ("TABLE", " THEAD ", "thead"),
+            ("TBODY", "Tr", "tr"),
+            ("TR", " tD ", "td"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let parent = ComponentProps::new(element(parent_tag), NodePath::root());
+            let child = VNode::Element(element(child_tag));
+
+            let child_props = structural_child_props(&parent, index, &child, &[expected_tag])
+                .expect("structural tags should be trimmed and matched case-insensitively");
+
+            assert_eq!(child_tag, child_props.element.tag);
+            assert_eq!(NodePath(vec![index]), child_props.path);
+        }
+    }
+
+    fn element(tag: &str) -> VElement {
+        VElement {
+            tag: tag.to_owned(),
+            attrs: BTreeMap::new(),
+            classes: Vec::new(),
+            children: Vec::new(),
+        }
+    }
 }
