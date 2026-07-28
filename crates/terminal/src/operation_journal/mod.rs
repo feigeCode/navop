@@ -1,6 +1,7 @@
 mod model;
 mod persistence;
 mod redaction;
+mod runtime;
 mod session_history;
 
 pub use model::{
@@ -18,6 +19,11 @@ pub use redaction::{
     OPERATION_PAYLOAD_PREVIEW_CHARS, OperationPayloadCompleteness, OperationPayloadFormat,
     RedactedOperationPayload, SensitiveOperationPayload,
 };
+pub use runtime::{
+    OperationJournalAttempt, OperationJournalQueueLimits, OperationJournalRuntime,
+    OperationJournalRuntimeConfig, OperationJournalRuntimeError, OperationJournalRuntimeHealth,
+    OperationJournalRuntimeSnapshot,
+};
 pub use session_history::{
     OPERATION_JOURNAL_SESSION_MANIFEST_SCHEMA_VERSION, OperationJournalHistoryConfig,
     OperationJournalHistoryDiscovery, OperationJournalHistoryError,
@@ -30,6 +36,8 @@ pub use session_history::{
 mod persistence_tests;
 #[cfg(test)]
 mod redaction_tests;
+#[cfg(test)]
+mod runtime_tests;
 #[cfg(test)]
 mod session_history_tests;
 #[cfg(test)]

@@ -97,6 +97,21 @@ impl OperationKind {
     fn allows_structured_payload(self) -> bool {
         matches!(self, Self::FileOperation | Self::ApplicationOperation)
     }
+
+    pub(super) fn validate_redacted_payload(
+        self,
+        payload: Option<&RedactedOperationPayload>,
+    ) -> Result<(), OperationJournalError> {
+        if payload.is_some_and(|payload| {
+            payload.format() == OperationPayloadFormat::StructuredJson
+                && !self.allows_structured_payload()
+        }) {
+            return Err(OperationJournalError::StructuredPayloadNotAllowed {
+                operation_kind: self,
+            });
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -359,7 +374,13 @@ impl OperationJournal {
         parent_operation_id: Option<&OperationId>,
         occurred_at_unix_ms: u64,
     ) -> Result<OperationId, OperationJournalError> {
-        self.queue_operation_inner(kind, parent_operation_id, None, occurred_at_unix_ms)
+        self.queue_operation_inner(
+            self.unique_operation_id(),
+            kind,
+            parent_operation_id,
+            None,
+            occurred_at_unix_ms,
+        )
     }
 
     pub fn queue_operation_with_payload(
@@ -369,14 +390,9 @@ impl OperationJournal {
         payload: RedactedOperationPayload,
         occurred_at_unix_ms: u64,
     ) -> Result<OperationId, OperationJournalError> {
-        if payload.format() == OperationPayloadFormat::StructuredJson
-            && !kind.allows_structured_payload()
-        {
-            return Err(OperationJournalError::StructuredPayloadNotAllowed {
-                operation_kind: kind,
-            });
-        }
+        kind.validate_redacted_payload(Some(&payload))?;
         self.queue_operation_inner(
+            self.unique_operation_id(),
             kind,
             parent_operation_id,
             Some(payload),
@@ -384,8 +400,28 @@ impl OperationJournal {
         )
     }
 
+    pub(super) fn queue_operation_with_id(
+        &mut self,
+        operation_id: OperationId,
+        kind: OperationKind,
+        parent_operation_id: Option<&OperationId>,
+        redacted_payload: Option<RedactedOperationPayload>,
+        occurred_at_unix_ms: u64,
+    ) -> Result<(), OperationJournalError> {
+        kind.validate_redacted_payload(redacted_payload.as_ref())?;
+        self.queue_operation_inner(
+            operation_id,
+            kind,
+            parent_operation_id,
+            redacted_payload,
+            occurred_at_unix_ms,
+        )
+        .map(|_| ())
+    }
+
     fn queue_operation_inner(
         &mut self,
+        operation_id: OperationId,
         kind: OperationKind,
         parent_operation_id: Option<&OperationId>,
         redacted_payload: Option<RedactedOperationPayload>,
@@ -403,6 +439,9 @@ impl OperationJournal {
                 generation_started_at_unix_ms: current_generation.started_at_unix_ms,
                 occurred_at_unix_ms,
             });
+        }
+        if self.operation(&operation_id).is_some() {
+            return Err(OperationJournalError::OperationIdAlreadyExists { operation_id });
         }
 
         let parent_operation_id = if let Some(parent_operation_id) = parent_operation_id {
@@ -433,7 +472,6 @@ impl OperationJournal {
         };
 
         let sequence = self.next_transition_sequence()?;
-        let operation_id = self.unique_operation_id();
         let generation_id = self.current_generation().id;
         let operation = OperationRecord {
             operation_id: operation_id.clone(),
@@ -870,6 +908,9 @@ pub enum OperationJournalError {
     OperationNotFound {
         operation_id: OperationId,
     },
+    OperationIdAlreadyExists {
+        operation_id: OperationId,
+    },
     OperationNotInCurrentGeneration {
         operation_id: OperationId,
         operation_generation_id: OperationGenerationId,
@@ -943,6 +984,9 @@ impl fmt::Display for OperationJournalError {
             ),
             Self::OperationNotFound { operation_id } => {
                 write!(formatter, "operation {operation_id} was not found")
+            }
+            Self::OperationIdAlreadyExists { operation_id } => {
+                write!(formatter, "operation {operation_id} already exists")
             }
             Self::OperationNotInCurrentGeneration {
                 operation_id,
