@@ -1,10 +1,15 @@
 use std::collections::HashMap;
 
-use crate::{NodePath, VElement, VNode, component::stable_component_id};
+use crate::{
+    NodePath, VElement, VNode,
+    component::stable_component_id,
+    html_input_adapter::{TextInputMode, text_input_mode},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatefulInputSpec {
     pub multiline: bool,
+    pub masked: bool,
     pub placeholder: Option<String>,
     pub value: Option<String>,
     pub bind: Option<String>,
@@ -14,6 +19,7 @@ impl StatefulInputSpec {
     pub(crate) fn from_element(element: &VElement, multiline: bool) -> Self {
         Self {
             multiline,
+            masked: !multiline && matches!(text_input_mode(element), Ok(TextInputMode::Password)),
             placeholder: element.attr("placeholder").map(str::to_owned),
             value: element.attr("value").map(str::to_owned),
             bind: element.attr("bind").map(str::to_owned),
@@ -22,6 +28,7 @@ impl StatefulInputSpec {
 
     pub(crate) fn has_same_configuration(&self, next: &Self) -> bool {
         self.multiline == next.multiline
+            && self.masked == next.masked
             && self.placeholder == next.placeholder
             && self.bind == next.bind
             && (self.bind.is_some() || self.value == next.value)
@@ -122,11 +129,21 @@ mod tests {
         assert_eq!(
             super::StatefulInputSpec {
                 multiline: true,
+                masked: false,
                 placeholder: Some("SQL".to_owned()),
                 value: Some("select 1".to_owned()),
                 bind: None,
             },
             super::StatefulInputSpec::from_element(element, true)
         );
+    }
+
+    #[test]
+    fn password_mode_is_a_stateful_input_configuration() {
+        let root = parse_html(r#"<input type="password" value="secret" />"#).expect("valid input");
+        let element = root.element().expect("input element");
+
+        assert!(super::StatefulInputSpec::from_element(element, false).masked);
+        assert!(!super::StatefulInputSpec::from_element(element, true).masked);
     }
 }

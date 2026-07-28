@@ -27,6 +27,8 @@ GPUI Element / stateful Entity
 - 使用 `html5ever` 解析 HTML fragment，并转换为自定义 `VNode`；
 - 只接受 Tailwind utility class，不解析 `style` 或 CSS；
 - strict / permissive 两种模板编译模式；
+- 编译期受限 HTML `<input type>` adapter：文本类映射原生 `Input`，并把
+  `checkbox` / `radio` / `range` / button-family 规范化到已有原生 DSL 组件；
 - source、节点、深度、属性和 class token 的硬资源限制；
 - 分阶段、分严重级别、带 VNode path 的 typed diagnostics；
 - 默认 HTML 标签和可扩展的 `ComponentRegistry`；
@@ -70,7 +72,9 @@ Demo 展示：
 - 固定 header 与使用 `overflow-y-scroll` 的可滚动内容区，以及带原生 scrollbar
   overlay 的 `<scroll>` viewport；
 - 两列原生 `Form` / `Field`，以及 username、email、notes 双向文本绑定；
-- `Checkbox`、`Switch`、`Radio` 的字符串布尔状态双向绑定；
+- `<input type="password" readonly>` 映射的 masked Release token；
+- `<input type="checkbox">`、原生 `Switch`、`<input type="radio">` 的字符串布尔
+  状态双向绑定；
 - bound `Alert`、`Progress`、`Badge`，以及原生 `Spinner`、`Skeleton`、
   `Separator`；
 - 由原生 table primitives 组成的完整静态表格，cell 内嵌 `Tag` 和 `Button`；
@@ -78,16 +82,17 @@ Demo 展示：
 - `Avatar` / `AvatarGroup`、强结构 `DescriptionList`，以及 action-only
   `Breadcrumb`；
 - 原生 `Kbd` 快捷键展示；
-- bound `Pagination`、`Rating`、`Slider`、`Tabs`、`Stepper`；选择变化先写回
-  state，再让 `selection-changed` handler 读取新值；Slider 在拖动时连续写回，
-  release 时派发 Action；
+- bound `Pagination`、`Rating`、`<input type="range">`、`Tabs`、`Stepper`；
+  选择变化先写回 state，再让 `selection-changed` handler 读取新值；range adapter
+  使用单值 Slider，在拖动时连续写回，release 时派发 Action；
 - bound `Accordion`，支持同时展开多项、canonical JSON 写回，并让
   `accordion-changed` handler 读取已经提交的新 binding；
 - 由 Runtime Action 控制 `open` binding 的 `Collapsible`，以及可直接拖动的两栏
   原生 `Resizable`；
 - 显式 stable ID、固定 viewport 高度和始终可见原生 scrollbar 的 Audit Log
   `<scroll>`；
-- `save` / `reset` / `inspect-row` / `select-connection` /
+- `<input type="submit">` / `<input type="reset">` 映射的 `save` / `reset` Action，
+  以及 `inspect-row` / `select-connection` /
   `selection-changed` / `accordion-changed` / `toggle-details` / `navigate` 到 Rust
   handler 的结构化派发；
 - `data-record` / `data-connection` 形成的 Action payload；
@@ -128,8 +133,11 @@ let template = compile_template(
 # Ok::<(), declarative_ui_demo::TemplateCompileError>(())
 ```
 
-`compile_template` 是正式入口。它先执行受限 HTML parse，再验证 tag、attribute、
-identity 和 Tailwind utility，成功后返回不可变的 `CompiledTemplate`。
+`compile_template` 是正式入口。它先执行受限 HTML parse，再规范化受支持的
+`<input type>`，然后验证 tag、attribute、identity 和 Tailwind utility，成功后返回
+不可变的 `CompiledTemplate`。`CompiledTemplate::source()` 保留调用方传入的原始
+HTML，`CompiledTemplate::root()` 则返回已经规范化、可直接进入 binding/render
+链路的 VNode。
 
 ### 2. 创建 Runtime
 
@@ -383,10 +391,52 @@ children、Accordion items / Collapsible content 不会被清空。目标 attrib
 - `accordion`：`bind` 与显式 `open-indices`；
 - `collapsible`：`bind` 与显式 `open`。
 
+### HTML `<input type>` adapter
+
+受限 HTML frontend 会在 **parse 之后、registry schema / identity 校验之前**规范化
+常见 `<input>`。这只是确定性的 VNode adapter，不是浏览器 DOM，也不引入 HTML form、
+constraint validation 或平台键盘语义。
+
+| HTML 声明 | 规范化后的 DSL / 原生组件 | 准确边界 |
+| --- | --- | --- |
+| `<input>`、`type=""`、`type="text"` | `<input>` / 原生单行 `Input` | 缺失或空 `type` 使用默认 text；显式非空值 trim 后转 ASCII 小写 |
+| `type="password"` | `<input type="password">` / masked `InputState` | 真实启用原生 masked 显示；value 仍是普通字符串 state，不提供加密存储 |
+| `type="email"`、`search`、`url`、`tel` | `<input>` / 原生单行 `Input` | 只是文本 alias；没有浏览器格式校验、autocomplete、专用键盘或 URL/email constraint |
+| `type="checkbox"` | `<checkbox>` / 原生 `Checkbox` | `bind` 写入 `checked`；字符串布尔合同与显式 `<checkbox>` 相同 |
+| `type="radio"` | `<radio>` / 原生 `Radio` | `bind` 写入 `checked`；没有 HTML `name` group 或自动互斥 |
+| `type="range"` | `<slider>` / 原生单值 `Slider` | 复用现有 `value` / `min` / `max` / `step` / `bind` / Action 合同；不是双端 range slider |
+| `type="button"`、`submit`、`reset` | `<button>` / 原生 `Button` | `value` 转为 `label`；submit/reset 只是 Button，可通过显式 `action` 派发宿主行为，不会自动提交或重置 HTML form |
+| `number`、日期时间族、`file`、`color`、`hidden`、`image` 等其他值 | 保留为规范化小写的 `<input type="…">` | 不静默降级成文本控件；renderer 返回 `ComponentRenderFailed`，错误保持在 typed render boundary 内且不会 panic |
+
+adapter 改写后才执行目标组件 schema 校验。因此
+`<input type="checkbox" placeholder="…">`、`<input type="range" checked>` 等组合
+会按 `checkbox` / `slider` 合同在 strict compile 阶段拒绝，而不是把无效属性带到
+renderer。
+
+文本类 `<input readonly>` 会规范化为 DSL 的 `read-only`；同时声明 `readonly` 与
+`read-only` 是 compile-time `ConflictingAttributes`。`readonly` 不适用于转换后的
+Checkbox、Radio、Slider 或 Button，它会被目标 schema 当作 unsupported attribute。
+HTML 数值 `size="20"` 也没有照搬：DSL 的 `size` 始终是
+`xs|sm|md|lg`（及其全名 alias）。
+
+转换保留原始 `id` / `key` 值，并继续参与整个 `CompiledTemplate` 的全局唯一
+identity namespace；但组件 stable ID 的 tag prefix 使用转换后的目标组件，例如
+`checkbox:notifications`、`radio:channel`、`slider:volume`、
+`button:save`。显式 identity 因此在 sibling reorder 时仍会生成稳定组件 ID，并让
+Slider cache 或其他使用 keyed native state 的目标组件在适用时复用状态；转换前后的
+不同组件类型也不会被误当成同一个 cache entry。
+
+当前没有把 `name`、`required`、`autocomplete`、`inputmode`、`maxlength`、
+`minlength`、`pattern`、`form`、`list`、`multiple`、`accept`、`capture` 等浏览器
+attribute 伪装成已支持能力；strict schema 会明确拒绝它们。需要 checkbox/radio
+旁边的可见文本时，可使用 `<field label="…">`，或直接使用支持 child label 的
+显式 `<checkbox>` / `<radio>` DSL 标签。
+
 ### 双向输入绑定
 
 ```html
 <input id="username" bind="username" placeholder="用户名" />
+<input id="credential" type="password" bind="credential" />
 <textarea key="notes" bind="notes"></textarea>
 ```
 
@@ -524,8 +574,9 @@ Slider 节点在同一父级内 reorder 时仍分别复用原来的 `InputState`
 `SliderState`。没有 `id` / `key` 的有状态组件使用 path；结构插入或移动可能让它
 重建。
 
-当 multiline、placeholder 或 bind 配置改变时，输入 Entity 会重建，旧 Entity 的
-write-back subscription 同时释放；仅 bound value 改变时会复用 Entity 并同步其值。
+当 multiline、password masked mode、placeholder 或 bind 配置改变时，输入 Entity
+会重建，旧 Entity 的 write-back subscription 同时释放；仅 bound value 改变时会
+复用 Entity 并同步其值。
 
 Slider cache 同样以 `ComponentProps::stable_id()` 为 key。bound Slider 的 state
 值变化时，会在原 `Entity<SliderState>` 上调用 `set_value`，该程序化同步不产生
@@ -563,7 +614,7 @@ identity namespace。
 | semantic / basic | `button`、`img` | `gpui_component::button::Button`、`gpui::img(src)` |
 | semantic / basic | `group-box`、`label`、`tag`、`skeleton` | 原生 `GroupBox`、`Label`、`Tag`、`Skeleton` |
 | form / input controls | `form`、`field` | 强结构的原生 `Form` + `Field` |
-| form / input controls | `input`、`textarea` | 原生 `Input` + 缓存的 `Entity<InputState>`；分别是单行和多行 |
+| form / input controls | `input`、`textarea` | 原生 `Input` + 缓存的 `Entity<InputState>`；分别是单行和多行；HTML frontend 会先处理受支持的 `input type`，password 进入 masked mode |
 | form / input controls | `checkbox`、`switch`、`radio` | 原生 `Checkbox`、`Switch`、`Radio`；支持字符串布尔双向 binding |
 | static table | `table`、`thead`、`tbody`、`tfoot`、`tr`、`th`、`td`、`caption` | 原生 `Table`、section、row、cell 和 caption primitives |
 | static list | `list`、`list-item` | flex-column 静态容器 + 原生 `ListItem` |
@@ -587,8 +638,9 @@ identity namespace。
 | 标签 | 主要 attribute |
 | --- | --- |
 | semantic containers | `bind` |
-| `button` | `action`、`data-*`、`variant`、`size`、`disabled`、`outline`、`loading`、`tooltip` |
-| `input`、`textarea` | `bind`、`value`、`placeholder`、`size`、`disabled`、`read-only`、`cleanable` |
+| `button` | `label` 或直接文本、`action`、`data-*`、`variant`、`size`、`disabled`、`outline`、`loading`、`tooltip` |
+| `input` | `type=text\|password\|email\|search\|url\|tel`（默认 text）、`bind`、`value`、`placeholder`、`size`、`disabled`、`read-only` / HTML `readonly` alias、`cleanable` |
+| `textarea` | `bind`、`value`、`placeholder`、`size`、`disabled`、`read-only`、`cleanable`；不接受 `type` |
 | `img` | 必填 `src` |
 | `group-box` | `title`、`variant=normal\|fill\|outline` |
 | `label` | `bind`、`secondary`、`masked` |
@@ -1046,7 +1098,7 @@ state；只有用户触发 native callback 时才按 binding 合同写回新值�
 
 | 分类 | 上游组件 / 模块 | standalone v1 状态与边界 |
 | --- | --- | --- |
-| **已映射** | `Button`、`Input`、`Checkbox`、`Switch`、`Radio`、`Form` / `Field`、`GroupBox`、`Label`、`Tag`、`Skeleton` | 使用公共原生 API；Form / Field 映射 label rem size、label 对齐和 signed grid line；输入和布尔控件具有明确字符串 binding |
+| **已映射** | `Button`、`Input`、`Checkbox`、`Switch`、`Radio`、`Form` / `Field`、`GroupBox`、`Label`、`Tag`、`Skeleton` | 使用公共原生 API；HTML `<input>` frontend adapter 覆盖 text/password/email/search/url/tel、checkbox/radio/range 和 button/submit/reset；Form / Field 映射 label rem size、label 对齐和 signed grid line；输入和布尔控件具有明确字符串 binding |
 | **已映射** | `Alert`、`Badge`、`Progress`、`Spinner`、`Separator` | 使用公共原生 API；无 `Styled` 的组件通过稳定 wrapper 接收 class |
 | **已映射** | `Avatar`、`AvatarGroup`、`DescriptionList` / `DescriptionItem` | 使用公共原生 API；资源、结构和 wrapper 边界见上文 |
 | **已映射** | `Breadcrumb` / `BreadcrumbItem`、`Pagination`、`Rating`、`TabBar` / `Tab`、`Stepper` / `StepperItem` | 使用公共原生 API；navigation 只产生 Runtime Action，不直接执行导航 |
@@ -1203,6 +1255,7 @@ html5ever 前会安全展开 `<sql-editor />` 一类自定义标签，同时：
 | 模块 | 职责 |
 | --- | --- |
 | `html_source.rs` | 安全展开自定义 XML-style 自闭合标签 |
+| `html_input_adapter.rs` | 常见 HTML `<input type>` → 受限原生 DSL VNode 规范化与 readonly alias 诊断 |
 | `parser.rs` | html5ever fragment → 受控 VNode |
 | `limits.rs` | 编译资源限制和资源类型 |
 | `vnode.rs` | 可 serde 的输入无关 VNode 中间表示 |
@@ -1245,6 +1298,8 @@ standalone v1 不实现：
 - CSS selector、cascade、inheritance、`style`；
 - 完整 Tailwind；
 - 完整 HTML 标准校验；
+- 浏览器 form submission/reset、constraint validation、autocomplete/inputmode，或
+  `number` / date-time / file / color 等专用 HTML input 控件；
 - 全部 `gpui-component` 的声明式镜像；
 - `DataTable<D>`、数据驱动或虚拟化 `List<D>`、select/tree delegate；
 - chart/plot delegate 或 entity 数据模型；

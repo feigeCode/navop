@@ -19,6 +19,7 @@ mod builtin_components;
 mod component;
 mod diagnostic;
 pub mod diff;
+mod html_input_adapter;
 mod html_source;
 mod input_cache;
 #[cfg(test)]

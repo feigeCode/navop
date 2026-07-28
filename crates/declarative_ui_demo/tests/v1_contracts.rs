@@ -147,6 +147,152 @@ fn component_schemas_reject_missing_and_unsupported_attributes() {
 }
 
 #[test]
+fn common_html_input_types_are_adapted_before_strict_validation() {
+    let registry = ComponentRegistry::with_defaults();
+    let source = r#"
+        <div>
+            <input id="default-input" />
+            <input id="text-input" type=" TEXT " readonly />
+            <input id="password-input" type="PASSWORD" value="secret" />
+            <input id="email-input" type="email" />
+            <input id="search-input" type="search" />
+            <input id="url-input" type="url" />
+            <input id="tel-input" type="tel" />
+            <input id="check-input" type="checkbox" bind="enabled" />
+            <input id="radio-input" type="radio" checked />
+            <input
+                id="range-input"
+                type=" RANGE "
+                value="25"
+                min="0"
+                max="100"
+                step="5"
+            />
+            <input id="plain-button" type="button" value="Run" action="run" />
+            <input
+                id="submit-button"
+                type="submit"
+                value="Save"
+                action="save"
+                data-record="profile"
+            />
+            <input id="reset-button" type="reset" value="Reset" action="reset" />
+        </div>
+    "#;
+
+    let template = compile_template(source, &registry, CompileOptions::strict())
+        .expect("common HTML input types should compile through native adapters");
+    let root = template.root().element().expect("root div");
+    let elements = root
+        .children
+        .iter()
+        .map(|child| child.element().expect("input adapter element"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        [
+            "input", "input", "input", "input", "input", "input", "input", "checkbox", "radio",
+            "slider", "button", "button", "button",
+        ],
+        elements
+            .iter()
+            .map(|element| element.tag.as_str())
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+    assert_eq!(None, elements[0].attr("type"));
+    assert_eq!(Some("text"), elements[1].attr("type"));
+    assert_eq!(Some(""), elements[1].attr("read-only"));
+    assert_eq!(None, elements[1].attr("readonly"));
+    assert_eq!(Some("password"), elements[2].attr("type"));
+    for (element, input_type) in elements[3..7].iter().zip(["email", "search", "url", "tel"]) {
+        assert_eq!(Some(input_type), element.attr("type"));
+    }
+    for element in &elements[7..] {
+        assert_eq!(None, element.attr("type"));
+    }
+    assert_eq!(Some("Run"), elements[10].attr("label"));
+    assert_eq!(Some("Save"), elements[11].attr("label"));
+    assert_eq!(Some("Reset"), elements[12].attr("label"));
+    assert_eq!(Some("profile"), elements[11].attr("data-record"));
+}
+
+#[test]
+fn adapted_html_inputs_are_validated_against_the_target_component_schema() {
+    let registry = ComponentRegistry::with_defaults();
+    let error = compile_template(
+        r#"
+        <div>
+            <input type="checkbox" placeholder="not applicable" />
+            <input type="range" checked />
+            <textarea type="password"></textarea>
+        </div>
+        "#,
+        &registry,
+        CompileOptions::strict(),
+    )
+    .expect_err("target component schemas must reject inapplicable HTML attributes");
+    let diagnostics = error.diagnostics().expect("validation diagnostics");
+
+    for path in [NodePath(vec![0]), NodePath(vec![1]), NodePath(vec![2])] {
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == DiagnosticCode::UnsupportedAttribute
+                    && diagnostic.path == Some(path.clone())
+            }),
+            "missing target-schema diagnostic at {path}"
+        );
+    }
+}
+
+#[test]
+fn html_readonly_alias_conflicts_are_rejected() {
+    let registry = ComponentRegistry::with_defaults();
+    let error = compile_template(
+        r#"<input readonly read-only="false" />"#,
+        &registry,
+        CompileOptions::strict(),
+    )
+    .expect_err("readonly aliases must not silently override each other");
+
+    assert!(
+        error
+            .diagnostics()
+            .expect("validation diagnostics")
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.code == DiagnosticCode::ConflictingAttributes
+                    && diagnostic.path == Some(NodePath::root())
+            })
+    );
+}
+
+#[test]
+fn adapted_input_identities_remain_in_the_global_namespace() {
+    let registry = ComponentRegistry::with_defaults();
+    let error = compile_template(
+        r#"
+        <div>
+            <input id="shared-control" type="checkbox" />
+            <slider key="shared-control"></slider>
+        </div>
+        "#,
+        &registry,
+        CompileOptions::strict(),
+    )
+    .expect_err("adapted controls must preserve explicit identity values");
+
+    let duplicate = error
+        .diagnostics()
+        .expect("validation diagnostics")
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::DuplicateIdentity)
+        .expect("duplicate identity diagnostic");
+    assert_eq!(Some(NodePath(vec![1])), duplicate.path);
+    assert!(duplicate.message.contains("shared-control"));
+}
+
+#[test]
 fn kbd_schema_requires_a_non_empty_stroke() {
     let registry = ComponentRegistry::with_defaults();
     for source in [r#"<kbd></kbd>"#, r#"<kbd stroke=""></kbd>"#] {
@@ -343,6 +489,8 @@ fn attribute_bindings_conflict_with_explicit_native_values() {
     let registry = ComponentRegistry::with_defaults();
     for source in [
         r#"<input bind="value" value="explicit" />"#,
+        r#"<input type="checkbox" bind="enabled" checked />"#,
+        r#"<input type="range" bind="volume" value="50" />"#,
         r#"<textarea bind="value" value="explicit"></textarea>"#,
         r#"<checkbox bind="enabled" checked="true">Enabled</checkbox>"#,
         r#"<switch bind="enabled" checked="true">Enabled</switch>"#,

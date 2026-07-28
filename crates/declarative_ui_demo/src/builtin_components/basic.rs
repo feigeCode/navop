@@ -11,7 +11,7 @@ use gpui_component::{
 
 use crate::{
     ComponentError, ComponentProps, ComponentRegistry, ComponentRenderer, ComponentResult,
-    ComponentSchema, RegistryError, RenderContext,
+    ComponentSchema, RegistryError, RenderContext, html_input_adapter::text_input_mode,
 };
 
 use super::{action_event, bool_attribute, parse_size_attribute};
@@ -26,7 +26,7 @@ pub(super) fn register(registry: &mut ComponentRegistry) -> Result<(), RegistryE
     registry.register_with_schema("input", input_schema(), InputComponent { multiline: false })?;
     registry.register_with_schema(
         "textarea",
-        input_schema(),
+        textarea_schema(),
         InputComponent { multiline: true },
     )?;
     registry.register_with_schema(
@@ -71,6 +71,7 @@ fn container_schema() -> ComponentSchema {
 
 fn button_schema() -> ComponentSchema {
     ComponentSchema::new()
+        .attribute("label")
         .attribute("action")
         .attribute("variant")
         .attribute("size")
@@ -82,6 +83,18 @@ fn button_schema() -> ComponentSchema {
 }
 
 fn input_schema() -> ComponentSchema {
+    ComponentSchema::new()
+        .attribute("type")
+        .attribute("bind")
+        .attribute("placeholder")
+        .attribute("value")
+        .attribute("size")
+        .attribute("disabled")
+        .attribute("read-only")
+        .attribute("cleanable")
+}
+
+fn textarea_schema() -> ComponentSchema {
     ComponentSchema::new()
         .attribute("bind")
         .attribute("placeholder")
@@ -106,7 +119,12 @@ struct ButtonComponent;
 
 impl ComponentRenderer for ButtonComponent {
     fn render(&self, props: ComponentProps, context: &mut RenderContext<'_>) -> ComponentResult {
-        let mut button = Button::new(props.stable_id()).label(props.element.text_content());
+        let label = props
+            .element
+            .attr("label")
+            .map(str::to_owned)
+            .unwrap_or_else(|| props.element.text_content());
+        let mut button = Button::new(props.stable_id()).label(label);
         if let Some(variant) = props.element.attr("variant") {
             button = match variant.trim().to_ascii_lowercase().as_str() {
                 "primary" => button.primary(),
@@ -155,6 +173,9 @@ struct InputComponent {
 
 impl ComponentRenderer for InputComponent {
     fn render(&self, props: ComponentProps, context: &mut RenderContext<'_>) -> ComponentResult {
+        if !self.multiline {
+            text_input_mode(&props.element).map_err(ComponentError::new)?;
+        }
         let state = context.input_state(&props, self.multiline);
         let mut input = Input::new(&state)
             .disabled(bool_attribute(&props.element, "disabled")?)

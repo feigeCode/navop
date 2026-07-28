@@ -173,6 +173,36 @@ fn keyed_inputs_keep_identity_when_their_paths_are_reordered(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn password_mode_is_part_of_the_cached_input_configuration(cx: &mut TestAppContext) {
+    let (window, _runtime, harness) = mount_harness(cx);
+    let mut visual = VisualTestContext::from_window(window, cx);
+    let text = harness.update_in(&mut visual, |harness, window, cx| {
+        harness.resolve(
+            InputCase::root(r#"<input key="credential" type="text" value="secret" />"#),
+            window,
+            cx,
+        )
+    });
+    let password = harness.update_in(&mut visual, |harness, window, cx| {
+        harness.resolve(
+            InputCase::root(r#"<input key="credential" type="password" value="secret" />"#),
+            window,
+            cx,
+        )
+    });
+    let password_again = harness.update_in(&mut visual, |harness, window, cx| {
+        harness.resolve(
+            InputCase::root(r#"<input key="credential" type="PASSWORD" value="secret" />"#),
+            window,
+            cx,
+        )
+    });
+
+    assert_ne!(text.entity_id(), password.entity_id());
+    assert_eq!(password.entity_id(), password_again.entity_id());
+}
+
+#[gpui::test]
 fn configuration_changes_replace_the_entity_and_drop_the_old_subscription(cx: &mut TestAppContext) {
     let (window, runtime, harness) = mount_harness(cx);
     let mut visual = VisualTestContext::from_window(window, cx);

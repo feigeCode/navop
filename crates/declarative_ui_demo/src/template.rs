@@ -4,7 +4,8 @@ use thiserror::Error;
 
 use crate::{
     CompileLimits, ComponentRegistry, Diagnostic, DiagnosticCode, DiagnosticPhase, Diagnostics,
-    HtmlParseError, NodePath, VElement, VNode, parse_classes, parse_html_with_limits,
+    HtmlParseError, NodePath, VElement, VNode, html_input_adapter::adapt_html_inputs,
+    parse_classes, parse_html_with_limits,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +91,8 @@ pub fn compile_template(
     options: CompileOptions,
 ) -> Result<CompiledTemplate, TemplateCompileError> {
     let root = parse_html_with_limits(source, options.limits)?;
-    let diagnostics = validate_template(&root, registry, options);
+    let (root, mut diagnostics) = adapt_html_inputs(root);
+    diagnostics.extend(validate_template(&root, registry, options));
     if diagnostics.has_errors() {
         return Err(TemplateCompileError::Validation(diagnostics));
     }

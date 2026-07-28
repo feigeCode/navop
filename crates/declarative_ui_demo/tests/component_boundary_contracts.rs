@@ -76,6 +76,79 @@ fn permissive_unknown_components_keep_compile_and_render_warnings(cx: &mut TestA
 }
 
 #[gpui::test]
+fn common_html_input_types_render_through_native_components(cx: &mut TestAppContext) {
+    let diagnostics = render_diagnostics(
+        r#"
+        <div class="flex flex-col gap-2">
+            <input id="text" type="text" value="operator" readonly />
+            <input id="password" type="password" value="secret" />
+            <input id="email" type="email" value="admin@example.com" />
+            <input id="search" type="search" value="primary" />
+            <input id="url" type="url" value="https://example.com" />
+            <input id="tel" type="tel" value="+1 555 0100" />
+            <input id="check" type="checkbox" checked />
+            <input id="choice" type="radio" checked="false" />
+            <input id="range" type="range" value="25" min="0" max="100" step="5" />
+            <input id="button" type="button" value="Run" />
+            <input id="submit" type="submit" value="Save" />
+            <input id="reset" type="reset" value="Reset" />
+        </div>
+        "#,
+        ComponentRegistry::with_defaults(),
+        cx,
+    );
+
+    assert!(
+        diagnostics.iter().all(|diagnostic| {
+            !matches!(
+                diagnostic.code,
+                DiagnosticCode::ComponentRenderFailed | DiagnosticCode::ComponentPanicked
+            )
+        }),
+        "supported HTML input adapters must remain inside the render boundary: {diagnostics:?}"
+    );
+}
+
+#[gpui::test]
+fn unsupported_html_input_types_become_typed_render_diagnostics(cx: &mut TestAppContext) {
+    let diagnostics = render_diagnostics(
+        r#"
+        <div>
+            <input type="number" />
+            <input type="date" />
+            <input type="file" />
+            <input type="color" />
+        </div>
+        "#,
+        ComponentRegistry::with_defaults(),
+        cx,
+    );
+    let failures = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == DiagnosticCode::ComponentRenderFailed
+                && diagnostic.phase == DiagnosticPhase::Render
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(4, failures.len());
+    for (index, input_type) in ["number", "date", "file", "color"].iter().enumerate() {
+        let failure = failures
+            .iter()
+            .find(|failure| failure.path == Some(NodePath(vec![index])))
+            .expect("typed input failure at the original node path");
+        assert_eq!(DiagnosticSeverity::Error, failure.severity);
+        assert!(failure.message.contains(input_type));
+    }
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != DiagnosticCode::ComponentPanicked),
+        "unsupported input types must not panic: {diagnostics:?}"
+    );
+}
+
+#[gpui::test]
 fn structured_builtin_components_render_without_crossing_the_error_boundary(
     cx: &mut TestAppContext,
 ) {

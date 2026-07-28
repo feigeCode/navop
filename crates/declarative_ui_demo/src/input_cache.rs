@@ -71,8 +71,12 @@ impl InputEntry {
         let placeholder = request.spec.placeholder.clone();
         let value = request.spec.value.clone();
         let multiline = request.spec.multiline;
+        let masked = request.spec.masked;
         let state = environment.cx.new(|cx| {
             let mut state = InputState::new(environment.window, cx).multi_line(multiline);
+            if masked {
+                state = state.masked(true);
+            }
             if let Some(text) = placeholder {
                 state = state.placeholder(text);
             }

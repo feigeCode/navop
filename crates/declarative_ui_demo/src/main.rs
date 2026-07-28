@@ -56,6 +56,7 @@ const DEMO_HTML: &str = r#"
                     >
                         <input
                             id="username-input"
+                            type="text"
                             bind="username"
                             placeholder="Database administrator"
                             cleanable
@@ -65,8 +66,21 @@ const DEMO_HTML: &str = r#"
                     <field label="Email" required>
                         <input
                             id="email-input"
+                            type="email"
                             bind="email"
                             placeholder="admin@example.com"
+                            class="w-full"
+                        />
+                    </field>
+                    <field
+                        label="Release token"
+                        description="HTML password + readonly adapt to a masked native Input."
+                    >
+                        <input
+                            id="release-token-input"
+                            type="password"
+                            value="release-ready"
+                            readonly
                             class="w-full"
                         />
                     </field>
@@ -84,9 +98,11 @@ const DEMO_HTML: &str = r#"
                         ></textarea>
                     </field>
                     <field label="Notifications" label-indent="false">
-                        <checkbox id="notifications" bind="notifications">
-                            Email alerts
-                        </checkbox>
+                        <input
+                            id="notifications"
+                            type="checkbox"
+                            bind="notifications"
+                        />
                     </field>
                     <field label="Synchronization" label-indent="false">
                         <switch id="auto-sync" bind="auto_sync">
@@ -94,29 +110,27 @@ const DEMO_HTML: &str = r#"
                         </switch>
                     </field>
                     <field label="Preview channel" label-indent="false">
-                        <radio id="beta-mode" bind="beta_mode">
-                            Enable beta mode
-                        </radio>
+                        <input id="beta-mode" type="radio" bind="beta_mode" />
                     </field>
                     <field label="Actions" label-indent="false" align="end">
                         <div class="flex items-center justify-end gap-2">
-                            <button
+                            <input
                                 id="reset-button"
+                                type="reset"
+                                value="Reset"
                                 action="reset"
                                 variant="secondary"
                                 size="sm"
-                            >
-                                Reset
-                            </button>
-                            <button
+                            />
+                            <input
                                 id="save-button"
+                                type="submit"
+                                value="Save"
                                 action="save"
                                 data-record="profile"
                                 variant="primary"
                                 size="sm"
-                            >
-                                Save
-                            </button>
+                            />
                         </div>
                     </field>
                 </form>
@@ -362,9 +376,10 @@ const DEMO_HTML: &str = r#"
                     </div>
 
                     <div class="flex flex-col gap-2">
-                        <span class="text-sm font-semibold">Bound Slider</span>
-                        <slider
+                        <span class="text-sm font-semibold">Bound HTML range adapter</span>
+                        <input
                             id="showcase-slider"
+                            type="range"
                             bind="volume"
                             min="0"
                             max="100"
@@ -374,7 +389,7 @@ const DEMO_HTML: &str = r#"
                             action="selection-changed"
                             data-control="slider"
                             class="w-full"
-                        ></slider>
+                        />
                     </div>
 
                     <div class="flex flex-col gap-2">
