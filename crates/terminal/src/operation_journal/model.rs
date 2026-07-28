@@ -1,3 +1,4 @@
+use super::redaction::{OperationPayloadFormat, RedactedOperationPayload};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -92,6 +93,12 @@ pub enum OperationKind {
     Unconfirmable,
 }
 
+impl OperationKind {
+    fn allows_structured_payload(self) -> bool {
+        matches!(self, Self::FileOperation | Self::ApplicationOperation)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationStatus {
@@ -180,6 +187,8 @@ pub struct OperationRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent_operation_id: Option<OperationId>,
     kind: OperationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    redacted_payload: Option<RedactedOperationPayload>,
     transitions: Vec<OperationStatusTransition>,
 }
 
@@ -198,6 +207,10 @@ impl OperationRecord {
 
     pub fn kind(&self) -> OperationKind {
         self.kind
+    }
+
+    pub fn redacted_payload(&self) -> Option<&RedactedOperationPayload> {
+        self.redacted_payload.as_ref()
     }
 
     pub fn transitions(&self) -> &[OperationStatusTransition] {
@@ -346,6 +359,38 @@ impl OperationJournal {
         parent_operation_id: Option<&OperationId>,
         occurred_at_unix_ms: u64,
     ) -> Result<OperationId, OperationJournalError> {
+        self.queue_operation_inner(kind, parent_operation_id, None, occurred_at_unix_ms)
+    }
+
+    pub fn queue_operation_with_payload(
+        &mut self,
+        kind: OperationKind,
+        parent_operation_id: Option<&OperationId>,
+        payload: RedactedOperationPayload,
+        occurred_at_unix_ms: u64,
+    ) -> Result<OperationId, OperationJournalError> {
+        if payload.format() == OperationPayloadFormat::StructuredJson
+            && !kind.allows_structured_payload()
+        {
+            return Err(OperationJournalError::StructuredPayloadNotAllowed {
+                operation_kind: kind,
+            });
+        }
+        self.queue_operation_inner(
+            kind,
+            parent_operation_id,
+            Some(payload),
+            occurred_at_unix_ms,
+        )
+    }
+
+    fn queue_operation_inner(
+        &mut self,
+        kind: OperationKind,
+        parent_operation_id: Option<&OperationId>,
+        redacted_payload: Option<RedactedOperationPayload>,
+        occurred_at_unix_ms: u64,
+    ) -> Result<OperationId, OperationJournalError> {
         let current_generation = self.current_generation();
         if current_generation.is_closed() {
             return Err(OperationJournalError::CurrentGenerationClosed {
@@ -395,6 +440,7 @@ impl OperationJournal {
             generation_id,
             parent_operation_id,
             kind,
+            redacted_payload,
             transitions: vec![OperationStatusTransition::new(
                 sequence,
                 OperationStatus::Queued,
@@ -615,6 +661,18 @@ impl OperationJournal {
                     return Err(OperationJournalError::InvalidSnapshot {
                         reason: "duplicate operation id",
                     });
+                }
+                if let Some(payload) = &operation.redacted_payload {
+                    payload
+                        .validate_snapshot()
+                        .map_err(|reason| OperationJournalError::InvalidSnapshot { reason })?;
+                    if payload.format() == OperationPayloadFormat::StructuredJson
+                        && !operation.kind.allows_structured_payload()
+                    {
+                        return Err(OperationJournalError::InvalidSnapshot {
+                            reason: "raw terminal operation contains structured payload",
+                        });
+                    }
                 }
                 let Some(first_transition) = operation.transitions.first() else {
                     return Err(OperationJournalError::InvalidSnapshot {
@@ -839,6 +897,9 @@ pub enum OperationJournalError {
         from: OperationStatus,
         to: OperationStatus,
     },
+    StructuredPayloadNotAllowed {
+        operation_kind: OperationKind,
+    },
     TransitionTimestampMovedBackwards {
         operation_id: OperationId,
         previous_at_unix_ms: u64,
@@ -927,6 +988,10 @@ impl fmt::Display for OperationJournalError {
             } => write!(
                 formatter,
                 "operation {operation_id} cannot transition from {from:?} to {to:?}"
+            ),
+            Self::StructuredPayloadNotAllowed { operation_kind } => write!(
+                formatter,
+                "operation kind {operation_kind:?} requires an opaque payload summary"
             ),
             Self::TransitionTimestampMovedBackwards {
                 operation_id,

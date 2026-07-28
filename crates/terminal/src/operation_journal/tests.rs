@@ -1,8 +1,9 @@
 use super::{
     OPERATION_JOURNAL_SCHEMA_VERSION, OperationGenerationId, OperationJournal,
-    OperationJournalError, OperationJournalSessionId, OperationKind, OperationStatus,
-    OperationTransitionOutcome,
+    OperationJournalError, OperationJournalSessionId, OperationKind, OperationPayloadCompleteness,
+    OperationStatus, OperationTransitionOutcome, SensitiveOperationPayload,
 };
+use serde_json::json;
 
 fn generation(value: u64) -> OperationGenerationId {
     OperationGenerationId::new(value).expect("generation must be non-zero")
@@ -51,6 +52,73 @@ fn queueing_an_operation_records_the_initial_transition() {
     assert_eq!(operation.transitions().len(), 1);
     assert_eq!(operation.transitions()[0].status(), OperationStatus::Queued);
     assert_eq!(operation.transitions()[0].occurred_at_unix_ms(), 1_010);
+}
+
+#[test]
+fn journal_accepts_only_redacted_payloads_and_serializes_no_raw_secrets() {
+    let mut journal = journal();
+    let payload = SensitiveOperationPayload::opaque(b"password=plain-secret".to_vec()).redact();
+    let operation_id = journal
+        .queue_operation_with_payload(OperationKind::Command, None, payload, 1_010)
+        .expect("queue operation with redacted payload");
+
+    let payload = journal
+        .operation(&operation_id)
+        .expect("operation")
+        .redacted_payload()
+        .expect("redacted payload");
+    assert_eq!(
+        payload.completeness(),
+        OperationPayloadCompleteness::SummaryOnly
+    );
+
+    let serialized = serde_json::to_string(&journal).expect("serialize journal");
+    assert!(serialized.contains("opaque_summary"));
+    assert!(!serialized.contains("plain-secret"));
+}
+
+#[test]
+fn raw_terminal_operation_kinds_reject_structured_payloads() {
+    for kind in [
+        OperationKind::UserInput,
+        OperationKind::Command,
+        OperationKind::Paste,
+        OperationKind::ControlSequence,
+        OperationKind::Unconfirmable,
+    ] {
+        let mut journal = journal();
+        let payload =
+            SensitiveOperationPayload::structured(json!({"command": "echo visible"})).redact();
+        assert!(matches!(
+            journal
+                .queue_operation_with_payload(kind, None, payload, 1_010)
+                .expect_err("raw terminal operations require opaque summaries"),
+            OperationJournalError::StructuredPayloadNotAllowed {
+                operation_kind
+            } if operation_kind == kind
+        ));
+    }
+}
+
+#[test]
+fn snapshot_rejects_structured_payloads_for_raw_terminal_operations() {
+    let mut journal = journal();
+    let payload =
+        SensitiveOperationPayload::structured(json!({"path": "/tmp/report.txt"})).redact();
+    journal
+        .queue_operation_with_payload(OperationKind::FileOperation, None, payload, 1_010)
+        .expect("queue file operation");
+
+    let mut snapshot = serde_json::to_value(journal).expect("serialize journal");
+    snapshot["generations"][0]["operations"][0]["kind"] = json!("command");
+
+    let error = serde_json::from_value::<OperationJournal>(snapshot)
+        .expect_err("raw terminal operation cannot restore a structured payload");
+    assert!(
+        error
+            .to_string()
+            .contains("raw terminal operation contains structured payload")
+    );
 }
 
 #[test]
