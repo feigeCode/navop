@@ -8,6 +8,8 @@ use super::{
 use serde_json::json;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
 
 fn generation(value: u64) -> OperationGenerationId {
     OperationGenerationId::new(value).expect("generation must be non-zero")
@@ -243,6 +245,124 @@ fn truncated_tail_is_discarded_and_repaired_before_future_appends() {
     reopened
         .persist(&journal)
         .expect("append after truncated tail repair");
+}
+
+#[cfg(unix)]
+#[test]
+fn append_log_symlink_is_rejected_without_reading_or_truncating_the_target() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let mut journal = journal();
+    let persistence_paths = paths(&directory, &journal);
+    let config = OperationJournalPersistenceConfig::default();
+    let (mut store, _) = OperationJournalFileStore::open(persistence_paths.clone(), config.clone())
+        .expect("open journal store");
+
+    journal
+        .queue_operation(OperationKind::Paste, None, 1_010)
+        .expect("queue operation");
+    store.persist(&journal).expect("persist operation");
+    drop(store);
+
+    let mut external_bytes =
+        fs::read(persistence_paths.append_log_path()).expect("read valid append log");
+    external_bytes.extend_from_slice(br#"{"format":"navop_terminal_operation_journal_snapshot""#);
+    let external_path = directory.path().join("external-append-target");
+    fs::write(&external_path, &external_bytes).expect("write external append target");
+    fs::remove_file(persistence_paths.append_log_path()).expect("remove real append log");
+    symlink(&external_path, persistence_paths.append_log_path())
+        .expect("replace append log with symlink");
+
+    let result = OperationJournalFileStore::open(persistence_paths, config);
+
+    assert_eq!(
+        fs::read(&external_path).expect("read external append target after recovery"),
+        external_bytes,
+        "recovery must never repair or truncate a symlink target"
+    );
+    assert!(result.is_err(), "append log symlinks must be rejected");
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_symlink_is_rejected_without_recovering_the_target() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let mut journal = journal();
+    let persistence_paths = paths(&directory, &journal);
+    let config = compact_after_one_entry_config();
+    let (mut store, _) = OperationJournalFileStore::open(persistence_paths.clone(), config.clone())
+        .expect("open journal store");
+
+    let operation_id = journal
+        .queue_operation(OperationKind::ApplicationOperation, None, 1_010)
+        .expect("queue operation");
+    store.persist(&journal).expect("persist queued operation");
+    journal
+        .transition_operation(&operation_id, OperationStatus::Sent, 1_020)
+        .expect("mark operation sent");
+    store
+        .persist(&journal)
+        .expect("compact journal and publish checkpoint");
+    drop(store);
+
+    let external_bytes =
+        fs::read(persistence_paths.checkpoint_path()).expect("read valid checkpoint");
+    let external_path = directory.path().join("external-checkpoint-target");
+    fs::write(&external_path, &external_bytes).expect("write external checkpoint target");
+    fs::remove_file(persistence_paths.checkpoint_path()).expect("remove real checkpoint");
+    fs::remove_file(persistence_paths.append_log_path()).expect("remove append log fallback");
+    symlink(&external_path, persistence_paths.checkpoint_path())
+        .expect("replace checkpoint with symlink");
+
+    let result = OperationJournalFileStore::open(persistence_paths, config);
+
+    assert_eq!(
+        fs::read(&external_path).expect("read external checkpoint target after recovery"),
+        external_bytes,
+        "checkpoint recovery must never mutate a symlink target"
+    );
+    assert!(result.is_err(), "checkpoint symlinks must be rejected");
+}
+
+#[cfg(unix)]
+#[test]
+fn append_rejects_a_same_length_symlink_replacement_without_writing_the_target() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let mut journal = journal();
+    let persistence_paths = paths(&directory, &journal);
+    let config = OperationJournalPersistenceConfig::default();
+    let (mut store, _) = OperationJournalFileStore::open(persistence_paths.clone(), config)
+        .expect("open journal store");
+
+    journal
+        .queue_operation(OperationKind::Command, None, 1_010)
+        .expect("queue operation");
+    store.persist(&journal).expect("persist initial operation");
+
+    let external_bytes =
+        fs::read(persistence_paths.append_log_path()).expect("read initial append log");
+    let external_path = directory.path().join("external-same-length-target");
+    fs::write(&external_path, &external_bytes).expect("write same-length external target");
+    fs::remove_file(persistence_paths.append_log_path()).expect("remove real append log");
+    symlink(&external_path, persistence_paths.append_log_path())
+        .expect("replace append log with symlink");
+
+    journal
+        .begin_generation(generation(2), 2_000)
+        .expect("begin reconnect generation");
+    let result = store.persist(&journal);
+
+    assert_eq!(
+        fs::read(&external_path).expect("read external target after append"),
+        external_bytes,
+        "append must never follow a replacement symlink"
+    );
+    assert!(
+        matches!(
+            result,
+            Err(OperationJournalPersistenceError::AppendLogChanged)
+        ),
+        "unexpected persist result after append log replacement: {result:?}"
+    );
 }
 
 #[test]

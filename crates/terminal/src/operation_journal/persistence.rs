@@ -1,4 +1,5 @@
 use super::model::{OperationJournal, OperationJournalSessionId};
+use same_file::Handle as FileHandle;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -14,6 +15,11 @@ const MAX_OPERATION_JOURNAL_LOG_ENTRIES: u64 = 256;
 const MAX_OPERATION_JOURNAL_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_OPERATION_JOURNAL_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_OPERATION_JOURNAL_CHECKPOINT_BYTES: u64 = 4 * 1024 * 1024;
+
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationJournalPersistenceConfig {
@@ -35,7 +41,7 @@ impl Default for OperationJournalPersistenceConfig {
 }
 
 impl OperationJournalPersistenceConfig {
-    fn validate(&self) -> Result<(), OperationJournalPersistenceError> {
+    pub(super) fn validate(&self) -> Result<(), OperationJournalPersistenceError> {
         if self.max_log_entries == 0 {
             return Err(OperationJournalPersistenceError::InvalidConfig {
                 reason: "max_log_entries must be greater than zero",
@@ -85,6 +91,7 @@ pub struct OperationJournalPersistencePaths {
     session_id: OperationJournalSessionId,
     append_log_path: PathBuf,
     checkpoint_path: PathBuf,
+    session_manifest_path: PathBuf,
 }
 
 impl OperationJournalPersistencePaths {
@@ -96,7 +103,12 @@ impl OperationJournalPersistencePaths {
             session_id: session_id.clone(),
             append_log_path: root.as_ref().join(format!("{file_stem}.journal.partial")),
             checkpoint_path: root.as_ref().join(format!("{file_stem}.checkpoint.json")),
+            session_manifest_path: root.as_ref().join(format!("{file_stem}.session.json")),
         }
+    }
+
+    pub fn session_id(&self) -> &OperationJournalSessionId {
+        &self.session_id
     }
 
     pub fn append_log_path(&self) -> &Path {
@@ -105,6 +117,10 @@ impl OperationJournalPersistencePaths {
 
     pub fn checkpoint_path(&self) -> &Path {
         &self.checkpoint_path
+    }
+
+    pub fn session_manifest_path(&self) -> &Path {
+        &self.session_manifest_path
     }
 }
 
@@ -344,15 +360,36 @@ impl std::error::Error for OperationJournalPersistenceError {
 /// The caller must not keep multiple live stores for the same paths. Supporting
 /// concurrent writers would require an inter-process lock rather than metadata
 /// checks around append operations.
+///
+/// The configured paths and their ancestor directories are trusted,
+/// application-owned storage. Leaf journal files are opened without following
+/// symlinks or Windows reparse points, but this store does not independently
+/// validate every ancestor directory component.
 #[derive(Debug)]
 pub struct OperationJournalFileStore {
     paths: OperationJournalPersistencePaths,
     config: OperationJournalPersistenceConfig,
+    log_file: Option<FileHandle>,
     next_persistence_sequence: u64,
     log_entry_count: u64,
     log_bytes: u64,
     force_compaction: bool,
     write_failed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TruncatedLogTailHandling {
+    RepairForWriter,
+    PreserveForReadOnlyRecovery,
+}
+
+struct RecoveredOperationJournalState {
+    recovery: OperationJournalRecovery,
+    log_file: Option<FileHandle>,
+    next_persistence_sequence: u64,
+    log_entry_count: u64,
+    log_bytes: u64,
+    force_compaction: bool,
 }
 
 impl OperationJournalFileStore {
@@ -361,79 +398,38 @@ impl OperationJournalFileStore {
         config: OperationJournalPersistenceConfig,
     ) -> Result<(Self, OperationJournalRecovery), OperationJournalPersistenceError> {
         config.validate()?;
-
-        let checkpoint = read_checkpoint(&paths, &config);
-        let log = read_append_log(&paths, &config)?;
-        let mut checkpoint_rejection = None;
-        let checkpoint = match checkpoint {
-            CheckpointRead::Missing => None,
-            CheckpointRead::Valid(snapshot) => Some(snapshot),
-            CheckpointRead::Rejected(corruption) => {
-                checkpoint_rejection = Some(corruption);
-                None
-            }
-        };
-
-        if let (Some(corruption), None) = (checkpoint_rejection, log.latest.as_ref()) {
-            return Err(OperationJournalPersistenceError::UnrecoverableCheckpoint { corruption });
-        }
-
-        let log_sequence = log
-            .latest
-            .as_ref()
-            .map(|snapshot| snapshot.persistence_sequence);
-        let (latest, source) = match (checkpoint, log.latest) {
-            (None, None) => (None, None),
-            (None, Some(log)) => (Some(log), Some(OperationJournalRecoverySource::AppendLog)),
-            (Some(checkpoint), None) => (
-                Some(checkpoint),
-                Some(OperationJournalRecoverySource::Checkpoint),
-            ),
-            (Some(checkpoint), Some(log)) => {
-                if checkpoint.persistence_sequence == log.persistence_sequence && checkpoint != log
-                {
-                    checkpoint_rejection =
-                        Some(OperationJournalPersistenceCorruption::ConflictingSnapshot);
-                    (Some(log), Some(OperationJournalRecoverySource::AppendLog))
-                } else if checkpoint.persistence_sequence > log.persistence_sequence {
-                    (
-                        Some(checkpoint),
-                        Some(OperationJournalRecoverySource::CheckpointAndAppendLog),
-                    )
-                } else {
-                    (
-                        Some(log),
-                        Some(OperationJournalRecoverySource::CheckpointAndAppendLog),
-                    )
-                }
-            }
-        };
-
-        let latest_sequence = latest
-            .as_ref()
-            .map_or(0, |snapshot| snapshot.persistence_sequence);
-        let next_persistence_sequence = latest_sequence
-            .checked_add(1)
-            .ok_or(OperationJournalPersistenceError::PersistenceSequenceOverflow)?;
-        let force_compaction =
-            log_sequence.is_some_and(|log_sequence| log_sequence < latest_sequence);
-        let journal = latest.map(|snapshot| snapshot.journal);
-        let recovery = OperationJournalRecovery {
-            journal,
-            source,
-            checkpoint_rejection,
-            discarded_log_tail_bytes: log.discarded_tail_bytes,
-        };
+        let RecoveredOperationJournalState {
+            recovery,
+            log_file,
+            next_persistence_sequence,
+            log_entry_count,
+            log_bytes,
+            force_compaction,
+        } = recover_operation_journal(&paths, &config, TruncatedLogTailHandling::RepairForWriter)?;
         let store = Self {
             paths,
             config,
+            log_file,
             next_persistence_sequence,
-            log_entry_count: log.entry_count,
-            log_bytes: log.valid_bytes,
+            log_entry_count,
+            log_bytes,
             force_compaction,
             write_failed: false,
         };
         Ok((store, recovery))
+    }
+
+    pub(super) fn recover_read_only(
+        paths: OperationJournalPersistencePaths,
+        config: OperationJournalPersistenceConfig,
+    ) -> Result<OperationJournalRecovery, OperationJournalPersistenceError> {
+        config.validate()?;
+        Ok(recover_operation_journal(
+            &paths,
+            &config,
+            TruncatedLogTailHandling::PreserveForReadOnlyRecovery,
+        )?
+        .recovery)
     }
 
     pub fn persist(
@@ -521,10 +517,30 @@ impl OperationJournalFileStore {
     }
 
     fn ensure_log_unchanged(&self) -> Result<(), OperationJournalPersistenceError> {
-        match fs::metadata(self.paths.append_log_path()) {
-            Ok(metadata) if metadata.is_file() && metadata.len() == self.log_bytes => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound && self.log_bytes == 0 => Ok(()),
-            Ok(_) | Err(_) => Err(OperationJournalPersistenceError::AppendLogChanged),
+        let Some(expected) = self.log_file.as_ref() else {
+            return match open_regular_file(
+                self.paths.append_log_path(),
+                RegularFileOpenMode::ReadOnly,
+            ) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound && self.log_bytes == 0 => {
+                    Ok(())
+                }
+                Ok(_) | Err(_) => Err(OperationJournalPersistenceError::AppendLogChanged),
+            };
+        };
+
+        let current =
+            open_regular_file_handle(self.paths.append_log_path(), RegularFileOpenMode::ReadOnly)
+                .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+        let current_bytes = current
+            .as_file()
+            .metadata()
+            .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
+            .len();
+        if &current == expected && current_bytes == self.log_bytes {
+            Ok(())
+        } else {
+            Err(OperationJournalPersistenceError::AppendLogChanged)
         }
     }
 
@@ -539,21 +555,56 @@ impl OperationJournalFileStore {
             .map_err(|source| OperationJournalPersistenceError::AppendWrite { source })?;
         fs::create_dir_all(parent)
             .map_err(|source| OperationJournalPersistenceError::AppendWrite { source })?;
-        let existed = self.paths.append_log_path().exists();
-        let result = (|| -> io::Result<()> {
-            let mut options = OpenOptions::new();
-            options.create(true).append(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
+        let existed = self.log_file.is_some();
+        let mut candidate = if let Some(expected) = self.log_file.as_ref() {
+            let candidate =
+                open_regular_file_handle(self.paths.append_log_path(), RegularFileOpenMode::Append)
+                    .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+            let candidate_bytes = candidate
+                .as_file()
+                .metadata()
+                .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
+                .len();
+            if &candidate != expected || candidate_bytes != self.log_bytes {
+                return Err(OperationJournalPersistenceError::AppendLogChanged);
             }
-            let mut file = options.open(self.paths.append_log_path())?;
+            candidate
+        } else {
+            let file = match open_regular_file(
+                self.paths.append_log_path(),
+                RegularFileOpenMode::CreateNewAppend,
+            ) {
+                Ok(file) => file,
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                    return Err(OperationJournalPersistenceError::AppendLogChanged);
+                }
+                Err(source) => {
+                    return Err(OperationJournalPersistenceError::AppendWrite { source });
+                }
+            };
+            let candidate = FileHandle::from_file(file)
+                .map_err(|source| OperationJournalPersistenceError::AppendWrite { source })?;
+            if candidate
+                .as_file()
+                .metadata()
+                .map_err(|source| OperationJournalPersistenceError::AppendWrite { source })?
+                .len()
+                != self.log_bytes
+            {
+                return Err(OperationJournalPersistenceError::AppendLogChanged);
+            }
+            candidate
+        };
+
+        let result = (|| -> io::Result<()> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                candidate
+                    .as_file()
+                    .set_permissions(fs::Permissions::from_mode(0o600))?;
             }
+            let file = candidate.as_file_mut();
             file.write_all(serialized)?;
             file.flush()?;
             file.sync_data()?;
@@ -564,9 +615,22 @@ impl OperationJournalFileStore {
             return Err(OperationJournalPersistenceError::AppendWrite { source });
         }
 
+        let current =
+            open_regular_file_handle(self.paths.append_log_path(), RegularFileOpenMode::ReadOnly)
+                .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+        let current_bytes = current
+            .as_file()
+            .metadata()
+            .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
+            .len();
+        if current != candidate || current_bytes != next_log_bytes {
+            return Err(OperationJournalPersistenceError::AppendLogChanged);
+        }
+
         // The appended bytes are already visible and file data has been synced. Keep
         // the in-memory metadata aligned with that file before attempting the parent
         // directory durability barrier; a later failure cannot safely roll them back.
+        self.log_file = Some(candidate);
         self.log_entry_count = next_log_entries;
         self.log_bytes = next_log_bytes;
         self.next_persistence_sequence = next_sequence;
@@ -591,17 +655,31 @@ impl OperationJournalFileStore {
             .map_err(|source| OperationJournalPersistenceError::LogCompactionWrite { source })?;
         let temporary = prepare_atomic_file(parent, serialized)
             .map_err(|source| OperationJournalPersistenceError::LogCompactionWrite { source })?;
-        temporary
+        let file = temporary
             .persist(self.paths.append_log_path())
             .map_err(
                 |error| OperationJournalPersistenceError::LogCompactionWrite {
                     source: error.error,
                 },
             )?;
+        let log_file = FileHandle::from_file(file)
+            .map_err(|source| OperationJournalPersistenceError::LogCompactionWrite { source })?;
+        let current =
+            open_regular_file_handle(self.paths.append_log_path(), RegularFileOpenMode::ReadOnly)
+                .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+        let current_bytes = current
+            .as_file()
+            .metadata()
+            .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
+            .len();
+        if current != log_file || current_bytes != serialized_bytes {
+            return Err(OperationJournalPersistenceError::AppendLogChanged);
+        }
 
         // Atomic replacement has already published the new segment. Record the
         // visible file state before syncing its parent; on sync failure the store is
         // fail-closed and recovery on reopen decides which snapshot is authoritative.
+        self.log_file = Some(log_file);
         self.log_entry_count = 1;
         self.log_bytes = serialized_bytes;
         self.next_persistence_sequence = next_sequence;
@@ -612,6 +690,81 @@ impl OperationJournalFileStore {
         }
         Ok(())
     }
+}
+
+fn recover_operation_journal(
+    paths: &OperationJournalPersistencePaths,
+    config: &OperationJournalPersistenceConfig,
+    truncated_tail_handling: TruncatedLogTailHandling,
+) -> Result<RecoveredOperationJournalState, OperationJournalPersistenceError> {
+    let checkpoint = read_checkpoint(paths, config);
+    let log = read_append_log(paths, config, truncated_tail_handling)?;
+    let mut checkpoint_rejection = None;
+    let checkpoint = match checkpoint {
+        CheckpointRead::Missing => None,
+        CheckpointRead::Valid(snapshot) => Some(snapshot),
+        CheckpointRead::Rejected(corruption) => {
+            checkpoint_rejection = Some(corruption);
+            None
+        }
+    };
+
+    if let (Some(corruption), None) = (checkpoint_rejection, log.latest.as_ref()) {
+        return Err(OperationJournalPersistenceError::UnrecoverableCheckpoint { corruption });
+    }
+
+    let log_sequence = log
+        .latest
+        .as_ref()
+        .map(|snapshot| snapshot.persistence_sequence);
+    let (latest, source) = match (checkpoint, log.latest) {
+        (None, None) => (None, None),
+        (None, Some(log)) => (Some(log), Some(OperationJournalRecoverySource::AppendLog)),
+        (Some(checkpoint), None) => (
+            Some(checkpoint),
+            Some(OperationJournalRecoverySource::Checkpoint),
+        ),
+        (Some(checkpoint), Some(log)) => {
+            if checkpoint.persistence_sequence == log.persistence_sequence && checkpoint != log {
+                checkpoint_rejection =
+                    Some(OperationJournalPersistenceCorruption::ConflictingSnapshot);
+                (Some(log), Some(OperationJournalRecoverySource::AppendLog))
+            } else if checkpoint.persistence_sequence > log.persistence_sequence {
+                (
+                    Some(checkpoint),
+                    Some(OperationJournalRecoverySource::CheckpointAndAppendLog),
+                )
+            } else {
+                (
+                    Some(log),
+                    Some(OperationJournalRecoverySource::CheckpointAndAppendLog),
+                )
+            }
+        }
+    };
+
+    let latest_sequence = latest
+        .as_ref()
+        .map_or(0, |snapshot| snapshot.persistence_sequence);
+    let next_persistence_sequence = latest_sequence
+        .checked_add(1)
+        .ok_or(OperationJournalPersistenceError::PersistenceSequenceOverflow)?;
+    let force_compaction = log_sequence.is_some_and(|log_sequence| log_sequence < latest_sequence);
+    let journal = latest.map(|snapshot| snapshot.journal);
+    let recovery = OperationJournalRecovery {
+        journal,
+        source,
+        checkpoint_rejection,
+        discarded_log_tail_bytes: log.discarded_tail_bytes,
+    };
+    Ok(RecoveredOperationJournalState {
+        recovery,
+        log_file: log.file,
+        next_persistence_sequence,
+        log_entry_count: log.entry_count,
+        log_bytes: log.valid_bytes,
+        force_compaction,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -840,15 +993,95 @@ enum CheckpointRead {
     Rejected(OperationJournalPersistenceCorruption),
 }
 
+#[derive(Clone, Copy)]
+enum RegularFileOpenMode {
+    ReadOnly,
+    ReadWrite,
+    Append,
+    CreateNewAppend,
+}
+
+pub(super) fn open_regular_read_file(path: &Path) -> io::Result<File> {
+    open_regular_file(path, RegularFileOpenMode::ReadOnly)
+}
+
+fn open_regular_file(path: &Path, mode: RegularFileOpenMode) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    match mode {
+        RegularFileOpenMode::ReadOnly => {
+            options.read(true);
+        }
+        RegularFileOpenMode::ReadWrite => {
+            options.read(true).write(true);
+        }
+        RegularFileOpenMode::Append => {
+            options.read(true).append(true);
+        }
+        RegularFileOpenMode::CreateNewAppend => {
+            options.read(true).append(true).create_new(true);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+        if matches!(mode, RegularFileOpenMode::CreateNewAppend) {
+            options.mode(0o600);
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "operation journal path is a reparse point",
+            ));
+        }
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "operation journal path is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+fn open_regular_file_handle(path: &Path, mode: RegularFileOpenMode) -> io::Result<FileHandle> {
+    FileHandle::from_file(open_regular_file(path, mode)?)
+}
+
 fn read_checkpoint(
     paths: &OperationJournalPersistencePaths,
     config: &OperationJournalPersistenceConfig,
 ) -> CheckpointRead {
-    let metadata = match fs::metadata(paths.checkpoint_path()) {
-        Ok(metadata) => metadata,
+    let file = match open_regular_file(paths.checkpoint_path(), RegularFileOpenMode::ReadOnly) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return CheckpointRead::Missing;
         }
+        Err(_) => {
+            return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::Unreadable);
+        }
+    };
+    let handle = match FileHandle::from_file(file) {
+        Ok(handle) => handle,
+        Err(_) => {
+            return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::Unreadable);
+        }
+    };
+    let metadata = match handle.as_file().metadata() {
+        Ok(metadata) => metadata,
         Err(_) => {
             return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::Unreadable);
         }
@@ -859,23 +1092,33 @@ fn read_checkpoint(
     if metadata.len() > config.max_checkpoint_bytes {
         return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::RecordTooLarge);
     }
-    let mut file = match File::open(paths.checkpoint_path()) {
-        Ok(file) => file,
-        Err(_) => {
-            return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::Unreadable);
-        }
-    };
     let mut serialized = Vec::new();
-    if Read::take(&mut file, config.max_checkpoint_bytes.saturating_add(1))
-        .read_to_end(&mut serialized)
-        .is_err()
+    if Read::take(
+        handle.as_file(),
+        config.max_checkpoint_bytes.saturating_add(1),
+    )
+    .read_to_end(&mut serialized)
+    .is_err()
     {
         return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::Unreadable);
     }
     if u64::try_from(serialized.len()).map_or(true, |bytes| bytes > config.max_checkpoint_bytes) {
         return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::RecordTooLarge);
     }
-    if fs::metadata(paths.checkpoint_path()).map_or(true, |current| current.len() != metadata.len())
+    let current =
+        match open_regular_file_handle(paths.checkpoint_path(), RegularFileOpenMode::ReadOnly) {
+            Ok(current) => current,
+            Err(_) => {
+                return CheckpointRead::Rejected(
+                    OperationJournalPersistenceCorruption::FileChanged,
+                );
+            }
+        };
+    if current != handle
+        || current
+            .as_file()
+            .metadata()
+            .map_or(true, |current| current.len() != metadata.len())
     {
         return CheckpointRead::Rejected(OperationJournalPersistenceCorruption::FileChanged);
     }
@@ -887,6 +1130,7 @@ fn read_checkpoint(
 
 struct AppendLogRead {
     latest: Option<PersistedOperationJournalSnapshot>,
+    file: Option<FileHandle>,
     entry_count: u64,
     valid_bytes: u64,
     discarded_tail_bytes: u64,
@@ -895,12 +1139,14 @@ struct AppendLogRead {
 fn read_append_log(
     paths: &OperationJournalPersistencePaths,
     config: &OperationJournalPersistenceConfig,
+    truncated_tail_handling: TruncatedLogTailHandling,
 ) -> Result<AppendLogRead, OperationJournalPersistenceError> {
-    let metadata = match fs::metadata(paths.append_log_path()) {
-        Ok(metadata) => metadata,
+    let file = match open_regular_file(paths.append_log_path(), RegularFileOpenMode::ReadOnly) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok(AppendLogRead {
                 latest: None,
+                file: None,
                 entry_count: 0,
                 valid_bytes: 0,
                 discarded_tail_bytes: 0,
@@ -910,14 +1156,12 @@ fn read_append_log(
             return Err(OperationJournalPersistenceError::OpenLog { source });
         }
     };
-    if !metadata.is_file() {
-        return Err(OperationJournalPersistenceError::OpenLog {
-            source: io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "append log path is not a regular file",
-            ),
-        });
-    }
+    let mut log_file = FileHandle::from_file(file)
+        .map_err(|source| OperationJournalPersistenceError::OpenLog { source })?;
+    let metadata = log_file
+        .as_file()
+        .metadata()
+        .map_err(|source| OperationJournalPersistenceError::OpenLog { source })?;
     if metadata.len() > config.max_log_bytes {
         return Err(OperationJournalPersistenceError::LogTooLarge {
             actual_bytes: metadata.len(),
@@ -925,9 +1169,7 @@ fn read_append_log(
         });
     }
 
-    let file = File::open(paths.append_log_path())
-        .map_err(|source| OperationJournalPersistenceError::OpenLog { source })?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(log_file.as_file());
     let mut latest = None;
     let mut previous_sequence: Option<u64> = None;
     let mut entry_count = 0_u64;
@@ -1006,26 +1248,57 @@ fn read_append_log(
         entry_count = next_entry_count;
         line_number = line_number.saturating_add(1);
     }
+    drop(reader);
 
-    let current_bytes = fs::metadata(paths.append_log_path())
-        .map_err(|source| OperationJournalPersistenceError::ReadLog { source })?
+    let current = open_regular_file_handle(paths.append_log_path(), RegularFileOpenMode::ReadOnly)
+        .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+    let current_bytes = current
+        .as_file()
+        .metadata()
+        .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
         .len();
-    if current_bytes != metadata.len() {
+    if current != log_file || current_bytes != metadata.len() {
         return Err(OperationJournalPersistenceError::AppendLogChanged);
     }
-    if discarded_tail_bytes > 0 {
-        let file = OpenOptions::new()
-            .write(true)
-            .open(paths.append_log_path())
+    if discarded_tail_bytes > 0
+        && truncated_tail_handling == TruncatedLogTailHandling::RepairForWriter
+    {
+        let repair_file =
+            open_regular_file_handle(paths.append_log_path(), RegularFileOpenMode::ReadWrite)
+                .map_err(|source| OperationJournalPersistenceError::RepairLog { source })?;
+        let repair_bytes = repair_file
+            .as_file()
+            .metadata()
+            .map_err(|source| OperationJournalPersistenceError::RepairLog { source })?
+            .len();
+        if repair_file != log_file || repair_bytes != metadata.len() {
+            return Err(OperationJournalPersistenceError::AppendLogChanged);
+        }
+        repair_file
+            .as_file()
+            .set_len(valid_bytes)
             .map_err(|source| OperationJournalPersistenceError::RepairLog { source })?;
-        file.set_len(valid_bytes)
+        repair_file
+            .as_file()
+            .sync_all()
             .map_err(|source| OperationJournalPersistenceError::RepairLog { source })?;
-        file.sync_all()
-            .map_err(|source| OperationJournalPersistenceError::RepairLog { source })?;
+        let current =
+            open_regular_file_handle(paths.append_log_path(), RegularFileOpenMode::ReadOnly)
+                .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?;
+        let current_bytes = current
+            .as_file()
+            .metadata()
+            .map_err(|_| OperationJournalPersistenceError::AppendLogChanged)?
+            .len();
+        if current != repair_file || current_bytes != valid_bytes {
+            return Err(OperationJournalPersistenceError::AppendLogChanged);
+        }
+        log_file = repair_file;
     }
 
     Ok(AppendLogRead {
         latest,
+        file: Some(log_file),
         entry_count,
         valid_bytes,
         discarded_tail_bytes,
@@ -1088,7 +1361,7 @@ fn strip_newline(line: &[u8]) -> &[u8] {
     line.strip_suffix(b"\n").unwrap_or(line)
 }
 
-fn write_atomic_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+pub(super) fn write_atomic_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let parent = persistence_parent(path)?;
     fs::create_dir_all(parent)?;
     let temporary = prepare_atomic_file(parent, contents)?;

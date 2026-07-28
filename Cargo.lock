@@ -12203,6 +12203,7 @@ dependencies = [
  "one-core",
  "plist",
  "polling",
+ "same-file",
  "serde",
  "serde_json",
  "serialport",

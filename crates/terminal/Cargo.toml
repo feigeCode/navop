@@ -19,6 +19,7 @@ alacritty_terminal.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+same-file = "1"
 shell-words = { workspace = true }
 plist = { workspace = true }
 tracing = { workspace = true }
