@@ -41,7 +41,8 @@ impl TerminalView {
     }
 
     pub(super) fn handle_app_theme_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = TerminalTheme::from_application_theme(cx.theme());
+        let settings = current_settings(cx);
+        let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }
 
@@ -75,6 +76,12 @@ impl TerminalView {
                 let family = family.clone();
                 let _ = update_settings(cx, move |settings| {
                     settings.font_family = family;
+                });
+            }
+            TerminalSidebarEvent::ThemeChanged(theme) => {
+                let theme_name = theme.name.to_string();
+                let _ = update_settings(cx, move |settings| {
+                    settings.theme = theme_name;
                 });
             }
             TerminalSidebarEvent::ScrollbackLinesChanged(lines) => {

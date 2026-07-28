@@ -1,6 +1,6 @@
 use super::{
-    TerminalTheme, available_monospace_fonts, default_font_fallbacks, default_monospace_font,
-    normalize_terminal_primary_font, terminal_cell_width_from_advance,
+    APPLICATION_THEME_NAME, TerminalTheme, available_monospace_fonts, default_font_fallbacks,
+    default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advance,
     terminal_cell_width_from_advances,
 };
 use gpui::{Pixels, px};
@@ -28,6 +28,81 @@ fn light_terminal_theme_softens_the_canvas_and_default_text() {
     assert!(terminal_theme.foreground.l <= 0.32);
     assert_eq!(app_theme.primary, terminal_theme.cursor);
     assert_eq!(app_theme.selection, terminal_theme.selection);
+}
+
+#[test]
+fn application_terminal_theme_tracks_application_colors() {
+    let dark_app_theme = Theme::from(ThemeColor::dark().as_ref());
+    let light_app_theme = Theme::from(ThemeColor::light().as_ref());
+
+    let dark_terminal_theme = TerminalTheme::resolve(APPLICATION_THEME_NAME, &dark_app_theme);
+    let light_terminal_theme = TerminalTheme::resolve(APPLICATION_THEME_NAME, &light_app_theme);
+
+    assert_eq!(APPLICATION_THEME_NAME, dark_terminal_theme.name);
+    assert_eq!(APPLICATION_THEME_NAME, light_terminal_theme.name);
+    assert_ne!(dark_terminal_theme, light_terminal_theme);
+}
+
+#[test]
+fn fixed_terminal_theme_does_not_depend_on_application_theme() {
+    let dark_app_theme = Theme::from(ThemeColor::dark().as_ref());
+    let light_app_theme = Theme::from(ThemeColor::light().as_ref());
+
+    assert_eq!(
+        TerminalTheme::resolve("ocean", &dark_app_theme),
+        TerminalTheme::resolve("ocean", &light_app_theme)
+    );
+}
+
+#[test]
+fn unknown_terminal_theme_falls_back_to_application() {
+    let app_theme = Theme::from(ThemeColor::dark().as_ref());
+
+    assert_eq!(
+        TerminalTheme::from_application_theme(&app_theme),
+        TerminalTheme::resolve("not-a-theme", &app_theme)
+    );
+    assert_eq!(
+        TerminalTheme::from_application_theme(&app_theme),
+        TerminalTheme::resolve("   ", &app_theme)
+    );
+}
+
+#[test]
+fn all_terminal_theme_names_are_stable_and_resolvable() {
+    let app_theme = Theme::from(ThemeColor::dark().as_ref());
+    let expected_names = [
+        APPLICATION_THEME_NAME,
+        "midnight",
+        "daylight",
+        "ink",
+        "paper",
+        "ocean",
+        "obsidian",
+        "lotus",
+        "neon_blue",
+        "matrix",
+        "crimson",
+    ];
+    let themes = TerminalTheme::all(&app_theme);
+
+    assert_eq!(expected_names.len(), themes.len());
+    assert_eq!(
+        expected_names,
+        themes
+            .iter()
+            .map(|theme| theme.name)
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+    for name in expected_names {
+        assert_eq!(
+            name,
+            TerminalTheme::find_by_name(name, &app_theme)
+                .expect("内置终端主题应可按名称解析")
+                .name
+        );
+    }
 }
 
 #[test]

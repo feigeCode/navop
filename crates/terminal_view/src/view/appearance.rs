@@ -119,7 +119,7 @@ impl TerminalView {
         self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
         self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
-        let theme = TerminalTheme::from_application_theme(cx.theme());
+        let theme = TerminalTheme::resolve(&settings.theme, cx.theme());
         self.apply_theme(&theme, window, cx);
     }
 
