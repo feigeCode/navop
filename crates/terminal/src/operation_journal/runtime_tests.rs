@@ -1,6 +1,6 @@
 use super::runtime::OperationJournalWorkerTestGate;
 use super::{
-    OperationGenerationId, OperationJournalAttempt, OperationJournalError,
+    OperationGenerationId, OperationId, OperationJournalAttempt, OperationJournalError,
     OperationJournalHistoryConfig, OperationJournalHistoryStore, OperationJournalPersistencePaths,
     OperationJournalQueueLimits, OperationJournalRuntime, OperationJournalRuntimeConfig,
     OperationJournalRuntimeError, OperationJournalRuntimeHealth, OperationJournalScope,
@@ -8,6 +8,10 @@ use super::{
 };
 use std::fs;
 use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use std::time::{Duration, Instant};
 
 fn generation(value: u64) -> OperationGenerationId {
@@ -275,6 +279,713 @@ fn journal_snapshot_fails_conservatively_after_runtime_shutdown() {
         runtime.journal_snapshot(Duration::from_secs(5)),
         Err(OperationJournalRuntimeError::Closed)
     );
+}
+
+#[test]
+fn guarded_retry_persists_a_fresh_queued_child_before_dispatch() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let scope = OperationJournalScope::local();
+    let session_id =
+        OperationJournalSessionId::from_string("terminal_session_live_runtime_guarded_retry");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        session_id,
+        scope.clone(),
+        generation(1),
+        2_500,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            Some(SensitiveOperationPayload::opaque(b"original command".to_vec()).redact()),
+            2_510,
+            OperationJournalAttempt::failed(2_520),
+        )
+        .expect("record failed parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist failed parent");
+
+    let root = directory.path().to_path_buf();
+    let scope_for_dispatch = scope.clone();
+    let parent_for_dispatch = parent_operation_id.clone();
+    let observed_persisted_child = Arc::new(AtomicBool::new(false));
+    let observed_persisted_child_for_dispatch = observed_persisted_child.clone();
+    let child_operation_id = runtime
+        .execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"manually re-entered command".to_vec()).redact(),
+            2_530,
+            2_540,
+            move || {
+                let store = OperationJournalHistoryStore::new(
+                    &root,
+                    OperationJournalHistoryConfig::default(),
+                )
+                .expect("open history while dispatching");
+                let discovery = store.discover(&scope_for_dispatch, &[]);
+                let persisted_child = discovery
+                    .histories()
+                    .first()
+                    .and_then(|history| {
+                        history
+                            .journal()
+                            .current_generation()
+                            .operations()
+                            .iter()
+                            .find(|operation| {
+                                operation.parent_operation_id() == Some(&parent_for_dispatch)
+                            })
+                    })
+                    .is_some_and(|operation| operation.status() == OperationStatus::Queued);
+                observed_persisted_child_for_dispatch.store(persisted_child, Ordering::Release);
+                true
+            },
+            Duration::from_secs(5),
+        )
+        .expect("persist then dispatch guarded retry");
+
+    assert!(
+        observed_persisted_child.load(Ordering::Acquire),
+        "the retry dispatch must not run until its queued child is recoverable"
+    );
+    assert_ne!(child_operation_id, parent_operation_id);
+    let journal = runtime
+        .journal_snapshot(Duration::from_secs(5))
+        .expect("snapshot guarded retry");
+    let parent = journal
+        .operation(&parent_operation_id)
+        .expect("original operation remains present");
+    let child = journal
+        .operation(&child_operation_id)
+        .expect("fresh retry child");
+    assert_eq!(parent.status(), OperationStatus::Failed);
+    assert_eq!(child.generation_id(), generation(1));
+    assert_eq!(
+        child.parent_operation_id(),
+        Some(&parent_operation_id),
+        "retry lineage must not overwrite the original operation"
+    );
+    assert_eq!(child.kind(), OperationKind::Command);
+    assert_eq!(child.status(), OperationStatus::Sent);
+    assert_eq!(
+        child
+            .transitions()
+            .iter()
+            .map(|transition| transition.status())
+            .collect::<Vec<_>>(),
+        vec![OperationStatus::Queued, OperationStatus::Sent]
+    );
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+}
+
+#[test]
+fn guarded_retry_does_not_dispatch_while_its_first_persistence_is_blocked() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let gate = OperationJournalWorkerTestGate::blocked_before_persist();
+    let runtime = OperationJournalRuntime::new_with_test_gate(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_persist_order",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        2_600,
+        gate.clone(),
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            2_610,
+            OperationJournalAttempt::failed(2_620),
+        )
+        .expect("queue failed parent");
+    gate.wait_until_worker_is_blocked();
+
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let dispatch_count_for_retry = dispatch_count.clone();
+    let runtime_for_retry = runtime.clone();
+    let retry = std::thread::spawn(move || {
+        runtime_for_retry.execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"manual retry".to_vec()).redact(),
+            2_630,
+            2_640,
+            move || {
+                dispatch_count_for_retry.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        )
+    });
+
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        dispatch_count.load(Ordering::Acquire),
+        0,
+        "dispatch must remain fail-closed before persistence completes"
+    );
+    gate.release();
+    retry
+        .join()
+        .expect("retry caller thread")
+        .expect("retry succeeds after persistence unblocks");
+    assert_eq!(dispatch_count.load(Ordering::Acquire), 1);
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+}
+
+#[test]
+fn guarded_retry_queue_rejection_never_dispatches() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let gate = OperationJournalWorkerTestGate::blocked_before_work();
+    let mut config = runtime_config(&directory);
+    config.queue = OperationJournalQueueLimits {
+        max_pending_operations: 1,
+        max_pending_bytes: 1024,
+        max_pending_controls: 4,
+    };
+    let runtime = OperationJournalRuntime::new_with_test_gate(
+        config,
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_queue_full",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        2_700,
+        gate.clone(),
+    )
+    .expect("spawn journal runtime");
+    gate.wait_until_worker_is_blocked();
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            2_710,
+            OperationJournalAttempt::failed(2_720),
+        )
+        .expect("fill bounded operation queue");
+
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let dispatch_count_for_retry = dispatch_count.clone();
+    assert_eq!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"must not dispatch".to_vec()).redact(),
+            2_730,
+            2_740,
+            move || {
+                dispatch_count_for_retry.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::QueueFull)
+    );
+    assert_eq!(dispatch_count.load(Ordering::Acquire), 0);
+
+    gate.release();
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("persist accepted parent and stop");
+}
+
+#[test]
+fn guarded_retry_rejects_missing_or_non_terminal_parents_without_dispatch() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_invalid_parent",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        2_800,
+    )
+    .expect("spawn journal runtime");
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+
+    let missing_parent = OperationId::from_string("terminal_operation_missing_retry_parent");
+    let missing_dispatch_count = dispatch_count.clone();
+    assert!(matches!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &missing_parent,
+            SensitiveOperationPayload::opaque(b"missing parent".to_vec()).redact(),
+            2_810,
+            2_820,
+            move || {
+                missing_dispatch_count.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::InvalidOperation(
+            OperationJournalError::ParentOperationNotFound { .. }
+        ))
+    ));
+
+    let non_terminal_parent = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            2_830,
+            OperationJournalAttempt::sent(2_840),
+        )
+        .expect("record sent parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist sent parent");
+    let non_terminal_dispatch_count = dispatch_count.clone();
+    assert!(matches!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &non_terminal_parent,
+            SensitiveOperationPayload::opaque(b"non terminal parent".to_vec()).redact(),
+            2_850,
+            2_860,
+            move || {
+                non_terminal_dispatch_count.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::InvalidOperation(
+            OperationJournalError::ParentOperationNotTerminal { .. }
+        ))
+    ));
+    assert_eq!(dispatch_count.load(Ordering::Acquire), 0);
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("invalid retry requests do not stop the worker");
+}
+
+#[test]
+fn guarded_retry_rejects_stale_generation_and_ineligible_parent_without_dispatch() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string("terminal_session_live_runtime_guarded_retry_stale"),
+        OperationJournalScope::local(),
+        generation(1),
+        2_900,
+    )
+    .expect("spawn journal runtime");
+    let failed_parent = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            2_910,
+            OperationJournalAttempt::failed(2_920),
+        )
+        .expect("record retryable parent");
+    let canceled_parent = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            2_930,
+            OperationJournalAttempt::canceled(2_940),
+        )
+        .expect("record ineligible terminal parent");
+    runtime
+        .begin_generation(generation(2), 2_950)
+        .expect("start reconnect generation");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist generation boundary");
+
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let stale_dispatch_count = dispatch_count.clone();
+    assert_eq!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &failed_parent,
+            SensitiveOperationPayload::opaque(b"stale retry".to_vec()).redact(),
+            2_960,
+            2_970,
+            move || {
+                stale_dispatch_count.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::RetryGenerationChanged {
+            expected_generation_id: generation(1),
+            current_generation_id: generation(2),
+        })
+    );
+
+    let ineligible_dispatch_count = dispatch_count.clone();
+    assert_eq!(
+        runtime.execute_guarded_retry(
+            generation(2),
+            &canceled_parent,
+            SensitiveOperationPayload::opaque(b"canceled retry".to_vec()).redact(),
+            2_980,
+            2_990,
+            move || {
+                ineligible_dispatch_count.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::RetryParentNotEligible {
+            parent_operation_id: canceled_parent,
+            kind: OperationKind::Command,
+            status: OperationStatus::Canceled,
+        })
+    );
+    assert_eq!(dispatch_count.load(Ordering::Acquire), 0);
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("rejected retries leave runtime usable");
+}
+
+#[test]
+fn guarded_retry_links_an_old_generation_parent_to_the_current_generation() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_old_generation",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        3_000,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Paste,
+            None,
+            None,
+            3_010,
+            OperationJournalAttempt::failed(3_020),
+        )
+        .expect("record failed old-generation parent");
+    runtime
+        .begin_generation(generation(2), 3_030)
+        .expect("start current generation");
+
+    let child_operation_id = runtime
+        .execute_guarded_retry(
+            generation(2),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"new command only".to_vec()).redact(),
+            3_040,
+            3_050,
+            || true,
+            Duration::from_secs(5),
+        )
+        .expect("retry old-generation parent in current generation");
+    let journal = runtime
+        .journal_snapshot(Duration::from_secs(5))
+        .expect("snapshot retry lineage");
+    assert_eq!(
+        journal
+            .operation(&parent_operation_id)
+            .expect("old parent")
+            .status(),
+        OperationStatus::Failed
+    );
+    let child = journal.operation(&child_operation_id).expect("retry child");
+    assert_eq!(child.generation_id(), generation(2));
+    assert_eq!(child.parent_operation_id(), Some(&parent_operation_id));
+    assert_eq!(child.kind(), OperationKind::Command);
+    assert_eq!(child.status(), OperationStatus::Sent);
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+}
+
+#[test]
+fn guarded_retry_dispatch_failure_records_a_failed_child_and_keeps_worker_usable() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_dispatch_failure",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        3_100,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            3_110,
+            OperationJournalAttempt::failed(3_120),
+        )
+        .expect("record failed parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist failed parent");
+
+    let error = runtime
+        .execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"manual retry".to_vec()).redact(),
+            3_130,
+            3_140,
+            || false,
+            Duration::from_secs(5),
+        )
+        .expect_err("failed backend dispatch must be explicit");
+    let OperationJournalRuntimeError::RetryDispatchFailed {
+        operation_id: child_operation_id,
+    } = error
+    else {
+        panic!("unexpected retry error: {error}");
+    };
+
+    let journal = runtime
+        .journal_snapshot(Duration::from_secs(5))
+        .expect("worker remains available after dispatch failure");
+    let child = journal
+        .operation(&child_operation_id)
+        .expect("failed retry child");
+    assert_eq!(child.parent_operation_id(), Some(&parent_operation_id));
+    assert_eq!(child.status(), OperationStatus::Failed);
+    assert_eq!(
+        child
+            .transitions()
+            .iter()
+            .map(|transition| transition.status())
+            .collect::<Vec<_>>(),
+        vec![OperationStatus::Queued, OperationStatus::Failed]
+    );
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+}
+
+#[test]
+fn guarded_retry_contains_dispatch_panics_as_failed_attempts() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_dispatch_panic",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        3_200,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Paste,
+            None,
+            None,
+            3_210,
+            OperationJournalAttempt::failed(3_220),
+        )
+        .expect("record failed parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist failed parent");
+
+    assert!(matches!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"panic retry".to_vec()).redact(),
+            3_230,
+            3_240,
+            || panic!("backend retry dispatch panicked"),
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::RetryDispatchFailed { .. })
+    ));
+    assert_eq!(
+        runtime.snapshot().health,
+        OperationJournalRuntimeHealth::Healthy
+    );
+
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("dispatch panic must not stop the journal worker");
+}
+
+#[test]
+fn guarded_retry_first_persistence_failure_never_dispatches() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let session_id = OperationJournalSessionId::from_string(
+        "terminal_session_live_runtime_guarded_retry_persistence_failure",
+    );
+    let paths = OperationJournalPersistencePaths::for_session(directory.path(), &session_id);
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        session_id,
+        OperationJournalScope::local(),
+        generation(1),
+        3_300,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            3_310,
+            OperationJournalAttempt::failed(3_320),
+        )
+        .expect("record failed parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist failed parent");
+
+    fs::remove_file(paths.append_log_path()).expect("remove live append log");
+    fs::create_dir(paths.append_log_path()).expect("replace append log with a directory");
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let dispatch_count_for_retry = dispatch_count.clone();
+    assert!(matches!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &parent_operation_id,
+            SensitiveOperationPayload::opaque(b"must remain local".to_vec()).redact(),
+            3_330,
+            3_340,
+            move || {
+                dispatch_count_for_retry.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::PersistenceFailed(_))
+    ));
+    assert_eq!(
+        dispatch_count.load(Ordering::Acquire),
+        0,
+        "the backend must not receive a retry whose lineage was not durably published"
+    );
+    assert_eq!(
+        runtime.snapshot().health,
+        OperationJournalRuntimeHealth::PersistenceFailed
+    );
+}
+
+#[test]
+fn guarded_retry_second_persistence_failure_reports_unknown_completion() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let session_id = OperationJournalSessionId::from_string(
+        "terminal_session_live_runtime_guarded_retry_post_dispatch_persistence_failure",
+    );
+    let paths = OperationJournalPersistencePaths::for_session(directory.path(), &session_id);
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        session_id,
+        OperationJournalScope::local(),
+        generation(1),
+        3_350,
+    )
+    .expect("spawn journal runtime");
+    let parent_operation_id = runtime
+        .record_attempt(
+            OperationKind::Command,
+            None,
+            None,
+            3_360,
+            OperationJournalAttempt::failed(3_370),
+        )
+        .expect("record failed parent");
+    runtime
+        .flush(Duration::from_secs(5))
+        .expect("persist failed parent");
+
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let dispatch_count_for_retry = dispatch_count.clone();
+    let result = runtime.execute_guarded_retry(
+        generation(1),
+        &parent_operation_id,
+        SensitiveOperationPayload::opaque(b"manual replacement command".to_vec()).redact(),
+        3_380,
+        3_390,
+        move || {
+            dispatch_count_for_retry.fetch_add(1, Ordering::AcqRel);
+            fs::remove_file(paths.append_log_path()).expect("remove live append log");
+            fs::create_dir(paths.append_log_path())
+                .expect("replace append log with a directory after dispatch");
+            true
+        },
+        Duration::from_secs(5),
+    );
+
+    assert!(matches!(
+        result,
+        Err(OperationJournalRuntimeError::RetryCompletionUnknown { .. })
+    ));
+    assert_eq!(
+        dispatch_count.load(Ordering::Acquire),
+        1,
+        "the caller must be told completion is unknown once dispatch has begun"
+    );
+    assert_eq!(
+        runtime.snapshot().health,
+        OperationJournalRuntimeHealth::PersistenceFailed
+    );
+}
+
+#[test]
+fn guarded_retry_after_shutdown_never_dispatches() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = OperationJournalRuntime::new(
+        runtime_config(&directory),
+        OperationJournalSessionId::from_string(
+            "terminal_session_live_runtime_guarded_retry_closed",
+        ),
+        OperationJournalScope::local(),
+        generation(1),
+        3_400,
+    )
+    .expect("spawn journal runtime");
+    runtime
+        .shutdown(Duration::from_secs(5))
+        .expect("stop journal runtime");
+
+    let dispatch_count = Arc::new(AtomicUsize::new(0));
+    let dispatch_count_for_retry = dispatch_count.clone();
+    assert_eq!(
+        runtime.execute_guarded_retry(
+            generation(1),
+            &OperationId::from_string("terminal_operation_closed_parent"),
+            SensitiveOperationPayload::opaque(b"closed runtime".to_vec()).redact(),
+            3_410,
+            3_420,
+            move || {
+                dispatch_count_for_retry.fetch_add(1, Ordering::AcqRel);
+                true
+            },
+            Duration::from_secs(5),
+        ),
+        Err(OperationJournalRuntimeError::Closed)
+    );
+    assert_eq!(dispatch_count.load(Ordering::Acquire), 0);
 }
 
 #[test]

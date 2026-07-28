@@ -126,6 +126,21 @@ pub enum OperationJournalRuntimeError {
     QueueFull,
     ControlQueueFull,
     WorkerStopped,
+    RetryGenerationChanged {
+        expected_generation_id: OperationGenerationId,
+        current_generation_id: OperationGenerationId,
+    },
+    RetryParentNotEligible {
+        parent_operation_id: OperationId,
+        kind: OperationKind,
+        status: OperationStatus,
+    },
+    RetryDispatchFailed {
+        operation_id: OperationId,
+    },
+    RetryCompletionUnknown {
+        operation_id: OperationId,
+    },
     Unavailable(String),
     PersistenceFailed(String),
     TimedOut,
@@ -155,6 +170,31 @@ impl fmt::Display for OperationJournalRuntimeError {
                 formatter.write_str("operation journal control queue is full")
             }
             Self::WorkerStopped => formatter.write_str("operation journal worker stopped"),
+            Self::RetryGenerationChanged {
+                expected_generation_id,
+                current_generation_id,
+            } => write!(
+                formatter,
+                "operation retry expected generation {expected_generation_id}, but the current generation is {current_generation_id}"
+            ),
+            Self::RetryParentNotEligible {
+                parent_operation_id,
+                kind,
+                status,
+            } => write!(
+                formatter,
+                "operation {parent_operation_id} ({kind:?}, {status:?}) is not eligible for manual retry"
+            ),
+            Self::RetryDispatchFailed { operation_id } => {
+                write!(
+                    formatter,
+                    "operation retry {operation_id} could not be dispatched"
+                )
+            }
+            Self::RetryCompletionUnknown { operation_id } => write!(
+                formatter,
+                "operation retry {operation_id} may have been dispatched before completion was confirmed"
+            ),
             Self::Unavailable(reason) => {
                 write!(formatter, "operation journal is unavailable: {reason}")
             }
@@ -321,6 +361,69 @@ impl OperationJournalRuntime {
                 Err(OperationJournalRuntimeError::QueueFull)
             }
             Err(error) => Err(error.into_runtime_error()),
+        }
+    }
+
+    /// Durably records a fresh manual retry before allowing its live dispatch.
+    ///
+    /// The retry is rejected unless the caller's captured generation is still
+    /// current and the original operation is a retryable terminal record.
+    /// Dispatch never runs when queue admission, validation, or the first
+    /// persistence fails.
+    pub fn execute_guarded_retry(
+        &self,
+        expected_generation_id: OperationGenerationId,
+        parent_operation_id: &OperationId,
+        redacted_payload: RedactedOperationPayload,
+        queued_at_unix_ms: u64,
+        attempt_at_unix_ms: u64,
+        dispatch: impl FnOnce() -> bool + Send + 'static,
+        timeout: Duration,
+    ) -> Result<OperationId, OperationJournalRuntimeError> {
+        OperationKind::Command
+            .validate_redacted_payload(Some(&redacted_payload))
+            .map_err(OperationJournalRuntimeError::InvalidOperation)?;
+        let operation_id = OperationId::new();
+        let cost_bytes = queued_operation_cost(
+            &operation_id,
+            Some(parent_operation_id),
+            Some(&redacted_payload),
+        )?;
+        let dispatch_state = GuardedRetryDispatchState::new();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let action = GuardedRetryAction {
+            operation_id: operation_id.clone(),
+            expected_generation_id,
+            parent_operation_id: parent_operation_id.clone(),
+            redacted_payload,
+            queued_at_unix_ms,
+            attempt_at_unix_ms,
+            dispatch: Some(Box::new(dispatch)),
+            dispatch_state: dispatch_state.clone(),
+            reply: sender,
+        };
+
+        match self.core.queue.enqueue_guarded_retry(action, cost_bytes) {
+            Ok(()) => {}
+            Err(QueueEnqueueError::Full) => {
+                self.core.shared.mark_queue_full();
+                return Err(OperationJournalRuntimeError::QueueFull);
+            }
+            Err(error) => return Err(error.into_runtime_error()),
+        }
+
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if dispatch_state.cancel_if_pending() {
+                    Err(OperationJournalRuntimeError::TimedOut)
+                } else {
+                    Err(OperationJournalRuntimeError::RetryCompletionUnknown { operation_id })
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(OperationJournalRuntimeError::WorkerStopped)
+            }
         }
     }
 
@@ -697,6 +800,18 @@ impl RuntimeQueue {
         action: OperationAction,
         cost_bytes: usize,
     ) -> Result<(), QueueEnqueueError> {
+        self.enqueue_data(QueueEntry::Operation { action, cost_bytes }, cost_bytes)
+    }
+
+    fn enqueue_guarded_retry(
+        &self,
+        action: GuardedRetryAction,
+        cost_bytes: usize,
+    ) -> Result<(), QueueEnqueueError> {
+        self.enqueue_data(QueueEntry::GuardedRetry { action, cost_bytes }, cost_bytes)
+    }
+
+    fn enqueue_data(&self, entry: QueueEntry, cost_bytes: usize) -> Result<(), QueueEnqueueError> {
         let mut state = lock_unpoisoned(&self.state);
         if let Some(error) = state.worker_error.clone() {
             return Err(QueueEnqueueError::Worker(error));
@@ -715,9 +830,7 @@ impl RuntimeQueue {
             return Err(QueueEnqueueError::Full);
         }
 
-        state
-            .entries
-            .push_back(QueueEntry::Operation { action, cost_bytes });
+        state.entries.push_back(entry);
         state.pending_operations = next_operations;
         state.pending_bytes = next_bytes;
         self.ready.notify_one();
@@ -813,7 +926,7 @@ impl RuntimeQueue {
         state.accepting_data = false;
         state.stopped = true;
         state.worker_error = Some(OperationJournalRuntimeError::Closed);
-        fail_pending_controls(&mut state, OperationJournalRuntimeError::Closed);
+        fail_pending_entries(&mut state, OperationJournalRuntimeError::Closed);
         self.ready.notify_all();
     }
 
@@ -825,15 +938,17 @@ impl RuntimeQueue {
         state.accepting_data = false;
         state.stopped = true;
         state.worker_error = Some(error.clone());
-        fail_pending_controls(&mut state, error);
+        fail_pending_entries(&mut state, error);
         self.ready.notify_all();
     }
 }
 
-fn fail_pending_controls(state: &mut RuntimeQueueState, error: OperationJournalRuntimeError) {
+fn fail_pending_entries(state: &mut RuntimeQueueState, error: OperationJournalRuntimeError) {
     for entry in state.entries.drain(..) {
-        if let QueueEntry::Control(action) = entry {
-            action.fail(error.clone());
+        match entry {
+            QueueEntry::GuardedRetry { action, .. } => action.fail(error.clone()),
+            QueueEntry::Control(action) => action.fail(error.clone()),
+            QueueEntry::Operation { .. } => {}
         }
     }
     state.pending_operations = 0;
@@ -862,6 +977,10 @@ enum QueueEntry {
         action: OperationAction,
         cost_bytes: usize,
     },
+    GuardedRetry {
+        action: GuardedRetryAction,
+        cost_bytes: usize,
+    },
     Control(ControlAction),
 }
 
@@ -872,6 +991,76 @@ struct OperationAction {
     redacted_payload: Option<RedactedOperationPayload>,
     queued_at_unix_ms: u64,
     attempt: OperationJournalAttempt,
+}
+
+struct GuardedRetryAction {
+    operation_id: OperationId,
+    expected_generation_id: OperationGenerationId,
+    parent_operation_id: OperationId,
+    redacted_payload: RedactedOperationPayload,
+    queued_at_unix_ms: u64,
+    attempt_at_unix_ms: u64,
+    dispatch: Option<Box<dyn FnOnce() -> bool + Send>>,
+    dispatch_state: GuardedRetryDispatchState,
+    reply: SyncSender<Result<OperationId, OperationJournalRuntimeError>>,
+}
+
+impl GuardedRetryAction {
+    fn respond(&self, result: Result<OperationId, OperationJournalRuntimeError>) {
+        self.dispatch_state.finish();
+        let _ = self.reply.send(result);
+    }
+
+    fn fail(self, error: OperationJournalRuntimeError) {
+        self.respond(Err(error));
+    }
+}
+
+#[derive(Clone)]
+struct GuardedRetryDispatchState {
+    phase: Arc<Mutex<GuardedRetryDispatchPhase>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GuardedRetryDispatchPhase {
+    Pending,
+    Canceled,
+    Dispatching,
+    Finished,
+}
+
+impl GuardedRetryDispatchState {
+    fn new() -> Self {
+        Self {
+            phase: Arc::new(Mutex::new(GuardedRetryDispatchPhase::Pending)),
+        }
+    }
+
+    fn cancel_if_pending(&self) -> bool {
+        let mut phase = lock_unpoisoned(&self.phase);
+        if *phase != GuardedRetryDispatchPhase::Pending {
+            return false;
+        }
+        *phase = GuardedRetryDispatchPhase::Canceled;
+        true
+    }
+
+    fn is_canceled(&self) -> bool {
+        *lock_unpoisoned(&self.phase) == GuardedRetryDispatchPhase::Canceled
+    }
+
+    fn begin_dispatch(&self) -> bool {
+        let mut phase = lock_unpoisoned(&self.phase);
+        if *phase != GuardedRetryDispatchPhase::Pending {
+            return false;
+        }
+        *phase = GuardedRetryDispatchPhase::Dispatching;
+        true
+    }
+
+    fn finish(&self) {
+        *lock_unpoisoned(&self.phase) = GuardedRetryDispatchPhase::Finished;
+    }
 }
 
 enum ControlAction {
@@ -997,6 +1186,148 @@ impl WorkerState {
         self.persist(updated_at_unix_ms)
     }
 
+    fn apply_guarded_retry(
+        &mut self,
+        mut action: GuardedRetryAction,
+    ) -> Result<(), OperationJournalRuntimeError> {
+        if action.dispatch_state.is_canceled() {
+            action.respond(Err(OperationJournalRuntimeError::TimedOut));
+            return Ok(());
+        }
+
+        let current_generation_id = self.journal.current_generation().id();
+        if current_generation_id != action.expected_generation_id {
+            action.respond(Err(OperationJournalRuntimeError::RetryGenerationChanged {
+                expected_generation_id: action.expected_generation_id,
+                current_generation_id,
+            }));
+            return Ok(());
+        }
+
+        let (parent_kind, parent_status) = match self.journal.operation(&action.parent_operation_id)
+        {
+            Some(parent) => (parent.kind(), parent.status()),
+            None => {
+                action.respond(Err(OperationJournalRuntimeError::InvalidOperation(
+                    OperationJournalError::ParentOperationNotFound {
+                        parent_operation_id: action.parent_operation_id.clone(),
+                    },
+                )));
+                return Ok(());
+            }
+        };
+        if !parent_status.is_terminal() {
+            action.respond(Err(OperationJournalRuntimeError::InvalidOperation(
+                OperationJournalError::ParentOperationNotTerminal {
+                    parent_operation_id: action.parent_operation_id.clone(),
+                    status: parent_status,
+                },
+            )));
+            return Ok(());
+        }
+        if !parent_kind.allows_manual_retry() || !parent_status.allows_manual_retry() {
+            action.respond(Err(OperationJournalRuntimeError::RetryParentNotEligible {
+                parent_operation_id: action.parent_operation_id.clone(),
+                kind: parent_kind,
+                status: parent_status,
+            }));
+            return Ok(());
+        }
+        if action.attempt_at_unix_ms < action.queued_at_unix_ms {
+            action.respond(Err(OperationJournalRuntimeError::InvalidOperation(
+                OperationJournalError::TransitionTimestampMovedBackwards {
+                    operation_id: action.operation_id.clone(),
+                    previous_at_unix_ms: action.queued_at_unix_ms,
+                    occurred_at_unix_ms: action.attempt_at_unix_ms,
+                },
+            )));
+            return Ok(());
+        }
+
+        if let Err(error) = self.journal.queue_operation_with_id(
+            action.operation_id.clone(),
+            OperationKind::Command,
+            Some(&action.parent_operation_id),
+            Some(action.redacted_payload.clone()),
+            action.queued_at_unix_ms,
+        ) {
+            action.respond(Err(OperationJournalRuntimeError::InvalidOperation(error)));
+            return Ok(());
+        }
+
+        let queued_updated_at_unix_ms = self
+            .manifest
+            .updated_at_unix_ms()
+            .max(action.queued_at_unix_ms);
+        if let Err(error) = self.persist(queued_updated_at_unix_ms) {
+            action.respond(Err(error.clone()));
+            return Err(error);
+        }
+
+        if !action.dispatch_state.begin_dispatch() {
+            let transition_result = self.journal.transition_operation(
+                &action.operation_id,
+                OperationStatus::Canceled,
+                action.attempt_at_unix_ms,
+            );
+            if let Err(error) = transition_result {
+                let error = OperationJournalRuntimeError::Unavailable(format!(
+                    "failed to cancel timed-out operation retry {}: {error}",
+                    action.operation_id
+                ));
+                action.respond(Err(error.clone()));
+                return Err(error);
+            }
+            let canceled_updated_at_unix_ms =
+                queued_updated_at_unix_ms.max(action.attempt_at_unix_ms);
+            if let Err(error) = self.persist(canceled_updated_at_unix_ms) {
+                action.respond(Err(error.clone()));
+                return Err(error);
+            }
+            action.respond(Err(OperationJournalRuntimeError::TimedOut));
+            return Ok(());
+        }
+
+        let dispatched = action
+            .dispatch
+            .take()
+            .is_some_and(|dispatch| catch_unwind(AssertUnwindSafe(dispatch)).unwrap_or(false));
+        let next_status = if dispatched {
+            OperationStatus::Sent
+        } else {
+            OperationStatus::Failed
+        };
+        if let Err(error) = self.journal.transition_operation(
+            &action.operation_id,
+            next_status,
+            action.attempt_at_unix_ms,
+        ) {
+            let error = OperationJournalRuntimeError::Unavailable(format!(
+                "invalid guarded retry transition {}: {error}",
+                action.operation_id
+            ));
+            action.respond(Err(error.clone()));
+            return Err(error);
+        }
+
+        let attempt_updated_at_unix_ms = queued_updated_at_unix_ms.max(action.attempt_at_unix_ms);
+        if let Err(error) = self.persist(attempt_updated_at_unix_ms) {
+            action.respond(Err(OperationJournalRuntimeError::RetryCompletionUnknown {
+                operation_id: action.operation_id.clone(),
+            }));
+            return Err(error);
+        }
+
+        if dispatched {
+            action.respond(Ok(action.operation_id.clone()));
+        } else {
+            action.respond(Err(OperationJournalRuntimeError::RetryDispatchFailed {
+                operation_id: action.operation_id.clone(),
+            }));
+        }
+        Ok(())
+    }
+
     fn begin_generation(
         &mut self,
         generation_id: OperationGenerationId,
@@ -1055,6 +1386,16 @@ fn operation_journal_worker(
                     queue.finish_operations(operation_count, cost_bytes);
                 }
                 result
+            }
+            QueueEntry::GuardedRetry { action, cost_bytes } => {
+                wait_on_test_gate_before_persist(&test_gate);
+                let result = state.apply_guarded_retry(action);
+                queue.finish_operations(1, cost_bytes);
+                if result.is_err() {
+                    result
+                } else {
+                    continue;
+                }
             }
             QueueEntry::Control(ControlAction::BeginGeneration {
                 generation_id,

@@ -35,6 +35,42 @@ fn journal_ids_are_stable_typed_and_unique() {
 }
 
 #[test]
+fn manual_retry_eligibility_is_fail_closed() {
+    for kind in [
+        OperationKind::UserInput,
+        OperationKind::Command,
+        OperationKind::Paste,
+    ] {
+        assert!(kind.allows_manual_retry());
+    }
+    for kind in [
+        OperationKind::ControlSequence,
+        OperationKind::FileOperation,
+        OperationKind::ApplicationOperation,
+        OperationKind::Unconfirmable,
+    ] {
+        assert!(!kind.allows_manual_retry());
+    }
+
+    for status in [
+        OperationStatus::Failed,
+        OperationStatus::Unknown,
+        OperationStatus::NeedsReview,
+    ] {
+        assert!(status.allows_manual_retry());
+    }
+    for status in [
+        OperationStatus::Queued,
+        OperationStatus::Sent,
+        OperationStatus::Acknowledged,
+        OperationStatus::Succeeded,
+        OperationStatus::Canceled,
+    ] {
+        assert!(!status.allows_manual_retry());
+    }
+}
+
+#[test]
 fn queueing_an_operation_records_the_initial_transition() {
     let mut journal = journal();
 

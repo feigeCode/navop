@@ -94,6 +94,10 @@ pub enum OperationKind {
 }
 
 impl OperationKind {
+    pub fn allows_manual_retry(self) -> bool {
+        matches!(self, Self::UserInput | Self::Command | Self::Paste)
+    }
+
     fn allows_structured_payload(self) -> bool {
         matches!(self, Self::FileOperation | Self::ApplicationOperation)
     }
@@ -133,6 +137,10 @@ impl OperationStatus {
             self,
             Self::Succeeded | Self::Failed | Self::Unknown | Self::NeedsReview | Self::Canceled
         )
+    }
+
+    pub fn allows_manual_retry(self) -> bool {
+        matches!(self, Self::Failed | Self::Unknown | Self::NeedsReview)
     }
 
     fn can_transition_to(self, next: Self) -> bool {
