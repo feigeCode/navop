@@ -284,9 +284,111 @@ impl Focusable for NotesView {
 mod external_markdown_tests {
     use super::*;
     use crate::markdown_session::MarkdownSyncState;
-    use gpui::{TestAppContext, VisualTestContext, WindowOptions};
-    use gpui_component::Root;
+    use gpui::{
+        Bounds, InteractiveElement, IntoElement, ParentElement, Render, Styled, TestAppContext,
+        VisualTestContext, WindowBounds, WindowOptions, div, px, size,
+    };
+    use gpui_component::{Root, h_flex};
+    use one_core::tab_container::{TabContainer, TabItem};
     use std::time::Duration;
+
+    struct NotesTabTestWindow {
+        tabs: Entity<TabContainer>,
+    }
+
+    impl Render for NotesTabTestWindow {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            h_flex()
+                .size_full()
+                .min_w_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .debug_selector(|| "notes-test-sidebar".to_owned())
+                        .w(px(64.0))
+                        .h_full()
+                        .flex_shrink_0(),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "notes-test-main-slot".to_owned())
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.tabs.clone()),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn standalone_markdown_tab_keeps_the_tab_switcher_at_the_window_edge(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("wide-content.md");
+        std::fs::write(
+            &path,
+            concat!(
+                "# Wide content\n\n",
+                "| Column | Endpoint | Description |\n",
+                "| --- | --- | --- |\n",
+                "| N1 | POST /ai-manager/space/bootstrap | ",
+                "A deliberately long table cell that must not affect the window tab bar. |\n",
+            ),
+        )
+        .unwrap();
+
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let notes =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    let tabs = cx.new(|cx| {
+                        TabContainer::new(window, cx).with_navigation_sidebar_toggle(true)
+                    });
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("notes", "notes-test", notes),
+                            window,
+                            cx,
+                        );
+                    });
+                    let root = cx.new(|_| NotesTabTestWindow { tabs });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let main_slot = cx.debug_bounds("notes-test-main-slot").expect("main slot");
+        let tab_bar = cx.debug_bounds("tab-bar").expect("tab bar");
+        let tab_container = cx.debug_bounds("tab-container").expect("tab container");
+        let tab_content = cx.debug_bounds("tab-content").expect("tab content");
+        let markdown_editor = cx.debug_bounds("markdown-editor").expect("markdown editor");
+        let dropdown = cx.debug_bounds("tab-dropdown-btn").expect("tab dropdown");
+
+        assert_eq!(
+            main_slot.right(),
+            tab_bar.right(),
+            "main={main_slot:?}, container={tab_container:?}, bar={tab_bar:?}, content={tab_content:?}, editor={markdown_editor:?}"
+        );
+        assert_eq!(
+            tab_bar.right(),
+            dropdown.right(),
+            "Markdown content must not determine the tab switcher's horizontal position"
+        );
+    }
 
     #[test]
     fn standalone_markdown_descriptor_preserves_the_external_file() -> anyhow::Result<()> {

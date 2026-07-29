@@ -11,11 +11,16 @@ impl NotesView {
     pub(crate) fn render_location_setup(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         v_flex()
             .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
             .items_center()
             .justify_center()
             .child(
                 v_flex()
                     .w(px(420.0))
+                    .max_w_full()
+                    .min_w_0()
                     .items_center()
                     .gap_3()
                     .p_6()

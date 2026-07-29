@@ -35,7 +35,9 @@ impl NotesView {
                 },
             ))
             .size_full()
+            .min_w_0()
             .min_h_0()
+            .overflow_hidden()
             .child(self.render_markdown_toolbar(document_id, mode, cx))
             .when(
                 matches!(session.state.sync_state, MarkdownSyncState::Conflict),
@@ -108,22 +110,30 @@ impl NotesView {
         h_flex()
             .id("markdown-mode-toolbar")
             .debug_selector(|| "markdown-mode-toolbar".to_owned())
+            .w_full()
+            .min_w_0()
             .h_9()
+            .flex_shrink_0()
+            .overflow_hidden()
             .px_2()
             .gap_2()
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.background)
             .child(self.render_source_toggle(document_id, mode, cx))
-            .child(div().flex_1().when_some(status, |status_view, status| {
-                status_view
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(status)
-            }))
+            .child(div().flex_1().min_w_0().overflow_hidden().when_some(
+                status,
+                |status_view, status| {
+                    status_view
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(status)
+                },
+            ))
             .child(
                 div()
                     .debug_selector(|| "markdown-auto-save".to_owned())
+                    .flex_shrink_0()
                     .child(
                         Switch::new("markdown-auto-save-switch")
                             .small()
@@ -146,6 +156,7 @@ impl NotesView {
             .child(
                 Button::new("markdown-save-now")
                     .debug_selector(|| "markdown-save-now".to_owned())
+                    .flex_shrink_0()
                     .label(t!("Notes.markdown_save_now").to_string())
                     .tooltip(t!("Notes.markdown_save_now_tooltip").to_string())
                     .small()
