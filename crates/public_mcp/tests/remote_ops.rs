@@ -106,7 +106,8 @@ fn registry_with_session() -> PublicMcpRegistry {
 
 #[test]
 fn remote_ops_tools_are_registered() {
-    let tool_registry = PublicMcpToolRegistry::terminal(PublicMcpRegistry::default());
+    let tool_registry = PublicMcpToolRegistry::terminal(PublicMcpRegistry::default())
+        .expect("terminal registry should be valid");
     let names: Vec<String> = tool_registry
         .tools()
         .into_iter()

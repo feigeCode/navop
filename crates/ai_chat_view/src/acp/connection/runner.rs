@@ -8,7 +8,6 @@ use agent_client_protocol::{AcpAgent, Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId};
 use gpui::AsyncApp;
 use one_core::gpui_tokio::Tokio;
-use rust_i18n::t;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::acp::client::{handle_read_text_file_request, handle_write_text_file_request};
@@ -16,12 +15,14 @@ use crate::acp::config::AcpAgentConfig;
 use crate::acp::permission::{AcpPermissionProvider, resolve_acp_permission_request};
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
-use crate::acp::{AcpError, AcpErrorKind};
 
 use super::notifications::{NotificationContext, handle_notification};
 use super::outcome::finish_connect;
 use super::setup::{SetupOutcome, setup_connection};
-use super::{AcpConnectOutcome, take_active_turn_id, transition_state};
+use super::{
+    AcpConnectOutcome, connection_closed_error, fail_connection_and_take_active_turn,
+    transition_state,
+};
 
 pub(super) type ReadyMessage = Result<(ConnectionTo<Agent>, SetupOutcome), String>;
 pub(super) type ReadyWait =
@@ -219,20 +220,15 @@ async fn setup_and_park(
 }
 
 fn handle_client_error(shared: &ConnectShared, protocol: agent_client_protocol::Error) {
-    let error = AcpError::new(
-        AcpErrorKind::ConnectionClosed,
-        shared.config.id.to_string(),
-        shared.config.name.to_string(),
-        t!("AgentUi.acp_connection_closed").to_string(),
-    )
-    .with_detail(protocol.to_string());
-    transition_state(
-        &shared.state,
-        AcpConnectionPhase::Failed {
-            error: error.clone(),
-        },
+    let protocol_detail = protocol.to_string();
+    let error = connection_closed_error(
+        shared.config.id.as_ref(),
+        shared.config.name.as_ref(),
+        Some(&protocol_detail),
     );
-    if let Some(turn_id) = take_active_turn_id(&shared.active_turn) {
+    if let Some(turn_id) =
+        fail_connection_and_take_active_turn(&shared.active_turn, &shared.state, error.clone())
+    {
         let _ = shared.events_tx.send(RuntimeEvent::TurnFailed {
             session_id: shared.session_id.clone(),
             turn_id,

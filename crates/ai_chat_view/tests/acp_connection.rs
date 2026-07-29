@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::schema::{ContentBlock, TextContent};
 use agent_runtime::RuntimeEvent;
 use ai_chat_view::{
     AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpPermissionFuture,
-    AcpPermissionOutcome, AcpPermissionProvider, AcpTimeoutConfig,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPromptStartError, AcpTimeoutConfig,
 };
 
 #[derive(Clone, Copy)]
@@ -91,6 +92,53 @@ async fn prompt_timeout_sends_cancel_and_returns_to_ready() {
         events.last(),
         Some(RuntimeEvent::TurnFailed { reason, .. }) if reason.contains("timed out")
     ));
+    assert_eq!(AcpConnectionPhase::Ready, connection.phase());
+}
+
+#[tokio::test]
+async fn a_second_prompt_is_rejected_without_emitting_a_fake_terminal_event() {
+    let connection = ready_connection(Mode::PromptHang, Duration::from_secs(2)).await;
+    let mut receiver = connection.subscribe();
+    let first_turn = connection
+        .try_prompt(text_prompt("first"))
+        .expect("first prompt should start");
+
+    for _ in 0..2 {
+        receiver
+            .recv()
+            .await
+            .expect("turn start events should be emitted");
+    }
+
+    assert_eq!(
+        Err(AcpPromptStartError::AlreadyRunning),
+        connection.try_prompt(text_prompt("second"))
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), receiver.recv())
+            .await
+            .is_err(),
+        "rejected prompt must not emit a synthetic TurnFailed event"
+    );
+    assert_eq!(
+        AcpConnectionPhase::RunningTurn {
+            turn_id: first_turn.clone(),
+        },
+        connection.phase()
+    );
+
+    connection.cancel();
+    loop {
+        let event = receiver
+            .recv()
+            .await
+            .expect("cancelled prompt should finish normally");
+        if let RuntimeEvent::TurnCancelled { turn_id, .. } = event {
+            assert_eq!(first_turn, turn_id);
+            break;
+        }
+    }
+    tokio::task::yield_now().await;
     assert_eq!(AcpConnectionPhase::Ready, connection.phase());
 }
 
@@ -190,7 +238,9 @@ fn fake_config(mode: Mode, prompt_timeout: Duration) -> AcpAgentConfig {
 
 async fn prompt_until_terminal(connection: &AcpConnection, prompt: &str) -> Vec<RuntimeEvent> {
     let mut receiver = connection.subscribe();
-    connection.prompt(prompt.to_string());
+    connection
+        .try_prompt(text_prompt(prompt))
+        .expect("prompt should start");
     let mut events = Vec::new();
     loop {
         let event = receiver
@@ -208,6 +258,10 @@ async fn prompt_until_terminal(connection: &AcpConnection, prompt: &str) -> Vec<
             return events;
         }
     }
+}
+
+fn text_prompt(prompt: &str) -> Vec<ContentBlock> {
+    vec![ContentBlock::Text(TextContent::new(prompt))]
 }
 
 fn mode_name(mode: Mode) -> &'static str {

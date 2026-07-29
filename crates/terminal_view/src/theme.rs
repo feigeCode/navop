@@ -21,6 +21,7 @@ use one_core::settings::{
     default_grid_monospace_font_family, is_supported_grid_monospace_font,
     normalize_grid_monospace_font_family,
 };
+use rust_i18n::t;
 
 /// 使用当前应用主题生成终端配色。
 pub const APPLICATION_THEME_NAME: &str = DEFAULT_TERMINAL_THEME;
@@ -152,9 +153,15 @@ pub fn default_font_fallbacks() -> Vec<SharedString> {
 }
 
 impl TerminalTheme {
+    /// 获取当前语言下的主题显示名称。
+    pub fn display_name(&self) -> String {
+        let key = format!("Theme.{}", self.name);
+        t!(&key).to_string()
+    }
+
     /// 获取可用主题。“跟随应用”始终排在第一位，颜色按当前应用主题动态生成。
     pub fn all(application_theme: &Theme) -> Vec<Self> {
-        let mut themes = Vec::with_capacity(11);
+        let mut themes = Vec::with_capacity(17);
         themes.push(Self::from_application_theme(application_theme));
         themes.extend(Self::presets());
         themes
@@ -187,6 +194,12 @@ impl TerminalTheme {
             Self::neon_blue(),
             Self::matrix(),
             Self::crimson(),
+            Self::slate(),
+            Self::aurora(),
+            Self::orchid(),
+            Self::ember(),
+            Self::sandstone(),
+            Self::frost(),
         ]
     }
 
@@ -352,6 +365,72 @@ impl TerminalTheme {
             rgb(0x1A0A0A).into(),
             rgb(0xFFFFFF).into(),
             rgb(0x4A1A1A).into(),
+        )
+    }
+
+    /// 石板主题（深蓝灰背景，柔和浅灰文字）。
+    pub fn slate() -> Self {
+        Self::new(
+            "slate",
+            rgb(0xE2E8F0).into(),
+            rgb(0x0F172A).into(),
+            rgb(0x38BDF8).into(),
+            rgb(0x1E3A5F).into(),
+        )
+    }
+
+    /// 极光主题（深青背景，薄荷色光标）。
+    pub fn aurora() -> Self {
+        Self::new(
+            "aurora",
+            rgb(0xD6F5FF).into(),
+            rgb(0x071A1E).into(),
+            rgb(0x5EEAD4).into(),
+            rgb(0x164E63).into(),
+        )
+    }
+
+    /// 兰紫主题（深紫背景，柔亮紫色光标）。
+    pub fn orchid() -> Self {
+        Self::new(
+            "orchid",
+            rgb(0xF4E8FF).into(),
+            rgb(0x1D1526).into(),
+            rgb(0xF0ABFC).into(),
+            rgb(0x563264).into(),
+        )
+    }
+
+    /// 余烬主题（深棕背景，暖橙色光标）。
+    pub fn ember() -> Self {
+        Self::new(
+            "ember",
+            rgb(0xFFE6C7).into(),
+            rgb(0x1B120B).into(),
+            rgb(0xFF9F43).into(),
+            rgb(0x57351A).into(),
+        )
+    }
+
+    /// 砂岩主题（暖米色背景，深棕文字）。
+    pub fn sandstone() -> Self {
+        Self::new(
+            "sandstone",
+            rgb(0x3B3028).into(),
+            rgb(0xF7F1E3).into(),
+            rgb(0x9A5B00).into(),
+            rgb(0xE8DCC8).into(),
+        )
+    }
+
+    /// 霜白主题（冷白背景，蓝灰文字）。
+    pub fn frost() -> Self {
+        Self::new(
+            "frost",
+            rgb(0x243044).into(),
+            rgb(0xF4F8FC).into(),
+            rgb(0x1D4ED8).into(),
+            rgb(0xD8E7F7).into(),
         )
     }
 

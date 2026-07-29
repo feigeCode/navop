@@ -34,7 +34,7 @@ pub(super) async fn run_subagent_model(
         Message::user(task.to_string()),
     ];
     for _ in 0..MAX_SUBAGENT_ITERATIONS {
-        let request = subagent_request(messages.clone(), &specs);
+        let request = subagent_request(messages.clone(), &specs)?;
         let response = sample_subagent_response(services, request, cancellation).await?;
         if response.tool_calls.is_empty() {
             return Ok(response.text.unwrap_or_default().trim().to_string());
@@ -103,15 +103,19 @@ fn subagent_tool_specs(
         .collect()
 }
 
-fn subagent_request(messages: Vec<Message>, specs: &[ToolSpec]) -> ModelRequest {
-    let tools: Vec<_> = specs.iter().map(|spec| spec.to_llm_tool()).collect();
+fn subagent_request(messages: Vec<Message>, specs: &[ToolSpec]) -> Result<ModelRequest, String> {
+    let tools = specs
+        .iter()
+        .map(ToolSpec::to_llm_tool)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
     let request = ModelRequest::new(messages);
     if tools.is_empty() {
-        request
+        Ok(request)
     } else {
-        request
+        Ok(request
             .with_tools(tools)
-            .with_tool_choice(ToolChoice::auto())
+            .with_tool_choice(ToolChoice::auto()))
     }
 }
 
@@ -248,4 +252,28 @@ fn subagent_system_prompt(name: &str) -> String {
 不要调用 `delegate_task` 或 `update_plan`;它们不会提供给你。\
 输出简体中文结论摘要,包含关键发现、证据和下一步建议。"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::subagent_request;
+    use crate::tools::ToolSpec;
+    use llm_connector::types::Message;
+    use serde_json::json;
+
+    #[test]
+    fn subagent_request_rejects_incompatible_function_calling_schema() {
+        let specs = vec![ToolSpec::new(
+            "malformed.schema",
+            "Malformed schema",
+            json!({ "type": "string" }),
+        )];
+
+        let error = subagent_request(vec![Message::user("inspect")], &specs)
+            .expect_err("subagent request must fail closed on an invalid root schema");
+
+        assert!(error.contains("incompatible function-calling schema"));
+        assert!(error.contains("/type"));
+        assert!(error.contains("root schema must declare type \"object\""));
+    }
 }

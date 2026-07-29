@@ -162,6 +162,14 @@ impl AcpSessionState {
 
 fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPhase) -> bool {
     use AcpConnectionPhase as Phase;
+
+    if matches!(next, Phase::Closed) {
+        return !matches!(current, Phase::Closed);
+    }
+    if matches!(next, Phase::Failed { .. }) {
+        return !matches!(current, Phase::Failed { .. } | Phase::Closed);
+    }
+
     matches!(
         (current, next),
         (Phase::Starting, Phase::Initializing)
@@ -177,14 +185,9 @@ fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPh
                 Phase::AuthenticationRequired { .. },
                 Phase::Authenticating { .. }
             )
-            | (Phase::AuthenticationRequired { .. }, Phase::Closed)
             | (Phase::CreatingSession, Phase::Ready)
             | (Phase::Ready, Phase::RunningTurn { .. })
-            | (Phase::Ready, Phase::Closed)
             | (Phase::RunningTurn { .. }, Phase::Ready)
-            | (Phase::RunningTurn { .. }, Phase::Closed)
-            | (_, Phase::Failed { .. })
-            | (Phase::Failed { .. }, Phase::Closed)
     )
 }
 
@@ -196,7 +199,10 @@ mod tests {
         SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, TextContent, UsageUpdate,
     };
 
+    use agent_runtime::TurnId;
+
     use super::{AcpConnectionPhase, AcpSessionState};
+    use crate::acp::{AcpError, AcpErrorKind};
 
     #[test]
     fn applies_initial_modes_and_config_options_from_new_session() {
@@ -273,5 +279,65 @@ mod tests {
 
         assert!(error.contains("Initializing -> Ready"));
         assert_eq!(AcpConnectionPhase::Initializing, state.phase);
+    }
+
+    #[test]
+    fn every_non_closed_phase_can_transition_to_closed() {
+        let phases = vec![
+            AcpConnectionPhase::Starting,
+            AcpConnectionPhase::Initializing,
+            AcpConnectionPhase::AuthenticationRequired {
+                methods: vec!["token".to_string()],
+            },
+            AcpConnectionPhase::Authenticating {
+                method_id: "token".to_string(),
+            },
+            AcpConnectionPhase::CreatingSession,
+            AcpConnectionPhase::Ready,
+            AcpConnectionPhase::RunningTurn {
+                turn_id: TurnId::from_string("turn"),
+            },
+            AcpConnectionPhase::Failed {
+                error: test_error(),
+            },
+        ];
+
+        for phase in phases {
+            let mut state = AcpSessionState {
+                phase: phase.clone(),
+                ..AcpSessionState::default()
+            };
+
+            state
+                .transition(AcpConnectionPhase::Closed)
+                .unwrap_or_else(|error| panic!("{phase:?} should close: {error}"));
+            assert_eq!(AcpConnectionPhase::Closed, state.phase);
+        }
+    }
+
+    #[test]
+    fn closed_is_terminal_and_cannot_transition_to_failed() {
+        let mut state = AcpSessionState {
+            phase: AcpConnectionPhase::Closed,
+            ..AcpSessionState::default()
+        };
+
+        let error = state
+            .transition(AcpConnectionPhase::Failed {
+                error: test_error(),
+            })
+            .expect_err("closed state must not transition to failed");
+
+        assert!(error.contains("Closed -> Failed"));
+        assert_eq!(AcpConnectionPhase::Closed, state.phase);
+    }
+
+    fn test_error() -> AcpError {
+        AcpError::new(
+            AcpErrorKind::ConnectionClosed,
+            "agent",
+            "Agent",
+            "connection closed",
+        )
     }
 }

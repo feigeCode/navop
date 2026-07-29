@@ -12,7 +12,6 @@ use crate::runtime::active_turn::ActiveTurn;
 use crate::runtime::event::{RuntimeEvent, RuntimeEventSender};
 use crate::runtime::input_queue::{InputQueue, TurnInput};
 use crate::runtime::session_state::SessionState;
-use crate::runtime::task::PendingToolApproval;
 use crate::skill::SkillContext;
 use crate::tools::{ToolCall, ToolObservation};
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 #[path = "session_turns.rs"]
 mod turns;
+pub(crate) use turns::PendingToolResolution;
 use turns::TurnState;
 
 /// 会话的可持久化快照:足以重建一个 [`Session`] 全部对话状态的最小集合。
@@ -50,7 +50,6 @@ pub struct Session {
     skills: Mutex<SkillContext>,
     input_queue: Mutex<InputQueue>,
     turns: Mutex<TurnState>,
-    pending_tool_approval: Mutex<Option<PendingToolApproval>>,
     events: RuntimeEventSender,
 }
 
@@ -63,7 +62,6 @@ impl Session {
             skills: Mutex::new(SkillContext::new()),
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
-            pending_tool_approval: Mutex::new(None),
             events,
         })
     }
@@ -84,7 +82,6 @@ impl Session {
             skills: Mutex::new(snapshot.skills),
             input_queue: Mutex::new(InputQueue::new()),
             turns: Mutex::new(TurnState::default()),
-            pending_tool_approval: Mutex::new(None),
             events,
         })
     }
@@ -399,26 +396,6 @@ impl Session {
             .lock()
             .expect("session 锁中毒")
             .has_pending()
-    }
-
-    // ===== 工具审批 =====
-
-    pub fn set_pending_tool_approval(&self, pending: PendingToolApproval) {
-        let turn_id = pending.turn_id.clone();
-        let _ = self.with_writable_turn(&turn_id, || {
-            *self.pending_tool_approval.lock().expect("session 锁中毒") = Some(pending);
-        });
-    }
-
-    pub fn take_pending_tool_approval(&self) -> Option<PendingToolApproval> {
-        self.pending_tool_approval
-            .lock()
-            .expect("session 锁中毒")
-            .take()
-    }
-
-    pub fn restore_pending_tool_approval(&self, pending: PendingToolApproval) {
-        self.set_pending_tool_approval(pending);
     }
 
     // ===== 事件 =====

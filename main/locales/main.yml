@@ -1754,6 +1754,14 @@ Settings:
         en: Theme Palette
         zh-CN: 主题配色
         zh-HK: 主題配色
+      terminal_theme:
+        en: Terminal Theme
+        zh-CN: 终端主题
+        zh-HK: 終端主題
+      terminal_theme_desc:
+        en: Choose a terminal palette independently, or follow the application theme.
+        zh-CN: 为终端单独选择配色，或跟随应用主题。
+        zh-HK: 為終端單獨選擇配色，或跟隨應用主題。
       import_theme:
         en: Import Theme
         zh-CN: 导入主题

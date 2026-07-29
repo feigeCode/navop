@@ -54,8 +54,8 @@ pub(super) fn agent_option_disabled(agent: &ComposerAgentOption) -> bool {
 pub(super) fn agent_selection_is_active(
     backend: Backend,
     current_id: Option<&SharedString>,
-    has_pending: bool,
+    has_live_connection_or_auth: bool,
     requested_id: &SharedString,
 ) -> bool {
-    current_id == Some(requested_id) && (backend == Backend::Acp || has_pending)
+    backend == Backend::Acp && current_id == Some(requested_id) && has_live_connection_or_auth
 }

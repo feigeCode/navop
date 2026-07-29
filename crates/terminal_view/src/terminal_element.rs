@@ -424,6 +424,8 @@ pub struct RenderCache {
     custom_background: Hsla,
     /// 主题定义的光标颜色（确保与背景色不同）
     custom_cursor: Hsla,
+    /// 主题定义的文本选区背景色
+    custom_selection: Hsla,
 
     /// 上一帧的选择范围，用于增量更新
     last_selection: Option<SelectionRange>,
@@ -493,6 +495,7 @@ impl DamageSnapshot {
 impl RenderCache {
     pub fn new(num_lines: usize, num_cols: usize, colors: Colors) -> Self {
         let default_bg = convert_color(Color::Named(NamedColor::Background), &colors);
+        let default_theme = TerminalTheme::midnight();
         Self {
             lines: vec![
                 CachedLine {
@@ -509,9 +512,10 @@ impl RenderCache {
             colors,
             default_bg,
             decoration_manager: DecorationManager::new(),
-            custom_foreground: rgb(0xE4E4E4).into(),
-            custom_background: rgb(0x1E1E1E).into(),
-            custom_cursor: rgb(0xFFFFFF).into(),
+            custom_foreground: default_theme.foreground,
+            custom_background: default_theme.background,
+            custom_cursor: default_theme.cursor,
+            custom_selection: default_theme.selection,
             last_selection: None,
             last_block_selection: None,
             left_edge_fingerprint: vec![0; num_lines],
@@ -556,6 +560,10 @@ impl RenderCache {
         // 同步主题光标颜色
         self.custom_cursor = theme.cursor;
 
+        // 选区背景色参与行缓存，变化时需要重建。
+        let selection_changed = theme.selection != self.custom_selection;
+        self.custom_selection = theme.selection;
+
         // 在任何 full rebuild 早返回之前同步终端调色板。
         let colors = term.colors();
         let colors_changed = !colors_equal(&self.colors, colors);
@@ -566,7 +574,7 @@ impl RenderCache {
 
         // 主题颜色变化或存在装饰时保守全量重建。
         let has_decorations = !self.decoration_manager.decorations_by_line.is_empty();
-        if fg_changed || bg_changed || colors_changed || has_decorations {
+        if fg_changed || bg_changed || selection_changed || colors_changed || has_decorations {
             self.rebuild_all_and_update_state(term, block_selection);
             return;
         }
@@ -922,6 +930,9 @@ impl RenderCache {
         let mut bg_span: Option<(usize, Hsla)> = None;
         let mut underline_span: Option<(usize, Hsla)> = None;
         let mut text_run: Option<CachedTextRun> = None;
+        let selection_background = self.custom_selection;
+        let selection_foreground =
+            ensure_minimum_contrast(self.custom_foreground, selection_background);
 
         for cell in &cells {
             // Get base colors from terminal
@@ -930,7 +941,7 @@ impl RenderCache {
 
             // Apply selection (higher priority than decorations)
             let (mut fg, mut bg) = if cell.is_selected {
-                (hsla(0.0, 0.0, 1.0, 1.0), hsla(0.58, 0.5, 0.4, 1.0))
+                (selection_foreground, selection_background)
             } else {
                 (base_fg, base_bg)
             };
@@ -1763,7 +1774,8 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 mod tests {
     use super::{
         BlockRect, CellData, RenderCache, TextRunFontRole, block_cursor_glyph_from_cell,
-        block_element_geometry, terminal_bold_weight, terminal_text_font_role,
+        block_element_geometry, ensure_minimum_contrast, terminal_bold_weight,
+        terminal_text_font_role,
     };
     use alacritty_terminal::term::cell::{Cell, Flags};
     use alacritty_terminal::term::color::Colors;
@@ -1856,6 +1868,26 @@ mod tests {
         assert_eq!(1, line.background_rects.len());
         assert_eq!(0, line.background_rects[0].0);
         assert_eq!(cache.custom_foreground, line.background_rects[0].2);
+    }
+
+    #[test]
+    fn selected_cells_use_terminal_theme_selection_colors() {
+        let mut cache = RenderCache::new(1, 8, Colors::default());
+        cache.custom_foreground = rgb(0x100F0F).into();
+        cache.custom_selection = rgb(0xE6E4D9).into();
+        let mut cell = plain_cell(0, 'Q', Flags::empty());
+        cell.is_selected = true;
+
+        cache.build_line_cache(0, vec![cell]);
+
+        let line = &cache.lines[0];
+        assert_eq!(1, line.text_runs.len());
+        assert_eq!(
+            ensure_minimum_contrast(cache.custom_foreground, cache.custom_selection),
+            line.text_runs[0].color
+        );
+        assert_eq!(1, line.background_rects.len());
+        assert_eq!(cache.custom_selection, line.background_rects[0].2);
     }
 
     #[test]

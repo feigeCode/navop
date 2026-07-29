@@ -47,6 +47,7 @@ mod message_code_actions;
 mod message_tool_group;
 mod message_view;
 mod model_settings;
+mod pending_submission;
 mod persistence;
 mod plan_tools;
 mod provider;
@@ -64,11 +65,12 @@ pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
     AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
     AcpPendingConnection, AcpPermissionFuture, AcpPermissionGrant, AcpPermissionOption,
-    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpPublicMcpApprovalFuture,
-    AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider, AcpPublicMcpApprovalRequest,
-    AcpRecoveryAction, AcpTimeoutConfig, AcpTransport, build_acp_agent_configs,
-    build_acp_agent_entries, current_acp_tool_mode, set_acp_agent_config_provider,
-    set_acp_permission_grant_provider, set_acp_tool_mode_provider, set_current_acp_tool_mode,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpPromptStartError,
+    AcpPublicMcpApprovalFuture, AcpPublicMcpApprovalOutcome, AcpPublicMcpApprovalProvider,
+    AcpPublicMcpApprovalRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
+    build_acp_agent_configs, build_acp_agent_entries, current_acp_tool_mode,
+    set_acp_agent_config_provider, set_acp_permission_grant_provider, set_acp_tool_mode_provider,
+    set_current_acp_tool_mode,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tool_config::emit_agent_tool_config_changed;

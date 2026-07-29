@@ -2101,6 +2101,14 @@ impl InputState {
         }
     }
 
+    /// Whether an IME composition currently owns marked text.
+    ///
+    /// History navigation and similar editor-level shortcuts should not
+    /// intercept navigation keys while the platform input method is composing.
+    pub fn has_ime_marked_text(&self) -> bool {
+        self.ime_marked_range.is_some()
+    }
+
     /// Visible row range in the last laid-out viewport, `None` before first layout.
     pub fn visible_row_range(&self) -> Option<std::ops::Range<usize>> {
         self.last_layout.as_ref().map(|l| l.visible_range.clone())
@@ -3349,6 +3357,7 @@ mod tests {
                     state.ime_marked_range,
                     Some(("前".len().."前n".len()).into())
                 );
+                assert!(state.has_ime_marked_text());
                 assert_eq!(state.selected_range(), "前".len().."前n".len());
                 assert_eq!(state.selected_text_string(), "n");
                 assert_valid_utf8_range(&state.text, state.selected_range());
@@ -3392,6 +3401,7 @@ mod tests {
                     state.ime_marked_range,
                     Some(("前".len().."前ni".len()).into())
                 );
+                assert!(state.has_ime_marked_text());
                 assert_eq!(state.selected_range(), "前ni".len().."前ni".len());
                 assert_valid_utf8_range(&state.text, state.selected_range());
 
@@ -3401,12 +3411,14 @@ mod tests {
                     state.ime_marked_range,
                     Some(("前".len().."前你".len()).into())
                 );
+                assert!(state.has_ime_marked_text());
                 assert_eq!(state.selected_range(), "前你".len().."前你".len());
                 assert_valid_utf8_range(&state.text, state.selected_range());
 
                 state.replace_text_in_range(Some(1..2), "好", window, cx);
                 assert_eq!(state.text.to_string(), "前好后");
                 assert_eq!(state.ime_marked_range, None);
+                assert!(!state.has_ime_marked_text());
                 assert_eq!(state.selected_range(), "前好".len().."前好".len());
                 assert_valid_utf8_range(&state.text, state.selected_range());
                 assert_eq!(state.selected_text_string(), "");

@@ -250,7 +250,7 @@ async fn remote_exec_uses_updated_permission_mode() {
     registry.register_remote_ops(session);
     let permission = public_mcp::protocol::SharedPermissionMode::new(PermissionMode::Deny);
     let protocol = PublicMcpServer::with_shared_permission(
-        PublicMcpToolRegistry::terminal(registry),
+        PublicMcpToolRegistry::terminal(registry).expect("terminal registry should be valid"),
         permission.clone(),
     );
     let mut client = TestClient::connect_protocol(protocol).await;
@@ -405,7 +405,8 @@ struct TestClient {
 
 impl TestClient {
     async fn connect(registry: PublicMcpRegistry, mode: PermissionMode) -> Self {
-        let protocol = PublicMcpServer::new(registry, mode);
+        let protocol =
+            PublicMcpServer::new(registry, mode).expect("terminal registry should be valid");
         Self::connect_protocol(protocol).await
     }
 
@@ -415,7 +416,7 @@ impl TestClient {
         approval_manager: PublicMcpApprovalManager,
     ) -> Self {
         let protocol = PublicMcpServer::with_tool_registry_and_approval(
-            PublicMcpToolRegistry::terminal(registry),
+            PublicMcpToolRegistry::terminal(registry).expect("terminal registry should be valid"),
             mode,
             approval_manager,
         );

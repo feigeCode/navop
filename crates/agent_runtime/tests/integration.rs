@@ -1358,6 +1358,124 @@ async fn manual_tool_mode_requires_confirmation_before_business_tool_dispatch() 
 }
 
 #[tokio::test]
+async fn interrupt_clears_pending_manual_tool_approval_and_allows_a_fresh_turn() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("新一轮已完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(WriteTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "写入 x".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+    let call_id = match outcome {
+        TaskOutcome::NeedUserInput {
+            pending_tool_call_id: Some(call_id),
+            ..
+        } => call_id,
+        other => panic!("manual mode should pause for tool approval, got {other:?}"),
+    };
+    let pending_turn_id = drain_events(&mut rx)
+        .into_iter()
+        .find_map(|event| match event {
+            RuntimeEvent::NeedUserInput { turn_id, .. } => Some(turn_id),
+            _ => None,
+        })
+        .expect("pending approval should emit NeedUserInput");
+
+    assert!(
+        session.is_busy(),
+        "a pending manual approval still owns the current turn"
+    );
+    assert_eq!(
+        Some(pending_turn_id.clone()),
+        session.current_turn_id(),
+        "callers must be able to identify a turn paused for manual approval"
+    );
+    assert!(matches!(
+        runtime.start_turn(session.id(), "不能抢占审批".into(), TaskKind::Ask),
+        Err(RuntimeError::SessionBusy(_))
+    ));
+    runtime
+        .interrupt(session.id())
+        .expect("interrupt pending approval");
+
+    assert!(!session.is_busy());
+    assert_eq!(None, session.current_turn_id());
+    assert!(matches!(
+        runtime.approve_pending_tool(session.id(), &call_id).await,
+        Err(RuntimeError::Other(_))
+    ));
+    assert!(drain_events(&mut rx).iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::TurnCancelled { turn_id, .. } if turn_id == &pending_turn_id
+        )
+    }));
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "开始新一轮".into(), TaskKind::Ask)
+        .await
+        .expect("fresh turn should start after interrupt");
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "新一轮已完成。")
+    );
+}
+
+#[tokio::test]
+async fn close_session_clears_pending_manual_tool_approval() {
+    let runtime = build_runtime(
+        vec![ModelResponse::tool_call(function_tool_call(
+            "c_write",
+            "write_data",
+            json!({"value": "x"}).to_string(),
+        ))],
+        ToolRegistry::new().with_tool(Arc::new(WriteTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let session_id = session.id().clone();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            &session_id,
+            "写入 x".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+    let call_id = match outcome {
+        TaskOutcome::NeedUserInput {
+            pending_tool_call_id: Some(call_id),
+            ..
+        } => call_id,
+        other => panic!("manual mode should pause for tool approval, got {other:?}"),
+    };
+
+    runtime.close_session(&session_id);
+
+    assert!(!session.is_busy());
+    assert!(matches!(
+        runtime.approve_pending_tool(&session_id, &call_id).await,
+        Err(RuntimeError::SessionNotFound(id)) if id == session_id
+    ));
+}
+
+#[tokio::test]
 async fn manual_tool_mode_rejects_pending_tool_and_continues_followup() {
     let model = Arc::new(MockModelClient::new([
         ModelResponse::tool_call(function_tool_call(

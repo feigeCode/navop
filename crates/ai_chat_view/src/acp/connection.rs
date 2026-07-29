@@ -21,9 +21,11 @@ use crate::acp::config::AcpAgentConfig;
 use crate::acp::permission::AcpPermissionProvider;
 use crate::acp::state::{AcpConnectionPhase, AcpSessionState};
 use crate::acp::turn::AcpTurnTracker;
+use crate::acp::{AcpError, AcpErrorKind};
 
 use lifecycle::AcpConnectionLifecycle;
 pub use pending::AcpPendingConnection;
+pub use prompt::AcpPromptStartError;
 
 pub enum AcpConnectOutcome {
     Ready(Box<AcpConnection>),
@@ -113,10 +115,101 @@ fn transition_state(state: &Arc<Mutex<AcpSessionState>>, phase: AcpConnectionPha
     }
 }
 
-fn take_active_turn_id(active: &Arc<Mutex<Option<AcpTurnTracker>>>) -> Option<TurnId> {
-    active
-        .lock()
-        .ok()
-        .and_then(|mut active| active.take())
-        .map(|tracker| tracker.turn_id().clone())
+pub(super) enum PromptCompletionClaim {
+    Ready(AcpTurnTracker),
+    Failed { turn_id: TurnId, error: AcpError },
+}
+
+pub(super) fn claim_prompt_completion(
+    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    state: &Arc<Mutex<AcpSessionState>>,
+    expected_turn_id: &TurnId,
+    closed_error: &AcpError,
+) -> Option<PromptCompletionClaim> {
+    // All paths that need both mutexes use this order. Keeping the tracker
+    // claimed together with the phase transition prevents prompt completion,
+    // connection failure, and lifecycle shutdown from publishing competing
+    // terminal events for the same turn.
+    let mut active = active_turn.lock().ok()?;
+    if !active
+        .as_ref()
+        .is_some_and(|tracker| tracker.turn_id() == expected_turn_id)
+    {
+        return None;
+    }
+    let mut state = state.lock().ok()?;
+    match state.phase() {
+        AcpConnectionPhase::RunningTurn { turn_id } if turn_id == expected_turn_id => {
+            if let Err(error) = state.transition(AcpConnectionPhase::Ready) {
+                tracing::warn!(%error, "failed to finish ACP prompt phase");
+                return None;
+            }
+            active.take().map(PromptCompletionClaim::Ready)
+        }
+        AcpConnectionPhase::Failed { error } => {
+            let error = error.clone();
+            active.take().map(|tracker| PromptCompletionClaim::Failed {
+                turn_id: tracker.turn_id().clone(),
+                error,
+            })
+        }
+        AcpConnectionPhase::Closed => active.take().map(|tracker| PromptCompletionClaim::Failed {
+            turn_id: tracker.turn_id().clone(),
+            error: closed_error.clone(),
+        }),
+        phase => {
+            tracing::warn!(
+                ?phase,
+                expected_turn_id = %expected_turn_id,
+                "ACP prompt completed outside its running phase"
+            );
+            None
+        }
+    }
+}
+
+pub(super) fn fail_connection_and_take_active_turn(
+    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    state: &Arc<Mutex<AcpSessionState>>,
+    error: AcpError,
+) -> Option<TurnId> {
+    let mut active = active_turn.lock().ok()?;
+    let mut state = state.lock().ok()?;
+    if let Err(transition_error) = state.transition(AcpConnectionPhase::Failed { error }) {
+        tracing::warn!(%transition_error, "failed to mark ACP connection as failed");
+        return None;
+    }
+    active.take().map(|tracker| tracker.turn_id().clone())
+}
+
+pub(super) fn close_connection_and_take_active_turn(
+    active_turn: &Arc<Mutex<Option<AcpTurnTracker>>>,
+    state: &Arc<Mutex<AcpSessionState>>,
+) -> Option<TurnId> {
+    let mut active = active_turn.lock().ok()?;
+    let mut state = state.lock().ok()?;
+    if !matches!(state.phase(), AcpConnectionPhase::Closed)
+        && let Err(error) = state.transition(AcpConnectionPhase::Closed)
+    {
+        tracing::warn!(%error, "failed to close ACP connection phase");
+        return None;
+    }
+    active.take().map(|tracker| tracker.turn_id().clone())
+}
+
+pub(super) fn connection_closed_error(
+    agent_id: &str,
+    agent_name: &str,
+    detail: Option<&str>,
+) -> AcpError {
+    let error = AcpError::new(
+        AcpErrorKind::ConnectionClosed,
+        agent_id,
+        agent_name,
+        rust_i18n::t!("AgentUi.acp_connection_closed").to_string(),
+    );
+    match detail {
+        Some(detail) => error.with_detail(detail),
+        None => error,
+    }
 }

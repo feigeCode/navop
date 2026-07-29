@@ -3,10 +3,11 @@
 mod agent_input;
 mod attachment;
 mod context;
+mod history;
 mod mention;
 mod skill;
 
-pub use agent_input::{AgentInput, AgentInputEvent};
+pub use agent_input::{AgentInput, AgentInputEvent, QueuedPromptPreview};
 pub use attachment::ImageAttachment;
 pub(crate) use attachment::prepare_input_images;
 pub use context::{
@@ -15,5 +16,6 @@ pub use context::{
     ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
     ComposerTarget,
 };
+pub(crate) use history::PromptHistory;
 pub use mention::{MentionCompletionProvider, MentionItem};
 pub use skill::{ComposerSkillItem, ComposerSkillSummary};

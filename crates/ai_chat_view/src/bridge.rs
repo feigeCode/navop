@@ -370,11 +370,14 @@ enum StreamState {
 ///
 /// Runtime 运行 codex 风格的 `AgentTask`:模型驱动,按需调用业务工具与
 /// `update_plan` checklist,简单问答直接回答、不规划。
-pub fn build_runtime(model: Arc<dyn ModelClient>, registry: ToolRegistry) -> Arc<Runtime> {
+pub fn build_runtime(
+    model: Arc<dyn ModelClient>,
+    registry: ToolRegistry,
+) -> anyhow::Result<Arc<Runtime>> {
     let mut merged_registry = agent_runtime::tools::builtin::default_agent_tools();
-    merged_registry.extend(registry);
+    merged_registry.try_extend(registry)?;
     let tools = Arc::new(ToolRouter::new(merged_registry));
-    Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
+    Ok(Arc::new(Runtime::new(RuntimeServices::new(model, tools))))
 }
 
 /// 用正式模型 provider 装配 Runtime。
@@ -384,7 +387,7 @@ pub fn build_runtime_from_llm_provider(
     registry: ToolRegistry,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
-) -> Arc<Runtime> {
+) -> anyhow::Result<Arc<Runtime>> {
     let mut client = LlmModelClient::new(provider, model);
     if let Some(temperature) = temperature {
         client = client.with_temperature(temperature);
@@ -405,13 +408,13 @@ pub fn build_runtime_from_provider_config(
     registry: ToolRegistry,
 ) -> anyhow::Result<Arc<Runtime>> {
     let provider: Arc<dyn LlmProvider> = Arc::new(LlmConnector::from_config(config)?);
-    Ok(build_runtime_from_llm_provider(
+    build_runtime_from_llm_provider(
         provider,
         model,
         registry,
         config.temperature,
         config.max_tokens.and_then(|v| u32::try_from(v).ok()),
-    ))
+    )
 }
 
 /// 用 `GlobalProviderState` 异步装配 Runtime,支持 OnetCli 等需要 manager 的 provider。
@@ -422,11 +425,11 @@ pub async fn build_runtime_from_provider_state(
     registry: ToolRegistry,
 ) -> anyhow::Result<Arc<Runtime>> {
     let provider = provider_state.manager().get_provider(config).await?;
-    Ok(build_runtime_from_llm_provider(
+    build_runtime_from_llm_provider(
         provider,
         model,
         registry,
         config.temperature,
         config.max_tokens.and_then(|v| u32::try_from(v).ok()),
-    ))
+    )
 }

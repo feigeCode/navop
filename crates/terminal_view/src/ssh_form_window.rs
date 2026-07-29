@@ -2052,11 +2052,28 @@ impl Render for SshFormWindow {
                 div()
                     .text_sm()
                     .text_color(cx.theme().success)
-                    .child(t!("SSH.uninstall_shell_integration_success").to_string()),
+                    .child(t!("SSH.uninstall_shell_integration_success").to_string())
+                    .into_any_element(),
             ),
-            Some(Err(e)) => Some(div().text_sm().text_color(cx.theme().danger).child(
-                t!("SSH.uninstall_shell_integration_failed", error = e.as_str()).to_string(),
-            )),
+            Some(Err(e)) => Some(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(cx.theme().danger.opacity(0.12))
+                    .text_sm()
+                    .text_color(cx.theme().danger)
+                    .max_h(px(120.0))
+                    .overflow_scrollbar()
+                    .whitespace_normal()
+                    .child(
+                        t!("SSH.uninstall_shell_integration_failed", error = e.as_str())
+                            .to_string(),
+                    )
+                    .into_any_element(),
+            ),
             None => None,
         };
 
@@ -2106,7 +2123,7 @@ impl Render for SshFormWindow {
                 this.child(h_flex().justify_center().pb_2().child(elem))
             })
             .when_some(uninstall_result_element, |this, elem| {
-                this.child(h_flex().justify_center().pb_2().child(elem))
+                this.child(div().w_full().min_w_0().px_6().pb_2().child(elem))
             })
             // 底部按钮
             .child(

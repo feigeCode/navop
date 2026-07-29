@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, ParentElement, PathPromptOptions, Render, SharedString,
+    IntoElement, Modifiers, ParentElement, PathPromptOptions, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
@@ -26,6 +26,7 @@ use gpui_component::popover::Popover;
 use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
 use rust_i18n::t;
 
+use crate::input::PromptHistory;
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
     AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem,
@@ -89,6 +90,46 @@ enum ComposerMenuKind {
     Model,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryDirection {
+    Previous,
+    Next,
+}
+
+fn history_direction(key: &str, modifiers: &Modifiers) -> Option<HistoryDirection> {
+    if modifiers.modified() {
+        return None;
+    }
+    match key {
+        "up" => Some(HistoryDirection::Previous),
+        "down" => Some(HistoryDirection::Next),
+        _ => None,
+    }
+}
+
+fn cursor_is_at_history_boundary(direction: HistoryDirection, text: &str, cursor: usize) -> bool {
+    match direction {
+        HistoryDirection::Previous => cursor == 0,
+        HistoryDirection::Next => cursor == text.len(),
+    }
+}
+
+/// 当前会话中等待下一轮执行的提交摘要。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedPromptPreview {
+    pub text: SharedString,
+    pub image_count: usize,
+}
+
+impl QueuedPromptPreview {
+    pub fn new(text: impl Into<SharedString>, image_count: usize) -> Self {
+        Self {
+            text: text.into(),
+            image_count,
+        }
+    }
+}
+
 const CONTEXT_POPOVER_WIDTH: f32 = 400.0;
 const CONTEXT_TARGET_LIST_MAX_HEIGHT: f32 = 320.0;
 const CONTEXT_KIND_MAX_WIDTH: f32 = 92.0;
@@ -141,6 +182,12 @@ pub struct AgentInput {
     mentions: Arc<Vec<MentionItem>>,
     /// 当前图片附件。
     attachments: Vec<ImageAttachment>,
+    /// 已提交过的文本历史，用于在输入框中通过上下键浏览。
+    history: PromptHistory,
+    /// 当前会话等待下一轮执行的提交摘要。
+    queued_submissions: Vec<QueuedPromptPreview>,
+    /// 队列因 ACP 连接或会话过渡失败而暂停，可由用户显式停止并清空。
+    pending_queue_blocked: bool,
     /// 是否正在运行(运行中显示「停止」)。
     is_running: bool,
     /// 上层注入的展示上下文(目标 / scope / 能力 / 模型 / 模式文案)。
@@ -233,6 +280,39 @@ impl AgentInput {
             this.update(cx, |this, cx| this.add_attachments(atts, cx));
         });
 
+        let weak = cx.entity().downgrade();
+        let history_sub = cx.intercept_keystrokes(move |ev, window, cx| {
+            let Some(direction) =
+                history_direction(ev.keystroke.key.as_ref(), &ev.keystroke.modifiers)
+            else {
+                return;
+            };
+            let Some(this) = weak.upgrade() else {
+                return;
+            };
+            let input_state = this.read(cx).input_state.clone();
+            let can_navigate = {
+                let state = input_state.read(cx);
+                state.focus_handle(cx).is_focused(window)
+                    && state.selected_range().is_empty()
+                    && !state.has_ime_marked_text()
+                    && !state.is_context_menu_open(cx)
+                    && cursor_is_at_history_boundary(
+                        direction,
+                        &state.text().to_string(),
+                        state.cursor(),
+                    )
+            };
+            if !can_navigate {
+                return;
+            }
+
+            let handled = this.update(cx, |this, cx| this.navigate_history(direction, window, cx));
+            if handled {
+                cx.stop_propagation();
+            }
+        });
+
         let context_search_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("AgentUi.search_targets").to_string())
@@ -259,6 +339,9 @@ impl AgentInput {
             input_state,
             mentions,
             attachments: Vec::new(),
+            history: PromptHistory::default(),
+            queued_submissions: Vec::new(),
+            pending_queue_blocked: false,
             is_running: false,
             context: AgentComposerContext::default(),
             target_options: Vec::new(),
@@ -274,7 +357,7 @@ impl AgentInput {
             top_capabilities_collapsed: false,
             theme: None,
             edge_to_edge: false,
-            _subscriptions: vec![enter_sub, paste_sub, context_search_sub],
+            _subscriptions: vec![enter_sub, paste_sub, history_sub, context_search_sub],
         }
     }
 
@@ -343,6 +426,26 @@ impl AgentInput {
         }
     }
 
+    /// 更新当前会话等待下一轮执行的提交摘要。
+    pub fn set_queued_submissions(
+        &mut self,
+        submissions: Vec<QueuedPromptPreview>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.queued_submissions != submissions {
+            self.queued_submissions = submissions;
+            cx.notify();
+        }
+    }
+
+    /// 设置当前会话的待执行队列是否处于阻塞状态。
+    pub fn set_pending_queue_blocked(&mut self, blocked: bool, cx: &mut Context<Self>) {
+        if self.pending_queue_blocked != blocked {
+            self.pending_queue_blocked = blocked;
+            cx.notify();
+        }
+    }
+
     /// 聚焦输入框。
     pub fn focus_input(&self, window: &mut Window, cx: &mut App) {
         let handle = self.input_state.read(cx).focus_handle(cx);
@@ -350,20 +453,17 @@ impl AgentInput {
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_running {
-            return;
-        }
         let text = self.input_state.read(cx).value().to_string();
-        let trimmed = text.trim();
-        if trimmed.is_empty() && self.attachments.is_empty() {
+        if text.trim().is_empty() && self.attachments.is_empty() {
             return;
         }
 
-        let mentions = self.referenced_mentions(trimmed);
+        self.history.record(&text);
+        let mentions = self.referenced_mentions(&text);
         let images = std::mem::take(&mut self.attachments);
 
         cx.emit(AgentInputEvent::Submit {
-            text: trimmed.to_string(),
+            text,
             mentions,
             images,
         });
@@ -372,6 +472,31 @@ impl AgentInput {
             state.set_value("", window, cx);
         });
         cx.notify();
+    }
+
+    fn navigate_history(
+        &mut self,
+        direction: HistoryDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self.input_state.read(cx).text().to_string();
+        let was_browsing = self.history.is_browsing();
+        let replacement = match direction {
+            HistoryDirection::Previous => self.history.previous(&current),
+            HistoryDirection::Next => self.history.next(),
+        };
+        let Some(replacement) = replacement else {
+            return was_browsing;
+        };
+
+        self.input_state.update(cx, |state, cx| {
+            let old_len = state.text().len();
+            state.replace_text_range(0..old_len, &replacement, window, cx);
+            let new_len = state.text().len();
+            state.set_selected_range(new_len..new_len, false, window, cx);
+        });
+        true
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
@@ -389,12 +514,6 @@ impl AgentInput {
         }
         self.attachments.append(&mut atts);
         cx.notify();
-    }
-
-    /// 从剪贴板读取图片并加入附件(cmd/ctrl-v 与按钮共用)。
-    fn paste_images_from_clipboard(&mut self, cx: &mut Context<Self>) {
-        let atts = ImageAttachment::from_clipboard(cx);
-        self.add_attachments(atts, cx);
     }
 
     /// 打开系统文件对话框选择图片。
@@ -424,7 +543,7 @@ impl AgentInput {
         }
     }
 
-    pub(super) fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.is_running
     }
 
@@ -896,6 +1015,62 @@ impl AgentInput {
         )
     }
 
+    fn render_queued_submissions(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if self.queued_submissions.is_empty() {
+            return None;
+        }
+
+        let theme = self.local_theme(cx);
+        let mut items = v_flex().w_full().gap_1();
+        for submission in &self.queued_submissions {
+            let text = if submission.text.trim().is_empty() {
+                t!("AgentUi.attachment_count", count = submission.image_count).to_string()
+            } else if submission.image_count == 0 {
+                submission.text.to_string()
+            } else {
+                format!(
+                    "{} · {}",
+                    submission.text,
+                    t!("AgentUi.attachment_count", count = submission.image_count)
+                )
+            };
+            items = items.child(
+                h_flex()
+                    .debug_selector(|| "agent-input-queued-item".to_string())
+                    .w_full()
+                    .min_w_0()
+                    .px_2()
+                    .py_1()
+                    .rounded(cx.theme().radius)
+                    .bg(theme.panel)
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(div().min_w_0().truncate().child(text)),
+            );
+        }
+
+        Some(
+            v_flex()
+                .debug_selector(|| "agent-input-queued".to_string())
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .px_3()
+                .pt_1()
+                .child(
+                    div().text_xs().text_color(theme.foreground).child(
+                        t!(
+                            "AgentUi.queued_for_next_turn",
+                            count = self.queued_submissions.len()
+                        )
+                        .to_string(),
+                    ),
+                )
+                .child(items)
+                .into_any_element(),
+        )
+    }
+
     fn render_editor_top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.local_theme(cx);
         let muted = theme.muted_foreground;
@@ -969,38 +1144,25 @@ impl AgentInput {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = self.local_theme(cx);
         let running = self.is_running;
+        let queue_mode = running || self.pending_queue_blocked;
         let model_label = match &self.context.model {
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
             None => SharedString::from(t!("AgentUi.select_model").to_string()),
         };
-        let run_button = if running {
-            Button::new("agent-stop")
-                .icon(IconName::Close)
-                .danger()
-                .small()
-                .tooltip(t!("AgentUi.stop").to_string())
-                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-        } else {
-            Button::new("agent-send")
-                .icon(IconName::ArrowUp)
-                .primary()
-                .small()
-                .tooltip(t!("AgentUi.send").to_string())
-                .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
-        };
-
-        h_flex()
+        let execution_width = if queue_mode { 88.0 } else { 124.0 };
+        let model_min_width = if queue_mode { 96.0 } else { 150.0 };
+        let mut toolbar = h_flex()
             .w_full()
             .min_w_0()
             .items_center()
             .text_color(theme.foreground)
-            .gap_2()
+            .gap(if queue_mode { px(4.0) } else { px(8.0) })
             .px_3()
             .py_2()
             .flex_shrink_0()
             .child(
                 div()
-                    .w(px(124.0))
+                    .w(px(execution_width))
                     .h(px(32.0))
                     .flex_shrink_0()
                     .overflow_hidden()
@@ -1009,20 +1171,66 @@ impl AgentInput {
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(150.0))
+                    .min_w(px(model_min_width))
                     .h(px(32.0))
                     .overflow_hidden()
                     .child(self.render_model_menu(model_label, self.model_options.clone(), cx))
                     .debug_selector(|| "agent-input-model-control".to_string()),
-            )
-            .child(
+            );
+
+        if queue_mode {
+            toolbar = toolbar
+                .child(
+                    div()
+                        .w(px(34.0))
+                        .h(px(32.0))
+                        .flex_shrink_0()
+                        .debug_selector(|| "agent-input-queue-send".to_string())
+                        .child(
+                            Button::new("agent-queue-send")
+                                .icon(IconName::ArrowUp)
+                                .primary()
+                                .small()
+                                .tooltip(t!("AgentUi.queue_for_next_turn").to_string())
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.submit(window, cx)),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(px(34.0))
+                        .h(px(32.0))
+                        .flex_shrink_0()
+                        .debug_selector(|| "agent-input-stop".to_string())
+                        .child(
+                            Button::new("agent-stop")
+                                .icon(IconName::Close)
+                                .danger()
+                                .small()
+                                .tooltip(t!("AgentUi.stop").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
+                        ),
+                );
+        } else {
+            toolbar = toolbar.child(
                 div()
                     .w(px(34.0))
                     .h(px(32.0))
                     .flex_shrink_0()
                     .debug_selector(|| "agent-input-send-control".to_string())
-                    .child(run_button),
-            )
+                    .child(
+                        Button::new("agent-send")
+                            .icon(IconName::ArrowUp)
+                            .primary()
+                            .small()
+                            .tooltip(t!("AgentUi.send").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
+                    ),
+            );
+        }
+
+        toolbar
     }
 }
 
@@ -2198,6 +2406,7 @@ impl Render for AgentInput {
         let context_bar = self.render_context_bar(cx);
         let attachments = self.render_attachments(cx);
         let editor_top_bar = self.render_editor_top_bar(cx);
+        let queued_submissions = self.render_queued_submissions(cx);
         let toolbar = self.render_toolbar(cx);
         let theme = self.local_theme(cx);
         let input_focused = self
@@ -2222,20 +2431,16 @@ impl Render for AgentInput {
                     .border_color(theme.border)
                     .shadow_sm()
             })
-            // 捕获阶段拦截 cmd/ctrl-v:把剪贴板图片作为附件(不阻断文本粘贴)。
-            .capture_key_down(cx.listener(|this, ev: &KeyDownEvent, _window, cx| {
-                if ev.keystroke.key == "v" && ev.keystroke.modifiers.secondary() {
-                    this.paste_images_from_clipboard(cx);
-                }
-            }))
             // 顶部：计划 / Agent / 上下文入口
             .child(context_bar)
             // 附件预览（如果有）
             .children(attachments)
             .child(editor_top_bar)
+            .when_some(queued_submissions, |this, queued| this.child(queued))
             // 中部：多行输入框
             .child(
                 div()
+                    .debug_selector(|| "agent-input-editor".to_string())
                     .w_full()
                     .min_w_0()
                     .px_3()
@@ -2276,6 +2481,7 @@ mod tests {
     struct AgentInputLayoutRoot {
         input: Entity<AgentInput>,
         width: Pixels,
+        height: Pixels,
     }
 
     impl AgentInputLayoutRoot {
@@ -2326,6 +2532,35 @@ mod tests {
             root
         }
 
+        fn running_with_queue(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let mut root = Self::with_width(px(360.0), window, cx);
+            root.height = px(320.0);
+            root.input.update(cx, |input, cx| {
+                input.set_running(true, cx);
+                input.set_queued_submissions(
+                    vec![
+                        QueuedPromptPreview::new("检查数据库连接状态", 0),
+                        QueuedPromptPreview::new("", 2),
+                    ],
+                    cx,
+                );
+            });
+            root
+        }
+
+        fn blocked_with_queue(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let mut root = Self::with_width(px(360.0), window, cx);
+            root.height = px(320.0);
+            root.input.update(cx, |input, cx| {
+                input.set_pending_queue_blocked(true, cx);
+                input.set_queued_submissions(
+                    vec![QueuedPromptPreview::new("等待 ACP 恢复后执行", 0)],
+                    cx,
+                );
+            });
+            root
+        }
+
         fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
             let input = cx.new(|cx| {
                 AgentInput::with_mentions(Vec::new(), "描述目标，输入 @ 引用资源…", window, cx)
@@ -2359,13 +2594,17 @@ mod tests {
                     cx,
                 );
             });
-            Self { input, width }
+            Self {
+                input,
+                width,
+                height: px(220.0),
+            }
         }
     }
 
     impl Render for AgentInputLayoutRoot {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().w(self.width).h(px(220.0)).child(self.input.clone())
+            div().w(self.width).h(self.height).child(self.input.clone())
         }
     }
 
@@ -2416,6 +2655,81 @@ mod tests {
         assert_eq!(
             model.size.height, send.size.height,
             "model and send controls should align vertically: model={model:?}, send={send:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn running_toolbar_keeps_queue_stop_and_model_controls_visible(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::running_with_queue);
+        let cx: &mut VisualTestContext = cx;
+
+        let model = cx
+            .debug_bounds("agent-input-model-control")
+            .expect("model control should be rendered");
+        let queue = cx
+            .debug_bounds("agent-input-queue-send")
+            .expect("queue send control should be rendered");
+        let stop = cx
+            .debug_bounds("agent-input-stop")
+            .expect("stop control should be rendered");
+
+        assert!(model.size.width >= px(96.0));
+        assert!(
+            model.origin.x + model.size.width <= queue.origin.x,
+            "model and queue controls must not overlap: model={model:?}, queue={queue:?}"
+        );
+        assert!(
+            queue.origin.x + queue.size.width <= stop.origin.x,
+            "queue and stop controls must not overlap: queue={queue:?}, stop={stop:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn blocked_queue_keeps_queue_and_stop_controls_without_marking_turn_running(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (root, cx) = cx.add_window_view(AgentInputLayoutRoot::blocked_with_queue);
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(cx.debug_bounds("agent-input-queue-send").is_some());
+        assert!(cx.debug_bounds("agent-input-stop").is_some());
+        assert!(cx.debug_bounds("agent-input-send-control").is_none());
+        root.read_with(cx, |root, cx| {
+            assert!(!root.input.read(cx).is_running());
+        });
+    }
+
+    #[gpui::test]
+    fn queued_submission_preview_renders_above_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::running_with_queue);
+        let cx: &mut VisualTestContext = cx;
+
+        let queue = cx
+            .debug_bounds("agent-input-queued")
+            .expect("queued preview should be rendered");
+        let item = cx
+            .debug_bounds("agent-input-queued-item")
+            .expect("queued preview item should be rendered");
+        let editor = cx
+            .debug_bounds("agent-input-editor")
+            .expect("editor should be rendered");
+
+        assert!(item.size.height > px(0.0));
+        assert!(
+            queue.origin.y + queue.size.height <= editor.origin.y,
+            "queued preview must stay above the editor: queue={queue:?}, editor={editor:?}"
         );
     }
 
@@ -2653,6 +2967,91 @@ mod tests {
         );
 
         assert!(target_matches(&opt, "  prod  "));
+    }
+
+    #[test]
+    fn history_navigation_only_uses_unmodified_vertical_keys() {
+        assert_eq!(
+            Some(HistoryDirection::Previous),
+            history_direction("up", &Modifiers::default())
+        );
+        assert_eq!(
+            Some(HistoryDirection::Next),
+            history_direction("down", &Modifiers::default())
+        );
+        assert_eq!(None, history_direction("left", &Modifiers::default()));
+        assert_eq!(
+            None,
+            history_direction(
+                "up",
+                &Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn history_navigation_only_uses_document_boundaries() {
+        let text = "first\nsecond\nthird";
+
+        assert!(cursor_is_at_history_boundary(
+            HistoryDirection::Previous,
+            text,
+            0
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Previous,
+            text,
+            "fir".len()
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Previous,
+            text,
+            "first\nsec".len()
+        ));
+        assert!(cursor_is_at_history_boundary(
+            HistoryDirection::Next,
+            text,
+            text.len()
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Next,
+            text,
+            "first\nsecond\nth".len()
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Next,
+            text,
+            "first\nsec".len()
+        ));
+    }
+
+    #[test]
+    fn history_navigation_uses_utf8_byte_offsets_at_document_boundaries() {
+        let text = "第一行\nsecond\n第三行";
+
+        assert!(cursor_is_at_history_boundary(
+            HistoryDirection::Previous,
+            text,
+            0
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Previous,
+            text,
+            "第".len()
+        ));
+        assert!(cursor_is_at_history_boundary(
+            HistoryDirection::Next,
+            text,
+            text.len()
+        ));
+        assert!(!cursor_is_at_history_boundary(
+            HistoryDirection::Next,
+            text,
+            text.len() - "行".len()
+        ));
     }
 
     #[test]

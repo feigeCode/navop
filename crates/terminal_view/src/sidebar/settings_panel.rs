@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
     InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
@@ -870,8 +870,7 @@ impl SettingsPanel {
         let accent_fg = colors.accent_foreground;
         let muted = colors.muted;
         let border = colors.border;
-        let theme_i18n_key = format!("Theme.{}", theme.name);
-        let theme_display_name = t!(&theme_i18n_key).to_string();
+        let theme_display_name = theme.display_name();
 
         div()
             .id(SharedString::from(format!("theme-{}", theme.name)))
@@ -1528,9 +1527,7 @@ impl SettingsPanel {
             )
             .child(
                 div()
-                    .id("theme-list-scroll")
-                    .max_h(px(300.0))
-                    .overflow_y_scrollbar()
+                    .id("theme-list")
                     .rounded_md()
                     .bg(muted)
                     .p_1()
@@ -1696,6 +1693,31 @@ mod tests {
     }
 
     #[test]
+    fn terminal_theme_list_uses_single_panel_scroll_container() {
+        let source = include_str!("settings_panel.rs");
+        let section_start = source
+            .find("fn render_theme_section")
+            .expect("应存在终端主题区域");
+        let section_end = source[section_start..]
+            .find("\nfn parse_optional_hex_color")
+            .map(|offset| section_start + offset)
+            .expect("应找到终端主题区域结尾");
+        let theme_section = &source[section_start..section_end];
+        let panel_render = source
+            .rfind("impl Render for SettingsPanel")
+            .map(|offset| &source[offset..])
+            .expect("应存在设置面板渲染实现");
+
+        assert!(theme_section.contains("TerminalTheme::all(cx.theme())"));
+        assert!(theme_section.contains(".id(\"theme-list\")"));
+        assert!(theme_section.contains(".children(theme_items)"));
+        assert!(!theme_section.contains(".max_h("));
+        assert!(!theme_section.contains(".overflow_y_scroll"));
+        assert!(panel_render.contains(".id(\"settings-panel-scroll\")"));
+        assert!(panel_render.contains(".overflow_y_scrollbar()"));
+    }
+
+    #[test]
     fn settings_panel_source_avoids_hard_coded_user_facing_strings() {
         let source = include_str!("settings_panel.rs");
         let forbidden_snippets = [
@@ -1736,26 +1758,27 @@ impl Render for SettingsPanel {
             .bg(colors.background)
             .text_color(colors.foreground)
             .child(
-                div()
-                    .id("settings-panel-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(
-                        v_flex()
-                            .flex_shrink_0()
-                            .pb_4()
-                            .child(self.render_search_section(cx))
-                            .child(self.render_font_section(cx))
-                            .child(self.render_scrollback_section(cx))
-                            .child(self.render_cursor_section(cx))
-                            .child(self.render_safety_section(cx))
-                            .when(has_file_manager, |el| {
-                                el.child(self.render_file_manager_section(cx))
-                            })
-                            .child(self.render_custom_highlight_section(window, cx))
-                            .child(self.render_theme_section(cx)),
-                    ),
+                div().flex_1().w_full().min_h_0().overflow_hidden().child(
+                    div()
+                        .id("settings-panel-scroll")
+                        .size_full()
+                        .overflow_y_scrollbar()
+                        .child(
+                            v_flex()
+                                .flex_shrink_0()
+                                .pb_4()
+                                .child(self.render_search_section(cx))
+                                .child(self.render_font_section(cx))
+                                .child(self.render_scrollback_section(cx))
+                                .child(self.render_cursor_section(cx))
+                                .child(self.render_safety_section(cx))
+                                .when(has_file_manager, |el| {
+                                    el.child(self.render_file_manager_section(cx))
+                                })
+                                .child(self.render_custom_highlight_section(window, cx))
+                                .child(self.render_theme_section(cx)),
+                        ),
+                ),
             )
     }
 }

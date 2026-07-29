@@ -83,6 +83,12 @@ fn all_terminal_theme_names_are_stable_and_resolvable() {
         "neon_blue",
         "matrix",
         "crimson",
+        "slate",
+        "aurora",
+        "orchid",
+        "ember",
+        "sandstone",
+        "frost",
     ];
     let themes = TerminalTheme::all(&app_theme);
 

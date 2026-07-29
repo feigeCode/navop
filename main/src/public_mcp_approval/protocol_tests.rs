@@ -101,7 +101,7 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
     registry.register_remote_ops(session);
     let (approver, mut receiver) = channel_approver(Duration::from_secs(10));
     let protocol = PublicMcpServer::with_tool_registry_and_approval(
-        PublicMcpToolRegistry::terminal(registry),
+        PublicMcpToolRegistry::terminal(registry).expect("terminal registry should be valid"),
         PermissionMode::Ask,
         PublicMcpApprovalManager::new(Arc::new(approver)),
     );

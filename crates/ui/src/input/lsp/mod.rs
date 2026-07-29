@@ -78,7 +78,7 @@ impl InputState {
         cx.notify();
     }
 
-    pub(crate) fn is_context_menu_open(&self, cx: &App) -> bool {
+    pub fn is_context_menu_open(&self, cx: &App) -> bool {
         let Some(menu) = self.context_menu_content.as_ref() else {
             return false;
         };

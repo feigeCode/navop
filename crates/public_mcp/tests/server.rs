@@ -9,7 +9,8 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn loopback_server_rejects_wrong_token_before_json_rpc() {
-    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow);
+    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow)
+        .expect("terminal registry should be valid");
     let server = LoopbackMcpServer::bind(protocol, "correct-token".to_string())
         .await
         .unwrap();
@@ -25,7 +26,8 @@ async fn loopback_server_rejects_wrong_token_before_json_rpc() {
 
 #[tokio::test]
 async fn loopback_server_handles_json_rpc_after_token_handshake() {
-    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow);
+    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow)
+        .expect("terminal registry should be valid");
     let server = LoopbackMcpServer::bind(protocol, "correct-token".to_string())
         .await
         .unwrap();
@@ -58,7 +60,8 @@ async fn loopback_server_handles_json_rpc_after_token_handshake() {
 
 #[tokio::test]
 async fn loopback_server_tracks_active_client_connections() {
-    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow);
+    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow)
+        .expect("terminal registry should be valid");
     let server = LoopbackMcpServer::bind(protocol, "correct-token".to_string())
         .await
         .unwrap();
