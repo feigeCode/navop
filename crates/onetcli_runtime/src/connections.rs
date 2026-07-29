@@ -495,8 +495,12 @@ fn save_schema() -> Value {
         object.insert(
             "oneOf".to_string(),
             json!([
-                { "required": ["kind", "values"] },
-                { "required": ["id", "patch"] }
+                {
+                    "type": "object",
+                    "required": ["kind", "values"],
+                    "not": { "required": ["id"] }
+                },
+                { "type": "object", "required": ["id", "patch"] }
             ]),
         );
     }

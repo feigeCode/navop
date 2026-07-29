@@ -260,9 +260,9 @@ fn unordered_task_continuation<'a>(marker: &str, after_marker: &'a str) -> Optio
     ["[ ]", "[x]", "[X]"]
         .into_iter()
         .find(|task| {
-            content.strip_prefix(task).is_some_and(|rest| {
-                rest.is_empty() || rest.starts_with(char::is_whitespace)
-            })
+            content
+                .strip_prefix(task)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
         })
         .map(|_| "[ ] ")
 }
