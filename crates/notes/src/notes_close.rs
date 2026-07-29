@@ -107,9 +107,9 @@ impl NotesView {
         // disk to close silently.
         for session in self.markdown_sessions.values_mut() {
             if matches!(session.state.sync_state, MarkdownSyncState::Clean)
-                && session.state.source_revision != session.state.persisted_revision
+                && session.state.editor_revision != session.state.persisted_revision
             {
-                session.state.sync_state = MarkdownSyncState::SourceDirty;
+                session.state.sync_state = MarkdownSyncState::Dirty;
             }
         }
 
@@ -137,7 +137,7 @@ impl NotesView {
                     // genuinely clean session cannot be pending.
                     return CloseSaveProgress::Failed;
                 }
-                MarkdownSyncState::SourceDirty => {
+                MarkdownSyncState::Dirty => {
                     if attempted_generations.get(&document_id) == Some(&generation) {
                         return CloseSaveProgress::Failed;
                     }
@@ -145,15 +145,15 @@ impl NotesView {
                     let Some(session) = self.markdown_sessions.get(&document_id) else {
                         continue;
                     };
-                    if matches!(session.state.sync_state, MarkdownSyncState::SavingSource) {
+                    if matches!(session.state.sync_state, MarkdownSyncState::Saving) {
                         attempted_generations.insert(document_id, generation);
                     }
                     // If an older generation is already being written,
-                    // begin_manual_source_save intentionally does nothing. Wait
+                    // begin_manual_save intentionally does nothing. Wait
                     // for it to finish, then save this newer generation.
                     waiting = true;
                 }
-                MarkdownSyncState::SavingSource => {
+                MarkdownSyncState::Saving => {
                     attempted_generations
                         .entry(document_id)
                         .or_insert(generation);
@@ -183,7 +183,7 @@ impl NotesView {
                         let Some(session) = self.markdown_sessions.get(&document_id) else {
                             continue;
                         };
-                        if !matches!(session.state.sync_state, MarkdownSyncState::SavingSource) {
+                        if !matches!(session.state.sync_state, MarkdownSyncState::Saving) {
                             return CloseSaveProgress::Failed;
                         }
                         attempted_generations.insert(document_id, generation);
@@ -208,11 +208,6 @@ impl NotesView {
                     {
                         return CloseSaveProgress::Failed;
                     }
-                }
-                MarkdownSyncState::Switching => {
-                    // Mode switching is synchronous. If this state survives
-                    // until try_close runs, closing would risk losing source.
-                    return CloseSaveProgress::Failed;
                 }
             }
         }
@@ -378,9 +373,9 @@ mod tests {
     #[test]
     fn dirty_and_saving_markdown_use_the_unsaved_prompt() {
         let mut dirty = MarkdownSessionState::default();
-        dirty.source_changed();
+        dirty.document_changed(1);
         let mut saving = dirty.clone();
-        saving.begin_manual_source_save().unwrap();
+        saving.begin_manual_save().unwrap();
 
         assert_eq!(
             Some(MarkdownClosePrompt::Unsaved),
@@ -412,7 +407,7 @@ mod tests {
     #[test]
     fn revision_mismatch_requires_a_prompt_even_with_a_stale_clean_flag() {
         let mut state = MarkdownSessionState::default();
-        state.source_revision = 1;
+        state.editor_revision = 1;
 
         assert_eq!(
             Some(MarkdownClosePrompt::Unsaved),
@@ -423,7 +418,7 @@ mod tests {
     #[test]
     fn a_blocked_document_takes_precedence_over_an_ordinary_dirty_document() {
         let mut dirty = MarkdownSessionState::default();
-        dirty.source_changed();
+        dirty.document_changed(1);
         let mut conflicted = MarkdownSessionState::default();
         conflicted.sync_state = MarkdownSyncState::Conflict;
 

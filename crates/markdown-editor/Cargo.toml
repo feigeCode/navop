@@ -3,20 +3,29 @@ name = "markdown-editor"
 version = "0.1.0"
 publish.workspace = true
 edition.workspace = true
+license = "Apache-2.0"
+autobins = false
 
 [dependencies]
+anyhow.workspace = true
+cssparser = "0.37"
+directories = "6"
 futures.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
-markdown-source.workspace = true
-thiserror.workspace = true
+ratex-layout = "0.1.9"
+ratex-parser = "0.1.9"
+ratex-svg = { version = "0.1.9", features = ["embed-fonts", "standalone"] }
+ropey.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "1"
+unicode-segmentation = "1.13"
+url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui-component-assets.workspace = true
-gpui_platform = { workspace = true, features = ["test-support"] }
-ropey.workspace = true
-rust-embed = { version = "8.7.2", features = ["include-exclude"] }
 
 [lints]
 workspace = true

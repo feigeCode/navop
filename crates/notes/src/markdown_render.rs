@@ -5,12 +5,7 @@ use gpui::{
     prelude::FluentBuilder,
 };
 use gpui_component::{
-    Disableable, Icon, IconName, Sizable,
-    button::Button,
-    h_flex,
-    input::{Input, LocalInputStyle},
-    switch::Switch,
-    v_flex,
+    Disableable, Icon, IconName, Sizable, button::Button, h_flex, switch::Switch, v_flex,
 };
 use rust_i18n::t;
 
@@ -23,52 +18,15 @@ impl NotesView {
             return div().into_any_element();
         };
         let mode = session.state.mode;
-        let content = match mode {
-            MarkdownViewMode::Source => {
-                let theme = self.resolved_editor_theme(cx);
-                div()
-                    .key_context(crate::markdown_source::SOURCE_CONTEXT)
-                    .on_action(cx.listener(
-                        |view, _: &crate::markdown_source::UndoSourceMode, window, cx| {
-                            view.apply_source_mode_history(true, window, cx);
-                        },
-                    ))
-                    .on_action(cx.listener(
-                        |view, _: &crate::markdown_source::RedoSourceMode, window, cx| {
-                            view.apply_source_mode_history(false, window, cx);
-                        },
-                    ))
-                    .on_action(cx.listener(
-                        |view, _: &crate::markdown_source::SaveMarkdown, window, cx| {
-                            view.save_active_markdown(window, cx);
-                        },
-                    ))
-                    .size_full()
-                    .child(
-                        Input::new(&session.source_editor)
-                            .size_full()
-                            .local_style(LocalInputStyle {
-                                background: theme.background,
-                                foreground: theme.foreground,
-                                muted_foreground: theme.muted_foreground,
-                                border: theme.border,
-                            })
-                            .highlight_theme(theme.highlight_theme)
-                            .caret_color(theme.primary)
-                            .indent_guide_color(theme.border.opacity(0.7)),
-                    )
-                    .into_any_element()
-            }
-            MarkdownViewMode::Wysiwyg => div()
-                .id("markdown-wysiwyg-editor")
-                .debug_selector(|| "markdown-wysiwyg-editor".to_owned())
-                .size_full()
-                .min_h_0()
-                .min_w_0()
-                .overflow_hidden()
-                .child(session.preview.clone())
-                .into_any_element(),
-        };
+        let content = div()
+            .id("markdown-editor")
+            .debug_selector(|| "markdown-editor".to_owned())
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .child(session.editor.clone())
+            .into_any_element();
         v_flex()
             .key_context(crate::markdown_source::MARKDOWN_CONTEXT)
             .on_action(cx.listener(
@@ -144,7 +102,7 @@ impl NotesView {
         let save_disabled = session.is_none_or(|session| {
             !matches!(
                 session.state.sync_state,
-                MarkdownSyncState::SourceDirty | MarkdownSyncState::Failed(_)
+                MarkdownSyncState::Dirty | MarkdownSyncState::Failed(_)
             )
         });
         h_flex()
@@ -205,15 +163,6 @@ impl NotesView {
         cx: &mut Context<Self>,
     ) -> Button {
         let id = document_id.to_owned();
-        let disabled = self
-            .markdown_sessions
-            .get(document_id)
-            .is_some_and(|session| {
-                !matches!(
-                    session.state.sync_state,
-                    crate::markdown_session::MarkdownSyncState::Clean
-                )
-            });
         Button::new("markdown-source-mode")
             .debug_selector(|| "markdown-source-mode".to_owned())
             .icon(if mode == MarkdownViewMode::Source {
@@ -232,7 +181,6 @@ impl NotesView {
                 t!("Notes.markdown_source_tooltip").to_string()
             })
             .small()
-            .disabled(disabled)
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.toggle_markdown_mode(id.clone(), window, cx)
             }))
@@ -245,11 +193,11 @@ fn markdown_status(
 ) -> Option<String> {
     match session.map(|session| &session.state.sync_state) {
         Some(MarkdownSyncState::Clean) => Some(t!("Notes.markdown_saved").to_string()),
-        Some(MarkdownSyncState::SourceDirty) if save_mode == MarkdownSaveMode::Automatic => {
+        Some(MarkdownSyncState::Dirty) if save_mode == MarkdownSaveMode::Automatic => {
             Some(t!("Notes.markdown_waiting_autosave").to_string())
         }
-        Some(MarkdownSyncState::SourceDirty) => Some(t!("Notes.markdown_unsaved").to_string()),
-        Some(MarkdownSyncState::SavingSource) => Some(t!("Notes.markdown_saving").to_string()),
+        Some(MarkdownSyncState::Dirty) => Some(t!("Notes.markdown_unsaved").to_string()),
+        Some(MarkdownSyncState::Saving) => Some(t!("Notes.markdown_saving").to_string()),
         Some(MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)) => None,
         _ => None,
     }

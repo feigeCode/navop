@@ -544,19 +544,6 @@ fn build_sidebar_context_menu(
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor_theme = self.resolved_editor_theme(cx);
-        let markdown_theme = markdown_editor::MarkdownEditorTheme {
-            background: editor_theme.background,
-            foreground: editor_theme.foreground,
-            muted_foreground: editor_theme.muted_foreground,
-            border: editor_theme.border,
-            primary: editor_theme.primary,
-            highlight_theme: editor_theme.highlight_theme.clone(),
-        };
-        for session in self.markdown_sessions.values() {
-            session.preview.update(cx, |editor, cx| {
-                editor.set_theme(markdown_theme.clone(), cx)
-            });
-        }
         let content = match &self.load_state {
             NotesLoadState::NeedsLocation => self.render_location_setup(cx),
             NotesLoadState::Ready => self.render_ready(cx),

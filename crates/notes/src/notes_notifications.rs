@@ -42,14 +42,16 @@ impl NotesView {
             };
             match result {
                 Ok(MarkdownSaveOutcome::Saved(_)) => {
-                    session.state.source_saved(generation);
+                    session.state.document_saved(generation);
                     if generation == session.state.generation
                         && matches!(
                             session.state.sync_state,
                             crate::markdown_session::MarkdownSyncState::Clean
                         )
                     {
-                        session.preview.update(cx, |editor, _| editor.mark_saved());
+                        session
+                            .editor
+                            .update(cx, |editor, cx| editor.mark_saved(cx));
                     }
                     saved_path = session.store.path().ok();
                     if save_mode == MarkdownSaveMode::Automatic {
@@ -66,7 +68,7 @@ impl NotesView {
                 Err(error) => {
                     session
                         .state
-                        .source_save_failed(generation, error.to_string());
+                        .document_save_failed(generation, error.to_string());
                     Some(Notification::error(
                         t!("Notes.markdown_save_failed", error = error.to_string()).to_string(),
                     ))
