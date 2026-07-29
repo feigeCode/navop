@@ -79,6 +79,10 @@ AgentUi:
     en: "%{name} is responding…"
     zh-CN: "%{name} 正在响应…"
     zh-HK: "%{name} 正在回應…"
+  acp_image_not_supported:
+    en: This ACP Agent does not support image prompts
+    zh-CN: 当前 ACP Agent 不支持图片输入
+    zh-HK: 目前 ACP Agent 不支援圖片輸入
   acp_safety_confirmation_notice:
     en: "%{summary}\n\nSafety Confirmation (Manual Confirmation) is enabled. After allowing this ACP permission request, the actual tool execution still requires a second approval in the safety confirmation dialog. To avoid the second approval, change the MCP permission mode to Auto."
     zh-CN: "%{summary}\n\n当前已开启“安全确认（手动确认）”模式。允许本次 ACP 权限请求后，实际工具执行还需要在弹出的安全确认窗口中进行二次审批；如不需要二次审批，可将 MCP 权限模式切换为“自动执行”。"
@@ -151,6 +155,14 @@ AgentUi:
     en: "%{count} attachment(s)"
     zh-CN: "%{count} 个附件"
     zh-HK: "%{count} 個附件"
+  queue_for_next_turn:
+    en: Queue for next turn
+    zh-CN: 发送到下一轮
+    zh-HK: 傳送到下一輪
+  queued_for_next_turn:
+    en: "Queued for next turn (%{count})"
+    zh-CN: "下一轮带入（%{count}）"
+    zh-HK: "下一輪帶入（%{count}）"
   auto:
     en: Auto
     zh-CN: 自动
@@ -251,6 +263,10 @@ AgentUi:
     en: Copy code
     zh-CN: 复制代码
     zh-HK: 複製程式碼
+  copy_message:
+    en: Copy message
+    zh-CN: 复制消息
+    zh-HK: 複製訊息
   create_acp_session_failed:
     en: "Failed to create a new ACP session: %{error}"
     zh-CN: "创建 ACP 新会话失败：%{error}"
@@ -463,6 +479,10 @@ AgentUi:
     en: No model configuration is available
     zh-CN: 没有可用模型配置
     zh-HK: 沒有可用的模型設定
+  model_switch_failed:
+    en: "Could not switch model: %{error}"
+    zh-CN: "模型切换失败：%{error}"
+    zh-HK: "模型切換失敗：%{error}"
   no_plan:
     en: No plan yet
     zh-CN: 暂无计划

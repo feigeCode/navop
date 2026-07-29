@@ -37,6 +37,7 @@ use rmcp::{
 };
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
+use tokio_util::sync::CancellationToken;
 
 pub type PublicMcpToolFuture =
     Pin<Box<dyn Future<Output = Result<CallToolResult, McpError>> + Send + 'static>>;
@@ -70,4 +71,30 @@ pub trait PublicMcpToolProvider: Send + Sync + 'static {
         arguments: Option<JsonObject>,
         context: PublicMcpToolContext,
     ) -> Option<PublicMcpToolFuture>;
+
+    fn call_tool_with_cancellation(
+        &self,
+        name: &str,
+        arguments: Option<JsonObject>,
+        context: PublicMcpToolContext,
+        cancellation: CancellationToken,
+    ) -> Option<PublicMcpToolFuture> {
+        let future = self.call_tool(name, arguments, context)?;
+        if cancellation.is_cancelled() {
+            return Some(Box::pin(async { Err(tool_call_cancelled_error()) }));
+        }
+        Some(Box::pin(async move {
+            // Dropping a provider future stops cooperative async work, but cannot undo
+            // side effects that the provider has already detached or completed.
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(tool_call_cancelled_error()),
+                result = future => result,
+            }
+        }))
+    }
+}
+
+fn tool_call_cancelled_error() -> McpError {
+    McpError::internal_error("public MCP tool call cancelled", None)
 }

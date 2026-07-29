@@ -58,7 +58,7 @@ impl PublicMcpRuntime {
         permission_mode: PermissionMode,
         discovery_path: PathBuf,
     ) -> Result<Self> {
-        let tool_registry = PublicMcpToolRegistry::terminal(registry);
+        let tool_registry = PublicMcpToolRegistry::terminal(registry)?;
         Self::start_with_tool_registry(tool_registry, mode, permission_mode, discovery_path).await
     }
 

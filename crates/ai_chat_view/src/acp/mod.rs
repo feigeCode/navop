@@ -28,7 +28,7 @@ pub use config::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
     AcpTimeoutConfig, AcpTransport,
 };
-pub use connection::{AcpConnectOutcome, AcpConnection, AcpPendingConnection};
+pub use connection::{AcpConnectOutcome, AcpConnection, AcpPendingConnection, AcpPromptStartError};
 pub use error::{AcpError, AcpErrorKind, AcpRecoveryAction};
 pub(crate) use permission::{AcpPermissionEnvelope, AcpPermissionMessage, acp_permission_channel};
 pub use permission::{

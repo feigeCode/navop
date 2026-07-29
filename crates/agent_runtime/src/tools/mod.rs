@@ -11,7 +11,7 @@ mod spec;
 
 pub use invocation::ToolInvocation;
 pub use observation::{ObservationData, ToolObservation};
-pub use registry::{Tool, ToolRegistry};
+pub use registry::{Tool, ToolRegistry, ToolRegistryError};
 pub use router::{ToolCall, ToolDispatchContext, ToolRouter};
 pub use runtime_adapter::*;
-pub use spec::{ToolName, ToolSpec};
+pub use spec::{ToolName, ToolNameAllocator, ToolSchemaError, ToolSpec};

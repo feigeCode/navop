@@ -317,6 +317,8 @@ impl Element for TextView {
                         return;
                     }
 
+                    let focus_handle = state.read(cx).focus_handle.clone();
+                    focus_handle.focus(window, cx);
                     state.update(cx, |state, _| {
                         state.start_selection(event.position);
                     });
@@ -382,19 +384,24 @@ mod tests {
     use super::TextView;
     use crate::text::TextViewState;
     use gpui::{
-        AppContext as _, Context, Entity, IntoElement, Modifiers, MouseButton, ParentElement as _,
-        Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+        Modifiers, MouseButton, ParentElement as _, Render, Styled as _, TestAppContext,
+        VisualTestContext, Window, div, point, px,
     };
 
     struct TextViewTestRoot {
         text_view: Entity<TextViewState>,
+        other_focus: FocusHandle,
     }
 
     impl TextViewTestRoot {
         fn new(text: &str, cx: &mut Context<Self>) -> Self {
             let text = text.to_string();
             let text_view = cx.new(|cx| TextViewState::markdown(&text, cx));
-            Self { text_view }
+            Self {
+                text_view,
+                other_focus: cx.focus_handle(),
+            }
         }
     }
 
@@ -408,7 +415,12 @@ mod tests {
                         .overflow_hidden()
                         .child(TextView::new(&self.text_view).selectable(true)),
                 )
-                .child(div().h(px(40.)).child("footer"))
+                .child(
+                    div()
+                        .h(px(40.))
+                        .track_focus(&self.other_focus)
+                        .child("footer"),
+                )
         }
     }
 
@@ -453,5 +465,56 @@ mod tests {
             selected_text.is_empty(),
             "unexpected selection: {selected_text:?}"
         );
+    }
+
+    #[gpui::test]
+    fn mouse_selected_markdown_can_be_copied(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let (view, cx) = cx
+            .add_window_view(|_, cx| TextViewTestRoot::new("\u{00a0}selectable text\u{00a0}", cx));
+        let cx: &mut VisualTestContext = cx;
+        view.update_in(cx, |root, window, cx| {
+            root.other_focus.focus(window, cx);
+        });
+
+        cx.simulate_mouse_down(
+            point(px(2.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(90.), px(12.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            point(px(90.), px(12.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        view.update_in(cx, |root, window, cx| {
+            assert!(
+                root.text_view.read(cx).focus_handle.is_focused(window),
+                "mouse selection should focus the TextView"
+            );
+        });
+        let selected_text = view.read_with(cx, |root, cx| root.text_view.read(cx).selected_text());
+        assert!(!selected_text.trim().is_empty());
+        assert_ne!(
+            selected_text,
+            selected_text.trim(),
+            "the selection must cover surrounding whitespace to verify exact copying"
+        );
+        #[cfg(target_os = "macos")]
+        cx.simulate_keystrokes("cmd-c");
+        #[cfg(not(target_os = "macos"))]
+        cx.simulate_keystrokes("ctrl-c");
+
+        let clipboard_text = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .expect("selected text should be copied");
+        assert_eq!(selected_text, clipboard_text);
     }
 }

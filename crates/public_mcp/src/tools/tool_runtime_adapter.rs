@@ -11,6 +11,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tool_runtime::{
     ResourceCapability, ResourceKind, ResourcePool, ResourceRef, ToolAdapter,
     ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
@@ -67,6 +68,16 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         arguments: Option<JsonObject>,
         context: PublicMcpToolContext,
     ) -> Option<PublicMcpToolFuture> {
+        self.call_tool_with_cancellation(name, arguments, context, CancellationToken::new())
+    }
+
+    fn call_tool_with_cancellation(
+        &self,
+        name: &str,
+        arguments: Option<JsonObject>,
+        context: PublicMcpToolContext,
+        cancellation: CancellationToken,
+    ) -> Option<PublicMcpToolFuture> {
         if name == CONNECTIONS_LIST_SESSIONS_TOOL && self.resource_pool_provider.is_some() {
             return Some(self.call_resource_sessions(arguments));
         }
@@ -101,6 +112,7 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
                 raw_input,
                 input,
                 context,
+                cancellation,
             )
             .await
         }))
@@ -127,13 +139,24 @@ async fn call_runtime_tool(
     request_input: Value,
     input: Value,
     context: PublicMcpToolContext,
+    cancellation: CancellationToken,
 ) -> Result<CallToolResult, McpError> {
     let policy = permission_policy_for_mode(context.permission_mode);
     match policy.decide(&descriptor.tool_id(), None, &call_annotations) {
-        tool_runtime::PermissionDecision::Allow => run_runtime_tool(registry, name, input).await,
+        tool_runtime::PermissionDecision::Allow => {
+            run_runtime_tool(registry, name, input, cancellation).await
+        }
         tool_runtime::PermissionDecision::Ask => {
-            ask_then_run_runtime_tool(registry, descriptor, name, request_input, input, context)
-                .await
+            ask_then_run_runtime_tool(
+                registry,
+                descriptor,
+                name,
+                request_input,
+                input,
+                context,
+                cancellation,
+            )
+            .await
         }
         tool_runtime::PermissionDecision::Deny => Ok(permission_denied_result(
             "tool runtime call denied by permission mode; set MCP Permission Profile to Confirm or Auto",
@@ -148,6 +171,7 @@ async fn ask_then_run_runtime_tool(
     request_input: Value,
     input: Value,
     context: PublicMcpToolContext,
+    cancellation: CancellationToken,
 ) -> Result<CallToolResult, McpError> {
     let outcome = context
         .request_approval(
@@ -163,7 +187,9 @@ async fn ask_then_run_runtime_tool(
         .await;
 
     match outcome {
-        PublicMcpApprovalOutcome::Approved => run_runtime_tool(registry, name, input).await,
+        PublicMcpApprovalOutcome::Approved => {
+            run_runtime_tool(registry, name, input, cancellation).await
+        }
         PublicMcpApprovalOutcome::Denied { reason } => {
             Ok(permission_denied_result(reason.unwrap_or_else(|| {
                 "tool runtime call denied by approval".to_string()
@@ -176,9 +202,14 @@ async fn run_runtime_tool(
     registry: ToolRegistry,
     name: String,
     input: Value,
+    cancellation: CancellationToken,
 ) -> Result<CallToolResult, McpError> {
     registry
-        .call(&name, input, ToolContext::for_adapter(ToolAdapter::Mcp))
+        .call(
+            &name,
+            input,
+            ToolContext::for_adapter(ToolAdapter::Mcp).with_cancellation(cancellation),
+        )
         .await
         .map(runtime_result_to_mcp_result)
         .map_err(runtime_error_to_mcp_error)

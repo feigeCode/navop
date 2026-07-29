@@ -92,6 +92,7 @@ async fn terminal_read_returns_recent_pty_rows() {
 #[test]
 fn public_terminal_registry_lists_terminal_read() {
     let names = PublicMcpToolRegistry::terminal(registry_with_terminal())
+        .expect("terminal registry should be valid")
         .tools()
         .into_iter()
         .map(|tool| tool.name.to_string())

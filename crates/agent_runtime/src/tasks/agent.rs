@@ -173,7 +173,18 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
 
         let tool_specs =
             specs_for_task(ctx.task_kind, ctx.tool_mode, &ctx.services, &ctx.resources);
-        let tools: Vec<_> = tool_specs.iter().map(|s| s.to_llm_tool()).collect();
+        let tools = match tool_specs
+            .iter()
+            .map(|spec| spec.to_llm_tool())
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(tools) => tools,
+            Err(error) => {
+                return TaskOutcome::Failed {
+                    reason: error.to_string(),
+                };
+            }
+        };
 
         // 构造请求:system + 历史 + (业务工具 + update_plan)。
         let mut messages = vec![Message::system(build_system_prompt(

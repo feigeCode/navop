@@ -1,7 +1,7 @@
 use crate::approval::PublicMcpApprovalManager;
 use crate::permissions::PermissionMode;
 use crate::registry::PublicMcpRegistry;
-use crate::tools::{PublicMcpToolContext, PublicMcpToolRegistry};
+use crate::tools::{PublicMcpToolContext, PublicMcpToolRegistry, PublicMcpToolRegistryError};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -52,8 +52,14 @@ impl SharedPermissionMode {
 }
 
 impl PublicMcpServer {
-    pub fn new(registry: PublicMcpRegistry, permission_mode: PermissionMode) -> Self {
-        Self::with_tool_registry(PublicMcpToolRegistry::terminal(registry), permission_mode)
+    pub fn new(
+        registry: PublicMcpRegistry,
+        permission_mode: PermissionMode,
+    ) -> Result<Self, PublicMcpToolRegistryError> {
+        Ok(Self::with_tool_registry(
+            PublicMcpToolRegistry::terminal(registry)?,
+            permission_mode,
+        ))
     }
 
     pub fn with_tool_registry(

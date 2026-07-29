@@ -5,8 +5,8 @@ use crate::approval::{
 use crate::permissions::PermissionMode;
 use crate::tools::{PublicMcpToolContext, PublicMcpToolRegistry};
 use agent_runtime::tools::{
-    ObservationData, Tool as AgentTool, ToolInvocation, ToolName, ToolObservation, ToolRegistry,
-    ToolSpec,
+    ObservationData, Tool as AgentTool, ToolInvocation, ToolName, ToolNameAllocator,
+    ToolObservation, ToolRegistry, ToolSpec,
 };
 use agent_runtime::{RiskLevel, ToolError};
 use async_trait::async_trait;
@@ -21,10 +21,14 @@ pub fn agent_runtime_tool_registry(
 ) -> ToolRegistry {
     let mut agent_registry = ToolRegistry::new();
     let context = agent_approved_public_mcp_context();
-    for tool in registry.tools() {
+    let mut tools = registry.tools();
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut names = ToolNameAllocator::default();
+    for tool in tools {
+        let original_name = tool.name.to_string();
         let adapter = PublicMcpAgentTool {
-            name: ToolName::new(tool.name.to_string()),
-            original_name: tool.name.to_string(),
+            name: names.allocate(&original_name),
+            original_name,
             description: tool
                 .description
                 .as_ref()
@@ -69,7 +73,12 @@ impl AgentTool for PublicMcpAgentTool {
         let arguments = invocation_arguments(invocation.arguments.clone())?;
         let result = self
             .registry
-            .call_tool(&self.original_name, Some(arguments), self.context.clone())
+            .call_tool_with_cancellation(
+                &self.original_name,
+                Some(arguments),
+                self.context.clone(),
+                invocation.cancellation.clone(),
+            )
             .await
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         Ok(observation_from_result(invocation, result))
@@ -77,6 +86,8 @@ impl AgentTool for PublicMcpAgentTool {
 }
 
 fn agent_approved_public_mcp_context() -> PublicMcpToolContext {
+    // Agent Runtime already applies its own risk/tool-mode approval policy. Avoid
+    // running the Public MCP approval layer a second time for an approved call.
     PublicMcpToolContext {
         permission_mode: PermissionMode::Allow,
         approver: PublicMcpApprovalManager::new(Arc::new(AgentApprovedApprover)),
@@ -206,6 +217,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn adapter_allocates_stable_unique_names_for_sanitized_collisions() {
+        let reverse_provider = Arc::new(CollisionProvider::new(true));
+        let forward_provider = Arc::new(CollisionProvider::new(false));
+        let reverse_registry = agent_runtime_tool_registry(
+            crate::tools::PublicMcpToolRegistry::new(vec![reverse_provider.clone()]),
+            PermissionMode::Deny,
+            PublicMcpApprovalManager::default(),
+        );
+        let forward_registry = agent_runtime_tool_registry(
+            crate::tools::PublicMcpToolRegistry::new(vec![forward_provider]),
+            PermissionMode::Deny,
+            PublicMcpApprovalManager::default(),
+        );
+
+        let names = |registry: &agent_runtime::ToolRegistry| {
+            registry
+                .names()
+                .into_iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            vec!["sample_echo".to_string(), "sample_echo_2".to_string()],
+            names(&reverse_registry)
+        );
+        assert_eq!(names(&reverse_registry), names(&forward_registry));
+
+        reverse_registry
+            .get(&ToolName::new("sample_echo"))
+            .expect("dotted MCP tool should use the base public name")
+            .execute(invocation_for(
+                "sample_echo",
+                json!({ "message": "dotted" }),
+            ))
+            .await
+            .expect("dotted MCP tool should execute");
+        reverse_registry
+            .get(&ToolName::new("sample_echo_2"))
+            .expect("underscore MCP tool should use the suffixed public name")
+            .execute(invocation_for(
+                "sample_echo_2",
+                json!({ "message": "underscore" }),
+            ))
+            .await
+            .expect("underscore MCP tool should execute");
+
+        assert_eq!(
+            vec!["sample.echo".to_string(), "sample_echo".to_string()],
+            reverse_provider.called_names()
+        );
+    }
+
     #[derive(Default)]
     struct RecordingProvider {
         last_name: Mutex<Option<String>>,
@@ -259,12 +323,71 @@ mod tests {
         }
     }
 
+    struct CollisionProvider {
+        reverse: bool,
+        called_names: Mutex<Vec<String>>,
+    }
+
+    impl CollisionProvider {
+        fn new(reverse: bool) -> Self {
+            Self {
+                reverse,
+                called_names: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn called_names(&self) -> Vec<String> {
+            self.called_names
+                .lock()
+                .expect("called names lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl PublicMcpToolProvider for CollisionProvider {
+        fn tools(&self) -> Vec<Tool> {
+            let mut tools = vec![
+                Tool::new("sample.echo", "Dotted echo", schema()),
+                Tool::new("sample_echo", "Underscore echo", schema()),
+            ];
+            if self.reverse {
+                tools.reverse();
+            }
+            tools
+        }
+
+        fn call_tool(
+            &self,
+            name: &str,
+            arguments: Option<JsonObject>,
+            _context: PublicMcpToolContext,
+        ) -> Option<PublicMcpToolFuture> {
+            if !matches!(name, "sample.echo" | "sample_echo") {
+                return None;
+            }
+            self.called_names
+                .lock()
+                .expect("called names lock should not be poisoned")
+                .push(name.to_string());
+            let value = serde_json::Value::Object(arguments.unwrap_or_default());
+            Some(Box::pin(async move {
+                Ok(CallToolResult::success(vec![Content::text(
+                    value["message"].as_str().unwrap_or_default().to_string(),
+                )]))
+            }))
+        }
+    }
+
     fn invocation(arguments: serde_json::Value) -> ToolInvocation {
+        invocation_for("sample.echo", arguments)
+    }
+
+    fn invocation_for(tool_name: &str, arguments: serde_json::Value) -> ToolInvocation {
         ToolInvocation {
             session_id: SessionId::from_string("session_1"),
             turn_id: TurnId::from_string("turn_1"),
             call_id: ToolCallId::from_string("call_1"),
-            tool_name: ToolName::new("sample.echo"),
+            tool_name: ToolName::new(tool_name),
             arguments,
             resource_id: None,
             resources: ResourceContext::new(),

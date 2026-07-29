@@ -17,9 +17,41 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, text::TextView, v_flex,
+    ActiveTheme, Icon, IconName, Sizable, Size, clipboard::Clipboard, h_flex, scroll::Scrollbar,
+    text::TextView, v_flex,
 };
 use rust_i18n::t;
+
+fn message_copy_id(message_id: &str) -> SharedString {
+    SharedString::from(format!("copy-message-{message_id}"))
+}
+
+fn message_copy_value<E: MessageExtension>(
+    message: &ChatMessageUIGeneric<E>,
+) -> Option<SharedString> {
+    let copyable = matches!(
+        (&message.role, &message.variant),
+        (ChatRole::User, MessageVariant::Text) | (ChatRole::Assistant, MessageVariant::Text)
+    );
+    (copyable && !message.content.is_empty()).then(|| message.content.clone().into())
+}
+
+fn render_message_copy<E: MessageExtension>(
+    message: &ChatMessageUIGeneric<E>,
+) -> Option<AnyElement> {
+    let value = message_copy_value(message)?;
+    Some(
+        div()
+            .debug_selector(|| "ai-chat-message-copy".to_string())
+            .flex_shrink_0()
+            .child(
+                Clipboard::new(message_copy_id(&message.id))
+                    .value(value)
+                    .tooltip(t!("AgentUi.copy_message").to_string()),
+            )
+            .into_any_element(),
+    )
+}
 
 pub fn render_messages(
     messages: &[ChatMessageUI],
@@ -198,12 +230,15 @@ fn render_user_message_themed<E: MessageExtension>(
 ) -> AnyElement {
     let bubble_width = user_message_bubble_width(&msg.content);
     let plain_text_html = user_plain_text_html(&msg.content);
+    let copy = render_message_copy(msg);
 
     h_flex()
         .debug_selector(|| "ai-chat-user-row".to_string())
         .w_full()
         .min_w_0()
+        .gap_1()
         .justify_end()
+        .when_some(copy, |this, copy| this.child(copy))
         .child(
             div()
                 .debug_selector(|| "ai-chat-user-bubble".to_string())
@@ -404,6 +439,7 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
     )
     .selectable(true);
     let text = apply_code_block_features(text, code_actions, Some(&theme), msg.is_streaming);
+    let copy = render_message_copy(msg);
 
     div()
         .w_full()
@@ -427,6 +463,9 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
                             .text_color(theme.foreground)
                             .child(text),
                     )
+                })
+                .when_some(copy, |this, copy| {
+                    this.child(h_flex().w_full().justify_start().child(copy))
                 }),
         )
         .into_any_element()
@@ -507,6 +546,41 @@ mod tests {
         assert_eq!(
             "**保持** &lt;tag&gt; &amp; &quot;quoted&quot; &#39;value&#39;<br>下一行",
             user_plain_text_html("**保持** <tag> & \"quoted\" 'value'\n下一行")
+        );
+    }
+
+    #[test]
+    fn message_copy_uses_stable_id_and_raw_content() {
+        let message = ChatMessageUI::user("**raw** <tag>\nnext").with_id("message-id");
+
+        assert_eq!(message_copy_id(&message.id), "copy-message-message-id");
+        assert_eq!(
+            Some(SharedString::from("**raw** <tag>\nnext")),
+            message_copy_value(&message)
+        );
+    }
+
+    #[test]
+    fn only_user_and_assistant_text_bodies_are_copyable() {
+        let assistant = ChatMessageUI::assistant("answer");
+        let system = ChatMessageUI::system("system");
+        let status = ChatMessageUI::status("running", false);
+        let card = ChatMessageUI::card("kind", "payload");
+        let user_card = ChatMessageUI::user("payload").with_variant(MessageVariant::Card {
+            kind: "kind".into(),
+        });
+
+        assert_eq!(
+            Some(SharedString::from("answer")),
+            message_copy_value(&assistant)
+        );
+        assert_eq!(None, message_copy_value(&system));
+        assert_eq!(None, message_copy_value(&status));
+        assert_eq!(None, message_copy_value(&card));
+        assert_eq!(None, message_copy_value(&user_card));
+        assert_eq!(
+            None,
+            message_copy_value(&ChatMessageUI::assistant(String::new()))
         );
     }
 }

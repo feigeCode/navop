@@ -164,6 +164,56 @@ async fn runtime_registry_agent_tool_forwards_invocation_cancellation() {
     assert!(handler.last_cancellation_state());
 }
 
+#[tokio::test]
+async fn runtime_registry_allocates_unique_stable_names_for_sanitized_collisions() {
+    let underscore = Arc::new(RuntimeEchoTool::new("sample_echo"));
+    let dotted = Arc::new(RuntimeEchoTool::new("sample.echo"));
+    let registry = ToolRegistry::new(vec![underscore.clone(), dotted.clone()]);
+    let agent_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+
+    assert_eq!(
+        vec!["sample_echo".to_string(), "sample_echo_2".to_string()],
+        agent_registry
+            .names()
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vec!["sample_echo".to_string(), "sample_echo_2".to_string()],
+        agent_registry
+            .specs(&ResourceContext::new())
+            .into_iter()
+            .map(|spec| spec.name.to_string())
+            .collect::<Vec<_>>()
+    );
+
+    agent_registry
+        .get(&ToolName::new("sample_echo"))
+        .expect("dotted runtime tool should use the base public name")
+        .execute(agent_invocation(
+            "sample_echo",
+            json!({ "source": "dotted" }),
+        ))
+        .await
+        .expect("dotted runtime tool should execute");
+    agent_registry
+        .get(&ToolName::new("sample_echo_2"))
+        .expect("underscore runtime tool should use the suffixed public name")
+        .execute(agent_invocation(
+            "sample_echo_2",
+            json!({ "source": "underscore" }),
+        ))
+        .await
+        .expect("underscore runtime tool should execute");
+
+    assert_eq!(json!({ "source": "dotted" }), dotted.last_input());
+    assert_eq!(json!({ "source": "underscore" }), underscore.last_input());
+}
+
 fn runtime_descriptor(id: &str, annotations: ToolAnnotations) -> RuntimeToolDescriptor {
     RuntimeToolDescriptor {
         id: ToolId::new(id),

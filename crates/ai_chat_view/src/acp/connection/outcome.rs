@@ -8,7 +8,7 @@ use super::lifecycle::AcpConnectionLifecycle;
 use super::pending::AcpPendingConnection;
 use super::runner::{ConnectShared, ReadyWait, SpawnedConnection};
 use super::setup::SetupOutcome;
-use super::{AcpConnectOutcome, AcpConnection, transition_state};
+use super::{AcpConnectOutcome, AcpConnection, connection_closed_error, transition_state};
 
 pub(super) fn finish_connect(
     shared: ConnectShared,
@@ -87,6 +87,14 @@ fn build_lifecycle(shared: &ConnectShared, spawned: SpawnedConnection) -> AcpCon
         join: spawned.join,
         shutdown: Some(spawned.shutdown_tx),
         state: shared.state.clone(),
+        active_turn: shared.active_turn.clone(),
+        events_tx: shared.events_tx.clone(),
+        session_id: shared.session_id.clone(),
+        closed_error: connection_closed_error(
+            shared.config.id.as_ref(),
+            shared.config.name.as_ref(),
+            None,
+        ),
     }
 }
 

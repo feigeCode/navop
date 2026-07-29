@@ -8,29 +8,51 @@ use rmcp::{
     model::{CallToolResult, JsonObject, Tool},
 };
 use std::{collections::BTreeSet, error::Error, fmt, sync::Arc};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicMcpToolRegistryError {
     duplicate_tool_names: Vec<String>,
+    duplicate_runtime_tool_ids: Vec<String>,
 }
 
 impl PublicMcpToolRegistryError {
     pub fn duplicate_tool_names(&self) -> Vec<String> {
         self.duplicate_tool_names.clone()
     }
+
+    pub fn duplicate_runtime_tool_ids(&self) -> Vec<String> {
+        self.duplicate_runtime_tool_ids.clone()
+    }
 }
 
 impl fmt::Display for PublicMcpToolRegistryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.duplicate_tool_names.is_empty() {
+            return write!(
+                formatter,
+                "duplicate public MCP tool names: {}",
+                self.duplicate_tool_names.join(", ")
+            );
+        }
         write!(
             formatter,
-            "duplicate public MCP tool names: {}",
-            self.duplicate_tool_names.join(", ")
+            "duplicate terminal runtime tool ids: {}",
+            self.duplicate_runtime_tool_ids.join(", ")
         )
     }
 }
 
 impl Error for PublicMcpToolRegistryError {}
+
+impl From<tool_runtime::ToolRegistryError> for PublicMcpToolRegistryError {
+    fn from(error: tool_runtime::ToolRegistryError) -> Self {
+        Self {
+            duplicate_tool_names: Vec::new(),
+            duplicate_runtime_tool_ids: error.duplicate_tool_ids(),
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct PublicMcpToolRegistry {
@@ -49,6 +71,7 @@ impl PublicMcpToolRegistry {
         if !duplicate_tool_names.is_empty() {
             return Err(PublicMcpToolRegistryError {
                 duplicate_tool_names,
+                duplicate_runtime_tool_ids: Vec::new(),
             });
         }
         Ok(Self {
@@ -56,17 +79,13 @@ impl PublicMcpToolRegistry {
         })
     }
 
-    pub fn terminal(registry: PublicMcpRegistry) -> Self {
-        let runtime_registry = tool_runtime::ToolRegistry::merge(vec![
+    pub fn terminal(registry: PublicMcpRegistry) -> Result<Self, PublicMcpToolRegistryError> {
+        Self::from_runtime_registries(vec![
             remote_ops_tool_registry(registry.clone()),
             terminal_read_tool_registry(registry.clone()),
             terminal_exec_tool_registry(registry.clone()),
             terminal_control_tool_registry(registry),
         ])
-        .expect("terminal runtime tool names must be unique");
-        Self::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
-            runtime_registry,
-        ))])
     }
 
     pub fn tools(&self) -> Vec<Tool> {
@@ -96,6 +115,38 @@ impl PublicMcpToolRegistry {
             None,
         ))
     }
+
+    pub async fn call_tool_with_cancellation(
+        &self,
+        name: &str,
+        arguments: Option<JsonObject>,
+        context: PublicMcpToolContext,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult, McpError> {
+        for provider in self.providers.iter() {
+            if let Some(result) = provider.call_tool_with_cancellation(
+                name,
+                arguments.clone(),
+                context.clone(),
+                cancellation.clone(),
+            ) {
+                return result.await;
+            }
+        }
+        Err(McpError::invalid_params(
+            format!("unknown public MCP tool: {name}"),
+            None,
+        ))
+    }
+
+    fn from_runtime_registries(
+        registries: Vec<tool_runtime::ToolRegistry>,
+    ) -> Result<Self, PublicMcpToolRegistryError> {
+        let runtime_registry = tool_runtime::ToolRegistry::merge(registries)?;
+        Self::try_new(vec![Arc::new(ToolRuntimeMcpProvider::new(
+            runtime_registry,
+        ))])
+    }
 }
 
 fn duplicate_tool_names(providers: &[Arc<dyn PublicMcpToolProvider>]) -> Vec<String> {
@@ -109,4 +160,28 @@ fn duplicate_tool_names(providers: &[Arc<dyn PublicMcpToolProvider>]) -> Vec<Str
         }
     }
     duplicates.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_runtime_duplicates_return_error_instead_of_panicking() {
+        let registry = PublicMcpRegistry::default();
+        let error = match PublicMcpToolRegistry::from_runtime_registries(vec![
+            remote_ops_tool_registry(registry.clone()),
+            remote_ops_tool_registry(registry),
+        ]) {
+            Ok(_) => panic!("duplicate terminal runtime tools must fail closed"),
+            Err(error) => error,
+        };
+
+        assert!(!error.duplicate_runtime_tool_ids().is_empty());
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate terminal runtime tool ids")
+        );
+    }
 }

@@ -1,5 +1,6 @@
 use super::*;
 use agent_runtime::model::{Message, ModelStreamEvent, Tool, ToolChoice, collect_model_stream};
+use agent_runtime::tools::builtin::LoadSkillTool;
 use llm_connector::types::{ChatResponse, Choice, Delta, FunctionCall, StreamingChoice};
 use one_core::llm::StreamingResponse;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -281,6 +282,37 @@ async fn stream_reasoning_and_content_are_distinct_events() {
 fn model_name_reflects_configured_model() {
     let client = LlmModelClient::new(sample_provider(), "my-model");
     assert_eq!(client.model_name(), "my-model");
+}
+
+#[test]
+fn duplicate_default_tool_names_fail_runtime_build_without_panicking() {
+    let registry = ToolRegistry::new().with_tool(Arc::new(LoadSkillTool));
+    let model: Arc<dyn ModelClient> =
+        Arc::new(LlmModelClient::new(sample_provider(), "test-model"));
+
+    let error = build_runtime(model, registry)
+        .err()
+        .expect("duplicate default tool should return an error");
+
+    assert!(
+        error.to_string().contains("load_skill"),
+        "error should identify the conflicting tool: {error}"
+    );
+}
+
+#[test]
+fn duplicate_default_tool_names_propagate_through_provider_builder() {
+    let registry = ToolRegistry::new().with_tool(Arc::new(LoadSkillTool));
+
+    let error =
+        build_runtime_from_llm_provider(sample_provider(), "test-model", registry, None, None)
+            .err()
+            .expect("provider runtime builder should propagate duplicate tool errors");
+
+    assert!(
+        error.to_string().contains("load_skill"),
+        "error should identify the conflicting tool: {error}"
+    );
 }
 
 fn tool_call(index: usize, id: &str, name: &str, args: &str) -> ToolCall {

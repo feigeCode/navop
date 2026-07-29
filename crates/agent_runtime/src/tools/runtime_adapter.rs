@@ -5,7 +5,9 @@ use serde_json::{Map, Value};
 
 use crate::error::ToolError;
 use crate::resource::ResourceId;
-use crate::tools::{ObservationData, Tool, ToolName, ToolObservation, ToolRegistry, ToolSpec};
+use crate::tools::{
+    ObservationData, Tool, ToolName, ToolNameAllocator, ToolObservation, ToolRegistry, ToolSpec,
+};
 use crate::{ResourceContext, SessionId, ToolCall, ToolExecutionMode, TurnId};
 
 const PROVIDER_TARGET_FIELDS: [&str; 3] = ["connection", "connection_id", "session_id"];
@@ -62,9 +64,13 @@ pub fn tool_runtime_agent_tool_registry(
     adapter: tool_runtime::ToolAdapter,
 ) -> ToolRegistry {
     let mut agent_registry = ToolRegistry::new();
-    for descriptor in registry.list_runtime(adapter) {
+    let mut descriptors = registry.list_runtime(adapter);
+    descriptors.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    let mut names = ToolNameAllocator::default();
+    for descriptor in descriptors {
+        let name = names.allocate(descriptor.id.as_str());
         agent_registry.register(std::sync::Arc::new(ToolRuntimeAgentTool {
-            name: ToolName::new(descriptor.id.as_str()),
+            name,
             runtime_id: descriptor.id.as_str().to_string(),
             descriptor,
             registry: registry.clone(),
@@ -89,7 +95,9 @@ impl Tool for ToolRuntimeAgentTool {
     }
 
     fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
-        agent_spec_from_runtime_descriptor(&self.descriptor)
+        let mut spec = agent_spec_from_runtime_descriptor(&self.descriptor);
+        spec.name = self.name.clone();
+        spec
     }
 
     fn supports_parallel(&self) -> bool {

@@ -31,6 +31,7 @@ use crate::error::RuntimeError;
 use crate::ids::{SessionId, ToolCallId, TurnId};
 use crate::model::ModelClient;
 use crate::resource::ResourceContext;
+use crate::runtime::session::PendingToolResolution;
 use crate::tasks::{AgentTask, continue_after_tool_decision};
 use crate::tools::ToolRouter;
 use rust_i18n::t;
@@ -99,7 +100,7 @@ impl Runtime {
 
     pub fn close_session(&self, id: &SessionId) {
         if let Some(session) = self.sessions.remove(id) {
-            session.cancel_active_turn();
+            session.cancel_current_turn();
         }
     }
 
@@ -130,17 +131,15 @@ impl Runtime {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
-        if session.is_busy() {
-            return Err(RuntimeError::SessionBusy(session_id.clone()));
-        }
-
         let turn = Arc::new(TurnContext::new(session_id.clone(), session.resources()));
         let cancellation = CancellationToken::new();
-        session.set_active_turn(ActiveTurn::new(
+        if !session.try_set_active_turn(ActiveTurn::new(
             turn.turn_id.clone(),
             cancellation.clone(),
             None,
-        ));
+        )) {
+            return Err(RuntimeError::SessionBusy(session_id.clone()));
+        }
         session.emit(RuntimeEvent::TurnStarted {
             session_id: session_id.clone(),
             turn_id: turn.turn_id.clone(),
@@ -188,32 +187,27 @@ impl Runtime {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
-        if session.is_busy() {
-            return Err(RuntimeError::SessionBusy(session_id.clone()));
-        }
-
-        let Some(pending) = session.take_pending_tool_approval() else {
-            return Err(RuntimeError::Other(anyhow::anyhow!(
-                t!("AgentRuntime.no_pending_tool").to_string()
-            )));
-        };
-        if &pending.call.call_id != call_id {
-            session.restore_pending_tool_approval(pending);
-            return Err(RuntimeError::Other(anyhow::anyhow!(
-                t!(
-                    "AgentRuntime.tool_approval_mismatch",
-                    call_id = call_id.as_str()
-                )
-                .to_string()
-            )));
-        }
-
         let cancellation = CancellationToken::new();
-        session.set_active_turn(ActiveTurn::new(
-            pending.turn_id.clone(),
-            cancellation.clone(),
-            None,
-        ));
+        let pending = match session.begin_pending_tool_resolution(call_id, cancellation.clone()) {
+            PendingToolResolution::Ready(pending) => pending,
+            PendingToolResolution::Busy => {
+                return Err(RuntimeError::SessionBusy(session_id.clone()));
+            }
+            PendingToolResolution::Missing => {
+                return Err(RuntimeError::Other(anyhow::anyhow!(
+                    t!("AgentRuntime.no_pending_tool").to_string()
+                )));
+            }
+            PendingToolResolution::Mismatch => {
+                return Err(RuntimeError::Other(anyhow::anyhow!(
+                    t!(
+                        "AgentRuntime.tool_approval_mismatch",
+                        call_id = call_id.as_str()
+                    )
+                    .to_string()
+                )));
+            }
+        };
         session.emit(RuntimeEvent::ToolApprovalResolved {
             session_id: session_id.clone(),
             turn_id: pending.turn_id.clone(),
@@ -247,15 +241,17 @@ impl Runtime {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
-        if session.is_busy() {
-            return Err(RuntimeError::SessionBusy(session_id.clone()));
-        }
-
         let turn = Arc::new(TurnContext::new(session_id.clone(), session.resources()));
         let turn_id = turn.turn_id.clone();
         let cancellation = CancellationToken::new();
         // 先登记当前轮,避免任务快速结束时清理早于登记造成的竞态。
-        session.set_active_turn(ActiveTurn::new(turn_id.clone(), cancellation.clone(), None));
+        if !session.try_set_active_turn(ActiveTurn::new(
+            turn_id.clone(),
+            cancellation.clone(),
+            None,
+        )) {
+            return Err(RuntimeError::SessionBusy(session_id.clone()));
+        }
         session.emit(RuntimeEvent::TurnStarted {
             session_id: session_id.clone(),
             turn_id: turn_id.clone(),
@@ -289,7 +285,7 @@ impl Runtime {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
-        if let Some(turn_id) = session.cancel_and_detach_active_turn() {
+        if let Some(turn_id) = session.cancel_and_detach_current_turn() {
             session.emit(RuntimeEvent::TurnCancelled {
                 session_id: session_id.clone(),
                 turn_id,

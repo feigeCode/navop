@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use agent_client_protocol::schema::{ContentBlock, TextContent};
 use agent_runtime::RuntimeEvent;
 use ai_chat_view::{AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpTimeoutConfig};
 
@@ -47,7 +48,9 @@ async fn installed_acp_agent_returns_output_or_actionable_failure() {
 
 async fn prompt_until_terminal(connection: &AcpConnection, prompt: &str) -> Vec<RuntimeEvent> {
     let mut receiver = connection.subscribe();
-    connection.prompt(prompt.to_string());
+    connection
+        .try_prompt(vec![ContentBlock::Text(TextContent::new(prompt))])
+        .expect("ACP smoke prompt should start");
     let mut events = Vec::new();
     loop {
         let event = receiver

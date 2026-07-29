@@ -11,7 +11,16 @@ use rmcp::{
     model::{CallToolResult, JsonObject, Tool},
 };
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
+use std::{
+    future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 struct EchoToolProvider;
@@ -41,6 +50,61 @@ impl PublicMcpToolProvider for EchoToolProvider {
                     .unwrap_or(Value::Null)
             })))
         }))
+    }
+}
+
+#[derive(Clone)]
+struct DefaultCancellationProvider {
+    started: Arc<AtomicBool>,
+    dropped: Arc<AtomicBool>,
+    started_signal: Arc<Notify>,
+}
+
+impl DefaultCancellationProvider {
+    fn new() -> Self {
+        Self {
+            started: Arc::new(AtomicBool::new(false)),
+            dropped: Arc::new(AtomicBool::new(false)),
+            started_signal: Arc::new(Notify::new()),
+        }
+    }
+}
+
+impl PublicMcpToolProvider for DefaultCancellationProvider {
+    fn tools(&self) -> Vec<Tool> {
+        vec![Tool::new(
+            "test.cancel",
+            "Wait until the default cancellation wrapper cancels this tool.",
+            empty_object_schema(),
+        )]
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        _arguments: Option<JsonObject>,
+        _context: PublicMcpToolContext,
+    ) -> Option<PublicMcpToolFuture> {
+        if name != "test.cancel" {
+            return None;
+        }
+        let started = self.started.clone();
+        let dropped = self.dropped.clone();
+        let started_signal = self.started_signal.clone();
+        Some(Box::pin(async move {
+            let _drop_signal = FutureDropSignal(dropped);
+            started.store(true, Ordering::Release);
+            started_signal.notify_one();
+            future::pending::<Result<CallToolResult, McpError>>().await
+        }))
+    }
+}
+
+struct FutureDropSignal(Arc<AtomicBool>);
+
+impl Drop for FutureDropSignal {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
     }
 }
 
@@ -150,6 +214,65 @@ async fn tool_registry_rejects_unknown_tools() {
 }
 
 #[tokio::test]
+async fn default_provider_cancellation_rejects_pre_cancelled_calls_without_polling_tool() {
+    let provider = DefaultCancellationProvider::new();
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(provider.clone())]);
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let error = tokio::time::timeout(
+        Duration::from_millis(100),
+        registry.call_tool_with_cancellation(
+            "test.cancel",
+            None,
+            denied_tool_context(),
+            cancellation,
+        ),
+    )
+    .await
+    .expect("pre-cancelled call should return promptly")
+    .expect_err("pre-cancelled call should fail");
+
+    assert!(error.message.contains("cancelled"));
+    assert!(!provider.started.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn default_provider_cancellation_drops_mid_flight_tool_future() {
+    let provider = DefaultCancellationProvider::new();
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(provider.clone())]);
+    let cancellation = CancellationToken::new();
+    let cancellation_for_call = cancellation.clone();
+    let call = tokio::spawn(async move {
+        registry
+            .call_tool_with_cancellation(
+                "test.cancel",
+                None,
+                denied_tool_context(),
+                cancellation_for_call,
+            )
+            .await
+    });
+
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        provider.started_signal.notified(),
+    )
+    .await
+    .expect("tool future should start");
+    cancellation.cancel();
+
+    let error = tokio::time::timeout(Duration::from_millis(100), call)
+        .await
+        .expect("cancelled call should return promptly")
+        .expect("tool task should not panic")
+        .expect_err("cancelled call should fail");
+
+    assert!(error.message.contains("cancelled"));
+    assert!(provider.dropped.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn approval_context_allows_requested_operations_when_approved() {
     let approver = Arc::new(RecordingApprover::approved());
     let outcome = PublicMcpToolContext {
@@ -201,4 +324,11 @@ fn empty_object_schema() -> Arc<JsonObject> {
     let mut schema = JsonObject::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
     Arc::new(schema)
+}
+
+fn denied_tool_context() -> PublicMcpToolContext {
+    PublicMcpToolContext {
+        permission_mode: PermissionMode::Deny,
+        approver: Default::default(),
+    }
 }

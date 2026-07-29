@@ -68,6 +68,7 @@ fn registry_with_terminal() -> (PublicMcpRegistry, FakeTerminalControl) {
 fn terminal_control_tool_is_registered_with_terminal_tools() {
     let (registry, _terminal) = registry_with_terminal();
     let names = PublicMcpToolRegistry::terminal(registry)
+        .expect("terminal registry should be valid")
         .tools()
         .into_iter()
         .map(|tool| tool.name.to_string())
