@@ -138,6 +138,7 @@ fn build_shell_integration_setup_script(
             "integration_path=\"$config_dir/shell_integration.sh\"\n",
             "managed_block={managed_block}\n",
             "mkdir -p \"$config_dir\"\n",
+            "rm -rf \"$integration_path\"\n",
             "printf %s {script} > \"$integration_path\"\n",
             "install_onetcli_block() {{\n",
             "    rc_file=\"$1\"\n",
@@ -220,7 +221,7 @@ fn build_shell_integration_uninstall_script(success_marker: &str, home_marker: &
             "remove_onetcli_block \"$HOME/.bash_login\"\n",
             "remove_onetcli_block \"$HOME/.profile\"\n",
             "remove_onetcli_block \"$HOME/.zshrc\"\n",
-            "rm -f \"$config_dir/shell_integration.sh\"\n",
+            "rm -rf \"$config_dir/shell_integration.sh\"\n",
             "rm -rf \"$config_dir/sessions\"\n",
             "rmdir \"$config_dir\" 2>/dev/null || true\n",
             "printf '%s%s\\n' {home_marker} \"$HOME\"\n",
@@ -1881,6 +1882,53 @@ mod tests {
     }
 
     #[test]
+    fn build_shell_integration_setup_command_replaces_directory_at_script_path() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "onetcli-shell-setup-directory-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        let home_dir = temp_dir.join("home");
+        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
+        fs::create_dir_all(&integration_path).expect("应创建冲突的 integration 目录");
+        fs::write(integration_path.join("stale"), "stale\n").expect("应写入冲突目录内容");
+
+        let command = build_shell_integration_setup_script(
+            "echo recovered\n",
+            "__TEST_OK__",
+            "__HOME__=",
+            "__SESSION__=",
+            "__SHELL__=",
+        );
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .env("HOME", &home_dir)
+            .env("SHELL", "/bin/bash")
+            .output()
+            .expect("应能执行本地 shell setup 命令");
+
+        assert!(
+            output.status.success(),
+            "setup 应清理占用脚本路径的目录并继续安装: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(&integration_path).expect("integration 路径应恢复为普通文件"),
+            "echo recovered\n"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("__TEST_OK__"),
+            "恢复安装后应输出成功标记"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn build_shell_integration_uninstall_command_removes_managed_blocks_and_scripts() {
         let temp_dir = std::env::temp_dir().join(format!(
             "onetcli-shell-uninstall-{}-{}",
@@ -1957,6 +2005,46 @@ mod tests {
         );
         assert!(!config_dir.join("shell_integration.sh").exists());
         assert!(!config_dir.join("sessions").exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn build_shell_integration_uninstall_command_removes_directory_collision_idempotently() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "onetcli-shell-uninstall-directory-collision-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        let home_dir = temp_dir.join("home");
+        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
+        fs::create_dir_all(&integration_path).expect("应创建冲突的 integration 目录");
+        fs::write(integration_path.join("stale"), "stale\n").expect("应写入冲突目录内容");
+
+        let command =
+            build_shell_integration_uninstall_script("__TEST_UNINSTALL_OK__", "__HOME__=");
+        for _ in 0..2 {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .env("HOME", &home_dir)
+                .output()
+                .expect("应能执行本地 uninstall 命令");
+
+            assert!(
+                output.status.success(),
+                "uninstall 应清理占用脚本路径的目录，并允许重复执行: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("__TEST_UNINSTALL_OK__"),
+                "每次幂等卸载都应输出成功标记"
+            );
+        }
+        assert!(!integration_path.exists());
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
