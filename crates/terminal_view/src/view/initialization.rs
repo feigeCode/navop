@@ -65,6 +65,10 @@ impl TerminalView {
                     terminal: terminal.clone(),
                     connection_id,
                     colors: default_theme.colors(),
+                    operation_history_available: terminal
+                        .read(cx)
+                        .operation_history_request()
+                        .is_some(),
                 },
                 window,
                 cx,

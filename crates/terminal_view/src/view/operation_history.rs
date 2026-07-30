@@ -1118,6 +1118,7 @@ impl TerminalView {
 
     pub(super) fn close_operation_history_panel(&mut self, cx: &mut Context<Self>) {
         self.operation_history_panel.close();
+        self.sync_command_bar_session_controls(cx);
         cx.notify();
     }
 

@@ -20,6 +20,7 @@ impl TerminalCommandBar {
         let subscriptions = vec![
             Self::subscribe_input(&input_state, window, cx),
             Self::subscribe_quick_search(&quick_search_state, window, cx),
+            cx.observe(&config.terminal, |_, _, cx| cx.notify()),
         ];
         let mut this = Self {
             terminal: config.terminal,
@@ -39,6 +40,10 @@ impl TerminalCommandBar {
             input_height: COMMAND_BAR_INPUT_DEFAULT_HEIGHT,
             autocomplete_enabled: true,
             colors: config.colors,
+            recording_path_prompt_pending: false,
+            recording_control_error: None,
+            operation_history_available: config.operation_history_available,
+            operation_history_open: false,
             _subscriptions: subscriptions,
         };
         this.load_quick_commands(cx);
@@ -92,6 +97,25 @@ impl TerminalCommandBar {
             self.selected_suggestion = None;
             self.clear_inline_completion(cx);
         }
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_session_controls_state(
+        &mut self,
+        recording_path_prompt_pending: bool,
+        recording_control_error: Option<String>,
+        operation_history_available: bool,
+        operation_history_open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.recording_path_prompt_pending = recording_path_prompt_pending;
+        self.recording_control_error = recording_control_error;
+        self.operation_history_available = operation_history_available;
+        self.operation_history_open = operation_history_open;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn refresh_session_controls(&mut self, cx: &mut Context<Self>) {
         cx.notify();
     }
 

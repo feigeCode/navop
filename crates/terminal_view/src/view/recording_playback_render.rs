@@ -41,7 +41,7 @@ impl TerminalView {
         if self.terminal.read(cx).is_recording_playback() {
             self.render_recording_playback_footer(cx)
         } else {
-            self.render_recording_footer(cx)
+            div().into_any_element()
         }
     }
 

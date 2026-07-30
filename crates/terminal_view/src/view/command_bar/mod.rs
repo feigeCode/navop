@@ -23,12 +23,18 @@ pub(super) enum TerminalCommandBarEvent {
     Submit(String),
     InputToPty(String),
     FocusTerminal,
+    StartRecording,
+    PauseRecording,
+    ResumeRecording,
+    StopRecording,
+    ToggleOperationHistory,
 }
 
 pub(super) struct TerminalCommandBarConfig {
     pub terminal: Entity<Terminal>,
     pub connection_id: Option<i64>,
     pub colors: TerminalColors,
+    pub operation_history_available: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -57,6 +63,10 @@ pub(super) struct TerminalCommandBar {
     input_height: f32,
     autocomplete_enabled: bool,
     colors: TerminalColors,
+    recording_path_prompt_pending: bool,
+    recording_control_error: Option<String>,
+    operation_history_available: bool,
+    operation_history_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 

@@ -46,6 +46,14 @@ impl TerminalView {
                 self.paste_text(command, window, cx);
             }
             TerminalCommandBarEvent::FocusTerminal => self.focus_terminal(window, cx),
+            TerminalCommandBarEvent::StartRecording => self.request_recording_start(cx),
+            TerminalCommandBarEvent::PauseRecording => self.request_recording_pause(cx),
+            TerminalCommandBarEvent::ResumeRecording => self.request_recording_resume(cx),
+            TerminalCommandBarEvent::StopRecording => self.request_recording_stop(cx),
+            TerminalCommandBarEvent::ToggleOperationHistory => {
+                self.toggle_operation_history_panel(cx);
+                self.sync_command_bar_session_controls(cx);
+            }
         }
     }
 }

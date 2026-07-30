@@ -233,9 +233,9 @@ pub struct TerminalView {
     suggestion_debounce: Option<Task<()>>,
     /// 当前 pane 是否正在等待用户选择录制文件保存目录。
     recording_path_prompt_pending: bool,
-    /// 当前 pane 最近一次录制控制错误；在 Footer 中直接展示。
+    /// 当前 pane 最近一次录制控制错误；在 command bar 中直接展示。
     recording_control_error: Option<String>,
-    /// 仅在录制时间持续增长时存在，用于每秒刷新 Footer。
+    /// 仅在录制时间持续增长时存在，用于每秒刷新 command bar。
     recording_ticker: Option<Task<()>>,
     /// 当前 pane 独占的 Playback seek 控件状态。
     recording_playback_slider: Entity<SliderState>,

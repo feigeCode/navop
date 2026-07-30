@@ -6,10 +6,8 @@ use terminal::recording::{
 };
 use uuid::Uuid;
 
-pub(super) const RECORDING_FOOTER_HEIGHT: Pixels = px(40.0);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RecordingFooterStatus {
+pub(super) enum RecordingFooterStatus {
     Ready,
     Recording,
     Paused,
@@ -19,7 +17,7 @@ enum RecordingFooterStatus {
 }
 
 impl RecordingFooterStatus {
-    fn from_recording_state(state: &RecordingState) -> Self {
+    pub(super) fn from_recording_state(state: &RecordingState) -> Self {
         match state {
             RecordingState::Idle => Self::Ready,
             RecordingState::Recording => Self::Recording,
@@ -30,7 +28,7 @@ impl RecordingFooterStatus {
         }
     }
 
-    fn label(self) -> SharedString {
+    pub(super) fn label(self) -> SharedString {
         match self {
             Self::Ready => t!("TerminalRecording.ready").to_string().into(),
             Self::Recording => t!("TerminalRecording.recording").to_string().into(),
@@ -41,7 +39,7 @@ impl RecordingFooterStatus {
         }
     }
 
-    fn color(self, cx: &App) -> Hsla {
+    pub(super) fn color(self, cx: &App) -> Hsla {
         match self {
             Self::Ready => cx.theme().muted_foreground,
             Self::Recording => cx.theme().danger,
@@ -51,17 +49,9 @@ impl RecordingFooterStatus {
         }
     }
 
-    fn can_start(self) -> bool {
+    pub(super) fn can_start(self) -> bool {
         matches!(self, Self::Ready | Self::Stopped | Self::Failed)
     }
-}
-
-struct RecordingFooterRenderState {
-    status: RecordingFooterStatus,
-    elapsed: Duration,
-    capture_input: bool,
-    path_prompt_pending: bool,
-    error: Option<String>,
 }
 
 impl TerminalView {
@@ -101,13 +91,14 @@ impl TerminalView {
         self.request_recording_stop(cx);
     }
 
-    fn request_recording_start(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_recording_start(&mut self, cx: &mut Context<Self>) {
         if self.recording_path_prompt_pending || self.recording_session_is_active(cx) {
             return;
         }
 
         self.recording_path_prompt_pending = true;
         self.recording_control_error = None;
+        self.sync_command_bar_session_controls(cx);
         cx.notify();
 
         let future = cx.prompt_for_paths(PathPromptOptions {
@@ -146,23 +137,24 @@ impl TerminalView {
                 }
 
                 this.sync_recording_ticker(cx);
+                this.sync_command_bar_session_controls(cx);
                 cx.notify();
             });
         })
         .detach();
     }
 
-    fn request_recording_pause(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_recording_pause(&mut self, cx: &mut Context<Self>) {
         let result = self.terminal.read(cx).pause_recording();
         self.apply_recording_control_result(result, cx);
     }
 
-    fn request_recording_resume(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_recording_resume(&mut self, cx: &mut Context<Self>) {
         let result = self.terminal.read(cx).resume_recording();
         self.apply_recording_control_result(result, cx);
     }
 
-    fn request_recording_stop(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_recording_stop(&mut self, cx: &mut Context<Self>) {
         let result = self.terminal.read(cx).stop_recording();
         self.apply_recording_control_result(result, cx);
     }
@@ -177,6 +169,7 @@ impl TerminalView {
             Err(error) => self.recording_control_error = Some(error.to_string()),
         }
         self.sync_recording_ticker(cx);
+        self.sync_command_bar_session_controls(cx);
         cx.notify();
     }
 
@@ -224,6 +217,9 @@ impl TerminalView {
                     .update(cx, |this, cx| {
                         let should_continue = this.recording_elapsed_is_advancing(cx);
                         if should_continue {
+                            this.command_bar.update(cx, |bar, cx| {
+                                bar.refresh_session_controls(cx);
+                            });
                             cx.notify();
                         } else {
                             this.recording_ticker = None;
@@ -238,224 +234,24 @@ impl TerminalView {
         }));
     }
 
-    fn recording_footer_render_state(&self, cx: &App) -> RecordingFooterRenderState {
-        let control_error = self.recording_control_error.clone();
-        match self.terminal.read(cx).recording_snapshot() {
-            Ok(snapshot) => RecordingFooterRenderState {
-                status: RecordingFooterStatus::from_recording_state(&snapshot.state),
-                elapsed: snapshot.elapsed,
-                capture_input: snapshot.capture_input,
-                path_prompt_pending: self.recording_path_prompt_pending,
-                error: control_error.or_else(|| recording_snapshot_failure(&snapshot)),
-            },
-            Err(error) => RecordingFooterRenderState {
-                status: RecordingFooterStatus::Failed,
-                elapsed: Duration::ZERO,
-                capture_input: false,
-                path_prompt_pending: self.recording_path_prompt_pending,
-                error: control_error.or_else(|| Some(error.to_string())),
-            },
-        }
-    }
-
-    pub(super) fn render_recording_footer(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let state = self.recording_footer_render_state(cx);
-        let terminal_colors = self.current_theme.colors();
-        let status_color = state.status.color(cx);
-        let disclosure = if state.capture_input {
-            t!("TerminalRecording.input_included").to_string()
-        } else {
-            t!("TerminalRecording.output_only").to_string()
-        };
-        let disclosure_color = if state.capture_input {
-            cx.theme().warning
-        } else {
-            terminal_colors.muted_foreground
-        };
-        let detail = if state.path_prompt_pending {
-            Some((
-                t!("TerminalRecording.selecting_directory").to_string(),
-                terminal_colors.muted_foreground,
-            ))
-        } else {
-            state.error.clone().map(|error| (error, cx.theme().danger))
-        };
-
-        h_flex()
-            .debug_selector(|| "terminal-recording-footer".to_string())
-            .w_full()
-            .h(RECORDING_FOOTER_HEIGHT)
-            .min_h(RECORDING_FOOTER_HEIGHT)
-            .max_h(RECORDING_FOOTER_HEIGHT)
-            .flex_shrink_0()
-            .overflow_hidden()
-            .items_center()
-            .gap_3()
-            .px_3()
-            .border_t_1()
-            .border_color(terminal_colors.border)
-            .bg(terminal_colors.background)
-            .text_size(px(11.0))
-            .text_color(terminal_colors.foreground)
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .size_2()
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(status_color),
-                    )
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .text_color(status_color)
-                            .child(state.status.label()),
-                    )
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .text_color(terminal_colors.muted_foreground)
-                            .child(format_recording_elapsed(state.elapsed)),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .justify_center()
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_color(disclosure_color)
-                            .child(disclosure),
-                    )
-                    .when_some(detail, |this, (message, color)| {
-                        this.child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .text_color(color)
-                                .child(message),
-                        )
-                    }),
-            )
-            .child(self.render_recording_controls(state.status, state.path_prompt_pending, cx))
-            .into_any_element()
-    }
-
-    fn render_recording_controls(
-        &mut self,
-        status: RecordingFooterStatus,
-        path_prompt_pending: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let history_available = self.operation_history_is_available(cx);
-        let history_open = self.operation_history_panel_is_open();
-        let controls =
-            h_flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap_1()
-                .when(history_available, |controls| {
-                    controls.child(
-                        Button::new("terminal-operation-history-toggle")
-                            .icon(IconName::TerminalHistoryColor)
-                            .label(t!("TerminalOperationHistory.title"))
-                            .xsmall()
-                            .when(history_open, |button| button.primary())
-                            .when(!history_open, |button| button.ghost())
-                            .tooltip(t!("TerminalOperationHistory.tooltip"))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.toggle_operation_history_panel(cx);
-                            })),
-                    )
-                });
-        match status {
-            status if status.can_start() => controls
-                .child(
-                    Button::new("terminal-recording-start")
-                        .label(t!("TerminalRecording.start"))
-                        .icon(IconName::Play)
-                        .ghost()
-                        .xsmall()
-                        .disabled(path_prompt_pending)
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.request_recording_start(cx);
-                        })),
-                )
-                .into_any_element(),
-            RecordingFooterStatus::Recording => controls
-                .child(
-                    Button::new("terminal-recording-pause")
-                        .label(t!("TerminalRecording.pause"))
-                        .icon(IconName::Pause)
-                        .ghost()
-                        .xsmall()
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.request_recording_pause(cx);
-                        })),
-                )
-                .child(
-                    Button::new("terminal-recording-stop")
-                        .label(t!("TerminalRecording.stop"))
-                        .icon(IconName::CircleX)
-                        .ghost()
-                        .xsmall()
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.request_recording_stop(cx);
-                        })),
-                )
-                .into_any_element(),
-            RecordingFooterStatus::Paused => controls
-                .child(
-                    Button::new("terminal-recording-resume")
-                        .label(t!("TerminalRecording.resume"))
-                        .icon(IconName::Play)
-                        .ghost()
-                        .xsmall()
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.request_recording_resume(cx);
-                        })),
-                )
-                .child(
-                    Button::new("terminal-recording-stop")
-                        .label(t!("TerminalRecording.stop"))
-                        .icon(IconName::CircleX)
-                        .ghost()
-                        .xsmall()
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.request_recording_stop(cx);
-                        })),
-                )
-                .into_any_element(),
-            RecordingFooterStatus::Stopping => controls
-                .child(
-                    Button::new("terminal-recording-stopping")
-                        .label(t!("TerminalRecording.stop"))
-                        .icon(IconName::CircleX)
-                        .ghost()
-                        .xsmall()
-                        .disabled(true),
-                )
-                .into_any_element(),
-            RecordingFooterStatus::Ready
-            | RecordingFooterStatus::Stopped
-            | RecordingFooterStatus::Failed => unreachable!(),
-        }
+    pub(super) fn sync_command_bar_session_controls(&self, cx: &mut Context<Self>) {
+        let recording_path_prompt_pending = self.recording_path_prompt_pending;
+        let recording_control_error = self.recording_control_error.clone();
+        let operation_history_available = self.operation_history_is_available(cx);
+        let operation_history_open = self.operation_history_panel_is_open();
+        self.command_bar.update(cx, |bar, cx| {
+            bar.set_session_controls_state(
+                recording_path_prompt_pending,
+                recording_control_error,
+                operation_history_available,
+                operation_history_open,
+                cx,
+            );
+        });
     }
 }
 
-fn recording_snapshot_failure(snapshot: &RecordingSnapshot) -> Option<String> {
+pub(super) fn recording_snapshot_failure(snapshot: &RecordingSnapshot) -> Option<String> {
     match &snapshot.state {
         RecordingState::Failed(failure) => Some(failure.to_string()),
         _ => snapshot.failure.as_ref().map(ToString::to_string),

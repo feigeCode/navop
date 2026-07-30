@@ -1,4 +1,7 @@
 use super::*;
+use crate::view::recording_footer::{
+    RecordingFooterStatus, format_recording_elapsed, recording_snapshot_failure,
+};
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
@@ -7,7 +10,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
@@ -154,6 +157,7 @@ impl TerminalCommandBar {
                     .child(div().truncate().child(self.target_label(cx))),
             )
             .child(self.render_quick_command_button(cx))
+            .child(self.render_session_controls(cx))
             .into_any_element()
     }
 
@@ -191,6 +195,171 @@ impl TerminalCommandBar {
                     })),
             )
             .child(self.render_quick_command_button(cx))
+            .child(self.render_session_controls(cx))
+            .into_any_element()
+    }
+
+    fn render_session_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        let snapshot = self.terminal.read(cx).recording_snapshot();
+        let (status, elapsed, capture_input, runtime_error) = match snapshot {
+            Ok(snapshot) => (
+                RecordingFooterStatus::from_recording_state(&snapshot.state),
+                snapshot.elapsed,
+                snapshot.capture_input,
+                recording_snapshot_failure(&snapshot),
+            ),
+            Err(error) => (
+                RecordingFooterStatus::Failed,
+                std::time::Duration::ZERO,
+                false,
+                Some(error.to_string()),
+            ),
+        };
+        let status_color = status.color(cx);
+        let detail = if self.recording_path_prompt_pending {
+            t!("TerminalRecording.selecting_directory").to_string()
+        } else if let Some(error) = self
+            .recording_control_error
+            .as_ref()
+            .or(runtime_error.as_ref())
+        {
+            error.clone()
+        } else if capture_input {
+            t!("TerminalRecording.input_included").to_string()
+        } else {
+            t!("TerminalRecording.output_only").to_string()
+        };
+
+        h_flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(self.colors.border)
+                    .px_2()
+                    .py_px()
+                    .text_xs()
+                    .text_color(status_color)
+                    .child(div().size_2().rounded_full().bg(status_color))
+                    .child(status.label())
+                    .when(
+                        matches!(
+                            status,
+                            RecordingFooterStatus::Recording
+                                | RecordingFooterStatus::Paused
+                                | RecordingFooterStatus::Stopping
+                        ),
+                        |this| {
+                            this.child(
+                                div()
+                                    .text_color(self.colors.muted_foreground)
+                                    .child(format_recording_elapsed(elapsed)),
+                            )
+                        },
+                    ),
+            )
+            .child(
+                div()
+                    .max_w(px(180.0))
+                    .truncate()
+                    .text_xs()
+                    .text_color(
+                        if runtime_error.is_some() || self.recording_control_error.is_some() {
+                            cx.theme().danger
+                        } else {
+                            self.colors.muted_foreground
+                        },
+                    )
+                    .child(detail),
+            )
+            .when(self.operation_history_available, |controls| {
+                controls.child(
+                    Button::new("terminal-command-operation-history-toggle")
+                        .icon(IconName::TerminalHistoryColor)
+                        .ghost()
+                        .xsmall()
+                        .when(self.operation_history_open, |button| {
+                            button.bg(self.colors.muted)
+                        })
+                        .tooltip(t!("TerminalOperationHistory.tooltip").to_string())
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.emit(TerminalCommandBarEvent::ToggleOperationHistory);
+                        })),
+                )
+            })
+            .children(self.render_recording_control_buttons(status, cx))
+            .into_any_element()
+    }
+
+    fn render_recording_control_buttons(
+        &self,
+        status: RecordingFooterStatus,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        if status.can_start() {
+            return vec![
+                Button::new("terminal-command-recording-start")
+                    .icon(IconName::Play)
+                    .ghost()
+                    .xsmall()
+                    .disabled(self.recording_path_prompt_pending)
+                    .tooltip(t!("TerminalRecording.start").to_string())
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(TerminalCommandBarEvent::StartRecording);
+                    }))
+                    .into_any_element(),
+            ];
+        }
+
+        match status {
+            RecordingFooterStatus::Recording => vec![
+                Button::new("terminal-command-recording-pause")
+                    .icon(IconName::Pause)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("TerminalRecording.pause").to_string())
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(TerminalCommandBarEvent::PauseRecording);
+                    }))
+                    .into_any_element(),
+                self.render_stop_recording_button(false, cx),
+            ],
+            RecordingFooterStatus::Paused => vec![
+                Button::new("terminal-command-recording-resume")
+                    .icon(IconName::Play)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("TerminalRecording.resume").to_string())
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(TerminalCommandBarEvent::ResumeRecording);
+                    }))
+                    .into_any_element(),
+                self.render_stop_recording_button(false, cx),
+            ],
+            RecordingFooterStatus::Stopping => {
+                vec![self.render_stop_recording_button(true, cx)]
+            }
+            RecordingFooterStatus::Ready
+            | RecordingFooterStatus::Stopped
+            | RecordingFooterStatus::Failed => Vec::new(),
+        }
+    }
+
+    fn render_stop_recording_button(&self, disabled: bool, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("terminal-command-recording-stop")
+            .icon(IconName::CircleX)
+            .ghost()
+            .xsmall()
+            .disabled(disabled)
+            .tooltip(t!("TerminalRecording.stop").to_string())
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(TerminalCommandBarEvent::StopRecording);
+            }))
             .into_any_element()
     }
 

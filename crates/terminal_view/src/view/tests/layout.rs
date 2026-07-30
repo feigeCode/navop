@@ -254,29 +254,20 @@ fn terminal_command_bar_is_only_rendered_for_live_terminal_input() {
 }
 
 #[test]
-fn terminal_recording_footer_is_a_fixed_non_overlay_flex_child() {
-    let footer_source = include_str!("../recording_footer.rs");
+fn terminal_recording_controls_live_in_the_command_bar() {
+    let command_bar_source = include_str!("../command_bar/render.rs");
+    let footer_source = include_str!("../recording_playback_render.rs");
 
-    assert_eq!(RECORDING_FOOTER_HEIGHT, px(40.0));
-    for fixed_height_contract in [
-        ".h(RECORDING_FOOTER_HEIGHT)",
-        ".min_h(RECORDING_FOOTER_HEIGHT)",
-        ".max_h(RECORDING_FOOTER_HEIGHT)",
-        ".flex_shrink_0()",
-    ] {
-        assert!(
-            footer_source.contains(fixed_height_contract),
-            "recording footer must retain `{fixed_height_contract}`"
-        );
-    }
-    assert!(
-        !footer_source.contains(".absolute()"),
-        "recording footer must consume real flex height rather than overlay the terminal"
-    );
+    assert!(command_bar_source.contains("render_session_controls"));
+    assert!(command_bar_source.contains("terminal-command-recording-start"));
+    assert!(command_bar_source.contains("terminal-command-recording-pause"));
+    assert!(command_bar_source.contains("terminal-command-recording-resume"));
+    assert!(command_bar_source.contains("terminal-command-recording-stop"));
+    assert!(!footer_source.contains("self.render_recording_footer(cx)"));
 }
 
 #[test]
-fn terminal_recording_footer_sits_between_primary_content_and_bottom_tool() {
+fn terminal_command_bar_sits_with_primary_content_and_playback_keeps_its_footer() {
     let render_source = include_str!("../render_layout.rs");
     let center_region = render_source
         .split("fn render_center_region")
@@ -286,15 +277,19 @@ fn terminal_recording_footer_sits_between_primary_content_and_bottom_tool() {
     let primary_content = center_region
         .find(".child(primary_content)")
         .expect("primary terminal content should be rendered");
-    let session_footer = center_region
+    let command_bar = center_region
+        .find(".child(self.command_bar.clone())")
+        .expect("live recording controls should be hosted by the command bar");
+    let playback_footer = center_region
         .find(".child(self.render_terminal_session_footer(cx))")
-        .expect("online recording or playback footer should be rendered");
+        .expect("recording playback should retain its dedicated footer");
     let bottom_tool = center_region
         .find(".when_some(state.bottom_panel")
         .expect("optional bottom tool should be rendered");
 
-    assert!(primary_content < session_footer);
-    assert!(session_footer < bottom_tool);
+    assert!(command_bar < primary_content);
+    assert!(primary_content < playback_footer);
+    assert!(playback_footer < bottom_tool);
 }
 
 #[test]
@@ -396,7 +391,8 @@ fn operation_history_drawer_overlays_primary_content_without_resizing_the_termin
 
 #[test]
 fn operation_history_toggle_is_live_only_and_the_drawer_has_no_mutation_path() {
-    let footer_source = include_str!("../recording_footer.rs");
+    let command_bar_source = include_str!("../command_bar/render.rs");
+    let command_bar_events_source = include_str!("../command_bar_events.rs");
     let playback_footer_source = include_str!("../recording_playback_render.rs");
     let history_source = include_str!("../operation_history.rs");
     let history_implementation = history_source
@@ -404,11 +400,10 @@ fn operation_history_toggle_is_live_only_and_the_drawer_has_no_mutation_path() {
         .next()
         .expect("operation history implementation should exist");
 
-    assert!(footer_source.contains("terminal-operation-history-toggle"));
-    assert!(footer_source.contains("operation_history_is_available(cx)"));
-    assert!(footer_source.contains("operation_history_panel_is_open()"));
-    assert!(footer_source.contains("this.toggle_operation_history_panel(cx);"));
-    assert!(!playback_footer_source.contains("terminal-operation-history-toggle"));
+    assert!(command_bar_source.contains("terminal-command-operation-history-toggle"));
+    assert!(command_bar_source.contains("ToggleOperationHistory"));
+    assert!(command_bar_events_source.contains("self.toggle_operation_history_panel(cx);"));
+    assert!(!playback_footer_source.contains("operation-history-toggle"));
 
     for forbidden_mutation in [
         "write_to_pty",
@@ -439,11 +434,11 @@ fn operation_history_toggle_is_live_only_and_the_drawer_has_no_mutation_path() {
 }
 
 #[test]
-fn recording_footer_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
+fn command_bar_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
     let render_layout_source = include_str!("../render_layout.rs");
     let render_surface_source = include_str!("../render_surface.rs");
     let terminal_layout_source = include_str!("../terminal_layout.rs");
-    let footer_source = include_str!("../recording_footer.rs");
+    let command_bar_source = include_str!("../command_bar/render.rs");
 
     let viewport = render_surface_source
         .split("pub(super) fn render_terminal_viewport")
@@ -464,19 +459,21 @@ fn recording_footer_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() 
     assert!(terminal_layout_source.contains("bounds.size.height / self.line_height"));
     assert!(terminal_layout_source.contains("terminal.resize("));
     assert!(
-        !render_layout_source.contains("RECORDING_FOOTER_HEIGHT"),
-        "the center layout must not manually subtract footer height"
+        !render_layout_source.contains("COMMAND_BAR_COLLAPSED_HEIGHT"),
+        "the center layout must not manually subtract command bar height"
     );
     assert!(
-        !footer_source.contains("resize_if_needed"),
-        "the footer must let the canvas bounds drive the existing resize path"
+        !command_bar_source.contains("resize_if_needed"),
+        "the command bar must let the canvas bounds drive the existing resize path"
     );
 }
 
 #[test]
-fn recording_footer_controls_are_pane_private_and_use_safe_terminal_apis() {
+fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() {
     let view_source = include_str!("../../view.rs");
-    let footer_source = include_str!("../recording_footer.rs");
+    let recording_source = include_str!("../recording_footer.rs");
+    let command_bar_source = include_str!("../command_bar/render.rs");
+    let event_source = include_str!("../command_bar_events.rs");
     let render_source = include_str!("../render_layout.rs");
 
     for pane_field in [
@@ -489,15 +486,19 @@ fn recording_footer_controls_are_pane_private_and_use_safe_terminal_apis() {
             "recording UI state must remain on each TerminalView: `{pane_field}`"
         );
     }
-    assert!(!footer_source.contains("Global<"));
-    assert!(footer_source.contains(".start_output_recording(output_path)"));
-    assert!(footer_source.contains(".pause_recording()"));
-    assert!(footer_source.contains(".resume_recording()"));
-    assert!(footer_source.contains(".stop_recording()"));
-    assert!(footer_source.contains("this.request_recording_start(cx);"));
-    assert!(footer_source.contains("this.request_recording_pause(cx);"));
-    assert!(footer_source.contains("this.request_recording_resume(cx);"));
-    assert!(footer_source.contains("this.request_recording_stop(cx);"));
+    assert!(!recording_source.contains("Global<"));
+    assert!(recording_source.contains(".start_output_recording(output_path)"));
+    assert!(recording_source.contains(".pause_recording()"));
+    assert!(recording_source.contains(".resume_recording()"));
+    assert!(recording_source.contains(".stop_recording()"));
+    assert!(command_bar_source.contains("TerminalCommandBarEvent::StartRecording"));
+    assert!(command_bar_source.contains("TerminalCommandBarEvent::PauseRecording"));
+    assert!(command_bar_source.contains("TerminalCommandBarEvent::ResumeRecording"));
+    assert!(command_bar_source.contains("TerminalCommandBarEvent::StopRecording"));
+    assert!(event_source.contains("self.request_recording_start(cx)"));
+    assert!(event_source.contains("self.request_recording_pause(cx)"));
+    assert!(event_source.contains("self.request_recording_resume(cx)"));
+    assert!(event_source.contains("self.request_recording_stop(cx)"));
 
     for action_handler in [
         ".on_action(cx.listener(Self::start_recording_action))",
@@ -510,14 +511,14 @@ fn recording_footer_controls_are_pane_private_and_use_safe_terminal_apis() {
 }
 
 #[test]
-fn recording_footer_discloses_output_only_capture_and_visible_failures() {
-    let footer_source = include_str!("../recording_footer.rs");
+fn command_bar_discloses_output_only_capture_and_visible_failures() {
+    let command_bar_source = include_str!("../command_bar/render.rs");
 
-    assert!(footer_source.contains("TerminalRecording.output_only"));
-    assert!(footer_source.contains("TerminalRecording.input_included"));
-    assert!(footer_source.contains("recording_snapshot_failure(&snapshot)"));
-    assert!(footer_source.contains("state.error.clone()"));
-    assert!(footer_source.contains("cx.theme().danger"));
+    assert!(command_bar_source.contains("TerminalRecording.output_only"));
+    assert!(command_bar_source.contains("TerminalRecording.input_included"));
+    assert!(command_bar_source.contains("recording_snapshot_failure(&snapshot)"));
+    assert!(command_bar_source.contains("recording_control_error"));
+    assert!(command_bar_source.contains("cx.theme().danger"));
 }
 
 #[test]
@@ -588,7 +589,7 @@ fn recording_playback_footer_is_a_fixed_dispatched_flex_child() {
     assert!(!render_source.contains(".absolute()"));
     assert!(render_source.contains(".is_recording_playback()"));
     assert!(render_source.contains("self.render_recording_playback_footer(cx)"));
-    assert!(render_source.contains("self.render_recording_footer(cx)"));
+    assert!(!render_source.contains("self.render_recording_footer(cx)"));
     assert!(layout_source.contains(".child(self.render_terminal_session_footer(cx))"));
     assert!(!layout_source.contains(".child(self.render_recording_footer(cx))"));
 }
