@@ -39,6 +39,8 @@ actions!(
         AlignTableColumnLeft,
         AlignTableColumnCenter,
         AlignTableColumnRight,
+        MoveToNextTableCell,
+        MoveToPreviousTableCell,
         DeleteActiveImageBackward,
         DeleteActiveImageForward
     ]
@@ -116,6 +118,8 @@ fn default_keybindings() -> Vec<KeyBinding> {
             AlignTableColumnRight,
             Some(INPUT_CONTEXT),
         ),
+        KeyBinding::new("tab", MoveToNextTableCell, Some(INPUT_CONTEXT)),
+        KeyBinding::new("shift-tab", MoveToPreviousTableCell, Some(INPUT_CONTEXT)),
         KeyBinding::new("backspace", DeleteActiveImageBackward, Some(INPUT_CONTEXT)),
         KeyBinding::new("delete", DeleteActiveImageForward, Some(INPUT_CONTEXT)),
     ]

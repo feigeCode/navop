@@ -1,5 +1,6 @@
 use super::*;
 use markdown_source::SourceBlockKind;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn preview_segments_replace_images_and_keep_surrounding_projected_text() {
@@ -89,6 +90,56 @@ fn preview_segments_keep_unicode_boundaries() {
             && destination == "logo.png"
             && after == " 后缀"
     ));
+}
+
+#[test]
+fn relative_image_paths_resolve_from_the_markdown_document_directory() {
+    let source = resolve_markdown_image_location(
+        "assets/logo.png".to_owned(),
+        Some(Path::new("/tmp/notes")),
+    );
+
+    assert_eq!(
+        source,
+        MarkdownImageLocation::Path(PathBuf::from("/tmp/notes/assets/logo.png"))
+    );
+}
+
+#[test]
+fn absolute_image_paths_are_not_rebased() {
+    let source = resolve_markdown_image_location(
+        "/tmp/shared/logo.png".to_owned(),
+        Some(Path::new("/tmp/notes")),
+    );
+
+    assert_eq!(
+        source,
+        MarkdownImageLocation::Path(PathBuf::from("/tmp/shared/logo.png"))
+    );
+}
+
+#[test]
+fn relative_image_paths_without_a_document_directory_keep_their_original_path() {
+    let source = resolve_markdown_image_location("assets/logo.png".to_owned(), None);
+
+    assert_eq!(
+        source,
+        MarkdownImageLocation::Path(PathBuf::from("assets/logo.png"))
+    );
+}
+
+#[test]
+fn remote_and_data_image_sources_are_not_rebased() {
+    for destination in [
+        "https://example.com/logo.png",
+        "//cdn.example.com/logo.png",
+        "data:image/png;base64,AA==",
+    ] {
+        assert_eq!(
+            resolve_markdown_image_location(destination.to_owned(), Some(Path::new("/tmp/notes"))),
+            MarkdownImageLocation::Uri(destination.to_owned())
+        );
+    }
 }
 
 fn table_cell(document: &SourceMarkdownDocument) -> &SourceTableCell {

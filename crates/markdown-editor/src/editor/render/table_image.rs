@@ -14,7 +14,7 @@ use gpui_component::{
 use markdown_source::{
     SourceInlineKind, SourceMarkdownDocument, SourceNodeId, SourceTableCell, TableCellAddress,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TableCellPreviewSegment {
@@ -24,6 +24,12 @@ enum TableCellPreviewSegment {
         alt: String,
         destination: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkdownImageLocation {
+    Uri(String),
+    Path(PathBuf),
 }
 
 impl MarkdownEditor {
@@ -173,22 +179,25 @@ impl MarkdownEditor {
             .h(rems(4.))
             .max_w(relative(1.))
             .child(
-                img(table_cell_image_source(destination))
-                    .h_full()
-                    .max_w(relative(1.))
-                    .object_fit(ObjectFit::Contain)
-                    .with_loading(|| gpui::div().size_full().into_any_element())
-                    .with_fallback(move || {
-                        gpui::div()
-                            .flex()
-                            .size_full()
-                            .items_center()
-                            .justify_center()
-                            .px_2()
-                            .text_color(muted)
-                            .child(fallback_alt.clone())
-                            .into_any_element()
-                    }),
+                img(markdown_image_source(
+                    destination,
+                    self.resource_base_path.as_deref(),
+                ))
+                .h_full()
+                .max_w(relative(1.))
+                .object_fit(ObjectFit::Contain)
+                .with_loading(|| gpui::div().size_full().into_any_element())
+                .with_fallback(move || {
+                    gpui::div()
+                        .flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .px_2()
+                        .text_color(muted)
+                        .child(fallback_alt.clone())
+                        .into_any_element()
+                }),
             )
             .into_any_element()
     }
@@ -245,14 +254,31 @@ fn push_preview_text(
     }
 }
 
-fn table_cell_image_source(destination: String) -> ImageSource {
+fn markdown_image_source(destination: String, resource_base_path: Option<&Path>) -> ImageSource {
+    match resolve_markdown_image_location(destination, resource_base_path) {
+        MarkdownImageLocation::Uri(uri) => gpui::SharedUri::from(uri).into(),
+        MarkdownImageLocation::Path(path) => path.into(),
+    }
+}
+
+fn resolve_markdown_image_location(
+    destination: String,
+    resource_base_path: Option<&Path>,
+) -> MarkdownImageLocation {
     if destination.contains("://")
         || destination.starts_with("data:")
         || destination.starts_with("//")
     {
-        gpui::SharedUri::from(destination).into()
+        MarkdownImageLocation::Uri(destination)
     } else {
-        PathBuf::from(destination).into()
+        let path = PathBuf::from(destination);
+        if path.is_absolute() {
+            MarkdownImageLocation::Path(path)
+        } else if let Some(resource_base_path) = resource_base_path {
+            MarkdownImageLocation::Path(resource_base_path.join(path))
+        } else {
+            MarkdownImageLocation::Path(path)
+        }
     }
 }
 

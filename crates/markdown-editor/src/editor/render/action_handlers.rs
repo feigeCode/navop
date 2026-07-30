@@ -162,7 +162,8 @@ impl MarkdownEditor {
     fn bind_table_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
         let element = Self::bind_table_row_actions(element, cx);
         let element = Self::bind_table_column_actions(element, cx);
-        Self::bind_table_alignment_actions(element, cx)
+        let element = Self::bind_table_alignment_actions(element, cx);
+        Self::bind_table_navigation_actions(element, cx)
     }
 
     fn bind_table_row_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
@@ -257,6 +258,18 @@ impl MarkdownEditor {
                         ),
                         cx,
                     );
+                }),
+            )
+    }
+
+    fn bind_table_navigation_actions(element: gpui::Div, cx: &mut Context<Self>) -> gpui::Div {
+        element
+            .on_action(cx.listener(|editor, _: &MoveToNextTableCell, window, cx| {
+                propagate_missing_table(editor.move_to_next_table_cell(window, cx), cx);
+            }))
+            .on_action(
+                cx.listener(|editor, _: &MoveToPreviousTableCell, window, cx| {
+                    propagate_missing_table(editor.move_to_previous_table_cell(window, cx), cx);
                 }),
             )
     }

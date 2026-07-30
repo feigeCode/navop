@@ -9,7 +9,7 @@ pub use block_render::{
     MarkdownBlockRenderArtifact, MarkdownBlockRenderKind, MarkdownBlockRenderProvider,
     MarkdownBlockRenderRequest,
 };
-pub use editor::{MarkdownEditor, MarkdownEditorError, MarkdownEditorEvent};
+pub use editor::{MarkdownEditor, MarkdownEditorError, MarkdownEditorEvent, MarkdownHeading};
 pub use projection::{
     MarkdownProjection, ProjectionEdit, ProjectionSegment, ProjectionStyle, ProjectionStyleSpan,
 };

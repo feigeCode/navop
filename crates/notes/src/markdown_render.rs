@@ -1,14 +1,15 @@
 use crate::markdown_session::MarkdownSyncState;
 use crate::{MarkdownSaveMode, MarkdownViewMode, NotesView};
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Styled, div,
-    prelude::FluentBuilder,
+    AnyElement, Context, ExternalPaths, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     Disableable, Icon, IconName, Sizable,
-    button::Button,
+    button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, LocalInputStyle},
+    input::{Input, LocalInputStyle, Paste},
+    popover::Popover,
     switch::Switch,
     v_flex,
 };
@@ -62,6 +63,15 @@ impl NotesView {
             MarkdownViewMode::Wysiwyg => div()
                 .id("markdown-wysiwyg-editor")
                 .debug_selector(|| "markdown-wysiwyg-editor".to_owned())
+                .on_action(cx.listener(|view, _: &Paste, window, cx| {
+                    if !view.paste_markdown_images(window, cx) {
+                        cx.propagate();
+                    }
+                }))
+                .drag_over::<ExternalPaths>(|element, _, _, _| element.bg(gpui::rgba(0x3b82f614)))
+                .on_drop(cx.listener(|view, paths: &ExternalPaths, window, cx| {
+                    view.drop_markdown_images(paths, window, cx);
+                }))
                 .size_full()
                 .min_h_0()
                 .min_w_0()
@@ -141,6 +151,18 @@ impl NotesView {
         let theme = self.resolved_editor_theme(cx);
         let session = self.markdown_sessions.get(document_id);
         let status = markdown_status(session, self.tree.markdown_save_mode);
+        let statistics =
+            session.map(|session| document_statistics(session.preview.read(cx).projected_text()));
+        let toolbar_status = statistics.map(|statistics| {
+            let metrics = t!(
+                "Notes.markdown_statistics",
+                words = statistics.words,
+                characters = statistics.characters,
+                lines = statistics.lines
+            )
+            .to_string();
+            status.map_or(metrics.clone(), |status| format!("{status} · {metrics}"))
+        });
         let save_disabled = session.is_none_or(|session| {
             !matches!(
                 session.state.sync_state,
@@ -157,12 +179,28 @@ impl NotesView {
             .border_color(theme.border)
             .bg(theme.background)
             .child(self.render_source_toggle(document_id, mode, cx))
-            .child(div().flex_1().when_some(status, |status_view, status| {
-                status_view
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(status)
-            }))
+            .child(self.render_outline(document_id, cx))
+            .child(
+                Button::new("markdown-search")
+                    .debug_selector(|| "markdown-search".to_owned())
+                    .icon(IconName::Search)
+                    .tooltip(t!("Notes.markdown_search_tooltip").to_string())
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.open_markdown_search(window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .when_some(toolbar_status, |status_view, status| {
+                        status_view
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(status)
+                    }),
+            )
             .child(
                 div()
                     .debug_selector(|| "markdown-auto-save".to_owned())
@@ -196,6 +234,58 @@ impl NotesView {
                         view.save_active_markdown(window, cx);
                     })),
             )
+    }
+
+    fn render_outline(&self, document_id: &str, cx: &mut Context<Self>) -> AnyElement {
+        let Some(session) = self.markdown_sessions.get(document_id) else {
+            return div().into_any_element();
+        };
+        let headings = session.preview.read(cx).headings();
+        let preview = session.preview.clone();
+        Popover::new("markdown-outline")
+            .trigger(
+                Button::new("markdown-outline-trigger")
+                    .debug_selector(|| "markdown-outline-trigger".to_owned())
+                    .icon(IconName::Menu)
+                    .tooltip(t!("Notes.markdown_outline_tooltip").to_string())
+                    .ghost()
+                    .small()
+                    .disabled(headings.is_empty()),
+            )
+            .content(move |_state, _window, cx| {
+                let popover = cx.entity();
+                v_flex()
+                    .id("markdown-outline-content")
+                    .debug_selector(|| "markdown-outline-content".to_owned())
+                    .min_w_48()
+                    .max_w_96()
+                    .max_h_96()
+                    .overflow_y_scroll()
+                    .p_2()
+                    .gap_1()
+                    .children(headings.clone().into_iter().map(|heading| {
+                        let preview = preview.clone();
+                        let popover = popover.clone();
+                        Button::new(("markdown-outline-heading", heading.block_id.0))
+                            .label(format!(
+                                "{} {}",
+                                "#".repeat(heading.level as usize),
+                                heading.title
+                            ))
+                            .ghost()
+                            .small()
+                            .on_click(move |_, window, cx| {
+                                preview.update(cx, |editor, cx| {
+                                    editor.activate_block(heading.block_id, window, cx);
+                                });
+                                popover.update(cx, |popover, cx| {
+                                    popover.dismiss(window, cx);
+                                });
+                            })
+                    }))
+                    .into_any_element()
+            })
+            .into_any_element()
     }
 
     fn render_source_toggle(
@@ -239,6 +329,53 @@ impl NotesView {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MarkdownDocumentStatistics {
+    words: usize,
+    characters: usize,
+    lines: usize,
+}
+
+fn document_statistics(source: &str) -> MarkdownDocumentStatistics {
+    let mut words = 0;
+    let mut in_latin_word = false;
+    for character in source.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            if !in_latin_word {
+                words += 1;
+                in_latin_word = true;
+            }
+        } else {
+            in_latin_word = false;
+            if is_cjk_character(character) {
+                words += 1;
+            }
+        }
+    }
+    MarkdownDocumentStatistics {
+        words,
+        characters: source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .count(),
+        lines: (!source.is_empty())
+            .then(|| source.lines().count())
+            .unwrap_or(0),
+    }
+}
+
+fn is_cjk_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2FA1F
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
+    )
+}
+
 fn markdown_status(
     session: Option<&crate::markdown_session::MarkdownSession>,
     save_mode: MarkdownSaveMode,
@@ -252,5 +389,30 @@ fn markdown_status(
         Some(MarkdownSyncState::SavingSource) => Some(t!("Notes.markdown_saving").to_string()),
         Some(MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)) => None,
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MarkdownDocumentStatistics, document_statistics};
+
+    #[test]
+    fn statistics_count_latin_runs_and_cjk_characters() {
+        assert_eq!(
+            MarkdownDocumentStatistics {
+                words: 4,
+                characters: 11,
+                lines: 2,
+            },
+            document_statistics("hello 世界\nRust")
+        );
+        assert_eq!(
+            MarkdownDocumentStatistics {
+                words: 0,
+                characters: 0,
+                lines: 0,
+            },
+            document_statistics("")
+        );
     }
 }

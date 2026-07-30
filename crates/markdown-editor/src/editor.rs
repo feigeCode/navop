@@ -8,7 +8,10 @@ use markdown_source::{
     PatchError, SourceEdit, SourceEditOrigin, SourceHistory, SourceMarkdownDocument,
     SourceSelection, SourceTransaction,
 };
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 mod activation;
 mod history_operations;
@@ -27,6 +30,13 @@ use setup::{apply_projection_styles, create_input, create_property_input};
 use surface::{MarkdownEditSurface, MarkdownSurfaceKey};
 use text_diff::{common_prefix, common_suffix};
 pub use types::{MarkdownEditorError, MarkdownEditorEvent};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownHeading {
+    pub block_id: markdown_source::SourceNodeId,
+    pub level: u8,
+    pub title: String,
+}
 
 pub struct MarkdownEditor {
     input: Entity<InputState>,
@@ -57,6 +67,7 @@ pub struct MarkdownEditor {
     pending_shared_renders:
         HashMap<render::block_renderer::RenderCacheKey, Vec<render::block_renderer::RenderWaiter>>,
     block_render_generation: u64,
+    resource_base_path: Option<PathBuf>,
     inline_math_artifacts: HashMap<String, MarkdownBlockRenderArtifact>,
     pending_inline_math_renders: HashSet<String>,
     failed_inline_math_renders: HashSet<String>,
@@ -113,6 +124,7 @@ impl MarkdownEditor {
             block_render_cache: HashMap::new(),
             pending_shared_renders: HashMap::new(),
             block_render_generation: 0,
+            resource_base_path: None,
             inline_math_artifacts: HashMap::new(),
             pending_inline_math_renders: HashSet::new(),
             failed_inline_math_renders: HashSet::new(),
@@ -172,6 +184,26 @@ impl MarkdownEditor {
         cx.notify();
     }
 
+    /// Sets the directory used to resolve relative image destinations.
+    ///
+    /// Markdown paths are document-relative, not process-working-directory
+    /// relative. Hosts that load a file should set this to the file's parent.
+    pub fn set_resource_base_path(
+        &mut self,
+        resource_base_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.resource_base_path == resource_base_path {
+            return;
+        }
+        self.resource_base_path = resource_base_path;
+        cx.notify();
+    }
+
+    pub fn resource_base_path(&self) -> Option<&Path> {
+        self.resource_base_path.as_deref()
+    }
+
     /// Retry a failed math or Mermaid block render without disturbing editor
     /// selection, layout or scroll position.
     pub fn retry_block_render(
@@ -198,6 +230,72 @@ impl MarkdownEditor {
 
     pub fn projected_text(&self) -> &str {
         &self.projection.text
+    }
+
+    pub fn headings(&self) -> Vec<MarkdownHeading> {
+        let document = self.history.document();
+        document
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                let markdown_source::SourceBlockKind::Heading { level, .. } = block.kind else {
+                    return None;
+                };
+                let content_range = block.content_range.clone()?;
+                Some(MarkdownHeading {
+                    block_id: block.id,
+                    level,
+                    title: document.source[content_range].trim().to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    pub fn insert_markdown_images(
+        &mut self,
+        images: &[(String, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, PatchError> {
+        if images.is_empty() {
+            return Ok(false);
+        }
+        let selection_before = self.source_selection(cx);
+        let range = selection_before.anchor.min(selection_before.head)
+            ..selection_before.anchor.max(selection_before.head);
+        let replacement = images
+            .iter()
+            .map(|(alt, destination)| {
+                format!(
+                    "![{}]({})",
+                    escape_markdown_image_alt(alt),
+                    escape_markdown_image_destination(destination)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source_cursor = range.start + replacement.len();
+        let selection_after = SourceSelection {
+            anchor: source_cursor,
+            head: source_cursor,
+        };
+        let active_table_cell = self.active_table_cell;
+        let revision = self.revision();
+        self.history.apply(&SourceTransaction {
+            edits: vec![SourceEdit::new(range.clone(), replacement, revision)],
+            origin: SourceEditOrigin::Paste,
+            allowed_ranges: vec![range],
+            selection_before,
+            selection_after,
+        })?;
+        self.dirty = true;
+        if let Some(address) = active_table_cell {
+            self.sync_table_cell(address, source_cursor, window, cx);
+        } else {
+            self.sync_projection(source_cursor, window, cx);
+        }
+        self.emit_changed(cx);
+        Ok(true)
     }
 
     pub fn active_inline_math_preview_count(&self) -> usize {
@@ -370,6 +468,39 @@ impl MarkdownEditor {
         self.pending_inline_math_renders.clear();
         self.failed_inline_math_renders.clear();
         self.measured_block_heights.clear();
+    }
+}
+
+fn escape_markdown_image_alt(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace(['\r', '\n'], " ")
+}
+
+fn escape_markdown_image_destination(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+        .replace('\t', "%09")
+        .replace(' ', "%20")
+}
+
+#[cfg(test)]
+mod image_insertion_tests {
+    use super::{escape_markdown_image_alt, escape_markdown_image_destination};
+
+    #[test]
+    fn markdown_image_parts_are_escaped() {
+        assert_eq!("a\\[b\\] c", escape_markdown_image_alt("a[b]\nc"));
+        assert_eq!(
+            "assets/a%20\\(1\\)%0Aimage.png",
+            escape_markdown_image_destination("assets/a (1)\nimage.png")
+        );
     }
 }
 

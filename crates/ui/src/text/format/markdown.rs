@@ -214,6 +214,20 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
                 ..Default::default()
             });
         }
+        Node::ImageReference(raw) => {
+            if let Some(reference) = cx.link_refs.get(raw.identifier.as_str()) {
+                paragraph.push_image(ImageNode {
+                    url: reference.url.clone().into(),
+                    title: reference.title.clone(),
+                    alt: Some(raw.alt.clone().into()),
+                    ..Default::default()
+                });
+            } else {
+                let label = raw.label.as_deref().unwrap_or(raw.identifier.as_str());
+                text = format!("![{}][{}]", raw.alt, label);
+                paragraph.push_str(&text);
+            }
+        }
         Node::InlineMath(raw) => {
             text = raw.value.clone();
             paragraph.push(InlineNode::new(&text).math());
@@ -295,6 +309,12 @@ fn ast_to_document(
         _ => panic!("expected root node"),
     };
 
+    for child in &root.children {
+        if let Node::Definition(definition) = child {
+            add_definition(cx, definition);
+        }
+    }
+
     let blocks = root
         .children
         .into_iter()
@@ -313,6 +333,17 @@ fn new_span(pos: Option<markdown::unist::Position>, cx: &NodeContext) -> Option<
         start: cx.offset + pos.start.offset,
         end: cx.offset + pos.end.offset,
     })
+}
+
+fn add_definition(cx: &mut NodeContext, definition: &mdast::Definition) {
+    cx.add_ref(
+        definition.identifier.clone().into(),
+        LinkMark {
+            url: definition.url.clone().into(),
+            identifier: Some(definition.identifier.clone().into()),
+            title: definition.title.clone().map(Into::into),
+        },
+    );
 }
 
 fn ast_to_node(
@@ -479,14 +510,7 @@ fn ast_to_node(
             BlockNode::Paragraph(paragraph)
         }
         Node::Definition(def) => {
-            cx.add_ref(
-                def.identifier.clone().into(),
-                LinkMark {
-                    url: def.url.clone().into(),
-                    identifier: Some(def.identifier.clone().into()),
-                    title: def.title.clone().map(Into::into),
-                },
-            );
+            add_definition(cx, &def);
 
             BlockNode::Definition {
                 identifier: def.identifier.clone().into(),
@@ -535,5 +559,54 @@ mod tests {
                 .any(|(_, mark)| mark.bold && mark.italic),
             "nested emphasis should produce a bold and italic mark"
         );
+    }
+
+    #[test]
+    fn image_reference_resolves_definition_declared_after_it() {
+        let mut cx = NodeContext::default();
+        let document = parse(
+            "![Logo][asset]\n\n[asset]: images/logo.png \"Product logo\"",
+            &mut cx,
+            &HighlightTheme::default_light(),
+        )
+        .unwrap();
+
+        let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
+            panic!("expected paragraph");
+        };
+        let image = paragraph
+            .children
+            .iter()
+            .find_map(|child| child.image.as_ref())
+            .expect("expected resolved image reference");
+
+        assert_eq!(image.url.as_ref(), "images/logo.png");
+        assert_eq!(image.alt.as_deref(), Some("Logo"));
+        assert_eq!(image.title.as_deref(), Some("Product logo"));
+    }
+
+    #[test]
+    fn unresolved_image_reference_remains_visible() {
+        let mut cx = NodeContext::default();
+        let document = parse(
+            "Before ![Logo][missing] after",
+            &mut cx,
+            &HighlightTheme::default_light(),
+        )
+        .unwrap();
+
+        let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
+            panic!("expected paragraph");
+        };
+
+        assert_eq!(
+            paragraph
+                .children
+                .iter()
+                .map(|child| child.text.as_ref())
+                .collect::<String>(),
+            "Before ![Logo][missing] after"
+        );
+        assert!(paragraph.children.iter().all(|child| child.image.is_none()));
     }
 }
