@@ -1,5 +1,5 @@
 use crate::notes_notifications::notify_operation_error;
-use crate::{MarkdownViewMode, NodeKind, NotesView, TreeRow};
+use crate::{NodeKind, NotesView, TreeRow};
 use anyhow::Context as _;
 use futures::AsyncReadExt;
 use gpui::{App, AppContext, AsyncApp, Context, Hsla, PathPromptOptions, Rgba, Window};
@@ -176,10 +176,7 @@ impl NotesView {
             .values()
             .find(|session| session.relative_path == row.relative_path)
         {
-            let source = match session.state.mode {
-                MarkdownViewMode::Source => session.source_editor.read(cx).value().to_string(),
-                MarkdownViewMode::Wysiwyg => session.preview.read(cx).source().to_owned(),
-            };
+            let source = session.editor.read(cx).markdown(cx);
             let path = session.store.path()?;
             return ExportSource::new(source, path.parent());
         }

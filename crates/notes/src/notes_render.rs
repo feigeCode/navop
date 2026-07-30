@@ -71,13 +71,16 @@ impl NotesView {
         }
         v_flex()
             .size_full()
+            .min_w_0()
             .min_h_0()
             .overflow_hidden()
             .child(
                 h_flex()
                     .flex_1()
+                    .min_w_0()
                     .h_full()
                     .min_h_0()
+                    .overflow_hidden()
                     .items_start()
                     .child(self.render_sidebar(cx))
                     .child(self.render_editor(cx)),
@@ -544,19 +547,6 @@ fn build_sidebar_context_menu(
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor_theme = self.resolved_editor_theme(cx);
-        let markdown_theme = markdown_editor::MarkdownEditorTheme {
-            background: editor_theme.background,
-            foreground: editor_theme.foreground,
-            muted_foreground: editor_theme.muted_foreground,
-            border: editor_theme.border,
-            primary: editor_theme.primary,
-            highlight_theme: editor_theme.highlight_theme.clone(),
-        };
-        for session in self.markdown_sessions.values() {
-            session.preview.update(cx, |editor, cx| {
-                editor.set_theme(markdown_theme.clone(), cx)
-            });
-        }
         let content = match &self.load_state {
             NotesLoadState::NeedsLocation => self.render_location_setup(cx),
             NotesLoadState::Ready => self.render_ready(cx),
@@ -564,6 +554,7 @@ impl Render for NotesView {
         div()
             .track_focus(&self.focus_handle)
             .size_full()
+            .min_w_0()
             .min_h_0()
             .overflow_hidden()
             .bg(editor_theme.background)
@@ -575,6 +566,50 @@ impl Render for NotesView {
 #[cfg(test)]
 mod tests {
     use super::{SidebarContextTarget, SidebarMenuAction, sidebar_menu_actions};
+
+    #[test]
+    fn notes_content_is_bounded_by_the_active_tab_width() {
+        let source = include_str!("notes_render.rs");
+
+        let ready_start = source
+            .find("fn render_ready")
+            .expect("notes ready renderer");
+        let ready_end = source[ready_start..]
+            .find("fn render_sidebar")
+            .map(|offset| ready_start + offset)
+            .expect("notes sidebar renderer");
+        let ready = &source[ready_start..ready_end];
+
+        assert!(
+            ready.matches(".min_w_0()").count() >= 2,
+            "both the ready root and its horizontal content row must be allowed to shrink"
+        );
+        assert!(
+            ready.matches(".overflow_hidden()").count() >= 2,
+            "both ready layout boundaries must clip intrinsic editor content"
+        );
+
+        let root_start = source
+            .find("impl Render for NotesView")
+            .expect("notes root renderer");
+        let root_end = source[root_start..]
+            .find("#[cfg(test)]")
+            .map(|offset| root_start + offset)
+            .expect("notes renderer tests");
+        let root = &source[root_start..root_end];
+
+        for constraint in [
+            ".size_full()",
+            ".min_w_0()",
+            ".min_h_0()",
+            ".overflow_hidden()",
+        ] {
+            assert!(
+                root.contains(constraint),
+                "NotesView root must keep {constraint} so intrinsic note content cannot squeeze window chrome"
+            );
+        }
+    }
 
     #[test]
     fn background_menu_exposes_create_file_manager_and_refresh_actions() {

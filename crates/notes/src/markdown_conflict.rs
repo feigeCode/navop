@@ -1,5 +1,5 @@
 use crate::notes_notifications::notify_operation_error;
-use crate::{MarkdownViewMode, NotesView, markdown_session::MarkdownSyncState};
+use crate::{NotesView, markdown_session::MarkdownSyncState};
 use gpui::{Context, Window};
 
 impl NotesView {
@@ -21,10 +21,10 @@ impl NotesView {
                 return;
             }
         };
-        if snapshot.source == session.preview.read(cx).source() {
+        if snapshot.source == session.editor.read(cx).markdown(cx) {
             return;
         }
-        if session.preview.read(cx).is_dirty()
+        if session.editor.read(cx).is_dirty()
             || !matches!(session.state.sync_state, MarkdownSyncState::Clean)
         {
             session.state.conflict();
@@ -45,7 +45,7 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(&document_id) else {
             return;
         };
-        if session.preview.read(cx).is_dirty()
+        if session.editor.read(cx).is_dirty()
             || !matches!(session.state.sync_state, MarkdownSyncState::Clean)
         {
             session.state.conflict();
@@ -65,20 +65,14 @@ impl NotesView {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
             return;
         };
-        let result = match session.state.mode {
-            MarkdownViewMode::Source => {
-                let source = session.source_editor.read(cx).value().to_string();
-                session.store.force_save(&source).map(|_| ())
-            }
-            MarkdownViewMode::Wysiwyg => session
-                .store
-                .force_save(session.preview.read(cx).source())
-                .map(|_| ()),
-        };
+        let source = session.editor.read(cx).markdown(cx);
+        let result = session.store.force_save(&source).map(|_| ());
         match result {
             Ok(()) => {
                 session.state.conflict_resolved();
-                session.preview.update(cx, |editor, _| editor.mark_saved());
+                session
+                    .editor
+                    .update(cx, |editor, cx| editor.mark_saved(cx));
                 cx.notify();
             }
             Err(error) => notify_operation_error(window, cx, error),
@@ -96,20 +90,16 @@ impl NotesView {
             return;
         };
         let result = session.store.load().and_then(|snapshot| {
-            let source = snapshot.source;
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .replace_source(source.clone(), window, cx)
-                    .map_err(anyhow::Error::from)
-            })?;
-            session.source_editor.update(cx, |input, cx| {
-                input.set_value(source, window, cx);
+            let revision = session.editor.update(cx, |editor, cx| {
+                editor.reload_markdown(snapshot.source, cx);
+                let revision = editor.revision();
+                revision
             });
+            session.state.external_reloaded(revision);
             Ok(())
         });
         match result {
             Ok(()) => {
-                session.state.external_reloaded();
                 cx.notify();
             }
             Err(error) => notify_operation_error(window, cx, error),

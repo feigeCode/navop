@@ -84,17 +84,51 @@ fn third_cursor_generation_is_the_first_safe_immediate_retirement() {
 }
 
 #[test]
-fn native_cursor_owns_the_pointer_while_remote_content_is_hovered() {
-    let mut state = RemoteCursorState::default();
-    state.install(cursor(1)).unwrap();
-    state.set_position(25, 40);
-    state.promote_latest();
+fn native_cursor_hides_only_when_the_remote_cursor_can_replace_it() {
+    assert!(!should_hide_native_cursor(
+        RemoteCursorMode::Default,
+        true,
+        true
+    ));
+    assert!(!should_hide_native_cursor(
+        RemoteCursorMode::Bitmap,
+        false,
+        true
+    ));
+    assert!(!should_hide_native_cursor(
+        RemoteCursorMode::Bitmap,
+        true,
+        false
+    ));
+    assert!(should_hide_native_cursor(
+        RemoteCursorMode::Bitmap,
+        true,
+        true
+    ));
+    assert!(should_hide_native_cursor(
+        RemoteCursorMode::Hidden,
+        true,
+        false
+    ));
+}
 
-    assert!(state.paint_state(Some((100, 80))).is_some());
-
+#[test]
+fn bitmap_cursor_is_not_paintable_until_position_and_image_are_ready() {
+    let mut state = RemoteCursorState::new(true);
     state.set_pointer_hovered(true);
-    assert!(state.paint_state(Some((100, 80))).is_none());
+    state.install(cursor(1)).unwrap();
 
-    state.set_pointer_hovered(false);
-    assert!(state.paint_state(Some((100, 80))).is_some());
+    assert!(!state.has_paintable_bitmap());
+
+    state.set_position(25, 40);
+    assert!(!state.has_paintable_bitmap());
+
+    state.promote_latest();
+    assert!(state.has_paintable_bitmap());
+}
+
+#[test]
+fn native_cursor_management_is_opt_in_for_rdp_only() {
+    assert!(!RemoteCursorState::default().manage_native_cursor);
+    assert!(RemoteCursorState::new(true).manage_native_cursor);
 }

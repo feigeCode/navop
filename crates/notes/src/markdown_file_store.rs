@@ -65,8 +65,10 @@ impl MarkdownFileStore {
         Ok(snapshot)
     }
 
-    /// Load a watcher event only when the on-disk fingerprint differs from the
-    /// fingerprint already observed or written by this store.
+    /// Load a watcher event only when the on-disk content differs from the
+    /// content already observed or written by this store.  Filesystems may
+    /// report a new modification time for a byte-identical rewrite; that is
+    /// not an external Markdown edit and must not create a conflict.
     ///
     /// A local save can finish after the editor has already produced a newer
     /// dirty revision. Its watcher event must not be mistaken for an external
@@ -80,7 +82,12 @@ impl MarkdownFileStore {
             fs::read_to_string(&path)
                 .with_context(|| format!("read Markdown {}", path.display()))?,
         )?;
-        if state.fingerprint.as_ref() == Some(&snapshot.fingerprint) {
+        if state
+            .fingerprint
+            .as_ref()
+            .is_some_and(|known| known.content_hash == snapshot.fingerprint.content_hash)
+        {
+            state.fingerprint = Some(snapshot.fingerprint);
             return Ok(None);
         }
         state.fingerprint = Some(snapshot.fingerprint.clone());
@@ -169,6 +176,33 @@ mod tests {
         let outcome = store.save("second")?;
         assert!(matches!(outcome, MarkdownSaveOutcome::Saved(_)));
         assert_eq!("second", fs::read_to_string(path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_metadata_only_changes_when_disk_bytes_are_unchanged() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("same-bytes.md");
+        fs::write(&path, "```rust\nfn main() {}\n```")?;
+        let store = MarkdownFileStore::new(path);
+        store.load()?;
+
+        // Force the remembered metadata to differ while keeping the observed
+        // content hash. This deterministically models a watcher event caused by
+        // touching or byte-identically rewriting the file.
+        {
+            let mut state = store.state()?;
+            state
+                .fingerprint
+                .as_mut()
+                .expect("load should establish a fingerprint")
+                .modified_at = Some(SystemTime::UNIX_EPOCH);
+        }
+
+        assert!(
+            store.load_external_change()?.is_none(),
+            "metadata-only watcher events must not become Markdown conflicts"
+        );
         Ok(())
     }
 

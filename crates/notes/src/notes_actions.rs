@@ -165,7 +165,7 @@ impl NotesView {
         let path = &row.relative_path;
         if self.markdown_sessions.values().any(|session| {
             session.relative_path.starts_with(path)
-                && (session.preview.read(cx).is_dirty()
+                && (session.editor.read(cx).is_dirty()
                     || !matches!(
                         session.state.sync_state,
                         crate::markdown_session::MarkdownSyncState::Clean

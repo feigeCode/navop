@@ -113,18 +113,9 @@ impl NotesView {
         if let Some(document_id) = self.active_document_id.as_ref()
             && let Some(session) = self.markdown_sessions.get(document_id)
         {
-            match session.state.mode {
-                crate::MarkdownViewMode::Source => {
-                    session
-                        .source_editor
-                        .update(cx, |input, cx| input.focus(window, cx));
-                }
-                crate::MarkdownViewMode::Wysiwyg => {
-                    session
-                        .preview
-                        .update(cx, |editor, cx| editor.focus(window, cx));
-                }
-            }
+            session.editor.update(cx, |editor, cx| {
+                editor.focus(window, cx);
+            });
             return;
         }
     }
@@ -165,7 +156,22 @@ impl NotesView {
     }
 
     pub fn set_editor_theme(&mut self, theme: MarkdownEditorTheme, cx: &mut Context<Self>) {
-        self.editor_theme = Some(theme);
+        self.editor_theme = Some(theme.clone());
+        let host_services = markdown_editor::markdown_editor_host_services(
+            crate::markdown_renderer::markdown_editor_theme(theme),
+            crate::markdown_renderer::block_render_provider(cx),
+        );
+        let editors = self
+            .markdown_sessions
+            .values()
+            .map(|session| session.editor.clone())
+            .collect::<Vec<_>>();
+        for editor in editors {
+            let host_services = host_services.clone();
+            editor.update(cx, |editor, cx| {
+                editor.set_host_services(host_services, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -280,9 +286,111 @@ impl Focusable for NotesView {
 mod external_markdown_tests {
     use super::*;
     use crate::markdown_session::MarkdownSyncState;
-    use gpui::{TestAppContext, VisualTestContext, WindowOptions};
-    use gpui_component::Root;
+    use gpui::{
+        Bounds, InteractiveElement, IntoElement, ParentElement, Render, Styled, TestAppContext,
+        VisualTestContext, WindowBounds, WindowOptions, div, px, size,
+    };
+    use gpui_component::{Root, h_flex};
+    use one_core::tab_container::{TabContainer, TabItem};
     use std::time::Duration;
+
+    struct NotesTabTestWindow {
+        tabs: Entity<TabContainer>,
+    }
+
+    impl Render for NotesTabTestWindow {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            h_flex()
+                .size_full()
+                .min_w_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .debug_selector(|| "notes-test-sidebar".to_owned())
+                        .w(px(64.0))
+                        .h_full()
+                        .flex_shrink_0(),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "notes-test-main-slot".to_owned())
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.tabs.clone()),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn standalone_markdown_tab_keeps_the_tab_switcher_at_the_window_edge(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("wide-content.md");
+        std::fs::write(
+            &path,
+            concat!(
+                "# Wide content\n\n",
+                "| Column | Endpoint | Description |\n",
+                "| --- | --- | --- |\n",
+                "| N1 | POST /ai-manager/space/bootstrap | ",
+                "A deliberately long table cell that must not affect the window tab bar. |\n",
+            ),
+        )
+        .unwrap();
+
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let notes =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    let tabs = cx.new(|cx| {
+                        TabContainer::new(window, cx).with_navigation_sidebar_toggle(true)
+                    });
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("notes", "notes-test", notes),
+                            window,
+                            cx,
+                        );
+                    });
+                    let root = cx.new(|_| NotesTabTestWindow { tabs });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let main_slot = cx.debug_bounds("notes-test-main-slot").expect("main slot");
+        let tab_bar = cx.debug_bounds("tab-bar").expect("tab bar");
+        let tab_container = cx.debug_bounds("tab-container").expect("tab container");
+        let tab_content = cx.debug_bounds("tab-content").expect("tab content");
+        let markdown_editor = cx.debug_bounds("markdown-editor").expect("markdown editor");
+        let dropdown = cx.debug_bounds("tab-dropdown-btn").expect("tab dropdown");
+
+        assert_eq!(
+            main_slot.right(),
+            tab_bar.right(),
+            "main={main_slot:?}, container={tab_container:?}, bar={tab_bar:?}, content={tab_content:?}, editor={markdown_editor:?}"
+        );
+        assert_eq!(
+            tab_bar.right(),
+            dropdown.right(),
+            "Markdown content must not determine the tab switcher's horizontal position"
+        );
+    }
 
     #[test]
     fn standalone_markdown_descriptor_preserves_the_external_file() -> anyhow::Result<()> {
@@ -329,7 +437,9 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
-    fn standalone_source_preserving_preview_and_mode_switch_keep_bytes(cx: &mut TestAppContext) {
+    fn standalone_preview_canonicalizes_without_saving_original_file_bytes(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -340,6 +450,11 @@ mod external_markdown_tests {
             "> <https://example.com/path_(item)>\n\n",
             "[README](README_CN.md) and `snake_case(value)`\n\n",
             "2. second\n\n_italic_\n",
+        );
+        let canonical = concat!(
+            "> <https://example.com/path\\_(item)>\n\n",
+            "[README](README_CN.md) and `snake_case(value)`\n\n",
+            "1. second\n\n*italic*",
         );
         std::fs::write(&path, source).unwrap();
         let (window, view) = cx.update(|cx| {
@@ -360,16 +475,10 @@ mod external_markdown_tests {
         let document_id = view.read_with(&cx, |view, cx| {
             let id = view.active_document_id.clone().unwrap();
             let session = view.markdown_sessions.get(&id).unwrap();
-            assert_eq!(source, session.preview.read(cx).source());
-            assert_eq!(
-                concat!(
-                    "<https://example.com/path_(item)>\n\n",
-                    "README and snake_case(value)\n\n",
-                    "second\n\nitalic\n",
-                ),
-                session.preview.read(cx).projected_text()
-            );
-            assert!(!session.preview.read(cx).is_dirty());
+            let editor = session.editor.read(cx);
+            assert_eq!(canonical, editor.markdown(cx));
+            assert_eq!(markdown_editor::ViewMode::Rendered, editor.view_mode());
+            assert!(!editor.is_dirty());
             id
         });
         cx.update(|window, cx| {
@@ -379,6 +488,13 @@ mod external_markdown_tests {
         });
         cx.run_until_parked();
 
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            let editor = session.editor.read(cx);
+            assert_eq!(canonical, editor.markdown(cx));
+            assert_eq!(markdown_editor::ViewMode::Source, editor.view_mode());
+            assert!(!editor.is_dirty());
+        });
         assert_eq!(source, std::fs::read_to_string(path).unwrap());
     }
 
@@ -506,20 +622,10 @@ mod external_markdown_tests {
         );
 
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "manual edit",
-                        markdown_source::SourceSelection {
-                            anchor: 11,
-                            head: 11,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("manual edit".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -574,17 +680,10 @@ mod external_markdown_tests {
         cx.run_until_parked();
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
 
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "dirty",
-                        markdown_source::SourceSelection { anchor: 5, head: 5 },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("dirty".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -654,18 +753,8 @@ mod external_markdown_tests {
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
         view.update_in(&mut cx, |view, window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "wysiwyg edit",
-                        markdown_source::SourceSelection {
-                            anchor: 12,
-                            head: 12,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("wysiwyg edit".to_owned(), cx));
                 editor.focus(window, cx);
             });
         });
@@ -690,17 +779,16 @@ mod external_markdown_tests {
         );
         view.update_in(&mut cx, |view, window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.source_editor.update(cx, |input, cx| {
-                let source_len = input.value().len();
-                input.set_selected_range(0..source_len, false, window, cx);
-                input.focus(window, cx);
+            session.editor.update(cx, |editor, cx| {
+                assert_eq!(markdown_editor::ViewMode::Source, editor.view_mode());
+                assert!(editor.replace_markdown("source edit".to_owned(), cx));
+                editor.focus(window, cx);
             });
         });
-        cx.simulate_input("source edit");
         cx.run_until_parked();
         view.read_with(&cx, |view, _| {
             assert_eq!(
-                MarkdownSyncState::SourceDirty,
+                MarkdownSyncState::Dirty,
                 view.markdown_sessions
                     .get(&document_id)
                     .unwrap()
@@ -714,7 +802,7 @@ mod external_markdown_tests {
     }
 
     #[gpui::test]
-    fn standalone_markdown_preview_uses_the_editable_wysiwyg_editor(cx: &mut TestAppContext) {
+    fn standalone_markdown_uses_one_editable_velotype_editor_across_modes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -722,11 +810,8 @@ mod external_markdown_tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("editable.md");
         let source = "# Title\n\nBody\n";
+        let canonical = "# Title\n\nBody";
         std::fs::write(&path, source).unwrap();
-        let body_id = markdown_source::SourceMarkdownDocument::parse(source)
-            .unwrap()
-            .blocks[1]
-            .id;
         let (window, view) = cx.update(|cx| {
             let mut view = None;
             let window = cx
@@ -746,48 +831,35 @@ mod external_markdown_tests {
             cx.debug_bounds("markdown-readonly-preview").is_none(),
             "the legacy read-only preview must not remain mounted"
         );
-        cx.debug_bounds("markdown-wysiwyg-editor")
-            .expect("the editable WYSIWYG editor must be rendered");
-        let body = cx
-            .debug_bounds(Box::leak(
-                format!("markdown-preview-block-{}", body_id.0).into_boxed_str(),
-            ))
-            .expect("the Markdown editor must expose its rendered body block");
-        cx.simulate_click(body.center(), gpui::Modifiers::default());
+        cx.debug_bounds("markdown-editor")
+            .expect("the embedded Velotype editor must be rendered");
+        let (document_id, editor) = view.read_with(&cx, |view, _| {
+            let id = view.active_document_id.as_ref().unwrap();
+            (
+                id.clone(),
+                view.markdown_sessions.get(id).unwrap().editor.clone(),
+            )
+        });
+        editor.update_in(&mut cx, |editor, window, cx| {
+            assert_eq!(canonical, editor.markdown(cx));
+            assert_eq!(markdown_editor::ViewMode::Rendered, editor.view_mode());
+            assert!(editor.focus(window, cx));
+            assert!(editor.replace_markdown("# Title\n\nBodyX\n".to_owned(), cx));
+        });
         cx.run_until_parked();
 
-        let editor = view.read_with(&cx, |view, _| {
-            let id = view.active_document_id.as_ref().unwrap();
-            view.markdown_sessions.get(id).unwrap().preview.clone()
-        });
-        assert_eq!(
-            Some(body_id),
-            editor.read_with(&cx, |editor, _| editor.active_block())
-        );
-        let input = editor.read_with(&cx, |editor, _| editor.input_state());
-        input.update_in(&mut cx, |input, window, cx| {
-            input.set_selected_range(4..4, false, window, cx);
-        });
-        cx.simulate_keystrokes("X");
-        cx.run_until_parked();
-
-        let document_id = view.read_with(&cx, |view, cx| {
-            let id = view.active_document_id.as_ref().unwrap();
-            let session = view.markdown_sessions.get(id).unwrap();
-            assert_eq!("# Title\n\nBodyX\n", session.preview.read(cx).source());
-            assert_eq!(
-                source,
-                session.source_editor.read(cx).value().as_ref(),
-                "the hidden source editor must not be rewritten on every WYSIWYG keystroke"
-            );
-            assert!(session.preview.read(cx).is_dirty());
-            id.clone()
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&document_id).unwrap();
+            assert_eq!("# Title\n\nBodyX", session.editor.read(cx).markdown(cx));
+            assert!(session.editor.read(cx).is_dirty());
+            assert_eq!(MarkdownSyncState::Dirty, session.state.sync_state);
         });
 
         view.update_in(&mut cx, |view, window, cx| {
             view.save_markdown_document(&document_id, window, cx);
         });
         cx.run_until_parked();
+        assert_eq!("# Title\n\nBodyX", std::fs::read_to_string(&path).unwrap());
         view.update_in(&mut cx, |view, window, cx| {
             view.toggle_markdown_mode(document_id.clone(), window, cx);
         });
@@ -796,10 +868,81 @@ mod external_markdown_tests {
             let session = view.markdown_sessions.get(&document_id).unwrap();
             assert_eq!(crate::MarkdownViewMode::Source, session.state.mode);
             assert_eq!(
-                "# Title\n\nBodyX\n",
-                session.source_editor.read(cx).value().as_ref(),
-                "switching to source mode must synchronize the latest source once"
+                markdown_editor::ViewMode::Source,
+                editor.read(cx).view_mode()
             );
+            assert_eq!("# Title\n\nBodyX", editor.read(cx).markdown(cx));
+            assert!(!editor.read(cx).is_dirty());
+        });
+    }
+
+    #[gpui::test]
+    fn markdown_theme_refresh_preserves_the_existing_editor_and_document(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("host-services.md");
+        std::fs::write(&path, "alpha").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+
+        let editor = view.read_with(&cx, |view, _| {
+            let document_id = view.active_document_id.as_ref().unwrap();
+            view.markdown_sessions
+                .get(document_id)
+                .unwrap()
+                .editor
+                .clone()
+        });
+        editor.update_in(&mut cx, |editor, _window, cx| {
+            assert!(editor.has_code_highlight_provider());
+            assert!(editor.replace_markdown("beta".to_owned(), cx));
+        });
+        cx.run_until_parked();
+        let editor_id = editor.entity_id();
+        let before = editor.read_with(&cx, |editor, cx| {
+            (
+                editor.markdown(cx),
+                editor.revision(),
+                editor.is_dirty(),
+                editor.host_services_revision(),
+            )
+        });
+
+        view.update_in(&mut cx, |view, _window, cx| {
+            view.set_editor_theme(MarkdownEditorTheme::from_app(cx), cx);
+        });
+        cx.run_until_parked();
+
+        let active_editor_id = view.read_with(&cx, |view, _| {
+            let document_id = view.active_document_id.as_ref().unwrap();
+            view.markdown_sessions
+                .get(document_id)
+                .unwrap()
+                .editor
+                .entity_id()
+        });
+        assert_eq!(editor_id, active_editor_id);
+        editor.read_with(&cx, |editor, cx| {
+            assert_eq!(before.0, editor.markdown(cx));
+            assert_eq!(before.1, editor.revision());
+            assert_eq!(before.2, editor.is_dirty());
+            assert_eq!(before.3 + 1, editor.host_services_revision());
+            assert!(editor.has_code_highlight_provider());
         });
     }
 
@@ -828,20 +971,10 @@ mod external_markdown_tests {
         cx.run_until_parked();
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
 
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "first edit",
-                        markdown_source::SourceSelection {
-                            anchor: 10,
-                            head: 10,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("first edit".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -853,20 +986,10 @@ mod external_markdown_tests {
             "the first half of the throttle window must not write to disk"
         );
 
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "latest edit",
-                        markdown_source::SourceSelection {
-                            anchor: 11,
-                            head: 11,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("latest edit".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -911,21 +1034,11 @@ mod external_markdown_tests {
         cx.run_until_parked();
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
 
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             view.tree.markdown_save_mode = crate::MarkdownSaveMode::Manual;
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "manual edit",
-                        markdown_source::SourceSelection {
-                            anchor: 11,
-                            head: 11,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("manual edit".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -935,7 +1048,7 @@ mod external_markdown_tests {
         assert_eq!("before", std::fs::read_to_string(&path).unwrap());
         view.read_with(&cx, |view, _| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            assert_eq!(MarkdownSyncState::SourceDirty, session.state.sync_state);
+            assert_eq!(MarkdownSyncState::Dirty, session.state.sync_state);
         });
 
         view.update_in(&mut cx, |view, window, cx| {
@@ -975,20 +1088,10 @@ mod external_markdown_tests {
         cx.run_until_parked();
         let document_id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
 
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "newer local revision",
-                        markdown_source::SourceSelection {
-                            anchor: 20,
-                            head: 20,
-                        },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("newer local revision".to_owned(), cx));
             });
         });
         cx.run_until_parked();
@@ -1003,8 +1106,8 @@ mod external_markdown_tests {
 
         view.read_with(&cx, |view, cx| {
             let session = view.markdown_sessions.get(&document_id).unwrap();
-            assert_eq!("newer local revision", session.preview.read(cx).source());
-            assert_eq!(MarkdownSyncState::SourceDirty, session.state.sync_state);
+            assert_eq!("newer local revision", session.editor.read(cx).markdown(cx));
+            assert_eq!(MarkdownSyncState::Dirty, session.state.sync_state);
         });
     }
 
@@ -1072,51 +1175,33 @@ mod external_markdown_tests {
         cx.run_until_parked();
         let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
         view.update_in(&mut cx, |view, window, cx| {
-            view.toggle_markdown_mode(id, window, cx);
+            view.toggle_markdown_mode(id.clone(), window, cx);
         });
         cx.run_until_parked();
-        let source_editor = view.read_with(&cx, |view, _| {
-            view.markdown_sessions
-                .values()
-                .next()
-                .unwrap()
-                .source_editor
-                .clone()
+        let editor = view.read_with(&cx, |view, _| {
+            view.markdown_sessions.get(&id).unwrap().editor.clone()
         });
-        view.update_in(&mut cx, |view, window, cx| {
-            let session = view.markdown_sessions.values().next().unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "after",
-                        markdown_source::SourceSelection { anchor: 5, head: 5 },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
-            });
-            session.source_editor.update(cx, |input, cx| {
-                input.set_value("after", window, cx);
-                input.focus(window, cx);
-            });
+        editor.update_in(&mut cx, |editor, window, cx| {
+            assert_eq!(markdown_editor::ViewMode::Source, editor.view_mode());
+            assert!(editor.replace_markdown("after".to_owned(), cx));
+            assert!(editor.focus(window, cx));
         });
         cx.run_until_parked();
         view.read_with(&cx, |view, cx| {
-            let session = view.markdown_sessions.values().next().unwrap();
-            assert_eq!("after", session.preview.read(cx).source());
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert_eq!("after", session.editor.read(cx).markdown(cx));
         });
-        #[cfg(target_os = "macos")]
-        cx.simulate_keystrokes("cmd-z");
-        #[cfg(not(target_os = "macos"))]
-        cx.simulate_keystrokes("ctrl-z");
+        editor.update(&mut cx, |editor, cx| {
+            assert!(editor.undo(cx));
+        });
         cx.run_until_parked();
-        assert_eq!(
-            "before",
-            source_editor.read_with(&cx, |input, _| input.value().to_string())
-        );
         view.read_with(&cx, |view, cx| {
-            let session = view.markdown_sessions.values().next().unwrap();
-            assert_eq!("before", session.preview.read(cx).source());
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert_eq!("before", session.editor.read(cx).markdown(cx));
+            assert_eq!(
+                markdown_editor::ViewMode::Source,
+                editor.read(cx).view_mode()
+            );
         });
     }
 
@@ -1142,6 +1227,11 @@ mod external_markdown_tests {
             (window, view.unwrap())
         });
         let mut visual = VisualTestContext::from_window(window.into(), cx);
+        let id = view.read_with(&visual, |view, _| view.active_document_id.clone().unwrap());
+        view.update_in(&mut visual, |view, window, cx| {
+            view.toggle_markdown_mode(id.clone(), window, cx);
+        });
+        visual.run_until_parked();
         std::fs::write(&path, "external _change_").unwrap();
         view.update_in(&mut visual, |view, window, cx| {
             view.reload_active_markdown_from_disk(window, cx);
@@ -1151,14 +1241,84 @@ mod external_markdown_tests {
                 .markdown_sessions
                 .get(view.active_document_id.as_ref().unwrap())
                 .unwrap();
-            assert_eq!("external _change_", session.preview.read(cx).source());
+            assert_eq!("external _change_", session.editor.read(cx).markdown(cx));
             assert_eq!(
-                "external _change_",
-                session.source_editor.read(cx).value().as_ref()
+                markdown_editor::ViewMode::Source,
+                session.editor.read(cx).view_mode()
             );
             assert_eq!(
                 crate::markdown_session::MarkdownSyncState::Clean,
                 session.state.sync_state
+            );
+        });
+        view.update_in(&mut visual, |view, window, cx| {
+            view.toggle_markdown_mode(id.clone(), window, cx);
+        });
+        visual.run_until_parked();
+        view.read_with(&visual, |view, cx| {
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert_eq!(
+                markdown_editor::ViewMode::Rendered,
+                session.editor.read(cx).view_mode()
+            );
+            assert_eq!("external *change*", session.editor.read(cx).markdown(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn clean_external_reload_discards_pre_reload_undo_history(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("reload-history.md");
+        std::fs::write(&path, "before").unwrap();
+        let (window, view) = cx.update(|cx| {
+            let mut view = None;
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let entity =
+                        cx.new(|cx| NotesView::new_for_markdown_file(path.clone(), window, cx));
+                    view = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .unwrap();
+            (window, view.unwrap())
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
+        let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
+        let editor = view.read_with(&cx, |view, _| {
+            view.markdown_sessions.get(&id).unwrap().editor.clone()
+        });
+
+        editor.update(&mut cx, |editor, cx| {
+            assert!(editor.replace_markdown("locally saved".to_owned(), cx));
+        });
+        cx.run_until_parked();
+        view.update_in(&mut cx, |view, window, cx| {
+            view.save_markdown_document(&id, window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!("locally saved", std::fs::read_to_string(&path).unwrap());
+
+        std::fs::write(&path, "external").unwrap();
+        view.update_in(&mut cx, |view, window, cx| {
+            view.reload_active_markdown_from_disk(window, cx);
+        });
+        cx.run_until_parked();
+
+        view.read_with(&cx, |view, cx| {
+            let session = view.markdown_sessions.get(&id).unwrap();
+            assert_eq!("external", session.editor.read(cx).markdown(cx));
+            assert_eq!(MarkdownSyncState::Clean, session.state.sync_state);
+            assert!(!session.editor.read(cx).is_dirty());
+        });
+        editor.update(&mut cx, |editor, cx| {
+            assert!(
+                !editor.undo(cx),
+                "Undo must not restore locally saved content from before the reload"
             );
         });
     }
@@ -1192,7 +1352,7 @@ mod external_markdown_tests {
         });
         view.read_with(&cx, |view, cx| {
             let session = view.markdown_sessions.values().next().unwrap();
-            assert_eq!("external", session.preview.read(cx).source());
+            assert_eq!("external", session.editor.read(cx).markdown(cx));
             assert!(matches!(session.state.sync_state, MarkdownSyncState::Clean));
         });
     }
@@ -1220,17 +1380,10 @@ mod external_markdown_tests {
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let id = view.read_with(&cx, |view, _| view.active_document_id.clone().unwrap());
-        view.update_in(&mut cx, |view, window, cx| {
+        view.update_in(&mut cx, |view, _window, cx| {
             let session = view.markdown_sessions.get(&id).unwrap();
-            session.preview.update(cx, |editor, cx| {
-                editor
-                    .apply_source_value(
-                        "local",
-                        markdown_source::SourceSelection { anchor: 5, head: 5 },
-                        window,
-                        cx,
-                    )
-                    .unwrap();
+            session.editor.update(cx, |editor, cx| {
+                assert!(editor.replace_markdown("local".to_owned(), cx));
             });
         });
         std::fs::write(&path, "external").unwrap();
@@ -1239,7 +1392,7 @@ mod external_markdown_tests {
         });
         view.read_with(&cx, |view, cx| {
             let session = view.markdown_sessions.get(&id).unwrap();
-            assert_eq!("local", session.preview.read(cx).source());
+            assert_eq!("local", session.editor.read(cx).markdown(cx));
             assert!(matches!(
                 session.state.sync_state,
                 MarkdownSyncState::Conflict

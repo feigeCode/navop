@@ -3003,8 +3003,15 @@ impl TabContainer {
         h_flex()
             .id("tab-bar")
             .debug_selector(|| "tab-bar".to_owned())
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
             .w_full()
+            .min_w_0()
             .h(px(40.0))
+            .flex_shrink_0()
+            .self_stretch()
             .bg(bg_color)
             .items_center()
             .border_b_1()
@@ -3155,7 +3162,9 @@ impl TabContainer {
                 h_flex()
                     .id("tabs")
                     .debug_selector(|| "tabs".to_owned())
-                    .size_full()
+                    .w_full()
+                    .min_w_0()
+                    .h_full()
                     .items_center()
                     // 仅在启用窗口控件时设置拖动区域（用于 Windows 原生拖动）
                     .when(show_window_controls, |this| {
@@ -3534,6 +3543,7 @@ impl TabContainer {
             .child(
                 Button::new("tab-dropdown-btn")
                     .debug_selector(|| "tab-dropdown-btn".to_owned())
+                    .flex_shrink_0()
                     .icon(IconName::ChevronDown)
                     .ghost()
                     .compact()
@@ -3867,13 +3877,18 @@ impl Render for TabContainer {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
+            .child(self.render_tab_bar(window, cx))
             .child(
                 v_flex()
-                    .size_full()
+                    .absolute()
+                    .top(px(40.0))
+                    .right_0()
+                    .bottom_0()
+                    .left_0()
                     .min_w_0()
                     .min_h_0()
+                    .items_stretch()
                     .overflow_hidden()
-                    .child(self.render_tab_bar(window, cx))
                     .child(self.render_tab_content(window, cx)),
             )
     }
@@ -4170,6 +4185,65 @@ mod tests {
             })
             .expect("window opens");
         });
+    }
+
+    #[gpui::test]
+    fn macos_tab_dropdown_stays_anchored_to_the_main_slot_right_edge(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Theme::default());
+        });
+
+        let window = cx.update(|cx| {
+            let window_bounds = Bounds::centered(None, size(px(1000.0), px(600.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let home = cx.new(|cx| TestTab::new("home", cx));
+                    let notes = cx.new(|cx| TestTab::new("notes", cx));
+                    let tabs = cx.new(|cx| {
+                        TabContainer::new(window, cx).with_navigation_sidebar_toggle(true)
+                    });
+                    tabs.update(cx, |tabs, cx| {
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("home", "test", home),
+                            window,
+                            cx,
+                        );
+                        tabs.add_and_activate_tab_with_focus(
+                            TabItem::new("notes", "test", notes),
+                            window,
+                            cx,
+                        );
+                    });
+                    let root = cx.new(|_| TestWindow {
+                        tab_container: tabs,
+                    });
+                    cx.new(|cx| Root::new(root, window, cx))
+                },
+            )
+            .expect("test window opens")
+        });
+
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+
+        let main_slot = cx.debug_bounds("test-main-slot").expect("main slot");
+        let tab_bar = cx.debug_bounds("tab-bar").expect("tab bar");
+        let dropdown = cx
+            .debug_bounds("tab-dropdown-btn")
+            .expect("tab dropdown button");
+
+        assert_eq!(main_slot.right(), tab_bar.right());
+        assert_eq!(
+            tab_bar.right(),
+            dropdown.right(),
+            "the tab switcher must consume the trailing edge instead of following the tabs' intrinsic width"
+        );
     }
 
     #[gpui::test]

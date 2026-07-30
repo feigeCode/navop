@@ -4,6 +4,7 @@ use gpui::RenderImage;
 use remote_desktop::RemoteDesktopCursor;
 
 use super::frame_lifecycle::RenderedFrameLifecycle;
+use crate::native_cursor;
 use crate::pixels::rgba_to_render_image;
 use crate::pointer::RemoteCursorGeometry;
 
@@ -58,9 +59,17 @@ pub(super) struct RemoteCursorState {
     position: Option<(u16, u16)>,
     mode: RemoteCursorMode,
     pointer_hovered: bool,
+    manage_native_cursor: bool,
 }
 
 impl RemoteCursorState {
+    pub(super) fn new(manage_native_cursor: bool) -> Self {
+        Self {
+            manage_native_cursor,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn install(&mut self, cursor: RemoteDesktopCursor) -> anyhow::Result<()> {
         self.latest = Some(RemoteCursorImage::new(cursor)?);
         self.mode = RemoteCursorMode::Bitmap;
@@ -69,37 +78,46 @@ impl RemoteCursorState {
 
     pub(super) fn set_position(&mut self, x: u16, y: u16) {
         self.position = Some((x, y));
+        self.sync_native_cursor();
     }
 
     pub(super) fn show_default(&mut self) {
         self.mode = RemoteCursorMode::Default;
         self.clear_images();
+        self.sync_native_cursor();
     }
 
     pub(super) fn hide(&mut self) {
         self.mode = RemoteCursorMode::Hidden;
         self.clear_images();
+        self.sync_native_cursor();
     }
 
     pub(super) fn reset_session(&mut self) {
         self.mode = RemoteCursorMode::Default;
         self.position = None;
         self.clear_images();
+        self.sync_native_cursor();
     }
 
     pub(super) fn set_pointer_hovered(&mut self, hovered: bool) {
         self.pointer_hovered = hovered;
+        self.sync_native_cursor();
+    }
+
+    pub(super) fn refresh_native_cursor(&self) {
+        self.sync_native_cursor();
     }
 
     pub(super) fn promote_latest(&mut self) -> Option<Arc<RenderImage>> {
         let latest = self.latest.clone()?;
-        self.rendered.promote(latest).map(|cursor| cursor.image)
+        let retired = self.rendered.promote(latest).map(|cursor| cursor.image);
+        self.sync_native_cursor();
+        retired
     }
 
     pub(super) fn paint_state(&self, remote_size: Option<(u16, u16)>) -> Option<RemoteCursorPaint> {
-        // GPUI cannot keep the native cursor hidden while it is moving, so let
-        // the native cursor own the hovered content and avoid drawing two cursors.
-        if self.pointer_hovered || self.mode != RemoteCursorMode::Bitmap {
+        if self.mode != RemoteCursorMode::Bitmap {
             return None;
         }
         let (remote_width, remote_height) = remote_size?;
@@ -141,6 +159,9 @@ impl RemoteCursorState {
         self.position = None;
         self.mode = RemoteCursorMode::Default;
         self.pointer_hovered = false;
+        if self.manage_native_cursor {
+            native_cursor::restore();
+        }
         cursors.into_iter().map(|cursor| cursor.image).collect()
     }
 
@@ -148,6 +169,31 @@ impl RemoteCursorState {
         self.pending_drops
             .extend(self.rendered.take_all_distinct(self.latest.take()));
     }
+
+    fn sync_native_cursor(&self) {
+        if !self.manage_native_cursor {
+            return;
+        }
+        if should_hide_native_cursor(self.mode, self.pointer_hovered, self.has_paintable_bitmap()) {
+            native_cursor::hide();
+        } else {
+            native_cursor::restore();
+        }
+    }
+
+    fn has_paintable_bitmap(&self) -> bool {
+        self.position.is_some() && self.rendered.current().is_some()
+    }
+}
+
+fn should_hide_native_cursor(
+    mode: RemoteCursorMode,
+    pointer_hovered: bool,
+    bitmap_available: bool,
+) -> bool {
+    pointer_hovered
+        && (mode == RemoteCursorMode::Hidden
+            || (mode == RemoteCursorMode::Bitmap && bitmap_available))
 }
 
 #[cfg(test)]

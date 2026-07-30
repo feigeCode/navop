@@ -51,10 +51,27 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
 }
 
 #[test]
-fn local_pointer_move_keeps_the_remote_cursor_in_sync_without_native_cursor_side_effects() {
-    let input = include_str!("input.rs");
+fn remote_cursor_never_calls_gpui_paint_only_cursor_apis_from_output_callbacks() {
+    let output = include_str!("output.rs");
     let cursor = include_str!("cursor.rs");
-    let lib = include_str!("../lib.rs");
+    let native_cursor = include_str!("../native_cursor.rs");
+    let view = include_str!("../view.rs");
+
+    assert!(!output.contains("set_cursor_style"));
+    assert!(!cursor.contains("set_cursor_style"));
+    assert!(cursor.contains("self.has_paintable_bitmap()"));
+    assert!(cursor.contains("if !self.manage_native_cursor"));
+    assert!(view.contains(
+        "let manage_native_cursor = config.options.protocol == RemoteDesktopProtocol::Rdp;"
+    ));
+    assert!(view.contains("RemoteCursorState::new(manage_native_cursor)"));
+    assert!(!native_cursor.contains("ShowCursor"));
+    assert!(native_cursor.contains("SetCursor"));
+}
+
+#[test]
+fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cursor() {
+    let input = include_str!("input.rs");
     let move_start = input
         .find("pub(super) fn send_pointer_move")
         .expect("pointer move handler");
@@ -63,24 +80,23 @@ fn local_pointer_move_keeps_the_remote_cursor_in_sync_without_native_cursor_side
         .map(|offset| move_start + offset)
         .expect("mouse button handler");
     let pointer_move = &input[move_start..move_end];
+
     let pointer_hover = pointer_move
         .find("self.cursor.set_pointer_hovered(true);")
-        .expect("pointer input must mark the remote content as hovered");
-    let remote_size = pointer_move
-        .find("let Some((remote_width, remote_height)) = self.remote_size")
-        .expect("pointer move must require the remote size");
+        .expect("pointer movement must keep hover state synchronized");
     let cursor_position = pointer_move
         .find("self.cursor.set_position(x, y);")
-        .expect("local pointer position must update the rendered cursor");
+        .expect("local pointer movement must predict the canvas cursor position");
+    let native_refresh = pointer_move
+        .find("self.cursor.refresh_native_cursor();")
+        .expect("native cursor state must be refreshed after local prediction");
     let remote_input = pointer_move
         .find("self.send_input(RemoteDesktopInput::MouseMove { x, y });")
-        .expect("local pointer position must be sent to the remote session");
+        .expect("pointer movement must still be sent to the remote session");
 
-    assert!(pointer_hover < remote_size);
-    assert!(cursor_position < remote_input);
-    assert!(!input.contains("refresh_native_cursor"));
-    assert!(!cursor.contains("native_cursor::"));
-    assert!(!lib.contains("mod native_cursor;"));
+    assert!(pointer_hover < cursor_position);
+    assert!(cursor_position < native_refresh);
+    assert!(native_refresh < remote_input);
 }
 
 fn assert_parent_bounded_remote_desktop_content(source: &str) {
@@ -114,7 +130,10 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
         .expect("empty-frame status")..];
     assert!(status.contains(".min_w_0()"));
     assert!(status.contains(".max_w_full()"));
+    assert!(status.contains(".flex_shrink_0()"));
     assert!(status.contains(".overflow_hidden()"));
+    assert!(status.contains(".whitespace_nowrap()"));
+    assert!(status.contains(".text_center()"));
     for constraint in [
         ".size_full()",
         ".min_w_0()",
