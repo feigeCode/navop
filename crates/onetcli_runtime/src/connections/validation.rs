@@ -114,8 +114,18 @@ fn invalid_fields(input: &Value) -> Vec<Value> {
         "port_forwarding" => {
             add_invalid_i64(values, "ssh_connection_id", &mut invalid);
             add_invalid_u16(values, "bind_port", &mut invalid);
-            add_invalid_u16(values, "target_port", &mut invalid);
-            add_invalid_enum(values, "kind", &["Local", "Dynamic"], &mut invalid);
+            if !matches!(
+                values.get("kind").and_then(Value::as_str),
+                Some("Dynamic" | "dynamic")
+            ) {
+                add_invalid_range(values, "target_port", 1, u16::MAX as u64, &mut invalid);
+            }
+            add_invalid_enum(
+                values,
+                "kind",
+                &["Local", "local", "Remote", "remote", "Dynamic", "dynamic"],
+                &mut invalid,
+            );
         }
         "rdp" | "vnc" => add_invalid_u16(values, "port", &mut invalid),
         _ => {}

@@ -1,6 +1,6 @@
 # SSH port forwarding
 
-Port forwarding uses a saved SSH/SFTP connection as a network path. Navop supports local forwarding and dynamic SOCKS forwarding, with state and activity logs. A tunnel does not grant application credentials or replace end-to-end TLS.
+Port forwarding uses a saved SSH/SFTP connection as a network path. Navop supports local forwarding, remote forwarding (SSH `-R`), and dynamic SOCKS forwarding, with state and activity logs. A tunnel does not grant application credentials or replace end-to-end TLS.
 
 ## Select the base SSH connection
 
@@ -14,6 +14,14 @@ Local forwarding maps a local listen address and port to a destination visible f
 
 The destination is resolved from the jump host's network perspective. If the listen port is occupied, choose another and update the downstream client. Connect that client to the local address while retaining the target service's credentials and certificates.
 
+## Configure remote forwarding (SSH `-R`)
+
+Remote forwarding listens on the SSH server's bind host and port, then carries each incoming connection back through SSH to a target reachable from the computer running Navop. For example, bind `127.0.0.1:18080` with target `127.0.0.1:3000` means that connecting to `127.0.0.1:18080` on the SSH server reaches `127.0.0.1:3000` on the Navop computer. The target is resolved from the Navop computer's network perspective.
+
+The SSH server must permit TCP forwarding and may still reject a remote-listen request. Set the bind port to `0` to let the server allocate an available port; the running tab displays the actual address. Stopping the forward or losing the SSH session removes the server-side listener.
+
+Whether a non-loopback bind is allowed depends on server policy such as `GatewayPorts`. Binding `0.0.0.0`, `::`, or another externally reachable address can expose a service on the Navop computer to the server's LAN or the public Internet. Do this only with deliberate service authentication, firewall rules, and access controls; prefer `127.0.0.1` by default.
+
 ## Configure dynamic SOCKS
 
 Dynamic forwarding creates a local SOCKS proxy whose clients select each destination. Configure supporting browsers or tools explicitly. DNS routing depends on the client; verify that sensitive names are not resolved outside the proxy.
@@ -22,7 +30,7 @@ Never expose the SOCKS listener to an untrusted network or treat it as anonymous
 
 ## Read state and logs
 
-Use status, connection counts, retries, and activity logs to distinguish SSH disconnects, local port conflicts, destination refusal, DNS failure, and access denial. Persistent failure needs a root-cause fix, not endless retrying.
+Use status, retries, and activity logs to distinguish SSH disconnects, listen-port conflicts, rejected remote-listen requests, destination refusal, DNS failure, and access denial. Persistent failure needs a root-cause fix, not endless retrying.
 
 Logs can contain hosts, ports, and timestamps and should be redacted before sharing.
 

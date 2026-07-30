@@ -122,6 +122,7 @@ fn parse_serial_flow_control(value: &str) -> Result<SerialFlowControl, ToolError
 fn parse_port_forwarding_kind(value: &str) -> Result<PortForwardingKind, ToolError> {
     match value {
         "Local" | "local" => Ok(PortForwardingKind::Local),
+        "Remote" | "remote" => Ok(PortForwardingKind::Remote),
         "Dynamic" | "dynamic" => Ok(PortForwardingKind::Dynamic),
         _ => unknown_value("port forwarding kind", value),
     }

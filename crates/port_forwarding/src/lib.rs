@@ -4,6 +4,7 @@ mod runtime_tests;
 
 pub use runtime::{
     DynamicForwardingRequest, LocalForwardingRequest, PortForwardingRuntime,
-    build_dynamic_forwarding_request, build_local_forwarding_request,
+    RemoteForwardingRequest, build_dynamic_forwarding_request, build_local_forwarding_request,
+    build_remote_forwarding_request,
 };
 pub use ssh::LocalPortForwardActivity;

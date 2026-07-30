@@ -96,13 +96,13 @@ PortForwarding:
     zh-CN: 绑定地址不能为空。
     zh-HK: 綁定位址不能為空。
   validation_target_host:
-    en: Target host is required for local forwarding.
-    zh-CN: 本地转发需要填写目标地址。
-    zh-HK: 本機轉送需要填寫目標位址。
+    en: Target host is required for local or remote forwarding.
+    zh-CN: 本地或远程转发需要填写目标地址。
+    zh-HK: 本機或遠端轉送需要填寫目標位址。
   validation_target_port:
-    en: Target port is required for local forwarding.
-    zh-CN: 本地转发需要填写目标端口。
-    zh-HK: 本機轉送需要填寫目標連接埠。
+    en: Target port is required for local or remote forwarding.
+    zh-CN: 本地或远程转发需要填写目标端口。
+    zh-HK: 本機或遠端轉送需要填寫目標連接埠。
   validation_number:
     en: "%{field} must be a valid port number."
     zh-CN: "%{field} 必须是有效端口。"
@@ -113,6 +113,10 @@ PortForwardingTab:
     en: Local Port Forwarding
     zh-CN: 本地端口转发
     zh-HK: 本機連接埠轉送
+  remote_title:
+    en: Remote Port Forwarding
+    zh-CN: 远程端口转发
+    zh-HK: 遠端連接埠轉送
   dynamic_title:
     en: Dynamic SOCKS Forwarding
     zh-CN: 动态 SOCKS 转发
@@ -125,6 +129,10 @@ PortForwardingTab:
     en: Local Listener
     zh-CN: 本机监听
     zh-HK: 本機監聽
+  remote_endpoint:
+    en: Remote Listener
+    zh-CN: 远端监听
+    zh-HK: 遠端監聽
   ssh_tunnel:
     en: SSH Tunnel
     zh-CN: SSH 隧道
@@ -133,6 +141,10 @@ PortForwardingTab:
     en: Remote Target
     zh-CN: 远端目标
     zh-HK: 遠端目標
+  local_target:
+    en: Local Target
+    zh-CN: 本机目标
+    zh-HK: 本機目標
   dynamic_target:
     en: Dynamic Target
     zh-CN: 动态目标

@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopFailure {
     NotRunning,
@@ -10,7 +8,7 @@ pub enum StopFailure {
 pub enum PortForwardingTabState {
     Starting,
     Running {
-        local_addr: SocketAddr,
+        bind_addr: String,
     },
     Stopping,
     Failed {
@@ -25,8 +23,10 @@ impl PortForwardingTabState {
         Self::Starting
     }
 
-    pub fn started(self, local_addr: SocketAddr) -> Self {
-        Self::Running { local_addr }
+    pub fn started(self, bind_addr: impl Into<String>) -> Self {
+        Self::Running {
+            bind_addr: bind_addr.into(),
+        }
     }
 
     pub fn start_failed(self, error: impl Into<String>) -> Self {
@@ -93,11 +93,11 @@ mod tests {
 
     #[test]
     fn successful_start_records_running_address() {
-        let state = PortForwardingTabState::starting().started("127.0.0.1:9000".parse().unwrap());
+        let state = PortForwardingTabState::starting().started("127.0.0.1:9000");
 
         assert_eq!(
             PortForwardingTabState::Running {
-                local_addr: "127.0.0.1:9000".parse().unwrap()
+                bind_addr: "127.0.0.1:9000".to_string()
             },
             state
         );
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn cancelling_close_keeps_running_state() {
         let state = PortForwardingTabState::Running {
-            local_addr: "127.0.0.1:9000".parse().unwrap(),
+            bind_addr: "127.0.0.1:9000".to_string(),
         };
 
         let after_cancel = state.clone();
@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn stop_failure_keeps_tab_open_with_error() {
         let state = PortForwardingTabState::Running {
-            local_addr: "127.0.0.1:9000".parse().unwrap(),
+            bind_addr: "127.0.0.1:9000".to_string(),
         }
         .begin_stop()
         .stop_failed("disconnect failed");

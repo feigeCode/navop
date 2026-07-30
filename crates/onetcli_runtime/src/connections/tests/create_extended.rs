@@ -1,6 +1,8 @@
 use super::{connection_tool_registry, create_connection, repo};
 use one_core::storage::traits::Repository;
-use one_core::storage::{ConnectionType, RemoteDesktopProtocol, SerialFlowControl, SerialParity};
+use one_core::storage::{
+    ConnectionType, PortForwardingKind, RemoteDesktopProtocol, SerialFlowControl, SerialParity,
+};
 use serde_json::json;
 
 #[test]
@@ -47,7 +49,7 @@ fn create_port_forwarding_connection_persists_forwarding_params() {
             "values": {
                 "name": "postgres tunnel",
                 "ssh_connection_id": 42,
-                "kind": "Dynamic",
+                "kind": "Remote",
                 "bind_host": "127.0.0.1",
                 "bind_port": 1080,
                 "target_host": "db.internal",
@@ -62,6 +64,7 @@ fn create_port_forwarding_connection_persists_forwarding_params() {
         .expect("port forwarding params should parse");
     assert_eq!(ConnectionType::PortForwarding, stored.connection_type);
     assert_eq!(42, params.ssh_connection_id);
+    assert_eq!(PortForwardingKind::Remote, params.kind);
     assert_eq!("127.0.0.1", params.bind_host);
     assert_eq!(1080, params.bind_port);
     assert_eq!("db.internal", params.target_host);

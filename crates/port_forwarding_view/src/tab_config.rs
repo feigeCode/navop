@@ -41,7 +41,7 @@ impl PortForwardingTabConfig {
 
 fn target_label(kind: PortForwardingKind, host: &str, port: u16) -> String {
     match kind {
-        PortForwardingKind::Local => format!("{host}:{port}"),
+        PortForwardingKind::Local | PortForwardingKind::Remote => format!("{host}:{port}"),
         PortForwardingKind::Dynamic => t!("PortForwardingTab.dynamic_target").to_string(),
     }
 }

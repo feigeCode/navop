@@ -1,11 +1,15 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod dynamic_socks;
+mod remote_forwarding;
 mod session_manager;
 mod socks5;
 mod ssh;
 
 pub use dynamic_socks::{DynamicSocksConfig, DynamicSocksTunnel, start_dynamic_socks_forward};
+pub use remote_forwarding::{
+    RemotePortForwardConfig, RemotePortForwardTunnel, start_remote_port_forward_with_config,
+};
 pub use session_manager::SshSessionManager;
 pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,

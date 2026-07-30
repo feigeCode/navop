@@ -310,6 +310,13 @@ fn forwarding_address(connection: &StoredConnection) -> Option<String> {
                 host_port(&target_host, params.target_port)
             ))
         }
+        PortForwardingKind::Remote => {
+            let target_host = non_empty(params.target_host)?;
+            Some(format!(
+                "{address} <- {}",
+                host_port(&target_host, params.target_port)
+            ))
+        }
         PortForwardingKind::Dynamic => Some(address),
     }
 }
@@ -596,6 +603,27 @@ mod tests {
 
         let resolved = connection_copy_actions(&forwarding, true, Some(&ssh));
         assert!(resolved.contains(&ConnectionCopyAction::ForwardingCommand));
+    }
+
+    #[test]
+    fn remote_forwarding_rule_uses_reverse_direction() {
+        let forwarding = StoredConnection::new_port_forwarding(
+            "Reverse".to_string(),
+            PortForwardingParams {
+                ssh_connection_id: 42,
+                kind: PortForwardingKind::Remote,
+                bind_host: "127.0.0.1".to_string(),
+                bind_port: 18080,
+                target_host: "127.0.0.1".to_string(),
+                target_port: 3000,
+            },
+            None,
+        );
+
+        assert_eq!(
+            Some("127.0.0.1:18080 <- 127.0.0.1:3000".to_string()),
+            connection_copy_text(ConnectionCopyAction::ForwardingRule, &forwarding, None,)
+        );
     }
 
     #[test]

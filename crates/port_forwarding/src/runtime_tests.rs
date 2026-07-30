@@ -5,6 +5,7 @@ use one_core::storage::{
 
 use crate::{
     PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
+    build_remote_forwarding_request,
 };
 
 fn ssh_connection(id: i64) -> StoredConnection {
@@ -58,6 +59,21 @@ fn dynamic_forwarding_connection(ssh_connection_id: i64) -> StoredConnection {
             bind_port: 1080,
             target_host: String::new(),
             target_port: 0,
+        },
+        None,
+    )
+}
+
+fn remote_forwarding_connection(ssh_connection_id: i64) -> StoredConnection {
+    StoredConnection::new_port_forwarding(
+        "webhook tunnel".to_string(),
+        PortForwardingParams {
+            ssh_connection_id,
+            kind: PortForwardingKind::Remote,
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 18080,
+            target_host: "127.0.0.1".to_string(),
+            target_port: 3000,
         },
         None,
     )
@@ -122,6 +138,20 @@ fn dynamic_request_uses_referenced_ssh_connection_and_bind_params() {
 
     assert_eq!(request.bind_host, "127.0.0.1");
     assert_eq!(request.bind_port, 1080);
+    assert_eq!(request.ssh_config.host, "bastion.example.com");
+    assert_eq!(request.ssh_config.username, "deploy");
+}
+
+#[test]
+fn remote_request_uses_remote_bind_and_local_target_params() {
+    let request =
+        build_remote_forwarding_request(&remote_forwarding_connection(7), &ssh_connection(7))
+            .unwrap();
+
+    assert_eq!(request.bind_host, "127.0.0.1");
+    assert_eq!(request.bind_port, 18080);
+    assert_eq!(request.target_host, "127.0.0.1");
+    assert_eq!(request.target_port, 3000);
     assert_eq!(request.ssh_config.host, "bastion.example.com");
     assert_eq!(request.ssh_config.username, "deploy");
 }

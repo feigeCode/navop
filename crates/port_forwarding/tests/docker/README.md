@@ -17,4 +17,8 @@ docker compose -f crates/port_forwarding/tests/docker/docker-compose.yml down
 - 密码：`onetcli-pass`
 - 目标：`onetcli-pf-target:80`
 
-E2E 同时验证 Local forwarding、Dynamic SOCKS forwarding、正常停止和监听端口释放。
+E2E 同时验证：
+
+- Local forwarding；
+- Dynamic SOCKS forwarding；
+- Remote forwarding（SSH `-R`），包括 SSH 容器中的远端监听端口、回连到测试进程本机目标以及停止后的端口释放。
