@@ -61,7 +61,14 @@ fn observe_file_events(
     let weak = cx.entity().downgrade();
     let window_handle = window.window_handle();
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        while receiver.recv().await.is_ok() {
+        loop {
+            let next_event = {
+                let receiver = receiver.clone();
+                cx.background_spawn(async move { receiver.recv().await })
+            };
+            if next_event.await.is_err() {
+                break;
+            }
             while receiver.try_recv().is_ok() {}
             let id = document_id.clone();
             let _ = cx.update_window(window_handle, |_, window, cx| {
