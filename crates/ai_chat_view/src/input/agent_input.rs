@@ -8,7 +8,7 @@
 //!
 //! 设计原则:输入框是"哑组件",只接收 [`AgentComposerContext`] 做展示并在交互时 emit
 //! [`AgentInputEvent`];目标用上层注入的列表渲染内置 popover(选中 emit `SelectTarget`),
-//! scope 仅 emit `PickScope` 交上层;模型 / 工具 / 任务模式同样用注入选项渲染内置下拉。
+//! scope 仅 emit `PickScope` 交上层;模型 / 执行模式同样用注入选项渲染内置下拉。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -71,10 +71,8 @@ pub enum AgentInputEvent {
         provider_id: SharedString,
         model: SharedString,
     },
-    /// 在内置下拉中选择了工具模式。
-    SelectToolMode { id: SharedString },
-    /// 在内置下拉中选择了任务模式。
-    SelectTaskMode { id: SharedString },
+    /// 在内置下拉中选择了工具执行模式。
+    SelectExecutionMode { id: SharedString },
     /// 在顶部「Agent」面板中选择内置 Agent 或 ACP Agent。
     SelectAgentBackend { id: Option<SharedString> },
 }
@@ -134,14 +132,6 @@ const CONTEXT_POPOVER_WIDTH: f32 = 400.0;
 const CONTEXT_TARGET_LIST_MAX_HEIGHT: f32 = 320.0;
 const CONTEXT_KIND_MAX_WIDTH: f32 = 92.0;
 
-fn current_task_label(label: &SharedString) -> SharedString {
-    if label.is_empty() {
-        SharedString::from(t!("AgentUi.auto_mode").to_string())
-    } else {
-        label.clone()
-    }
-}
-
 fn toolbar_button_label(label: SharedString) -> impl IntoElement {
     h_flex()
         .w_full()
@@ -159,19 +149,12 @@ fn menu_state_after_open_change(
     requested_open.then_some(menu)
 }
 
-fn current_tool_label(label: &SharedString) -> SharedString {
+fn current_execution_mode_label(label: &SharedString) -> SharedString {
     if label.is_empty() {
-        SharedString::from(t!("AgentUi.manual_confirmation").to_string())
+        SharedString::from(t!("AgentUi.auto").to_string())
     } else {
         label.clone()
     }
-}
-
-fn execution_mode_trigger_label(
-    task_label: &SharedString,
-    tool_label: &SharedString,
-) -> SharedString {
-    SharedString::from(format!("{task_label} · {tool_label}"))
 }
 
 /// Agent 输入框组件。
@@ -196,10 +179,8 @@ pub struct AgentInput {
     target_options: Vec<ComposerTarget>,
     /// 模型下拉选项(上层注入)。
     model_options: Vec<ComposerModelOption>,
-    /// 工具模式下拉选项(上层注入)。
-    tool_options: Vec<ComposerMenuOption>,
-    /// 任务模式下拉选项(上层注入)。
-    task_options: Vec<ComposerMenuOption>,
+    /// 工具执行模式下拉选项(上层注入)。
+    execution_mode_options: Vec<ComposerMenuOption>,
     /// 上下文面板的目标搜索框(与顶部输入框分离,避免抢焦点 / 拦截回车提交)。
     context_search_input: Entity<InputState>,
     /// 上下文面板当前搜索关键字(每次打开面板时重置为空)。
@@ -346,8 +327,7 @@ impl AgentInput {
             context: AgentComposerContext::default(),
             target_options: Vec::new(),
             model_options: Vec::new(),
-            tool_options: Vec::new(),
-            task_options: Vec::new(),
+            execution_mode_options: Vec::new(),
             context_search_input,
             context_search_query: SharedString::default(),
             selected_resource_kind_filter: SharedString::from("all"),
@@ -401,17 +381,15 @@ impl AgentInput {
         cx.notify();
     }
 
-    /// 注入底部三个内置下拉的选项。
+    /// 注入底部模型与工具执行模式下拉的选项。
     pub fn set_menu_options(
         &mut self,
         model_options: Vec<ComposerModelOption>,
-        tool_options: Vec<ComposerMenuOption>,
-        task_options: Vec<ComposerMenuOption>,
+        execution_mode_options: Vec<ComposerMenuOption>,
         cx: &mut Context<Self>,
     ) {
         self.model_options = model_options;
-        self.tool_options = tool_options;
-        self.task_options = task_options;
+        self.execution_mode_options = execution_mode_options;
         cx.notify();
     }
 
@@ -818,27 +796,23 @@ impl AgentInput {
     fn render_execution_mode_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Mode);
-        let task_label = current_task_label(&self.context.task_label);
-        let tool_label = current_tool_label(&self.context.tool_label);
-        let trigger_label = execution_mode_trigger_label(&task_label, &tool_label);
+        let execution_mode_label = current_execution_mode_label(&self.context.execution_mode_label);
         let data = ModeContentData {
-            task_label: task_label.clone(),
-            tool_label,
-            task_options: self.task_options.clone(),
-            tool_options: self.tool_options.clone(),
+            execution_mode_label: execution_mode_label.clone(),
+            options: self.execution_mode_options.clone(),
         };
 
         let theme = self.local_theme(cx);
         let trigger = themed_outline_button(
-            Button::new("agent-task-mode")
-                .debug_selector(|| "agent-task-mode".to_string())
+            Button::new("agent-execution-mode")
+                .debug_selector(|| "agent-execution-mode".to_string())
                 .small()
                 .w_full()
                 .h_full()
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
-                .child(toolbar_button_label(trigger_label)),
+                .child(toolbar_button_label(execution_mode_label)),
             &theme,
         );
 
@@ -1279,23 +1253,13 @@ impl EventEmitter<AgentInputEvent> for AgentInput {}
 
 #[derive(Clone)]
 struct ModeContentData {
-    task_label: SharedString,
-    tool_label: SharedString,
-    task_options: Vec<ComposerMenuOption>,
-    tool_options: Vec<ComposerMenuOption>,
+    execution_mode_label: SharedString,
+    options: Vec<ComposerMenuOption>,
 }
 
 struct ModeOptionRow {
-    id_prefix: &'static str,
     option: ComposerMenuOption,
     selected: bool,
-    event: ModeOptionEvent,
-}
-
-#[derive(Clone, Copy)]
-enum ModeOptionEvent {
-    Task,
-    Tool,
 }
 
 fn render_mode_content(
@@ -1311,39 +1275,12 @@ fn render_mode_content(
         .bg(theme.background)
         .text_color(theme.foreground);
 
-    col = col.child(context_group_label(
-        t!("AgentUi.response_mode").to_string(),
-        theme,
-    ));
-    for option in data.task_options {
-        let selected = option.label == data.task_label;
+    col = col.child(context_group_label(t!("AgentUi.mode").to_string(), theme));
+    for option in data.options {
+        let selected = option.label == data.execution_mode_label;
         col = col.child(mode_option_row(
             view.clone(),
-            ModeOptionRow {
-                id_prefix: "agent-task-mode",
-                option,
-                selected,
-                event: ModeOptionEvent::Task,
-            },
-            theme,
-            cx,
-        ));
-    }
-
-    col = col.child(context_group_label(
-        t!("AgentUi.tool_confirmation").to_string(),
-        theme,
-    ));
-    for option in data.tool_options {
-        let selected = option.label == data.tool_label;
-        col = col.child(mode_option_row(
-            view.clone(),
-            ModeOptionRow {
-                id_prefix: "agent-tool-mode",
-                option,
-                selected,
-                event: ModeOptionEvent::Tool,
-            },
+            ModeOptionRow { option, selected },
             theme,
             cx,
         ));
@@ -1363,7 +1300,7 @@ fn mode_option_row(
     let selected_bg = theme.selection_background();
     let selected_fg = theme.accent;
     let id = row.option.id.clone();
-    let row_id = SharedString::from(format!("{}-opt-{id}", row.id_prefix));
+    let row_id = SharedString::from(format!("agent-execution-mode-opt-{id}"));
     let mut inner = v_flex()
         .flex_1()
         .min_w_0()
@@ -1397,18 +1334,11 @@ fn mode_option_row(
                     return;
                 }
                 this.open_menu = None;
-                cx.emit(mode_option_event(row.event, id));
+                cx.emit(AgentInputEvent::SelectExecutionMode { id });
                 cx.notify();
             });
         })
         .into_any_element()
-}
-
-fn mode_option_event(event: ModeOptionEvent, id: SharedString) -> AgentInputEvent {
-    match event {
-        ModeOptionEvent::Task => AgentInputEvent::SelectTaskMode { id },
-        ModeOptionEvent::Tool => AgentInputEvent::SelectToolMode { id },
-    }
 }
 
 fn render_plan_mode_content(
@@ -2572,8 +2502,7 @@ mod tests {
                             "Very Long Provider Name",
                             "extremely-long-model-name-with-large-context",
                         )),
-                        tool_label: SharedString::from("手动确认"),
-                        task_label: SharedString::from("Auto Mode"),
+                        execution_mode_label: SharedString::from("自动"),
                         ..AgentComposerContext::default()
                     },
                     cx,
@@ -2590,7 +2519,6 @@ mod tests {
                         ComposerMenuOption::new("readonly", "只读"),
                         ComposerMenuOption::new("manual", "手动确认"),
                     ],
-                    vec![ComposerMenuOption::new("agent", "Auto Mode")],
                     cx,
                 );
             });
@@ -2734,7 +2662,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn plan_and_subagent_triggers_stay_and_tool_mode_merges_into_task_menu(
+    fn plan_and_subagent_triggers_stay_and_execution_mode_is_single_control(
         cx: &mut TestAppContext,
     ) {
         cx.update(|cx| {
@@ -2753,12 +2681,16 @@ mod tests {
             "subagents should be a top capability trigger"
         );
         assert!(
-            cx.debug_bounds("agent-task-mode").is_some(),
-            "task mode should stay as the merged bottom mode control"
+            cx.debug_bounds("agent-execution-mode").is_some(),
+            "execution mode should render as the single bottom mode control"
+        );
+        assert!(
+            cx.debug_bounds("agent-task-mode").is_none(),
+            "task mode should no longer render"
         );
         assert!(
             cx.debug_bounds("agent-tool-mode").is_none(),
-            "tool mode should not render as a separate bottom toolbar control"
+            "tool mode should not render as a separate legacy toolbar control"
         );
     }
 
@@ -2829,22 +2761,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_tool_label_defaults_to_manual_confirmation() {
+    fn empty_execution_mode_label_defaults_to_auto() {
         assert_eq!(
-            t!("AgentUi.manual_confirmation").as_ref(),
-            current_tool_label(&SharedString::from("")).as_ref()
+            t!("AgentUi.auto").as_ref(),
+            current_execution_mode_label(&SharedString::from("")).as_ref()
         );
     }
 
     #[test]
-    fn mode_trigger_label_includes_task_and_tool_confirmation_modes() {
+    fn execution_mode_trigger_uses_single_label() {
         assert_eq!(
-            "Auto Mode · 手动确认",
-            execution_mode_trigger_label(
-                &SharedString::from("Auto Mode"),
-                &SharedString::from("手动确认")
-            )
-            .as_ref()
+            "只读",
+            current_execution_mode_label(&SharedString::from("只读")).as_ref()
         );
     }
 

@@ -114,7 +114,7 @@ impl AgentChatView {
         let Some(mode) = current_acp_tool_mode(cx) else {
             return;
         };
-        self.selected_tool = tool_execution_mode_label(mode).into();
+        self.tool_execution_mode = mode;
         self.sync_composer(cx);
     }
 

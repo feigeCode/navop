@@ -449,8 +449,20 @@ impl Default for McpSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiChatToolExecutionMode {
+    #[default]
+    Auto,
+    ReadOnly,
+    Manual,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AiChatSettings {}
+pub struct AiChatSettings {
+    #[serde(default)]
+    pub tool_execution_mode: AiChatToolExecutionMode,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomFont {
@@ -1331,12 +1343,13 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AppSettings, CustomFont, DEFAULT_TERMINAL_THEME, HomeConnectionLayout, HomePageStyle,
-        LOCALE_SYSTEM, LargeTextCellEditorOpenMode, LocalTerminalProfileKind,
-        LocalTerminalProfileSettings, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
-        RemoteFileOpenMode, StartupDefaultPage, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
+        HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -1954,6 +1967,31 @@ mod tests {
         assert!(loaded.tool_exposure.mcp.database);
         assert!(loaded.tool_exposure.mcp.redis);
         assert!(!loaded.tool_exposure.agent.terminal_exec);
+    }
+
+    #[test]
+    fn ai_chat_tool_execution_mode_defaults_to_auto() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(
+            AiChatToolExecutionMode::Auto,
+            settings.ai_chat.tool_execution_mode
+        );
+    }
+
+    #[test]
+    fn ai_chat_tool_execution_mode_round_trip_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.tool_execution_mode = AiChatToolExecutionMode::ReadOnly;
+
+        let json = serde_json::to_string(&settings).expect("应序列化 AI Chat 设置");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 AI Chat 设置");
+
+        assert_eq!(
+            AiChatToolExecutionMode::ReadOnly,
+            restored.ai_chat.tool_execution_mode
+        );
     }
 
     #[test]
