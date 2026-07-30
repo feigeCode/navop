@@ -366,7 +366,7 @@ mod tests {
             .find("impl RenderOnce for ControlIcon")
             .expect("control icon renderer");
         let render_end = source[render_start..]
-            .find("\n#[derive(IntoElement)]\nstruct WindowControls")
+            .find("struct WindowControls")
             .map(|offset| render_start + offset)
             .expect("window controls renderer");
         let render = &source[render_start..render_end];
