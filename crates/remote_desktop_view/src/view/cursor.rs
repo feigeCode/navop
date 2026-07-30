@@ -76,9 +76,14 @@ impl RemoteCursorState {
         Ok(())
     }
 
-    pub(super) fn set_position(&mut self, x: u16, y: u16) {
+    pub(super) fn set_position(&mut self, x: u16, y: u16) -> bool {
+        let previous = self.position;
+        let was_paintable = self.has_paintable_bitmap();
         self.position = Some((x, y));
-        self.sync_native_cursor();
+        if was_paintable != self.has_paintable_bitmap() {
+            self.sync_native_cursor();
+        }
+        previous != self.position
     }
 
     pub(super) fn show_default(&mut self) {
@@ -100,13 +105,28 @@ impl RemoteCursorState {
         self.sync_native_cursor();
     }
 
-    pub(super) fn set_pointer_hovered(&mut self, hovered: bool) {
+    pub(super) fn set_pointer_hovered(&mut self, hovered: bool) -> bool {
+        if self.pointer_hovered == hovered {
+            return false;
+        }
         self.pointer_hovered = hovered;
         self.sync_native_cursor();
+        true
     }
 
-    pub(super) fn refresh_native_cursor(&self) {
-        self.sync_native_cursor();
+    pub(super) fn rehide_native_cursor_after_pointer_move(&self) {
+        if self.manage_native_cursor
+            && should_hide_native_cursor(
+                self.mode,
+                self.pointer_hovered,
+                self.has_paintable_bitmap(),
+            )
+        {
+            // GPUI/Win32 may restore its native cursor before dispatching the
+            // mouse-move callback. Hide it once after the canvas position has
+            // been updated instead of repeatedly syncing it from every setter.
+            native_cursor::hide();
+        }
     }
 
     pub(super) fn promote_latest(&mut self) -> Option<Arc<RenderImage>> {

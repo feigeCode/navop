@@ -179,14 +179,14 @@ impl Render for RemoteDesktopView {
                 this.cursor.set_pointer_hovered(*hovered);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                this.send_pointer_move(event.position, window);
+                this.send_pointer_move(event.position, window, cx);
                 cx.stop_propagation();
             }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, true);
                     cx.stop_propagation();
                 }),
@@ -195,7 +195,7 @@ impl Render for RemoteDesktopView {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, true);
                     cx.stop_propagation();
                 }),
@@ -204,7 +204,7 @@ impl Render for RemoteDesktopView {
                 MouseButton::Middle,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, true);
                     cx.stop_propagation();
                 }),
@@ -212,7 +212,7 @@ impl Render for RemoteDesktopView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, false);
                     cx.stop_propagation();
                 }),
@@ -220,7 +220,7 @@ impl Render for RemoteDesktopView {
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, false);
                     cx.stop_propagation();
                 }),
@@ -228,7 +228,7 @@ impl Render for RemoteDesktopView {
             .on_mouse_up(
                 MouseButton::Middle,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window);
+                    this.send_pointer_move(event.position, window, cx);
                     this.send_mouse_button(event.button, false);
                     cx.stop_propagation();
                 }),
