@@ -19,6 +19,7 @@ pub(super) mod layout_metrics;
 mod list_marker_source;
 mod natural_blocks;
 mod table;
+mod table_image;
 mod table_toolbar;
 
 pub(super) const MARKDOWN_BODY_FONT_SIZE: f32 = 16.;

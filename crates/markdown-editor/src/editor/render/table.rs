@@ -1,10 +1,10 @@
-use super::{MARKDOWN_BODY_FONT_SIZE, MARKDOWN_BODY_LINE_HEIGHT, MarkdownEditor};
+use super::MarkdownEditor;
 use crate::editor::surface::MarkdownSurfaceKey;
 use gpui::{
     Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString, Styled,
     TextAlign, prelude::FluentBuilder, rems,
 };
-use gpui_component::{ElementExt, StyledExt, h_flex, input::Input, v_flex};
+use gpui_component::{ElementExt, StyledExt, h_flex, v_flex};
 use markdown_source::{SourceBlock, SourceTableMap, TableCellAddress};
 
 impl MarkdownEditor {
@@ -133,39 +133,9 @@ impl MarkdownEditor {
                     .w_full()
                     .min_w_0()
                     .relative()
-                    .child(
-                        gpui::div()
-                            .id(table_cell_input_id(address))
-                            .debug_selector(move || {
-                                if active {
-                                    "markdown-active-table-input-slot".to_owned()
-                                } else {
-                                    table_cell_input_selector(address)
-                                }
-                            })
-                            .flex()
-                            .flex_col()
-                            .w_full()
-                            .min_w_0()
-                            .child(
-                                Input::new(&input)
-                                    .w_full()
-                                    .h_auto()
-                                    .bare()
-                                    .bordered(false)
-                                    .focus_bordered(false)
-                                    .local_style(self.input_style())
-                                    .highlight_theme(self.theme.highlight_theme.clone())
-                                    .editor_scrollbar(false)
-                                    .text_layout_margin(false)
-                                    .text_size(gpui::px(MARKDOWN_BODY_FONT_SIZE))
-                                    .line_height(gpui::px(MARKDOWN_BODY_LINE_HEIGHT))
-                                    .text_align(alignment)
-                                    .caret_color(self.theme.primary)
-                                    .when(header, |input| input.font_semibold()),
-                            ),
-                    )
-                    .children(self.inline_math_overlays(key)),
+                    .child(self.render_table_cell_surface_content(
+                        address, input, active, alignment, header,
+                    )),
             )
             .into_any_element()
     }
@@ -214,11 +184,11 @@ fn table_cell_surface_selector(address: TableCellAddress) -> String {
     )
 }
 
-fn table_cell_input_id(address: TableCellAddress) -> SharedString {
+pub(super) fn table_cell_input_id(address: TableCellAddress) -> SharedString {
     table_cell_input_selector(address).into()
 }
 
-fn table_cell_input_selector(address: TableCellAddress) -> String {
+pub(super) fn table_cell_input_selector(address: TableCellAddress) -> String {
     format!(
         "markdown-table-cell-input-slot-{}-{}-{}",
         address.block_id.0, address.row, address.column

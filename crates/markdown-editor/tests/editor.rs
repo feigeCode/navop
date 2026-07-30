@@ -511,6 +511,119 @@ fn clicking_a_table_cell_edits_only_its_mapped_content(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn table_cell_with_image_renders_preview_without_replacing_its_input(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_component::init);
+    let source = "| A |\n| --- |\n| Before ![logo](https://example.com/logo.png) after |\n";
+    let (window, editor) = open_editor(source, cx);
+    let mut cx = VisualTestContext::from_window(window, cx);
+    let (block_id, image_id) = editor.read_with(&cx, |editor, _| {
+        let document = markdown_source::SourceMarkdownDocument::parse(editor.source()).unwrap();
+        let block = &document.blocks[0];
+        let SourceBlockKind::Table(table) = &block.kind else {
+            panic!("fixture must parse as a table");
+        };
+        let image_id = table.rows[2].cells[0]
+            .inline_nodes
+            .iter()
+            .find(|node| matches!(node.kind, markdown_source::SourceInlineKind::Image(_)))
+            .expect("fixture must contain an image")
+            .id;
+        (block.id, image_id)
+    });
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    let cell_selector =
+        Box::leak(format!("markdown-table-cell-{}-2-0", block_id.0).into_boxed_str());
+    let preview_selector = Box::leak(
+        format!("markdown-table-cell-preview-{}-2-0", block_id.0).into_boxed_str(),
+    );
+    let image_selector = Box::leak(
+        format!(
+            "markdown-table-cell-image-{}-2-0-{}",
+            block_id.0, image_id.0
+        )
+        .into_boxed_str(),
+    );
+    let input_selector = Box::leak(
+        format!("markdown-table-cell-input-slot-{}-2-0", block_id.0).into_boxed_str(),
+    );
+    let cell_bounds = cx
+        .debug_bounds(cell_selector)
+        .expect("table cell must be rendered");
+    assert!(
+        cx.debug_bounds(preview_selector).is_some(),
+        "image cell must mount its rendered preview"
+    );
+    assert!(
+        cx.debug_bounds(image_selector).is_some(),
+        "image cell preview must mount an image element"
+    );
+    assert!(
+        cx.debug_bounds(input_selector).is_some(),
+        "image cell input must remain mounted while previewing"
+    );
+
+    cx.simulate_click(
+        point(cell_bounds.left() + px(4.), cell_bounds.top() + px(4.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+
+    assert_eq!(
+        Some(TableCellAddress {
+            block_id,
+            row: 2,
+            column: 0,
+        }),
+        editor.read_with(&cx, |editor, _| editor.active_table_cell())
+    );
+    assert!(
+        cx.debug_bounds("markdown-active-table-input-slot")
+            .is_some(),
+        "activation must reveal the already-mounted table cell input"
+    );
+    let image_input_id =
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id());
+    let header_selector =
+        Box::leak(format!("markdown-table-cell-{}-0-0", block_id.0).into_boxed_str());
+    let header_bounds = cx
+        .debug_bounds(header_selector)
+        .expect("header cell must be rendered");
+    cx.simulate_click(
+        point(header_bounds.left() + px(4.), header_bounds.top() + px(4.)),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(preview_selector).is_some(),
+        "leaving the image cell must reveal its preview again"
+    );
+    let image_cell_bounds = cx
+        .debug_bounds(cell_selector)
+        .expect("image cell must remain rendered");
+    cx.simulate_click(
+        point(
+            image_cell_bounds.left() + px(4.),
+            image_cell_bounds.top() + px(4.),
+        ),
+        Modifiers::none(),
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        image_input_id,
+        editor.read_with(&cx, |editor, _| editor.input_state().entity_id()),
+        "reactivating the image cell must reuse its original input"
+    );
+}
+
+#[gpui::test]
 fn clearing_an_active_table_cell_preserves_table_layout(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = "| A | B |\n| :--- | ---: |\n| one | two |\n";
