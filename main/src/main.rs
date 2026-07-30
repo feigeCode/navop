@@ -339,7 +339,7 @@ mod embedded_cli_removal_tests {
 
     #[test]
     fn environment_files_are_disabled_for_release_builds() {
-        let runtime_loader = include_str!("env_file.rs");
+        let runtime_loader = include_str!("env_file.rs").replace("\r\n", "\n");
         let build_script = include_str!("../../crates/core/build.rs");
 
         assert!(

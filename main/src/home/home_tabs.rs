@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn persistent_sidebar_enlarges_windows_rail_buttons_and_icons() {
-        let source = include_str!("../persistent_connection_sidebar/rail.rs");
+        let source = include_str!("../persistent_connection_sidebar/rail.rs").replace("\r\n", "\n");
 
         assert!(source.contains("items_center().gap_1().p_1()"));
         assert!(source.contains("#[cfg(target_os = \"windows\")]\nconst NAVIGATION_RAIL_WIDTH"));
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
-        let tabs_source = include_str!("home_tabs.rs");
+        let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
         let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
 
