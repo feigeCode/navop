@@ -133,6 +133,20 @@ impl PostgresPlugin {
         statements
     }
 
+    fn primary_key_columns(design: &TableDesign) -> Vec<&str> {
+        let columns = design.primary_key_columns();
+        if !columns.is_empty() {
+            return columns;
+        }
+
+        design
+            .indexes
+            .iter()
+            .find(|index| index.is_primary)
+            .map(|index| index.columns.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
     fn database_node(node: &DbNode, database: String) -> DbNode {
         DbNode::new(
             format!("{}:{}", node.id, database),
@@ -2336,6 +2350,9 @@ ORDER BY rolname;"#
             .collect();
         let new_cols: std::collections::HashMap<&str, &ColumnDefinition> =
             new.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+        let original_primary_key_columns = Self::primary_key_columns(original);
+        let new_primary_key_columns = Self::primary_key_columns(new);
+        let primary_key_changed = original_primary_key_columns != new_primary_key_columns;
         let original_foreign_keys: std::collections::HashMap<&str, &ForeignKeyDefinition> =
             original
                 .foreign_keys
@@ -2354,6 +2371,14 @@ ORDER BY rolname;"#
                     if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
                 _ => statements.push(self.build_drop_foreign_key_sql(&new.table_name, name)),
             }
+        }
+
+        if primary_key_changed && !original_primary_key_columns.is_empty() {
+            statements.push(format!(
+                "ALTER TABLE {} DROP CONSTRAINT {};",
+                table_name,
+                self.quote_identifier(&format!("{}_pkey", original.table_name))
+            ));
         }
 
         for name in original_cols.keys() {
@@ -2434,24 +2459,34 @@ ORDER BY rolname;"#
             }
         }
 
+        if primary_key_changed && !new_primary_key_columns.is_empty() {
+            let primary_key_columns = new_primary_key_columns
+                .iter()
+                .map(|column| self.quote_identifier(column))
+                .collect::<Vec<_>>()
+                .join(", ");
+            statements.push(format!(
+                "ALTER TABLE {} ADD PRIMARY KEY ({});",
+                table_name, primary_key_columns
+            ));
+        }
+
         let original_indexes: std::collections::HashMap<&str, &IndexDefinition> = original
             .indexes
             .iter()
+            .filter(|index| !index.is_primary)
             .map(|i| (i.name.as_str(), i))
             .collect();
-        let new_indexes: std::collections::HashMap<&str, &IndexDefinition> =
-            new.indexes.iter().map(|i| (i.name.as_str(), i)).collect();
+        let new_indexes: std::collections::HashMap<&str, &IndexDefinition> = new
+            .indexes
+            .iter()
+            .filter(|index| !index.is_primary)
+            .map(|i| (i.name.as_str(), i))
+            .collect();
 
-        for (name, idx) in &original_indexes {
+        for name in original_indexes.keys() {
             if !new_indexes.contains_key(name) {
-                if idx.is_primary {
-                    statements.push(format!(
-                        "ALTER TABLE {} DROP CONSTRAINT {}_pkey;",
-                        table_name, new.table_name
-                    ));
-                } else {
-                    statements.push(format!("DROP INDEX {};", self.quote_identifier(name)));
-                }
+                statements.push(format!("DROP INDEX {};", self.quote_identifier(name)));
             }
         }
 
@@ -2463,22 +2498,14 @@ ORDER BY rolname;"#
                     .map(|c| self.quote_identifier(c))
                     .collect();
 
-                if idx.is_primary {
-                    statements.push(format!(
-                        "ALTER TABLE {} ADD PRIMARY KEY ({});",
-                        table_name,
-                        idx_cols.join(", ")
-                    ));
-                } else {
-                    let unique_str = if idx.is_unique { "UNIQUE " } else { "" };
-                    statements.push(format!(
-                        "CREATE {}INDEX {} ON {} ({});",
-                        unique_str,
-                        self.quote_identifier(name),
-                        table_name,
-                        idx_cols.join(", ")
-                    ));
-                }
+                let unique_str = if idx.is_unique { "UNIQUE " } else { "" };
+                statements.push(format!(
+                    "CREATE {}INDEX {} ON {} ({});",
+                    unique_str,
+                    self.quote_identifier(name),
+                    table_name,
+                    idx_cols.join(", ")
+                ));
             }
         }
 
@@ -3319,6 +3346,159 @@ mod tests {
         let sql = plugin.build_alter_table_sql(&original, &new);
         assert!(sql.contains("ADD COLUMN"));
         assert!(sql.contains("\"email\""));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_add_primary_key_to_existing_column() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("id").data_type("INTEGER")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            columns: vec![
+                ColumnDefinition::new("id")
+                    .data_type("INTEGER")
+                    .primary_key(true),
+            ],
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!(r#"ALTER TABLE "users" ADD PRIMARY KEY ("id");"#, sql);
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_add_primary_key_with_new_column() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("name").data_type("TEXT")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            columns: vec![
+                ColumnDefinition::new("name").data_type("TEXT"),
+                ColumnDefinition::new("id")
+                    .data_type("INTEGER")
+                    .primary_key(true),
+            ],
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!(
+            concat!(
+                "ALTER TABLE \"users\" ADD COLUMN \"id\" INTEGER;\n",
+                "ALTER TABLE \"users\" ADD PRIMARY KEY (\"id\");"
+            ),
+            sql
+        );
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_replace_primary_key() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id")
+                    .data_type("INTEGER")
+                    .primary_key(true),
+                ColumnDefinition::new("email").data_type("TEXT"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INTEGER"),
+                ColumnDefinition::new("email")
+                    .data_type("TEXT")
+                    .primary_key(true),
+            ],
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!(
+            concat!(
+                "ALTER TABLE \"users\" DROP CONSTRAINT \"users_pkey\";\n",
+                "ALTER TABLE \"users\" ADD PRIMARY KEY (\"email\");"
+            ),
+            sql
+        );
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_supports_legacy_primary_index() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("id").data_type("INTEGER")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            indexes: vec![
+                IndexDefinition::new("users_pkey")
+                    .columns(vec!["id".to_string()])
+                    .primary(true),
+            ],
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!(r#"ALTER TABLE "users" ADD PRIMARY KEY ("id");"#, sql);
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_does_not_duplicate_canonical_primary_key() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id")
+                    .data_type("INTEGER")
+                    .primary_key(true),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            indexes: vec![
+                IndexDefinition::new("users_pkey")
+                    .columns(vec!["id".to_string()])
+                    .primary(true),
+            ],
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!("-- No changes detected", sql);
     }
 
     #[test]
