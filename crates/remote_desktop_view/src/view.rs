@@ -115,6 +115,7 @@ impl RemoteDesktopView {
         window_handle: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) -> Self {
+        let manage_native_cursor = config.options.protocol == RemoteDesktopProtocol::Rdp;
         let focus_handle = cx.focus_handle();
         let output_poll_task = cx.spawn(async move |this, cx| {
             loop {
@@ -155,7 +156,7 @@ impl RemoteDesktopView {
             framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
             pending_frame_drops: Vec::new(),
-            cursor: cursor::RemoteCursorState::default(),
+            cursor: cursor::RemoteCursorState::new(manage_native_cursor),
             frame_sync: frame_sync::FrameSyncTracker::default(),
             capabilities: None,
             remote_size: None,

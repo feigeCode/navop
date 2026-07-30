@@ -167,7 +167,6 @@ impl RemoteDesktopView {
     }
 
     pub(super) fn send_pointer_move(&mut self, position: Point<Pixels>, window: &mut Window) {
-        self.cursor.set_pointer_hovered(true);
         let Some((remote_width, remote_height)) = self.remote_size else {
             return;
         };
@@ -180,7 +179,14 @@ impl RemoteDesktopView {
         ) else {
             return;
         };
+        // Pointer shape and pointer position are independent RDP updates. Some
+        // servers do not echo a position update for every local mouse move, so
+        // keep the canvas cursor aligned locally before hiding the native one.
+        self.cursor.set_pointer_hovered(true);
         self.cursor.set_position(x, y);
+        // Win32 may restore the GPUI cursor while processing mouse movement.
+        // Re-apply the presenter state after the local cursor is paintable.
+        self.cursor.refresh_native_cursor();
         self.send_input(RemoteDesktopInput::MouseMove { x, y });
     }
 
