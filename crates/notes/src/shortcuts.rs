@@ -1,8 +1,11 @@
+use crate::markdown_source::{OpenMarkdownSearch, ToggleMarkdownOutline};
 use gpui::{Action, App, KeyBinding};
 use markdown_editor::*;
 use one_core::keybindings::rebind_keybindings;
 
 const INPUT_CONTEXT: &str = "MarkdownEditor > Input";
+const MARKDOWN_CONTEXT: &str = "NotesMarkdown";
+const SOURCE_INPUT_CONTEXT: &str = "NotesMarkdownSource > Input";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotesShortcutDescriptor {
@@ -20,6 +23,12 @@ macro_rules! bind_commands {
 macro_rules! collect_descriptors {
     ($descriptors:expr, $(($id:expr, $title:expr, $keys:expr, $action:expr),)*) => {
         $descriptors.extend([$(descriptor($id, $title, $keys)),*]);
+    };
+}
+
+macro_rules! bind_document_commands {
+    ($bindings:expr, $cx:expr, $(($id:expr, $title:expr, $keys:expr, $action:expr),)*) => {
+        $(append_document_bindings(&mut $bindings, $cx, $id, $keys, $action);)*
     };
 }
 
@@ -55,6 +64,21 @@ macro_rules! command_list {
     };
 }
 
+macro_rules! document_command_list {
+    ($visitor:ident $(, $args:expr)*) => {
+        $visitor! {
+            $($args,)*
+            ("navigation.find", "Find and Replace", &["secondary-f"], OpenMarkdownSearch),
+            (
+                "navigation.outline",
+                "Document Outline",
+                &["secondary-shift-o"],
+                ToggleMarkdownOutline
+            ),
+        }
+    };
+}
+
 pub fn init(cx: &mut App) {
     refresh(cx);
 }
@@ -62,12 +86,14 @@ pub fn init(cx: &mut App) {
 pub fn refresh(cx: &mut App) {
     let mut bindings = Vec::new();
     command_list!(bind_commands, bindings, cx);
+    document_command_list!(bind_document_commands, bindings, cx);
     cx.bind_keys(bindings);
 }
 
 pub fn descriptors() -> Vec<NotesShortcutDescriptor> {
     let mut descriptors = Vec::new();
     command_list!(collect_descriptors, descriptors);
+    document_command_list!(collect_descriptors, descriptors);
     descriptors
 }
 
@@ -85,6 +111,24 @@ fn append_bindings<A: Action + Clone>(
         Some(INPUT_CONTEXT),
         action,
     ));
+}
+
+fn append_document_bindings<A: Action + Clone>(
+    bindings: &mut Vec<KeyBinding>,
+    cx: &App,
+    id: &'static str,
+    defaults: &'static [&'static str],
+    action: A,
+) {
+    for context in [MARKDOWN_CONTEXT, SOURCE_INPUT_CONTEXT, INPUT_CONTEXT] {
+        bindings.extend(rebind_keybindings(
+            cx,
+            id,
+            defaults,
+            Some(context),
+            action.clone(),
+        ));
+    }
 }
 
 fn descriptor(
@@ -114,5 +158,17 @@ mod tests {
                 Keystroke::parse(&key).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn markdown_navigation_shortcuts_are_exposed_to_settings() {
+        let descriptors = descriptors();
+        assert!(descriptors.iter().any(|descriptor| {
+            descriptor.command_id == "navigation.find" && descriptor.default_keys == ["secondary-f"]
+        }));
+        assert!(descriptors.iter().any(|descriptor| {
+            descriptor.command_id == "navigation.outline"
+                && descriptor.default_keys == ["secondary-shift-o"]
+        }));
     }
 }

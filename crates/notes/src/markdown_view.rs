@@ -95,6 +95,16 @@ impl NotesView {
         });
     }
 
+    pub(crate) fn toggle_markdown_outline(&mut self, cx: &mut Context<Self>) {
+        let has_headings = self
+            .active_document_id
+            .as_ref()
+            .and_then(|document_id| self.markdown_sessions.get(document_id))
+            .is_some_and(|session| !session.preview.read(cx).headings().is_empty());
+        self.markdown_outline_open = has_headings && !self.markdown_outline_open;
+        cx.notify();
+    }
+
     pub(crate) fn apply_source_mode_history(
         &mut self,
         undo: bool,
@@ -181,6 +191,9 @@ impl NotesView {
             if let Some(storage) = self.storage.as_ref() {
                 storage.save_state(&self.tree.to_ui_state())?;
             }
+        }
+        if self.active_document_id.as_deref() != Some(document_id.as_str()) {
+            self.markdown_outline_open = false;
         }
         self.active_document_id = Some(document_id.clone());
         if let Some(session) = self.markdown_sessions.get(&document_id)

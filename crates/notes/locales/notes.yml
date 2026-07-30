@@ -62,13 +62,13 @@ Notes:
     zh-CN: 已保存
     zh-HK: 已儲存
   markdown_search_tooltip:
-    en: Find and replace
-    zh-CN: 查找与替换
-    zh-HK: 尋找與取代
+    en: Find and replace (Cmd/Ctrl+F)
+    zh-CN: 查找与替换（Cmd/Ctrl+F）
+    zh-HK: 尋找與取代（Cmd/Ctrl+F）
   markdown_outline_tooltip:
-    en: Document outline
-    zh-CN: 文档大纲
-    zh-HK: 文件大綱
+    en: Document outline (Cmd/Ctrl+Shift+O)
+    zh-CN: 文档大纲（Cmd/Ctrl+Shift+O）
+    zh-HK: 文件大綱（Cmd/Ctrl+Shift+O）
   markdown_statistics:
     en: "%{words} words · %{characters} characters · %{lines} lines"
     zh-CN: "%{words} 词 · %{characters} 字符 · %{lines} 行"

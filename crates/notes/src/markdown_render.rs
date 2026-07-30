@@ -86,6 +86,16 @@ impl NotesView {
                     view.save_active_markdown(window, cx);
                 },
             ))
+            .on_action(cx.listener(
+                |view, _: &crate::markdown_source::OpenMarkdownSearch, window, cx| {
+                    view.open_markdown_search(window, cx);
+                },
+            ))
+            .on_action(cx.listener(
+                |view, _: &crate::markdown_source::ToggleMarkdownOutline, _window, cx| {
+                    view.toggle_markdown_outline(cx);
+                },
+            ))
             .size_full()
             .min_h_0()
             .child(self.render_markdown_toolbar(document_id, mode, cx))
@@ -242,7 +252,17 @@ impl NotesView {
         };
         let headings = session.preview.read(cx).headings();
         let preview = session.preview.clone();
+        let view = cx.entity();
         Popover::new("markdown-outline")
+            .open(self.markdown_outline_open && !headings.is_empty())
+            .on_open_change(move |open, _, cx| {
+                view.update(cx, |view, cx| {
+                    if view.markdown_outline_open != *open {
+                        view.markdown_outline_open = *open;
+                        cx.notify();
+                    }
+                });
+            })
             .trigger(
                 Button::new("markdown-outline-trigger")
                     .debug_selector(|| "markdown-outline-trigger".to_owned())

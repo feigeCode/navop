@@ -7,7 +7,13 @@ pub(crate) const MARKDOWN_CONTEXT: &str = "NotesMarkdown";
 const SOURCE_INPUT_CONTEXT: &str = "NotesMarkdownSource > Input";
 actions!(
     notes_markdown_source,
-    [UndoSourceMode, RedoSourceMode, SaveMarkdown]
+    [
+        UndoSourceMode,
+        RedoSourceMode,
+        SaveMarkdown,
+        OpenMarkdownSearch,
+        ToggleMarkdownOutline
+    ]
 );
 
 pub(crate) fn init(cx: &mut App) {
