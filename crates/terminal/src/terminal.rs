@@ -75,8 +75,9 @@ use crate::{
     TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
 };
 use ssh::{
-    ChannelEvent, HostKeyVerifier, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
-    KeyboardInteractiveTarget, SshChannel, SshSessionManager,
+    ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
+    KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
+    SshChannel, SshSessionManager,
 };
 pub use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
@@ -87,6 +88,8 @@ pub use ssh::{
 pub enum TerminalModelEvent {
     /// 终端内容已更新，需要重新渲染
     Wakeup,
+    /// SSH 服务端主机指纹需要用户确认
+    HostKeyVerificationRequired,
     /// SSH keyboard-interactive/MFA 请求状态变化
     SshMfaChanged,
     /// shell 开始渲染新的 prompt（OSC 133;A）
@@ -115,6 +118,19 @@ pub enum ConnectionState {
     Connected,
     Connecting,
     Disconnected { error: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostKeyVerificationRequest {
+    pub identity: HostKeyIdentity,
+    pub presented: HostKeyDetails,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKeyVerificationDecision {
+    AcceptAndSave,
+    AcceptOnce,
+    Reject,
 }
 
 /// 终端连接类型
@@ -1485,6 +1501,8 @@ pub struct Terminal {
     ssh_session_manager: Option<Arc<SshSessionManager>>,
     /// SSH keyboard-interactive/MFA 输入响应器
     ssh_mfa_responder: Option<TerminalMfaResponder>,
+    /// 等待用户确认的未知 SSH 主机指纹
+    pending_host_key_verification: Option<HostKeyVerificationRequest>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
     /// 事件发送器（用于 SSH 重连）
@@ -1794,6 +1812,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -1905,6 +1924,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -2014,6 +2034,7 @@ impl Terminal {
             ssh_config: Some(config),
             ssh_session_manager: Some(ssh_session_manager),
             ssh_mfa_responder: Some(resolved.responder),
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -2090,6 +2111,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: Some(serial_params),
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -2166,6 +2188,7 @@ impl Terminal {
                 ssh_config: None,
                 ssh_session_manager: None,
                 ssh_mfa_responder: None,
+                pending_host_key_verification: None,
                 serial_params: None,
                 event_tx: Some(event_tx),
                 event_proxy: None,
@@ -2430,6 +2453,7 @@ impl Terminal {
 
         match result {
             Ok(Ok(backend)) => {
+                self.pending_host_key_verification = None;
                 self.connection_state = ConnectionState::Connected;
                 self.performance_metrics
                     .record_ssh_connect(is_reconnect_generation(generation));
@@ -2459,15 +2483,23 @@ impl Terminal {
                 if let Some(responder) = &self.ssh_mfa_responder {
                     responder.cancel();
                 }
-                self.connection_state = ConnectionState::Disconnected {
-                    error: Some(format_connection_error(&e)),
-                };
+                if let Some(request) = host_key_verification_request(&e) {
+                    self.pending_host_key_verification = Some(request);
+                    self.connection_state = ConnectionState::Disconnected { error: None };
+                    cx.emit(TerminalModelEvent::HostKeyVerificationRequired);
+                } else {
+                    self.pending_host_key_verification = None;
+                    self.connection_state = ConnectionState::Disconnected {
+                        error: Some(format_connection_error(&e)),
+                    };
+                }
                 self.set_connection_active(false, cx);
             }
             Err(e) => {
                 if let Some(responder) = &self.ssh_mfa_responder {
                     responder.cancel();
                 }
+                self.pending_host_key_verification = None;
                 self.connection_state = ConnectionState::Disconnected {
                     error: Some(e.to_string()),
                 };
@@ -3325,7 +3357,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.reset_terminal_surface();
+            self.prepare_surface_for_reconnect();
 
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
@@ -3374,7 +3406,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.reset_terminal_surface();
+            self.prepare_surface_for_reconnect();
             let generation = self.next_connection_generation();
             self.record_connection_generation_marker(generation);
             self.begin_operation_journal_generation(generation);
@@ -3399,41 +3431,55 @@ impl Terminal {
         cx.emit(TerminalModelEvent::Wakeup);
     }
 
-    fn reset_terminal_surface(&mut self) {
-        if self.is_recording_playback() {
-            return;
-        }
-        let Some(event_tx) = self.event_tx.clone() else {
-            return;
-        };
-
-        let event_proxy = self.event_proxy_for_surface_reset(event_tx);
-        let term_config = TermConfig {
-            scrolling_history: self.scrollback_lines,
-            ..Default::default()
-        };
-        let new_term = Term::new(
-            term_config,
-            &TermDimensions {
-                cols: self.cols,
-                rows: self.rows,
-            },
-            event_proxy,
-        );
-
-        *self.term.lock() = new_term;
-        self.title.clear();
-        self.current_working_dir = None;
+    fn prepare_surface_for_reconnect(&mut self) {
+        // Keep the existing alacritty grid and scrollback. The replacement
+        // backend appends its output to the same terminal surface.
         self.child_exited = None;
+        self.current_working_dir = None;
     }
 
-    fn event_proxy_for_surface_reset(
-        &self,
-        event_tx: UnboundedSender<TerminalEvent>,
-    ) -> GpuiEventProxy {
-        self.event_proxy.clone().unwrap_or_else(|| {
-            GpuiEventProxy::with_metrics(event_tx, self.performance_metrics.clone())
-        })
+    pub fn host_key_verification_request(&self) -> Option<HostKeyVerificationRequest> {
+        self.pending_host_key_verification.clone()
+    }
+
+    pub fn respond_to_host_key_verification(
+        &mut self,
+        decision: HostKeyVerificationDecision,
+        rejection_message: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self.pending_host_key_verification.take() else {
+            return;
+        };
+
+        if decision == HostKeyVerificationDecision::Reject {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
+        }
+
+        let Some(config) = self.ssh_config.as_mut() else {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
+        };
+
+        config.ssh_config.host_key_verifier = config
+            .ssh_config
+            .host_key_verifier
+            .clone()
+            .with_confirmed_key(
+                request.identity,
+                request.presented,
+                decision == HostKeyVerificationDecision::AcceptAndSave,
+            );
+        self.ssh_session_manager =
+            Some(Arc::new(SshSessionManager::new(config.ssh_config.clone())));
+        self.reconnect(cx);
     }
 
     /// 更新 SSH 终端的路径同步设置。
@@ -3545,6 +3591,23 @@ fn format_connection_error(err: &anyhow::Error) -> String {
     format!("{err:#}")
 }
 
+fn host_key_verification_request(error: &anyhow::Error) -> Option<HostKeyVerificationRequest> {
+    error
+        .downcast_ref::<HostKeyRejection>()
+        .and_then(|rejection| match rejection {
+            HostKeyRejection::Unknown {
+                identity,
+                presented,
+            } => Some(HostKeyVerificationRequest {
+                identity: identity.clone(),
+                presented: presented.clone(),
+            }),
+            HostKeyRejection::Changed { .. }
+            | HostKeyRejection::Revoked { .. }
+            | HostKeyRejection::StoreUnavailable { .. } => None,
+        })
+}
+
 impl EventEmitter<TerminalModelEvent> for Terminal {}
 
 #[cfg(test)]
@@ -3558,7 +3621,8 @@ mod tests {
         TerminalOperationJournal, TerminalSessionMode, build_cd_command,
         build_ssh_base_init_commands, build_ssh_init_commands, clamp_operation_journal_timestamp,
         clear_screen_remote_redraw_bytes, compose_ssh_init_commands, format_connection_error,
-        is_reconnect_generation, keyboard_interactive_answers_for_terminal, merge_history_matches,
+        host_key_verification_request, is_reconnect_generation,
+        keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
@@ -3592,7 +3656,10 @@ mod tests {
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
-    use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth};
+    use ssh::{
+        HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute,
+        KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth,
+    };
     use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
@@ -3686,6 +3753,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -3829,7 +3897,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_recording_runtime_survives_surface_reset_and_generation_change() {
+    fn terminal_recording_runtime_survives_reconnect_generation_change() {
         let directory = tempfile::tempdir().expect("create recording directory");
         let final_path = directory.path().join("session.cast");
         let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
@@ -3874,7 +3942,6 @@ mod tests {
         let generation = terminal.next_connection_generation();
         assert_eq!(2, generation);
         terminal.record_connection_generation_marker(generation);
-        terminal.reset_terminal_surface();
 
         assert_eq!(
             RecordingState::Recording,
@@ -5755,6 +5822,45 @@ mod tests {
     }
 
     #[test]
+    fn unknown_host_key_error_becomes_verification_request() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:test".to_string(),
+        };
+        let error = anyhow::Error::new(HostKeyRejection::Unknown {
+            identity: identity.clone(),
+            presented: presented.clone(),
+        })
+        .context("SSH connect failed");
+
+        let request =
+            host_key_verification_request(&error).expect("unknown key should require confirmation");
+
+        assert_eq!(request.identity, identity);
+        assert_eq!(request.presented, presented);
+    }
+
+    #[test]
+    fn changed_host_key_error_never_becomes_verification_request() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:new".to_string(),
+        };
+        let error = anyhow::Error::new(HostKeyRejection::Changed {
+            identity,
+            presented,
+            expected: vec![HostKeyDetails {
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:old".to_string(),
+            }],
+        });
+
+        assert!(host_key_verification_request(&error).is_none());
+    }
+
+    #[test]
     fn create_term_shares_performance_metrics_with_event_proxy() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let (_term, event_proxy, _colors, metrics) =
@@ -5771,11 +5877,12 @@ mod tests {
     }
 
     #[test]
-    fn reset_terminal_surface_clears_buffer_and_stale_connection_metadata() {
+    fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, _event_proxy, _colors, performance_metrics) =
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let shared_metrics = performance_metrics.clone();
+        let original_term = term.clone();
         let mut terminal = Terminal {
             term,
             session_mode: TerminalSessionMode::Live,
@@ -5796,6 +5903,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -5816,17 +5924,6 @@ mod tests {
         processor.advance(&mut *terminal.term.lock(), b"hello");
 
         assert_eq!(terminal.term.lock().grid()[Line(0)][Column(0)].c, 'h');
-        let reset_proxy = terminal.event_proxy_for_surface_reset(
-            terminal
-                .event_tx
-                .clone()
-                .expect("event sender should exist"),
-        );
-        assert!(Arc::ptr_eq(
-            &shared_metrics,
-            &reset_proxy.performance_metrics()
-        ));
-
         let previous = terminal.performance_snapshot();
         terminal
             .performance_metrics()
@@ -5835,18 +5932,22 @@ mod tests {
         assert_eq!(1, window.render_samples);
         assert_eq!(4_000_000.0, window.average_render_ns);
 
-        terminal.reset_terminal_surface();
+        terminal.prepare_surface_for_reconnect();
         assert!(Arc::ptr_eq(
             &shared_metrics,
             &terminal.performance_metrics()
         ));
+        assert!(Arc::ptr_eq(&original_term, &terminal.term));
 
+        processor.advance(&mut *terminal.term.lock(), b" world");
         let term = terminal.term.lock();
-        assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'h');
+        assert_eq!(term.grid()[Line(0)][Column(5)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(6)].c, 'w');
         assert_eq!(term.columns(), 80);
         assert_eq!(term.screen_lines(), 24);
         drop(term);
-        assert_eq!(terminal.title(), "");
+        assert_eq!(terminal.title(), "old title");
         assert_eq!(terminal.current_working_dir(), None);
         assert_eq!(terminal.child_exited(), None);
     }
@@ -5868,7 +5969,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_scrollback_limit_can_be_updated_and_survives_surface_reset() {
+    fn terminal_scrollback_limit_can_be_updated_without_replacing_surface() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, event_proxy, _colors, performance_metrics) =
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
@@ -5892,6 +5993,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -5909,10 +6011,6 @@ mod tests {
         };
 
         terminal.set_scrollback_lines(250_000);
-        assert_eq!(250_000, terminal.scrollback_lines());
-
-        terminal.reset_terminal_surface();
-
         assert_eq!(250_000, terminal.scrollback_lines());
     }
 }

@@ -102,8 +102,9 @@ use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
 use terminal::LocalConfig;
 use terminal::terminal::{
-    ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind, TerminalModelEvent,
-    TerminalOperationHistoryLoad, TerminalScrollProxy, resolve_local_working_dir,
+    ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
+    TerminalConnectionKind, TerminalModelEvent, TerminalOperationHistoryLoad, TerminalScrollProxy,
+    resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
@@ -122,6 +123,7 @@ mod helpers;
 mod history_actions;
 mod history_query;
 mod history_render;
+mod host_key_confirmation;
 mod init_config;
 mod initialization;
 mod input_handler;

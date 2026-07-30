@@ -7,6 +7,7 @@
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use crate::proxy::LocalAuth;
 use crate::setup::{ClientHello, HEADER_LEN};
 use crate::{MagicCookie, ServerEndpoint, X11Error};
 
@@ -21,14 +22,14 @@ pub enum BridgeError {
 /// 按出示的 fake cookie 换取对应的本机真实 cookie。
 /// 返回 `None` 表示该 cookie 不被接受。
 pub trait CookieExchange: Send + Sync {
-    fn exchange(&self, presented: &MagicCookie) -> Option<MagicCookie>;
+    fn exchange(&self, presented: &MagicCookie) -> Option<LocalAuth>;
 }
 
 impl<F> CookieExchange for F
 where
-    F: Fn(&MagicCookie) -> Option<MagicCookie> + Send + Sync,
+    F: Fn(&MagicCookie) -> Option<LocalAuth> + Send + Sync,
 {
-    fn exchange(&self, presented: &MagicCookie) -> Option<MagicCookie> {
+    fn exchange(&self, presented: &MagicCookie) -> Option<LocalAuth> {
         self(presented)
     }
 }
@@ -72,8 +73,12 @@ where
         return Err(X11Error::CookieRejected.into());
     };
 
-    // 3. 换成本机真实 cookie 重新编码，连上本机 X server 后双向转发。
-    let rewritten = hello.encode_with(local.bytes());
+    // 3. 换成本机认证信息重新编码，连上本机 X server 后双向转发。
+    let rewritten = match local {
+        LocalAuth::Cookie(cookie) => hello.encode_with(cookie.bytes()),
+        #[cfg(any(target_os = "windows", test))]
+        LocalAuth::None => hello.encode_with_auth("", &[]),
+    };
     let mut server = open(endpoint).await?;
     server.write_all(&rewritten).await?;
     tokio::io::copy_bidirectional(&mut channel, &mut server).await?;
@@ -117,6 +122,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
     use tokio::net::TcpListener;
 
+    use crate::proxy::LocalAuth;
     use crate::setup::ByteOrder;
 
     use super::*;
@@ -157,13 +163,55 @@ mod tests {
         };
         let (mut client, channel) = duplex(8192);
         let expected_fake = fake.clone();
-        let exchange =
-            move |presented: &MagicCookie| (presented == &expected_fake).then(|| real.clone());
+        let exchange = move |presented: &MagicCookie| {
+            (presented == &expected_fake).then(|| LocalAuth::Cookie(real.clone()))
+        };
 
         let relay = relay_inner(channel, &endpoint, &exchange);
         let client_flow = async move {
             client.write_all(&packet_with(&fake)).await.unwrap();
             // setup 之后的字节应原样穿过桥接到达“X server”并被回显。
+            client.write_all(b"ping").await.unwrap();
+            let mut echoed = [0u8; 4];
+            client.read_exact(&mut echoed).await.unwrap();
+            assert_eq!(&echoed, b"ping");
+        };
+        let (relay_result, ()) = tokio::join!(relay, client_flow);
+
+        server_task.await.unwrap();
+        relay_result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn validates_fake_cookie_then_removes_auth_for_no_auth_local_server() {
+        let fake = cookie(0xf1);
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_task = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut setup = [0u8; HEADER_LEN];
+            conn.read_exact(&mut setup).await.unwrap();
+            let decoded = ClientHello::decode(&setup).unwrap();
+            assert!(decoded.auth_name.is_empty());
+            assert!(decoded.auth_data.is_empty());
+
+            let mut buf = [0u8; 4];
+            conn.read_exact(&mut buf).await.unwrap();
+            conn.write_all(&buf).await.unwrap();
+        });
+
+        let endpoint = ServerEndpoint::Inet {
+            host: "127.0.0.1".into(),
+            port,
+        };
+        let (mut client, channel) = duplex(8192);
+        let expected_fake = fake.clone();
+        let exchange =
+            move |presented: &MagicCookie| (presented == &expected_fake).then_some(LocalAuth::None);
+
+        let relay = relay_inner(channel, &endpoint, &exchange);
+        let client_flow = async move {
+            client.write_all(&packet_with(&fake)).await.unwrap();
             client.write_all(b"ping").await.unwrap();
             let mut echoed = [0u8; 4];
             client.read_exact(&mut echoed).await.unwrap();

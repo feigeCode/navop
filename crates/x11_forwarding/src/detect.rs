@@ -6,7 +6,11 @@
 //! → 读取 Xauthority 文件并挑出匹配 DISPLAY 的 MIT-MAGIC-COOKIE-1。
 
 use std::collections::HashSet;
+#[cfg(any(target_os = "windows", test))]
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
@@ -26,13 +30,16 @@ pub fn detect_local_server() -> X11Result<X11Proxy> {
     let cookie = match find_authority_cookie(&address, &hints) {
         Ok(cookie) => cookie,
         Err(initial_error) => {
-            retry_xquartz_authority(&display_text, &address, &hints).map_err(|retry_error| {
+            match retry_xquartz_authority(&display_text, &address, &hints).map_err(|retry_error| {
                 if matches!(retry_error, X11Error::AuthorityNoMatch) {
                     initial_error
                 } else {
                     retry_error
                 }
-            })?
+            }) {
+                Ok(cookie) => cookie,
+                Err(error) => return windows_no_auth_proxy(&address, error),
+            }
         }
     };
 
@@ -159,8 +166,68 @@ fn is_x_server_endpoint(endpoint: &Path) -> bool {
 
 fn discover_display_string() -> Option<String> {
     env_non_empty("DISPLAY")
+        .or_else(local_windows_display)
         .or_else(launchd_display)
         .or_else(local_xquartz_display)
+}
+
+#[cfg(target_os = "windows")]
+fn local_windows_display() -> Option<String> {
+    windows_display_from_probe(|address| {
+        std::net::TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn local_windows_display() -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_display_from_probe(mut probe: impl FnMut(SocketAddr) -> bool) -> Option<String> {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6000);
+    probe(address).then(|| "127.0.0.1:0.0".into())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_no_auth_proxy(address: &DisplayAddress, error: X11Error) -> X11Result<X11Proxy> {
+    if !address.serves_local_host() || !windows_endpoint_is_listening(address.endpoint()) {
+        return Err(error);
+    }
+    tracing::warn!(
+        target: "x11.detect",
+        %error,
+        endpoint = ?address.endpoint(),
+        "Windows 本机 X server 无可用 Xauthority，回退到无认证桥接"
+    );
+    Ok(X11Proxy::new_without_auth(
+        address.endpoint().clone(),
+        address.screen(),
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_no_auth_proxy(_address: &DisplayAddress, error: X11Error) -> X11Result<X11Proxy> {
+    Err(error)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_endpoint_is_listening(endpoint: &crate::ServerEndpoint) -> bool {
+    use std::net::ToSocketAddrs as _;
+
+    let crate::ServerEndpoint::Inet { host, port } = endpoint else {
+        return false;
+    };
+    if !endpoint.is_loopback() {
+        return false;
+    }
+    (host.as_str(), *port)
+        .to_socket_addrs()
+        .into_iter()
+        .flatten()
+        .any(|address| {
+            std::net::TcpStream::connect_timeout(&address, Duration::from_millis(150)).is_ok()
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -235,7 +302,7 @@ fn xquartz_server_authority_files(home: &Path) -> Vec<PathBuf> {
                 })
         })
         .collect::<Vec<_>>();
-    paths.sort_by(|left, right| right.1.cmp(&left.1));
+    paths.sort_by_key(|(_, modified)| std::cmp::Reverse(*modified));
     paths.into_iter().map(|(path, _)| path).collect()
 }
 
@@ -271,9 +338,22 @@ fn command_output(program: &str, args: &[&str]) -> Option<String> {
 mod tests {
     #[cfg(target_os = "macos")]
     use super::{detect_local_server, xquartz_server_authority_files};
-    use super::{display_number_from_socket_name, is_x_server_endpoint};
+    use super::{
+        display_number_from_socket_name, is_x_server_endpoint, windows_display_from_probe,
+    };
     use std::ffi::OsStr;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::path::Path;
+
+    #[test]
+    fn windows_display_falls_back_to_local_display_zero_only_when_listening() {
+        let expected = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6000);
+        assert_eq!(
+            windows_display_from_probe(|address| address == expected),
+            Some("127.0.0.1:0.0".into())
+        );
+        assert_eq!(windows_display_from_probe(|_| false), None);
+    }
 
     #[test]
     fn parses_x11_unix_socket_names() {

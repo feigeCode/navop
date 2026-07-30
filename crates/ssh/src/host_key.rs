@@ -230,6 +230,7 @@ impl fmt::Display for HostKeyDetails {
 pub enum HostKeyAcceptance {
     Known,
     AcceptedNew,
+    AcceptedOnce,
     Insecure,
 }
 
@@ -316,6 +317,14 @@ pub struct HostKeyVerifier {
     policy: HostKeyPolicy,
     trust_store_path: Option<PathBuf>,
     openssh_known_hosts_path: Option<PathBuf>,
+    confirmed_keys: Vec<ConfirmedHostKey>,
+}
+
+#[derive(Clone)]
+struct ConfirmedHostKey {
+    identity: HostKeyIdentity,
+    details: HostKeyDetails,
+    persist: bool,
 }
 
 impl Default for HostKeyVerifier {
@@ -339,6 +348,7 @@ impl HostKeyVerifier {
             policy,
             trust_store_path,
             openssh_known_hosts_path,
+            confirmed_keys: Vec::new(),
         }
     }
 
@@ -389,6 +399,28 @@ impl HostKeyVerifier {
     #[must_use]
     pub fn openssh_known_hosts_path(&self) -> Option<&Path> {
         self.openssh_known_hosts_path.as_deref()
+    }
+
+    /// Return a verifier that accepts exactly the key the user confirmed.
+    ///
+    /// Confirmations are additive so jump-host and target-host prompts can be
+    /// handled independently during the same connection attempt. Unknown keys
+    /// that were not shown to the user remain fail-closed.
+    #[must_use]
+    pub fn with_confirmed_key(
+        mut self,
+        identity: HostKeyIdentity,
+        details: HostKeyDetails,
+        persist: bool,
+    ) -> Self {
+        self.confirmed_keys
+            .retain(|entry| entry.identity != identity || entry.details != details);
+        self.confirmed_keys.push(ConfirmedHostKey {
+            identity,
+            details,
+            persist,
+        });
+        self
     }
 
     /// Verify a server key and, in `AcceptNew`, persist an unknown key.
@@ -459,6 +491,31 @@ impl HostKeyVerifier {
                     reason,
                 });
             }
+        }
+
+        if let Some(confirmation) = self.confirmed_keys.iter().find(|confirmation| {
+            confirmation.identity == *identity && confirmation.details == presented
+        }) {
+            if !confirmation.persist {
+                return Ok(HostKeyAcceptance::AcceptedOnce);
+            }
+
+            let public_key = public_key_string(server_public_key);
+            let details = HostKeyDetails::from_public_key(server_public_key);
+            let mut entries = app_entries;
+            entries.push(StoredHostKey {
+                identity: identity.clone(),
+                public_key,
+                details,
+            });
+            if let Err(reason) = self.save_app_entries(&entries) {
+                return Err(HostKeyRejection::StoreUnavailable {
+                    identity: identity.clone(),
+                    presented,
+                    reason,
+                });
+            }
+            return Ok(HostKeyAcceptance::AcceptedNew);
         }
 
         if self.policy == HostKeyPolicy::AcceptNew {
@@ -845,6 +902,103 @@ mod tests {
                 .verify(&id, &first)
                 .expect("persisted key should be known"),
             HostKeyAcceptance::Known
+        );
+    }
+
+    #[test]
+    fn confirmed_once_accepts_only_exact_key_without_persisting() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        let details = HostKeyDetails::from_public_key(&presented);
+
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .with_confirmed_key(id.clone(), details, false)
+                .verify(&id, &presented)
+                .expect("the explicitly confirmed key should be accepted once"),
+            HostKeyAcceptance::AcceptedOnce
+        );
+        assert!(!path.exists());
+        assert!(matches!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path).verify(&id, &presented),
+            Err(HostKeyRejection::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmed_and_saved_key_is_reused_by_strict_verifier() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        let details = HostKeyDetails::from_public_key(&presented);
+
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .with_confirmed_key(id.clone(), details, true)
+                .verify(&id, &presented)
+                .expect("the explicitly confirmed key should be persisted"),
+            HostKeyAcceptance::AcceptedNew
+        );
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .verify(&id, &presented)
+                .expect("the persisted key should be trusted"),
+            HostKeyAcceptance::Known
+        );
+    }
+
+    #[test]
+    fn confirmation_does_not_accept_another_unknown_key() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let confirmed_id = identity("confirmed.example", 22);
+        let other_id = identity("other.example", 22);
+        let confirmed_key = key(ssh_key::Algorithm::Ed25519);
+        let other_key = key(ssh_key::Algorithm::Ed25519);
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path).with_confirmed_key(
+            confirmed_id,
+            HostKeyDetails::from_public_key(&confirmed_key),
+            false,
+        );
+
+        assert!(matches!(
+            verifier.verify(&other_id, &other_key),
+            Err(HostKeyRejection::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmations_are_additive_for_jump_and_target_hosts() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let jump_id = identity("jump.example", 22);
+        let target_id = identity("target.example", 22);
+        let jump_key = key(ssh_key::Algorithm::Ed25519);
+        let target_key = key(ssh_key::Algorithm::Ed25519);
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .with_confirmed_key(
+                jump_id.clone(),
+                HostKeyDetails::from_public_key(&jump_key),
+                false,
+            )
+            .with_confirmed_key(
+                target_id.clone(),
+                HostKeyDetails::from_public_key(&target_key),
+                false,
+            );
+
+        assert_eq!(
+            verifier.verify(&jump_id, &jump_key).expect("jump key"),
+            HostKeyAcceptance::AcceptedOnce
+        );
+        assert_eq!(
+            verifier
+                .verify(&target_id, &target_key)
+                .expect("target key"),
+            HostKeyAcceptance::AcceptedOnce
         );
     }
 

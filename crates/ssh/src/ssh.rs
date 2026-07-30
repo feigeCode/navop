@@ -358,6 +358,17 @@ impl client::Handler for RusshHandler {
                 );
                 Ok(true)
             }
+            Ok(HostKeyAcceptance::AcceptedOnce) => {
+                let details = HostKeyDetails::from_public_key(server_public_key);
+                tracing::warn!(
+                    target: "ssh.host_key",
+                    identity = %self.identity,
+                    algorithm = %details.algorithm,
+                    fingerprint = %details.fingerprint,
+                    "accepted an SSH host key once after explicit confirmation"
+                );
+                Ok(true)
+            }
             Ok(HostKeyAcceptance::Insecure) => {
                 let details = HostKeyDetails::from_public_key(server_public_key);
                 tracing::warn!(

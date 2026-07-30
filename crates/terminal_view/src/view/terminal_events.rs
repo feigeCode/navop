@@ -43,6 +43,9 @@ impl TerminalView {
                 cx.emit(TabContentEvent::ContentChanged);
                 cx.notify();
             }
+            TerminalModelEvent::HostKeyVerificationRequired => {
+                self.show_host_key_verification_dialog(window, cx);
+            }
             TerminalModelEvent::CommandHistoryChanged => {
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.refresh_history_commands(cx);

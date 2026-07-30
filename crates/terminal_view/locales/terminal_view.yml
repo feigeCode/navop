@@ -431,9 +431,17 @@ SSH:
     zh-CN: X11 转发
     zh-HK: X11 轉發
   x11_forwarding_desc:
-    en: Forward remote X11 graphical applications to the local X server (e.g. XQuartz on macOS). Applies to new terminal sessions.
-    zh-CN: 将远端 X11 图形应用转发到本机 X server（如 macOS 上的 XQuartz）显示。对新开的终端会话生效。
-    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server（如 macOS 上的 XQuartz）顯示。對新開的終端工作階段生效。
+    en: Forward remote X11 graphical applications to the local X server. macOS requires XQuartz to be installed and running. Applies to new terminal sessions.
+    zh-CN: 将远端 X11 图形应用转发到本机 X server。macOS 需要安装并启动 XQuartz。对新开的终端会话生效。
+    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server。macOS 需要安裝並啟動 XQuartz。對新開的終端工作階段生效。
+  xquartz_not_installed:
+    en: XQuartz was not detected. Install and start XQuartz before using X11 forwarding on macOS, then reconnect the SSH session.
+    zh-CN: 未检测到 XQuartz。请先安装并启动 XQuartz，再重新建立 SSH 连接以使用 X11 转发。
+    zh-HK: 未偵測到 XQuartz。請先安裝並啟動 XQuartz，再重新建立 SSH 連線以使用 X11 轉發。
+  xquartz_unavailable:
+    en: X11 forwarding is unavailable because XQuartz is not installed, not running, or its DISPLAY authorization is not ready. Install or start XQuartz, then reconnect the SSH session.
+    zh-CN: X11 转发不可用：XQuartz 可能未安装、未运行，或 DISPLAY 授权尚未就绪。请安装或启动 XQuartz，然后重新建立 SSH 连接。
+    zh-HK: X11 轉發無法使用：XQuartz 可能未安裝、未執行，或 DISPLAY 授權尚未就緒。請安裝或啟動 XQuartz，然後重新建立 SSH 連線。
   remote_shell_integration:
     en: Remote Shell Integration
     zh-CN: 远端 Shell 集成
@@ -1488,6 +1496,42 @@ SshSession:
     en: Reconnect
     zh-CN: 重新连接
     zh-HK: 重新連接
+  host_key_title:
+    en: Verify SSH Host Key
+    zh-CN: 验证 SSH 主机指纹
+    zh-HK: 驗證 SSH 主機指紋
+  host_key_message:
+    en: This server is not yet trusted. Verify the fingerprint before continuing.
+    zh-CN: 尚未信任此服务器。继续前请核对主机指纹。
+    zh-HK: 尚未信任此伺服器。繼續前請核對主機指紋。
+  host_key_identity:
+    en: Server
+    zh-CN: 服务器
+    zh-HK: 伺服器
+  host_key_algorithm:
+    en: Algorithm
+    zh-CN: 算法
+    zh-HK: 演算法
+  host_key_fingerprint:
+    en: SHA-256 Fingerprint
+    zh-CN: SHA-256 指纹
+    zh-HK: SHA-256 指紋
+  host_key_accept_save:
+    en: Accept and Save
+    zh-CN: 接受并保存
+    zh-HK: 接受並儲存
+  host_key_accept_once:
+    en: Accept Once
+    zh-CN: 仅本次接受
+    zh-HK: 僅本次接受
+  host_key_reject:
+    en: Reject
+    zh-CN: 拒绝
+    zh-HK: 拒絕
+  host_key_rejected:
+    en: SSH host key was rejected.
+    zh-CN: 已拒绝 SSH 主机指纹。
+    zh-HK: 已拒絕 SSH 主機指紋。
 
 # 文件管理器
 FileManager:
@@ -1998,45 +2042,45 @@ TerminalRecordingPlayback:
 
 TerminalOperationHistory:
   title:
-    en: Operation History
-    zh-CN: 操作历史
-    zh-HK: 操作歷史
+    en: Input Audit
+    zh-CN: 输入操作审计
+    zh-HK: 輸入操作審計
   tooltip:
-    en: View read-only operation history
-    zh-CN: 查看只读操作历史
-    zh-HK: 檢視唯讀操作歷史
+    en: View redacted input attempts; this is not terminal output or scrollback
+    zh-CN: 查看脱敏后的输入操作记录；这里不是终端输出或滚动历史
+    zh-HK: 檢視遮罩後的輸入操作記錄；這裡不是終端輸出或捲動歷史
   read_only:
-    en: Read-only history. Nothing is executed from this panel.
-    zh-CN: 此处仅供只读查看，不会执行任何历史操作。
-    zh-HK: 此處僅供唯讀檢視，不會執行任何歷史操作。
+    en: Read-only input audit. It does not restore terminal output or execute anything.
+    zh-CN: 此处是只读输入审计，不会恢复终端输出，也不会执行任何操作。
+    zh-HK: 此處是唯讀輸入審計，不會恢復終端輸出，也不會執行任何操作。
   close:
-    en: Close operation history
-    zh-CN: 关闭操作历史
-    zh-HK: 關閉操作歷史
+    en: Close input audit
+    zh-CN: 关闭输入操作审计
+    zh-HK: 關閉輸入操作審計
   loading:
-    en: Loading operation history…
-    zh-CN: 正在加载操作历史…
-    zh-HK: 正在載入操作歷史…
+    en: Loading input audit…
+    zh-CN: 正在加载输入操作审计…
+    zh-HK: 正在載入輸入操作審計…
   refreshing:
-    en: Refreshing operation history…
-    zh-CN: 正在刷新操作历史…
-    zh-HK: 正在重新整理操作歷史…
+    en: Refreshing input audit…
+    zh-CN: 正在刷新输入操作审计…
+    zh-HK: 正在重新整理輸入操作審計…
   stale:
     en: Showing the previous snapshot until refresh completes.
     zh-CN: 刷新完成前暂时显示上一份快照。
     zh-HK: 重新整理完成前暫時顯示上一份快照。
   load_failed:
-    en: "Failed to load operation history: %{error}"
-    zh-CN: "加载操作历史失败：%{error}"
-    zh-HK: "載入操作歷史失敗：%{error}"
+    en: "Failed to load input audit: %{error}"
+    zh-CN: "加载输入操作审计失败：%{error}"
+    zh-HK: "載入輸入操作審計失敗：%{error}"
   empty:
-    en: No operations have been recorded.
-    zh-CN: 暂无已记录的操作。
-    zh-HK: 暫無已記錄的操作。
+    en: No input attempts have been recorded.
+    zh-CN: 暂无已记录的输入操作。
+    zh-HK: 暫無已記錄的輸入操作。
   no_matches:
-    en: No operations match this status.
-    zh-CN: 没有符合此状态的操作。
-    zh-HK: 沒有符合此狀態的操作。
+    en: No input attempts match this status.
+    zh-CN: 没有符合此状态的输入操作。
+    zh-HK: 沒有符合此狀態的輸入操作。
   current_snapshot_unavailable:
     en: "The current session snapshot is unavailable: %{error}"
     zh-CN: "当前会话快照不可用：%{error}"
@@ -2046,13 +2090,13 @@ TerminalOperationHistory:
     zh-CN: "%{warning} · 会话 %{session}"
     zh-HK: "%{warning} · 工作階段 %{session}"
   current_session:
-    en: Current Session
-    zh-CN: 当前会话
-    zh-HK: 目前工作階段
+    en: Current Input Audit
+    zh-CN: 当前输入审计
+    zh-HK: 目前輸入審計
   recovered_session:
-    en: Recovered Session
-    zh-CN: 已恢复会话
-    zh-HK: 已復原工作階段
+    en: Recovered Input Audit
+    zh-CN: 已恢复的输入审计
+    zh-HK: 已復原的輸入審計
   session_id:
     en: Session ID
     zh-CN: 会话 ID
@@ -2066,9 +2110,9 @@ TerminalOperationHistory:
     zh-CN: 更新时间
     zh-HK: 更新時間
   recovery_source:
-    en: Recovery Source
-    zh-CN: 恢复来源
-    zh-HK: 復原來源
+    en: Audit Recovery Source
+    zh-CN: 审计恢复来源
+    zh-HK: 審計復原來源
   generation:
     en: "Generation %{generation}"
     zh-CN: "连接代次 %{generation}"
