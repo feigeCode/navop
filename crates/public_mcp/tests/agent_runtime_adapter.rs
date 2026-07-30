@@ -12,11 +12,11 @@ use public_mcp::tools::{
     PublicMcpToolRegistry, ToolRuntimeMcpProvider, agent_runtime_tool_registry,
 };
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 use tool_runtime::{
     RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolHandler, ToolMode,
     ToolRegistry, ToolResult,
 };
-use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn agent_auto_mode_executes_public_mcp_open_world_tool_without_approval() {

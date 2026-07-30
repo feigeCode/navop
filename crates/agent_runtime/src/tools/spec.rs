@@ -304,7 +304,10 @@ mod tests {
     fn tool_name_allocator_skips_already_reserved_suffixes() {
         let mut allocator = ToolNameAllocator::default();
 
-        assert_eq!(allocator.allocate("sample_echo_2").as_str(), "sample_echo_2");
+        assert_eq!(
+            allocator.allocate("sample_echo_2").as_str(),
+            "sample_echo_2"
+        );
         assert_eq!(allocator.allocate("sample.echo").as_str(), "sample_echo");
         assert_eq!(allocator.allocate("sample_echo").as_str(), "sample_echo_3");
     }

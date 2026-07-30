@@ -76,10 +76,7 @@ impl ToolRegistry {
     }
 
     /// 注册工具；名称冲突时保持原注册表不变并返回错误。
-    pub fn try_register(
-        &mut self,
-        tool: Arc<dyn Tool>,
-    ) -> Result<&mut Self, ToolRegistryError> {
+    pub fn try_register(&mut self, tool: Arc<dyn Tool>) -> Result<&mut Self, ToolRegistryError> {
         let name = tool.name();
         if self.tools.contains_key(&name) {
             return Err(ToolRegistryError {
@@ -103,10 +100,7 @@ impl ToolRegistry {
     }
 
     /// 原子合并注册表；任一名称冲突时不合并任何工具。
-    pub fn try_extend(
-        &mut self,
-        other: ToolRegistry,
-    ) -> Result<&mut Self, ToolRegistryError> {
+    pub fn try_extend(&mut self, other: ToolRegistry) -> Result<&mut Self, ToolRegistryError> {
         let duplicate_tool_names = other
             .tools
             .keys()
@@ -205,11 +199,10 @@ mod tests {
             )
         }
 
-        async fn execute(
-            &self,
-            _invocation: ToolInvocation,
-        ) -> Result<ToolObservation, ToolError> {
-            Err(ToolError::Execution("not used by registry tests".to_string()))
+        async fn execute(&self, _invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+            Err(ToolError::Execution(
+                "not used by registry tests".to_string(),
+            ))
         }
     }
 
@@ -227,7 +220,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(vec!["sample_echo".to_string()], error.duplicate_tool_names());
+        assert_eq!(
+            vec!["sample_echo".to_string()],
+            error.duplicate_tool_names()
+        );
         assert!(Arc::ptr_eq(
             &registry
                 .get(&ToolName::new("sample.echo"))
@@ -260,7 +256,10 @@ mod tests {
             Err(error) => error,
         };
 
-        assert_eq!(vec!["sample_echo".to_string()], error.duplicate_tool_names());
+        assert_eq!(
+            vec!["sample_echo".to_string()],
+            error.duplicate_tool_names()
+        );
         assert_eq!(1, registry.len());
         assert!(registry.contains(&ToolName::new("sample.echo")));
         assert!(!registry.contains(&ToolName::new("unique.tool")));
