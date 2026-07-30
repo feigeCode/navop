@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, Keystroke,
-    ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
+    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -1886,6 +1886,18 @@ impl Render for OnetCliApp {
             .size_full()
             .relative()
             .opacity(AppSettings::global(cx).window_opacity)
+            .drag_over::<ExternalPaths>(|element, _, _, cx| {
+                element.bg(cx.theme().primary.opacity(0.08))
+            })
+            .on_drop(cx.listener(|_, paths: &ExternalPaths, window, cx| {
+                for path in paths.paths() {
+                    crate::file_open::open_input(
+                        crate::file_open::FileOpenInput::Path(path.clone()),
+                        window,
+                        cx,
+                    );
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleConnectionSidebar, _, cx| {
                 if !this.home_page_style.uses_persistent_sidebar() {
                     return;

@@ -131,15 +131,12 @@ fn classify_supported_path(path: &Path) -> Option<OpenFileKind> {
     if is_terminal_recording_path(path) {
         return Some(OpenFileKind::TerminalRecording);
     }
-    let extension = path.extension()?.to_str()?;
-    if extension.eq_ignore_ascii_case("db") {
-        Some(OpenFileKind::Database(DatabaseType::SQLite))
-    } else if extension.eq_ignore_ascii_case("duckdb") {
-        Some(OpenFileKind::Database(DatabaseType::DuckDB))
-    } else if extension.eq_ignore_ascii_case("md") {
-        Some(OpenFileKind::Markdown)
-    } else {
-        None
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "db" | "sqlite" | "sqlite3" => Some(OpenFileKind::Database(DatabaseType::SQLite)),
+        "duckdb" => Some(OpenFileKind::Database(DatabaseType::DuckDB)),
+        "md" | "markdown" | "mdown" | "mkd" => Some(OpenFileKind::Markdown),
+        _ => None,
     }
 }
 
@@ -321,12 +318,32 @@ mod tests {
             classify_supported_path(Path::new("orders.db"))
         );
         assert_eq!(
+            Some(OpenFileKind::Database(DatabaseType::SQLite)),
+            classify_supported_path(Path::new("orders.sqlite"))
+        );
+        assert_eq!(
+            Some(OpenFileKind::Database(DatabaseType::SQLite)),
+            classify_supported_path(Path::new("orders.SQLITE3"))
+        );
+        assert_eq!(
             Some(OpenFileKind::Database(DatabaseType::DuckDB)),
             classify_supported_path(Path::new("warehouse.DUCKDB"))
         );
         assert_eq!(
             Some(OpenFileKind::Markdown),
             classify_supported_path(Path::new("README.Md"))
+        );
+        assert_eq!(
+            Some(OpenFileKind::Markdown),
+            classify_supported_path(Path::new("README.markdown"))
+        );
+        assert_eq!(
+            Some(OpenFileKind::Markdown),
+            classify_supported_path(Path::new("notes.MDOWN"))
+        );
+        assert_eq!(
+            Some(OpenFileKind::Markdown),
+            classify_supported_path(Path::new("guide.mkd"))
         );
         assert_eq!(
             Some(OpenFileKind::TerminalRecording),
@@ -347,6 +364,7 @@ mod tests {
         assert_eq!(None, classify_supported_path(Path::new("session.partial")));
         assert_eq!(None, classify_supported_path(Path::new("cast")));
         assert_eq!(None, classify_supported_path(Path::new("notes.txt")));
+        assert_eq!(None, classify_supported_path(Path::new("script.sql")));
     }
 
     #[test]
