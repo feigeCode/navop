@@ -1,6 +1,6 @@
 #[test]
 fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() {
-    let source = include_str!("render.rs");
+    let source = include_str!("render.rs").replace("\r\n", "\n");
 
     let canvas_start = source
         .find("fn remote_desktop_frame_canvas")
@@ -47,7 +47,7 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
         "the remote cursor must be painted over the framebuffer"
     );
 
-    assert_parent_bounded_remote_desktop_content(source);
+    assert_parent_bounded_remote_desktop_content(&source);
 }
 
 #[test]
