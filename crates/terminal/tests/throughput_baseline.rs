@@ -206,10 +206,6 @@ fn local_pty_close_during_high_output_baseline() {
         "local PTY should produce observable output before shutdown"
     );
     assert!(
-        snapshot.term_lock_samples > 0,
-        "local PTY parsing should record real terminal lock samples"
-    );
-    assert!(
         output_stopped,
         "local PTY output should stop after shutdown"
     );

@@ -1,5 +1,5 @@
 use alacritty_terminal::event::{Event as AlacTermEvent, EventListener, OnResize, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg, TerminalLockObserver};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{ClipboardType, Term};
 use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite, Options as PtyOptions};
@@ -375,18 +375,7 @@ impl LocalPtyBackend {
             performance_metrics.clone(),
             recording_tap.clone(),
         );
-        let terminal_lock_observer = performance_metrics.is_enabled().then(|| {
-            let metrics = performance_metrics.clone();
-            Arc::new(move |wait, hold| metrics.record_term_lock(wait, hold)) as TerminalLockObserver
-        });
-        let event_loop = EventLoop::new_with_terminal_lock_observer(
-            term,
-            event_proxy.clone(),
-            pty,
-            true,
-            false,
-            terminal_lock_observer,
-        )?;
+        let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
 
         // 设置 PtyWrite 回写通道，使 DA 等终端响应能写回 PTY
