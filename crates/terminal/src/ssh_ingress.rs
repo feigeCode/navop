@@ -48,6 +48,7 @@ pub(crate) struct SshPendingIngress {
 pub(crate) struct SshParserIngress {
     sender: BoundedTerminalSender<()>,
     metrics: Arc<TerminalPerformanceMetrics>,
+    ingress_generation: u64,
     task: JoinHandle<()>,
 }
 
@@ -82,6 +83,7 @@ impl SshParserIngress {
         recording_tap: Option<RecordingTap>,
     ) -> Self {
         let (sender, mut receiver) = bounded_terminal_queue::<()>(budget);
+        let ingress_generation = metrics.begin_ingress_backlog();
         let task_metrics = metrics.clone();
         let task = tokio::spawn(async move {
             let mut processor = Processor::<StdSyncHandler>::new();
@@ -100,16 +102,24 @@ impl SshParserIngress {
                 // consumption boundary has completed.
                 drop(data);
                 task_metrics.record_ingress_backlog(
+                    ingress_generation,
                     receiver.pending_bytes(),
+                    receiver.take_interval_peak_pending_bytes(),
                     receiver.peak_pending_bytes(),
                 );
                 event_proxy.queue_wakeup();
             }
-            task_metrics.record_ingress_backlog(0, receiver.peak_pending_bytes());
+            task_metrics.record_ingress_backlog(
+                ingress_generation,
+                0,
+                receiver.take_interval_peak_pending_bytes(),
+                receiver.peak_pending_bytes(),
+            );
         });
         Self {
             sender,
             metrics,
+            ingress_generation,
             task,
         }
     }
@@ -122,17 +132,28 @@ impl SshParserIngress {
     pub(crate) fn pending(&self, data: Vec<u8>) -> SshPendingIngress {
         let sender = self.sender.clone();
         let metrics = self.metrics.clone();
+        let ingress_generation = self.ingress_generation;
         SshPendingIngress::from_future(async move {
             // Keep metrics current even when the send has reserved bytes but
             // is waiting for a bounded chunk slot.
             let mut send = Box::pin(sender.send_data(data));
             let result = poll_fn(|cx| {
                 let result = std::future::Future::poll(send.as_mut(), cx);
-                metrics.record_ingress_backlog(sender.pending_bytes(), sender.peak_pending_bytes());
+                metrics.record_ingress_backlog(
+                    ingress_generation,
+                    sender.pending_bytes(),
+                    sender.take_interval_peak_pending_bytes(),
+                    sender.peak_pending_bytes(),
+                );
                 result
             })
             .await;
-            metrics.record_ingress_backlog(sender.pending_bytes(), sender.peak_pending_bytes());
+            metrics.record_ingress_backlog(
+                ingress_generation,
+                sender.pending_bytes(),
+                sender.take_interval_peak_pending_bytes(),
+                sender.peak_pending_bytes(),
+            );
             result
         })
     }
@@ -222,12 +243,16 @@ fn advance_terminal(
         let _ = recording_tap.record_output(data);
     }
     metrics.record_parser_chunk(data.len());
-    let wait_started = Instant::now();
-    let mut term = term.lock();
-    let wait = wait_started.elapsed();
-    let hold_started = Instant::now();
-    processor.advance(&mut *term, data);
-    let hold = hold_started.elapsed();
-    drop(term);
-    metrics.record_term_lock(wait, hold);
+    if metrics.is_enabled() {
+        let wait_started = Instant::now();
+        let mut term = term.lock();
+        let wait = wait_started.elapsed();
+        let hold_started = Instant::now();
+        processor.advance(&mut *term, data);
+        let hold = hold_started.elapsed();
+        drop(term);
+        metrics.record_term_lock(wait, hold);
+    } else {
+        processor.advance(&mut *term.lock(), data);
+    }
 }

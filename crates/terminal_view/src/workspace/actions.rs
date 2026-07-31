@@ -24,9 +24,11 @@ impl TerminalWorkspace {
         let content_subscription = cx.subscribe_in(
             &pane,
             window,
-            |_this, _pane, event: &TabContentEvent, _window, cx| {
+            move |this, _pane, event: &TabContentEvent, _window, cx| {
                 cx.emit(event.clone());
-                cx.notify();
+                if should_notify_workspace(this.active_pane_id, pane_id, event) {
+                    cx.notify();
+                }
             },
         );
         self.pane_subscriptions
@@ -52,6 +54,10 @@ impl TerminalWorkspace {
         self.pane_tab_metadata.insert(pane_id, tab_metadata);
         self.subscribe_to_pane(pane_id, pane.clone(), window, cx);
         self.active_pane_id = pane_id;
+        pane.update(cx, |pane, _cx| {
+            pane.set_performance_tab_active(self.tab_active);
+        });
+        self.set_active_pane_metric_state(cx);
         pane.read(cx).focus_handle(cx).focus(window, cx);
         cx.emit(TabContentEvent::StateChanged);
         cx.notify();
@@ -89,6 +95,7 @@ impl TerminalWorkspace {
         };
         if self.active_pane_id != pane_id {
             self.active_pane_id = pane_id;
+            self.set_active_pane_metric_state(cx);
             cx.emit(TabContentEvent::StateChanged);
             cx.notify();
         }
@@ -110,7 +117,50 @@ impl TerminalWorkspace {
         if self.active_pane_id == pane_id {
             self.active_pane_id = fallback;
         }
+        self.set_active_pane_metric_state(cx);
         cx.emit(TabContentEvent::StateChanged);
         cx.notify();
+    }
+}
+
+fn should_notify_workspace(
+    active_pane_id: TerminalPaneId,
+    source_pane_id: TerminalPaneId,
+    event: &TabContentEvent,
+) -> bool {
+    active_pane_id == source_pane_id || !matches!(event, TabContentEvent::ContentChanged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_pane_content_changes_notify_workspace() {
+        let pane_id = TerminalPaneId::new(1);
+
+        assert!(should_notify_workspace(
+            pane_id,
+            pane_id,
+            &TabContentEvent::ContentChanged,
+        ));
+    }
+
+    #[test]
+    fn inactive_pane_content_changes_do_not_notify_workspace() {
+        assert!(!should_notify_workspace(
+            TerminalPaneId::new(1),
+            TerminalPaneId::new(2),
+            &TabContentEvent::ContentChanged,
+        ));
+    }
+
+    #[test]
+    fn inactive_pane_state_changes_still_notify_workspace() {
+        assert!(should_notify_workspace(
+            TerminalPaneId::new(1),
+            TerminalPaneId::new(2),
+            &TabContentEvent::StateChanged,
+        ));
     }
 }

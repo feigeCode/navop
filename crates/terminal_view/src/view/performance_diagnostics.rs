@@ -15,7 +15,7 @@ impl TerminalView {
         };
 
         cx.spawn(async move |this, cx| {
-            let mut previous = metrics.snapshot();
+            let mut previous = metrics.snapshot_for_window();
             let mut previous_at = Instant::now();
 
             loop {
@@ -28,7 +28,7 @@ impl TerminalView {
                 }
 
                 let now = Instant::now();
-                let current = metrics.snapshot();
+                let current = metrics.snapshot_for_window();
                 let window =
                     current.delta_since(&previous, now.saturating_duration_since(previous_at));
 
@@ -39,7 +39,8 @@ impl TerminalView {
                     ingress_bytes = window.ingress_bytes,
                     ingress_bytes_per_second = window.ingress_bytes_per_second,
                     ingress_pending_bytes = window.ingress_pending_bytes,
-                    ingress_pending_bytes_max = window.ingress_pending_bytes_max,
+                    ingress_pending_bytes_window_max = window.ingress_pending_bytes_window_max,
+                    ingress_pending_bytes_lifetime_max = window.ingress_pending_bytes_lifetime_max,
                     parser_chunks = window.parser_chunks,
                     average_parser_chunk_bytes = window.average_parser_chunk_bytes,
                     user_input_bytes = window.user_input_bytes,

@@ -110,8 +110,8 @@ recording 或 ingress queue 行为。
 命令内容或认证信息。所有累计 counter 和 duration 都使用饱和运算，避免长期运行后
 整数回绕；跨字段 snapshot 是由独立 atomic load 组成的 best-effort observability
 数据，不承诺事务一致性，也不得用于驱动 correctness-sensitive terminal 行为。
-`ingress_pending_bytes_max` 表达 metrics 实例的生命周期峰值，不是 snapshot window
-内的峰值。
+`ingress_pending_bytes_window_max` 表达当前 diagnostics snapshot window 内的峰值，
+`ingress_pending_bytes_lifetime_max` 表达 metrics 实例的生命周期峰值。
 
 本切片明确**尚未接入** parser、backend、SSH、GPUI render 或 wakeup 的真实埋点。
 当前 `dev` 已经存在 `GpuiEventProxy::wakeup_pending` 去重和 terminal event loop 的

@@ -157,6 +157,7 @@ fn concurrent_terminal_parser_baseline() {
 #[ignore = "performance baseline"]
 fn background_terminal_output_remains_observable() {
     let (term, _proxy, metrics, _events) = test_term();
+    metrics.set_tab_active(false);
     metrics.set_view_visible(false);
 
     parse_chunks(&term, &metrics, 256);
@@ -203,6 +204,10 @@ fn local_pty_close_during_high_output_baseline() {
     assert!(
         output_started && snapshot.ingress_bytes > 0,
         "local PTY should produce observable output before shutdown"
+    );
+    assert!(
+        snapshot.term_lock_samples > 0,
+        "local PTY parsing should record real terminal lock samples"
     );
     assert!(
         output_stopped,

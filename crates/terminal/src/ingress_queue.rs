@@ -42,6 +42,7 @@ struct QueueState {
     // This counter changes only after one complete byte acquisition.
     pending_bytes: AtomicUsize,
     peak_pending_bytes: AtomicUsize,
+    interval_peak_pending_bytes: AtomicUsize,
     abort: CancellationToken,
 }
 
@@ -53,6 +54,7 @@ impl QueueState {
             byte_permits: Arc::new(Semaphore::new(max_pending_bytes)),
             pending_bytes: AtomicUsize::new(0),
             peak_pending_bytes: AtomicUsize::new(0),
+            interval_peak_pending_bytes: AtomicUsize::new(0),
             abort: CancellationToken::new(),
         }
     }
@@ -76,6 +78,8 @@ impl QueueState {
         debug_assert!(current <= self.max_pending_bytes);
         self.peak_pending_bytes
             .fetch_max(current, Ordering::Relaxed);
+        self.interval_peak_pending_bytes
+            .fetch_max(current, Ordering::Relaxed);
         ByteReservation {
             byte_count,
             _permit: permit,
@@ -85,6 +89,10 @@ impl QueueState {
 
     fn peak_pending_bytes(&self) -> usize {
         self.peak_pending_bytes.load(Ordering::Relaxed)
+    }
+
+    fn take_interval_peak_pending_bytes(&self) -> usize {
+        self.interval_peak_pending_bytes.swap(0, Ordering::AcqRel)
     }
 }
 
@@ -205,6 +213,10 @@ impl<C> BoundedTerminalSender<C> {
     pub fn peak_pending_bytes(&self) -> usize {
         self.state.peak_pending_bytes()
     }
+
+    pub fn take_interval_peak_pending_bytes(&self) -> usize {
+        self.state.take_interval_peak_pending_bytes()
+    }
 }
 
 struct QueuedData {
@@ -285,6 +297,10 @@ impl<C> BoundedTerminalReceiver<C> {
 
     pub fn peak_pending_bytes(&self) -> usize {
         self.state.peak_pending_bytes()
+    }
+
+    pub fn take_interval_peak_pending_bytes(&self) -> usize {
+        self.state.take_interval_peak_pending_bytes()
     }
 
     fn finish_abort(&mut self) {

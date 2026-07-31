@@ -4,8 +4,8 @@
 //! They are not transactionally consistent across fields and must not be used
 //! to drive correctness-sensitive terminal behavior.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const TERMINAL_PERFORMANCE_METRICS_ENV: &str = "NAVOP_TERMINAL_PERFORMANCE_METRICS";
@@ -14,6 +14,7 @@ pub const TERMINAL_PERFORMANCE_METRICS_ENV: &str = "NAVOP_TERMINAL_PERFORMANCE_M
 pub enum TerminalActivity {
     Focused,
     Visible,
+    MountedHidden,
     Background,
 }
 
@@ -27,7 +28,8 @@ pub enum TerminalInputMetricSource {
 pub struct TerminalPerformanceSnapshot {
     pub ingress_bytes: u64,
     pub ingress_pending_bytes: u64,
-    pub ingress_pending_bytes_max: u64,
+    pub ingress_pending_bytes_window_max: u64,
+    pub ingress_pending_bytes_lifetime_max: u64,
     pub parser_chunks: u64,
     pub parser_chunk_bytes: u64,
     pub parser_chunk_max_bytes: u64,
@@ -50,14 +52,16 @@ pub struct TerminalPerformanceSnapshot {
     pub last_render_tick_ns: u64,
     pub last_render_focused: bool,
     pub view_visible: bool,
+    pub tab_active: bool,
+    pub pane_active: bool,
 }
 
 impl TerminalPerformanceSnapshot {
     /// Builds a window from two best-effort snapshots.
     ///
     /// Counter deltas saturate at zero when the supplied snapshots are out of
-    /// order. `ingress_pending_bytes_max` remains the lifetime peak observed by
-    /// the metrics instance rather than a peak scoped to this window.
+    /// order. Backlog window peaks are reset independently by
+    /// [`TerminalPerformanceMetrics::snapshot_for_window`].
     pub fn delta_since(&self, previous: &Self, elapsed: Duration) -> TerminalPerformanceWindow {
         let ingress_bytes = delta(self.ingress_bytes, previous.ingress_bytes);
         let parser_chunks = delta(self.parser_chunks, previous.parser_chunks);
@@ -73,7 +77,8 @@ impl TerminalPerformanceSnapshot {
             ingress_bytes,
             ingress_bytes_per_second: rate(ingress_bytes, elapsed),
             ingress_pending_bytes: self.ingress_pending_bytes,
-            ingress_pending_bytes_max: self.ingress_pending_bytes_max,
+            ingress_pending_bytes_window_max: self.ingress_pending_bytes_window_max,
+            ingress_pending_bytes_lifetime_max: self.ingress_pending_bytes_lifetime_max,
             parser_chunks,
             average_parser_chunk_bytes: average(parser_bytes, parser_chunks),
             user_input_bytes: delta(self.user_input_bytes, previous.user_input_bytes),
@@ -96,12 +101,14 @@ impl TerminalPerformanceSnapshot {
     }
 
     pub fn activity(&self) -> TerminalActivity {
-        if !self.view_visible {
+        if !self.tab_active {
             TerminalActivity::Background
-        } else if self.last_render_focused {
+        } else if self.view_visible && self.pane_active && self.last_render_focused {
             TerminalActivity::Focused
-        } else {
+        } else if self.view_visible {
             TerminalActivity::Visible
+        } else {
+            TerminalActivity::MountedHidden
         }
     }
 }
@@ -112,7 +119,8 @@ pub struct TerminalPerformanceWindow {
     pub ingress_bytes: u64,
     pub ingress_bytes_per_second: f64,
     pub ingress_pending_bytes: u64,
-    pub ingress_pending_bytes_max: u64,
+    pub ingress_pending_bytes_window_max: u64,
+    pub ingress_pending_bytes_lifetime_max: u64,
     pub parser_chunks: u64,
     pub average_parser_chunk_bytes: f64,
     pub user_input_bytes: u64,
@@ -134,7 +142,10 @@ pub struct TerminalPerformanceMetrics {
     enabled: bool,
     ingress_bytes: AtomicU64,
     ingress_pending_bytes: AtomicU64,
-    ingress_pending_bytes_max: AtomicU64,
+    ingress_pending_bytes_window_max: AtomicU64,
+    ingress_pending_bytes_lifetime_max: AtomicU64,
+    ingress_generation: AtomicU64,
+    ingress_update_lock: Mutex<()>,
     parser_chunks: AtomicU64,
     parser_chunk_bytes: AtomicU64,
     parser_chunk_max_bytes: AtomicU64,
@@ -157,6 +168,8 @@ pub struct TerminalPerformanceMetrics {
     last_render_tick_ns: AtomicU64,
     last_render_focused: AtomicBool,
     view_visible: AtomicBool,
+    tab_active: AtomicBool,
+    pane_active: AtomicBool,
 }
 
 impl Default for TerminalPerformanceMetrics {
@@ -191,7 +204,10 @@ impl TerminalPerformanceMetrics {
             enabled,
             ingress_bytes: AtomicU64::new(0),
             ingress_pending_bytes: AtomicU64::new(0),
-            ingress_pending_bytes_max: AtomicU64::new(0),
+            ingress_pending_bytes_window_max: AtomicU64::new(0),
+            ingress_pending_bytes_lifetime_max: AtomicU64::new(0),
+            ingress_generation: AtomicU64::new(0),
+            ingress_update_lock: Mutex::new(()),
             parser_chunks: AtomicU64::new(0),
             parser_chunk_bytes: AtomicU64::new(0),
             parser_chunk_max_bytes: AtomicU64::new(0),
@@ -214,6 +230,8 @@ impl TerminalPerformanceMetrics {
             last_render_tick_ns: AtomicU64::new(0),
             last_render_focused: AtomicBool::new(false),
             view_visible: AtomicBool::new(false),
+            tab_active: AtomicBool::new(false),
+            pane_active: AtomicBool::new(false),
         }
     }
 
@@ -229,16 +247,53 @@ impl TerminalPerformanceMetrics {
             .fetch_max(bytes, Ordering::Relaxed);
     }
 
-    pub fn record_ingress_backlog(&self, current_bytes: usize, peak_bytes: usize) {
+    /// Starts backlog accounting for a new ingress queue.
+    ///
+    /// The returned generation must accompany updates from that queue. This
+    /// prevents a reconnect's detached old worker from overwriting the current
+    /// backlog of the replacement queue.
+    pub fn begin_ingress_backlog(&self) -> u64 {
+        if !self.enabled {
+            return 0;
+        }
+        let _update = self
+            .ingress_update_lock
+            .lock()
+            .expect("terminal performance ingress update lock poisoned");
+        let generation = self
+            .ingress_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        self.ingress_pending_bytes.store(0, Ordering::Release);
+        generation
+    }
+
+    pub fn record_ingress_backlog(
+        &self,
+        generation: u64,
+        current_bytes: usize,
+        interval_peak_bytes: usize,
+        lifetime_peak_bytes: usize,
+    ) {
         if !self.enabled {
             return;
         }
         let current_bytes = usize_to_u64(current_bytes);
-        let peak_bytes = usize_to_u64(peak_bytes).max(current_bytes);
+        let interval_peak_bytes = usize_to_u64(interval_peak_bytes).max(current_bytes);
+        let lifetime_peak_bytes = usize_to_u64(lifetime_peak_bytes).max(interval_peak_bytes);
+        self.ingress_pending_bytes_lifetime_max
+            .fetch_max(lifetime_peak_bytes, Ordering::Relaxed);
+        let _update = self
+            .ingress_update_lock
+            .lock()
+            .expect("terminal performance ingress update lock poisoned");
+        if self.ingress_generation.load(Ordering::Acquire) != generation {
+            return;
+        }
         self.ingress_pending_bytes
-            .store(current_bytes, Ordering::Relaxed);
-        self.ingress_pending_bytes_max
-            .fetch_max(peak_bytes, Ordering::Relaxed);
+            .store(current_bytes, Ordering::Release);
+        self.ingress_pending_bytes_window_max
+            .fetch_max(interval_peak_bytes, Ordering::Relaxed);
     }
 
     pub fn record_input(&self, source: TerminalInputMetricSource, bytes: usize) {
@@ -308,6 +363,24 @@ impl TerminalPerformanceMetrics {
         self.view_visible.store(visible, Ordering::Release);
     }
 
+    pub fn set_tab_active(&self, active: bool) {
+        if !self.enabled {
+            return;
+        }
+        self.tab_active.store(active, Ordering::Release);
+        if !active {
+            self.view_visible.store(false, Ordering::Release);
+            self.last_render_focused.store(false, Ordering::Release);
+        }
+    }
+
+    pub fn set_pane_active(&self, active: bool) {
+        if !self.enabled {
+            return;
+        }
+        self.pane_active.store(active, Ordering::Release);
+    }
+
     pub fn record_ssh_connect(&self, reconnect: bool) {
         if !self.enabled {
             return;
@@ -326,6 +399,28 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn snapshot(&self) -> TerminalPerformanceSnapshot {
+        self.snapshot_with_window_peak(None)
+    }
+
+    /// Takes a snapshot for a diagnostics interval and starts a fresh backlog
+    /// peak window.
+    ///
+    /// Metrics are explicitly best effort. A producer racing this reset may be
+    /// counted in either adjacent interval, but the lifetime peak remains
+    /// monotonic and is never reset.
+    pub fn snapshot_for_window(&self) -> TerminalPerformanceSnapshot {
+        if !self.enabled {
+            return TerminalPerformanceSnapshot::default();
+        }
+        let current = load(&self.ingress_pending_bytes);
+        let window_peak = self
+            .ingress_pending_bytes_window_max
+            .swap(current, Ordering::AcqRel)
+            .max(current);
+        self.snapshot_with_window_peak(Some(window_peak))
+    }
+
+    fn snapshot_with_window_peak(&self, window_peak: Option<u64>) -> TerminalPerformanceSnapshot {
         if !self.enabled {
             return TerminalPerformanceSnapshot::default();
         }
@@ -334,7 +429,9 @@ impl TerminalPerformanceMetrics {
         TerminalPerformanceSnapshot {
             ingress_bytes: load(&self.ingress_bytes),
             ingress_pending_bytes: load(&self.ingress_pending_bytes),
-            ingress_pending_bytes_max: load(&self.ingress_pending_bytes_max),
+            ingress_pending_bytes_window_max: window_peak
+                .unwrap_or_else(|| load(&self.ingress_pending_bytes_window_max)),
+            ingress_pending_bytes_lifetime_max: load(&self.ingress_pending_bytes_lifetime_max),
             parser_chunks: load(&self.parser_chunks),
             parser_chunk_bytes: load(&self.parser_chunk_bytes),
             parser_chunk_max_bytes: load(&self.parser_chunk_max_bytes),
@@ -357,6 +454,8 @@ impl TerminalPerformanceMetrics {
             last_render_tick_ns: load(&self.last_render_tick_ns),
             last_render_focused: self.last_render_focused.load(Ordering::Acquire),
             view_visible: self.view_visible.load(Ordering::Acquire),
+            tab_active: self.tab_active.load(Ordering::Acquire),
+            pane_active: self.pane_active.load(Ordering::Acquire),
         }
     }
 }

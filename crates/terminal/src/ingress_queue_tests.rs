@@ -139,6 +139,19 @@ async fn accounts_exact_bytes_and_releases_before_delivery() {
 }
 
 #[tokio::test]
+async fn interval_peak_is_consumed_without_resetting_lifetime_peak() {
+    let (sender, mut receiver) = bounded_terminal_queue::<()>(budget(4, 1, 1));
+
+    sender.send_data(vec![1, 2, 3]).await.unwrap();
+    let data = receiver.recv_reserved().await.unwrap();
+    drop(data);
+
+    assert_eq!(3, sender.take_interval_peak_pending_bytes());
+    assert_eq!(0, sender.take_interval_peak_pending_bytes());
+    assert_eq!(3, sender.peak_pending_bytes());
+}
+
+#[tokio::test]
 async fn reserved_delivery_holds_bytes_until_consumer_drops_guard() {
     let (sender, mut receiver) = bounded_terminal_queue::<()>(budget(8, 2, 1));
     sender

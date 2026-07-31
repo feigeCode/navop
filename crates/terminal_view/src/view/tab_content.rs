@@ -74,6 +74,16 @@ impl TabContent for TerminalView {
         self.duplicate_supported(cx)
     }
 
+    fn on_activate(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.set_performance_tab_active(true);
+        self.set_performance_pane_active(true);
+    }
+
+    fn on_deactivate(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.set_performance_tab_active(false);
+        self.set_performance_pane_active(false);
+    }
+
     fn duplicate(
         &mut self,
         window: &mut Window,

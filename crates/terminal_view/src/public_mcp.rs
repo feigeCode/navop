@@ -26,6 +26,7 @@ use terminal::{
 use uuid::Uuid;
 
 const DEFAULT_OUTPUT_TIMEOUT_MS: u64 = 60_000;
+const MAX_TERMINAL_EXEC_RESPONSE_BYTES: usize = 128 * 1024;
 
 pub struct GlobalPublicMcpRegistry(pub PublicMcpRegistry);
 
@@ -399,23 +400,45 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
                     );
                 }
             }
+            let (output, response_truncated) =
+                bounded_utf8_tail(core_result.output, MAX_TERMINAL_EXEC_RESPONSE_BYTES);
+            let response_bytes = output.len();
+            let command_id = (core_result.completion == CoreTerminalExecCompletion::TimedOut
+                || response_truncated)
+                .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
+                .flatten();
             Ok(TerminalExecResult {
                 target: request.target,
                 command: request.command,
                 submitted: request.submit,
                 completion: map_exec_completion(core_result.completion),
                 exit_code: core_result.exit_code,
-                output: core_result.output,
+                output,
                 truncated: core_result.truncated,
                 captured_bytes: core_result.captured_bytes,
                 discarded_bytes: core_result.discarded_bytes,
+                response_truncated,
+                response_bytes,
                 duration_ms: core_result.duration_ms,
-                command_id: (core_result.completion == CoreTerminalExecCompletion::TimedOut)
-                    .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
-                    .flatten(),
+                command_id,
             })
         })
     }
+}
+
+fn bounded_utf8_tail(output: String, max_bytes: usize) -> (String, bool) {
+    if output.len() <= max_bytes {
+        return (output, false);
+    }
+    if max_bytes == 0 {
+        return (String::new(), true);
+    }
+
+    let mut start = output.len() - max_bytes;
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    (output[start..].to_string(), true)
 }
 
 fn apply_terminal_progress(entry: &CommandEntry, progress: TerminalExecProgress) {
@@ -749,7 +772,73 @@ mod tests {
         assert!(result.truncated);
         assert_eq!(1024 * 1024, result.captured_bytes);
         assert_eq!(17, result.discarded_bytes);
+        assert!(!result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
         assert_eq!(42, result.duration_ms);
+    }
+
+    #[tokio::test]
+    async fn terminal_exec_caps_immediate_output_and_keeps_full_result_in_command_store() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let command_store = RemoteCommandStore::default();
+        let full_output = "中".repeat(MAX_TERMINAL_EXEC_RESPONSE_BYTES / 3 + 32);
+        let captured_bytes = full_output.len();
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            exec: Arc::new(Mutex::new(Some(fake_exec_handle(
+                requests,
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::ShellIntegrationExit,
+                    exit_code: Some(0),
+                    output: full_output.clone(),
+                    truncated: false,
+                    captured_bytes,
+                    discarded_bytes: 0,
+                    duration_ms: 42,
+                },
+            )))),
+            command_store: command_store.clone(),
+        };
+
+        let result = handle
+            .exec_in_terminal(
+                TerminalExecRequest {
+                    target: "terminal-1".to_string(),
+                    command: "large-output".to_string(),
+                    submit: true,
+                    wait_for_output: true,
+                    ready_timeout_ms: 0,
+                    timeout_ms: Some(1_000),
+                },
+                TerminalExecCancellation::new(),
+            )
+            .await
+            .expect("large terminal output should return a bounded response");
+
+        assert!(result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
+        assert!(result.response_bytes <= MAX_TERMINAL_EXEC_RESPONSE_BYTES);
+        assert!(full_output.ends_with(&result.output));
+        assert!(!result.truncated);
+        assert_eq!(captured_bytes, result.captured_bytes);
+
+        let command_id = result
+            .command_id
+            .expect("truncated immediate response should return a command id");
+        assert_eq!(
+            RemoteCommandStatus::Exited,
+            command_store.poll_by_id(&command_id).unwrap().status
+        );
+        let stored = command_store
+            .output(&public_mcp::remote_ops::RemoteCommandOutputRequest {
+                command_id,
+                stdout_offset: 0,
+                stderr_offset: 0,
+                limit_bytes: Some(captured_bytes + 1),
+            })
+            .unwrap();
+        assert_eq!(full_output, stored.stdout);
+        assert!(!stored.truncated);
     }
 
     #[tokio::test]
@@ -789,6 +878,8 @@ mod tests {
             .expect("timed out terminal exec should detach");
 
         let command_id = result.command_id.expect("timeout should return command id");
+        assert!(!result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
         assert_eq!(
             RemoteCommandStatus::Running,
             command_store.poll_by_id(&command_id).unwrap().status

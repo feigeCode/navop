@@ -402,7 +402,7 @@ async fn parser_worker_preserves_order_drains_and_coalesces_wakeups() {
     assert_eq!(snapshot.parser_chunk_bytes, 3);
     assert_eq!(snapshot.term_lock_samples, 2);
     assert_eq!(snapshot.ingress_pending_bytes, 0);
-    assert!((2..=4).contains(&snapshot.ingress_pending_bytes_max));
+    assert!((2..=4).contains(&snapshot.ingress_pending_bytes_lifetime_max));
     assert_eq!(snapshot.wakeup_requests, 2);
     assert_eq!(snapshot.wakeup_queued, 1);
     assert_eq!(snapshot.wakeup_coalesced, 1);
@@ -534,7 +534,7 @@ async fn parser_worker_abort_discards_unconsumed_backlog_without_payload_metrics
     assert_eq!(snapshot.term_lock_samples, 0);
     assert_eq!(snapshot.ingress_pending_bytes, 0);
     assert_eq!(
-        snapshot.ingress_pending_bytes_max,
+        snapshot.ingress_pending_bytes_lifetime_max,
         (SECRET.len() + b"second".len()) as u64
     );
     assert_eq!(snapshot.wakeup_requests, 0);

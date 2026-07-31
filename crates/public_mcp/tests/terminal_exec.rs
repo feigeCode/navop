@@ -99,6 +99,8 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
                 truncated: false,
                 captured_bytes,
                 discarded_bytes: 0,
+                response_truncated: false,
+                response_bytes: captured_bytes,
                 duration_ms: 12,
                 command_id: None,
             })
@@ -185,6 +187,8 @@ fn terminal_exec_result_defaults_truncation_metadata_for_legacy_json() {
     assert!(!result.truncated);
     assert_eq!(0, result.captured_bytes);
     assert_eq!(0, result.discarded_bytes);
+    assert!(!result.response_truncated);
+    assert_eq!(0, result.response_bytes);
 }
 
 #[test]
@@ -226,6 +230,15 @@ fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
             .is_some()
     );
     assert_eq!(json!(0), result.structured_content["discarded_bytes"]);
+    assert_eq!(
+        json!(false),
+        result.structured_content["response_truncated"]
+    );
+    assert!(
+        result.structured_content["response_bytes"]
+            .as_u64()
+            .is_some()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

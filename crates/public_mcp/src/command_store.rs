@@ -44,7 +44,10 @@ struct CommandState {
     started: Instant,
     finished: Option<Instant>,
     stdout: Vec<u8>,
+    stdout_base_offset: usize,
+    stdout_snapshot: Vec<u8>,
     stderr: Vec<u8>,
+    stderr_base_offset: usize,
     cancel_handle: Option<CommandCancelHandle>,
     finished_notify: Arc<Notify>,
 }
@@ -66,7 +69,10 @@ impl CommandEntry {
                 started: Instant::now(),
                 finished: None,
                 stdout: Vec::new(),
+                stdout_base_offset: 0,
+                stdout_snapshot: Vec::new(),
                 stderr: Vec::new(),
+                stderr_base_offset: 0,
                 cancel_handle,
                 finished_notify: Arc::new(Notify::new()),
             }),
@@ -76,24 +82,35 @@ impl CommandEntry {
     /// 追加输出。由执行桥在收到 channel 数据时调用。
     pub fn push_stdout(&self, data: &[u8]) {
         let mut state = self.state.lock().expect("command state lock poisoned");
-        if state.stdout.len() + data.len() <= MAX_COMMAND_BUFFER_BYTES {
-            state.stdout.extend_from_slice(data);
-        }
+        let discarded = append_bounded_tail(&mut state.stdout, data, MAX_COMMAND_BUFFER_BYTES);
+        state.stdout_base_offset = state.stdout_base_offset.saturating_add(discarded);
     }
 
     pub fn push_stderr(&self, data: &[u8]) {
         let mut state = self.state.lock().expect("command state lock poisoned");
-        if state.stderr.len() + data.len() <= MAX_COMMAND_BUFFER_BYTES {
-            state.stderr.extend_from_slice(data);
-        }
+        let discarded = append_bounded_tail(&mut state.stderr, data, MAX_COMMAND_BUFFER_BYTES);
+        state.stderr_base_offset = state.stderr_base_offset.saturating_add(discarded);
     }
 
+    /// Incorporates a cumulative stdout snapshot without rewinding the public
+    /// stream offsets already returned to clients.
+    ///
+    /// Terminal observers publish a bounded, sanitized snapshot on every
+    /// update. Before that capture buffer fills, snapshots normally extend the
+    /// previous snapshot. After it rolls, the new snapshot overlaps the suffix
+    /// of the previous one. Only the newly observed suffix is appended to this
+    /// entry's independently bounded stream.
     pub fn replace_stdout(&self, data: &[u8]) {
         let mut state = self.state.lock().expect("command state lock poisoned");
-        state.stdout.clear();
-        state
-            .stdout
-            .extend_from_slice(&data[..data.len().min(MAX_COMMAND_BUFFER_BYTES)]);
+        let append_from = snapshot_append_offset(&state.stdout_snapshot, data);
+        let discarded = append_bounded_tail(
+            &mut state.stdout,
+            &data[append_from..],
+            MAX_COMMAND_BUFFER_BYTES,
+        );
+        state.stdout_base_offset = state.stdout_base_offset.saturating_add(discarded);
+        state.stdout_snapshot.clear();
+        state.stdout_snapshot.extend_from_slice(data);
     }
 
     /// 标记命令完成。由执行桥在收到 ExitStatus/ExitSignal/EOF 时调用。
@@ -149,8 +166,8 @@ impl CommandEntry {
             status: state.status,
             exit_code: state.exit_code,
             duration_ms,
-            stdout_len: state.stdout.len(),
-            stderr_len: state.stderr.len(),
+            stdout_len: state.stdout_base_offset.saturating_add(state.stdout.len()),
+            stderr_len: state.stderr_base_offset.saturating_add(state.stderr.len()),
         }
     }
 
@@ -159,15 +176,29 @@ impl CommandEntry {
         let limit = request
             .limit_bytes
             .unwrap_or(crate::remote_ops::DEFAULT_OUTPUT_LIMIT_BYTES);
-        let stdout_slice = slice_output(&state.stdout, request.stdout_offset, limit);
-        let remaining = limit.saturating_sub(stdout_slice.0.len());
-        let stderr_slice = slice_output(&state.stderr, request.stderr_offset, remaining);
+        let stdout_slice = slice_output(
+            &state.stdout,
+            state.stdout_base_offset,
+            request.stdout_offset,
+            limit,
+        );
+        let remaining = limit.saturating_sub(stdout_slice.bytes.len());
+        let stderr_slice = slice_output(
+            &state.stderr,
+            state.stderr_base_offset,
+            request.stderr_offset,
+            remaining,
+        );
         CommandOutput {
-            stdout: stdout_slice.0,
-            stdout_next_offset: stdout_slice.1,
-            stderr: stderr_slice.0,
-            stderr_next_offset: stderr_slice.1,
-            truncated: stdout_slice.2 || stderr_slice.2,
+            stdout: stdout_slice.bytes,
+            stdout_start_offset: stdout_slice.start_offset,
+            stdout_next_offset: stdout_slice.next_offset,
+            stdout_discarded_bytes: state.stdout_base_offset,
+            stderr: stderr_slice.bytes,
+            stderr_start_offset: stderr_slice.start_offset,
+            stderr_next_offset: stderr_slice.next_offset,
+            stderr_discarded_bytes: state.stderr_base_offset,
+            truncated: stdout_slice.truncated || stderr_slice.truncated,
         }
     }
 
@@ -194,22 +225,125 @@ struct CommandSnapshot {
 
 struct CommandOutput {
     stdout: Vec<u8>,
+    stdout_start_offset: usize,
     stdout_next_offset: usize,
+    stdout_discarded_bytes: usize,
     stderr: Vec<u8>,
+    stderr_start_offset: usize,
     stderr_next_offset: usize,
+    stderr_discarded_bytes: usize,
     truncated: bool,
 }
 
 /// 单条命令 stdout/stderr 各自的最大缓冲。超出部分从头部滚动丢弃，保证 poll 总能拿到最近输出。
 const MAX_COMMAND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
-fn slice_output(buffer: &[u8], offset: usize, limit: usize) -> (Vec<u8>, usize, bool) {
-    if offset >= buffer.len() {
-        return (Vec::new(), buffer.len(), false);
+fn append_bounded_tail(buffer: &mut Vec<u8>, data: &[u8], max_bytes: usize) -> usize {
+    if max_bytes == 0 {
+        let discarded = buffer.len().saturating_add(data.len());
+        buffer.clear();
+        return discarded;
     }
-    let end = offset.saturating_add(limit).min(buffer.len());
-    let truncated = end - offset == limit && end < buffer.len();
-    (buffer[offset..end].to_vec(), end, truncated)
+    if data.len() >= max_bytes {
+        let discarded = buffer
+            .len()
+            .saturating_add(data.len().saturating_sub(max_bytes));
+        buffer.clear();
+        buffer.extend_from_slice(&data[data.len() - max_bytes..]);
+        return discarded;
+    }
+
+    let overflow = buffer
+        .len()
+        .saturating_add(data.len())
+        .saturating_sub(max_bytes);
+    if overflow > 0 {
+        buffer.drain(..overflow);
+    }
+    buffer.extend_from_slice(data);
+    overflow
+}
+
+#[cfg(test)]
+fn replace_bounded_tail(buffer: &mut Vec<u8>, data: &[u8], max_bytes: usize) -> usize {
+    buffer.clear();
+    let discarded = data.len().saturating_sub(max_bytes);
+    if max_bytes > 0 {
+        buffer.extend_from_slice(&data[discarded..]);
+    }
+    discarded
+}
+
+fn snapshot_append_offset(previous: &[u8], next: &[u8]) -> usize {
+    if previous.is_empty() {
+        return 0;
+    }
+    if next.starts_with(previous) {
+        return previous.len();
+    }
+    if previous.starts_with(next) {
+        return next.len();
+    }
+    longest_suffix_prefix_overlap(previous, next)
+}
+
+fn longest_suffix_prefix_overlap(previous: &[u8], next: &[u8]) -> usize {
+    if next.is_empty() {
+        return 0;
+    }
+
+    let mut prefix = vec![0; next.len()];
+    for index in 1..next.len() {
+        let mut matched = prefix[index - 1];
+        while matched > 0 && next[index] != next[matched] {
+            matched = prefix[matched - 1];
+        }
+        if next[index] == next[matched] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+
+    let mut matched = 0;
+    for (index, byte) in previous.iter().enumerate() {
+        while matched > 0 && *byte != next[matched] {
+            matched = prefix[matched - 1];
+        }
+        if *byte == next[matched] {
+            matched += 1;
+        }
+        if matched == next.len() && index + 1 != previous.len() {
+            matched = prefix[matched - 1];
+        }
+    }
+    matched
+}
+
+struct OutputSlice {
+    bytes: Vec<u8>,
+    start_offset: usize,
+    next_offset: usize,
+    truncated: bool,
+}
+
+fn slice_output(
+    buffer: &[u8],
+    base_offset: usize,
+    requested_offset: usize,
+    limit: usize,
+) -> OutputSlice {
+    let stream_end = base_offset.saturating_add(buffer.len());
+    let start_offset = requested_offset.clamp(base_offset, stream_end);
+    let start = start_offset.saturating_sub(base_offset);
+    let end = start.saturating_add(limit).min(buffer.len());
+    let missed_evicted_output = requested_offset < base_offset;
+    let has_more_buffered_output = end < buffer.len();
+    OutputSlice {
+        bytes: buffer[start..end].to_vec(),
+        start_offset,
+        next_offset: base_offset.saturating_add(end),
+        truncated: missed_evicted_output || has_more_buffered_output,
+    }
 }
 
 /// 进程级 background 命令注册表。由启动命令的执行桥写入，由 MCP 工具读取/取消。
@@ -283,8 +417,12 @@ impl RemoteCommandStore {
             command_id: request.command_id.clone(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            stdout_start_offset: out.stdout_start_offset,
+            stderr_start_offset: out.stderr_start_offset,
             next_stdout_offset: out.stdout_next_offset,
             next_stderr_offset: out.stderr_next_offset,
+            stdout_discarded_bytes: out.stdout_discarded_bytes,
+            stderr_discarded_bytes: out.stderr_discarded_bytes,
             truncated: out.truncated,
         })
     }
@@ -390,6 +528,251 @@ mod tests {
             .unwrap();
         assert_eq!(" world\n", rest.stdout);
         assert!(!rest.truncated);
+    }
+
+    #[test]
+    fn bounded_tail_rolls_old_bytes_when_append_crosses_limit() {
+        let mut buffer = b"abcdef".to_vec();
+
+        let discarded = append_bounded_tail(&mut buffer, b"ghij", 8);
+
+        assert_eq!(b"cdefghij", buffer.as_slice());
+        assert_eq!(2, discarded);
+    }
+
+    #[test]
+    fn bounded_tail_keeps_end_of_an_oversized_chunk() {
+        let mut buffer = b"old".to_vec();
+
+        let discarded = append_bounded_tail(&mut buffer, b"0123456789", 6);
+
+        assert_eq!(b"456789", buffer.as_slice());
+        assert_eq!(7, discarded);
+    }
+
+    #[test]
+    fn replace_bounded_tail_keeps_newest_bytes() {
+        let mut buffer = b"old".to_vec();
+
+        let base_offset = replace_bounded_tail(&mut buffer, b"0123456789", 6);
+
+        assert_eq!(b"456789", buffer.as_slice());
+        assert_eq!(4, base_offset);
+    }
+
+    #[test]
+    fn rolling_output_offsets_remain_absolute_after_eviction() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "cat".to_string(),
+            None,
+        );
+        let prefix = vec![b'a'; MAX_COMMAND_BUFFER_BYTES - 2];
+        entry.push_stdout(&prefix);
+        entry.push_stdout(b"BCDE");
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(MAX_COMMAND_BUFFER_BYTES),
+        });
+
+        assert_eq!(2, output.stdout_start_offset);
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES + 2, output.stdout_next_offset);
+        assert_eq!(2, output.stdout_discarded_bytes);
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES, output.stdout.len());
+        assert_eq!(b"BCDE", &output.stdout[output.stdout.len() - 4..]);
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn old_absolute_offset_resynchronizes_to_retained_tail() {
+        let mut buffer = b"abcdef".to_vec();
+        let base_offset = append_bounded_tail(&mut buffer, b"ghij", 8);
+
+        let output = slice_output(&buffer, base_offset, 0, 3);
+
+        assert_eq!(b"cde", output.bytes.as_slice());
+        assert_eq!(2, output.start_offset);
+        assert_eq!(5, output.next_offset);
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn offset_beyond_stream_end_returns_absolute_end() {
+        let output = slice_output(b"cdefghij", 2, 100, 8);
+
+        assert!(output.bytes.is_empty());
+        assert_eq!(10, output.start_offset);
+        assert_eq!(10, output.next_offset);
+        assert!(!output.truncated);
+    }
+
+    #[test]
+    fn cumulative_snapshot_appends_only_new_output() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "echo".to_string(),
+            None,
+        );
+        entry.replace_stdout(b"first");
+        entry.replace_stdout(b"first second");
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(MAX_COMMAND_BUFFER_BYTES),
+        });
+
+        assert_eq!(b"first second", output.stdout.as_slice());
+        assert_eq!(0, output.stdout_start_offset);
+        assert_eq!(12, output.stdout_next_offset);
+        assert_eq!(0, output.stdout_discarded_bytes);
+    }
+
+    #[test]
+    fn rolling_snapshot_overlap_keeps_offsets_monotonic_without_duplicates() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "stream".to_string(),
+            None,
+        );
+        entry.replace_stdout(b"abcdefgh");
+        entry.replace_stdout(b"defghijk");
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(MAX_COMMAND_BUFFER_BYTES),
+        });
+
+        assert_eq!(b"abcdefghijk", output.stdout.as_slice());
+        assert_eq!(0, output.stdout_start_offset);
+        assert_eq!(11, output.stdout_next_offset);
+        assert_eq!(0, output.stdout_discarded_bytes);
+    }
+
+    #[test]
+    fn rewritten_shorter_snapshot_does_not_replay_existing_prefix() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "stream".to_string(),
+            None,
+        );
+        entry.replace_stdout(b"stable transient");
+        entry.replace_stdout(b"stable");
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(MAX_COMMAND_BUFFER_BYTES),
+        });
+
+        assert_eq!(b"stable transient", output.stdout.as_slice());
+        assert_eq!(16, output.stdout_next_offset);
+    }
+
+    #[test]
+    fn oversized_replacement_reports_snapshot_tail_base() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "cat".to_string(),
+            None,
+        );
+        let output_bytes = vec![b'x'; MAX_COMMAND_BUFFER_BYTES + 7];
+        entry.replace_stdout(&output_bytes);
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(MAX_COMMAND_BUFFER_BYTES),
+        });
+
+        assert_eq!(7, output.stdout_start_offset);
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES + 7, output.stdout_next_offset);
+        assert_eq!(7, output.stdout_discarded_bytes);
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES, output.stdout.len());
+        assert!(output.truncated);
+    }
+
+    #[test]
+    fn poll_byte_totals_are_monotonic_across_rolling_eviction() {
+        let store = RemoteCommandStore::default();
+        let (id, entry, _) = store.register("ssh-1", "cat");
+        let prefix = vec![b'a'; MAX_COMMAND_BUFFER_BYTES];
+        entry.push_stdout(&prefix);
+        let first = store.poll_by_id(&id).unwrap();
+
+        entry.push_stdout(b"more");
+        let second = store.poll_by_id(&id).unwrap();
+
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES, first.stdout_bytes);
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES + 4, second.stdout_bytes);
+    }
+
+    #[test]
+    fn stdout_and_stderr_use_the_same_rolling_tail_policy() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "echo".to_string(),
+            None,
+        );
+        let first = vec![b'a'; MAX_COMMAND_BUFFER_BYTES - 2];
+        entry.push_stdout(&first);
+        entry.push_stdout(b"BCDE");
+        entry.push_stderr(&first);
+        entry.push_stderr(b"BCDE");
+
+        let state = entry.state.lock().expect("command state lock poisoned");
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES, state.stdout.len());
+        assert_eq!(MAX_COMMAND_BUFFER_BYTES, state.stderr.len());
+        assert_eq!(b"BCDE", &state.stdout[state.stdout.len() - 4..]);
+        assert_eq!(b"BCDE", &state.stderr[state.stderr.len() - 4..]);
+    }
+
+    #[test]
+    fn stdout_and_stderr_report_independent_absolute_offsets() {
+        let entry = CommandEntry::new(
+            "cmd-1".to_string(),
+            "ssh-1".to_string(),
+            "mixed-output".to_string(),
+            None,
+        );
+        {
+            let mut state = entry.state.lock().expect("command state lock poisoned");
+            state.stdout = b"stdout-tail".to_vec();
+            state.stdout_base_offset = 11;
+            state.stderr = b"err-tail".to_vec();
+            state.stderr_base_offset = 3;
+        }
+
+        let output = entry.read_output(&RemoteCommandOutputRequest {
+            command_id: "cmd-1".to_string(),
+            stdout_offset: 0,
+            stderr_offset: 0,
+            limit_bytes: Some(64),
+        });
+
+        assert_eq!(b"stdout-tail", output.stdout.as_slice());
+        assert_eq!(11, output.stdout_start_offset);
+        assert_eq!(22, output.stdout_next_offset);
+        assert_eq!(11, output.stdout_discarded_bytes);
+        assert_eq!(b"err-tail", output.stderr.as_slice());
+        assert_eq!(3, output.stderr_start_offset);
+        assert_eq!(11, output.stderr_next_offset);
+        assert_eq!(3, output.stderr_discarded_bytes);
+        assert!(output.truncated);
     }
 
     #[test]

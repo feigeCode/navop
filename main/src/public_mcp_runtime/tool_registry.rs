@@ -795,6 +795,8 @@ mod tests {
                     truncated: false,
                     captured_bytes: 0,
                     discarded_bytes: 0,
+                    response_truncated: false,
+                    response_bytes: 0,
                     duration_ms: 0,
                 })
             })

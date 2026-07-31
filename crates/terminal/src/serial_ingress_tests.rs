@@ -151,7 +151,7 @@ fn reader_and_parser_preserve_order_drain_and_coalesce_wakeups() {
     assert_eq!(snapshot.parser_chunk_bytes, 4);
     assert_eq!(snapshot.term_lock_samples, 2);
     assert_eq!(snapshot.ingress_pending_bytes, 0);
-    assert!((2..=4).contains(&snapshot.ingress_pending_bytes_max));
+    assert!((2..=4).contains(&snapshot.ingress_pending_bytes_lifetime_max));
     assert_eq!(snapshot.wakeup_requests, 2);
     assert_eq!(snapshot.wakeup_queued, 1);
     assert_eq!(snapshot.wakeup_coalesced, 1);

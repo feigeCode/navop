@@ -24,7 +24,20 @@ pub(crate) struct TerminalWorkspaceSidebarSnapshot {
 impl TerminalView {
     pub(crate) fn with_workspace_pane(mut self) -> Self {
         self.render_mode = TerminalRenderMode::WorkspacePane;
+        self.set_performance_pane_active(false);
         self
+    }
+
+    pub(crate) fn set_performance_tab_active(&self, active: bool) {
+        if let Some(metrics) = &self.performance_metrics {
+            metrics.set_tab_active(active);
+        }
+    }
+
+    pub(crate) fn set_performance_pane_active(&self, active: bool) {
+        if let Some(metrics) = &self.performance_metrics {
+            metrics.set_pane_active(active);
+        }
     }
 
     pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> Option<TerminalDuplicateSource> {

@@ -120,8 +120,20 @@ pub struct RemoteCommandOutputResult {
     pub command_id: String,
     pub stdout: String,
     pub stderr: String,
+    /// Absolute stream offset of the first returned stdout byte.
+    #[serde(default)]
+    pub stdout_start_offset: usize,
+    /// Absolute stream offset of the first returned stderr byte.
+    #[serde(default)]
+    pub stderr_start_offset: usize,
     pub next_stdout_offset: usize,
     pub next_stderr_offset: usize,
+    /// Total stdout bytes no longer retained by the rolling buffer.
+    #[serde(default)]
+    pub stdout_discarded_bytes: usize,
+    /// Total stderr bytes no longer retained by the rolling buffer.
+    #[serde(default)]
+    pub stderr_discarded_bytes: usize,
     pub truncated: bool,
 }
 

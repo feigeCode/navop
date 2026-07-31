@@ -51,6 +51,7 @@ pub(crate) struct SerialIngressProducer {
     sender: BoundedTerminalSender<SerialIngressControl>,
     source_closed: Arc<AtomicBool>,
     metrics: Arc<TerminalPerformanceMetrics>,
+    ingress_generation: u64,
     on_source_closed: Option<UnboundedSender<()>>,
 }
 
@@ -59,6 +60,7 @@ pub(crate) struct SerialParserIngress {
     source_closed: Arc<AtomicBool>,
     task: Option<JoinHandle<()>>,
     metrics: Arc<TerminalPerformanceMetrics>,
+    ingress_generation: u64,
     on_source_closed: Option<UnboundedSender<()>>,
     completion_state: Arc<AtomicU8>,
 }
@@ -124,6 +126,7 @@ impl SerialParserIngress {
         recording_tap: Option<RecordingTap>,
     ) -> std::io::Result<Self> {
         let (sender, mut receiver) = bounded_terminal_queue::<SerialIngressControl>(budget);
+        let ingress_generation = metrics.begin_ingress_backlog();
         let source_closed = Arc::new(AtomicBool::new(false));
         let completion_state = Arc::new(AtomicU8::new(SERIAL_COMPLETION_RUNNING));
         let task_completion_state = completion_state.clone();
@@ -158,7 +161,9 @@ impl SerialParserIngress {
                                 // synchronous parser boundary, not merely dequeue.
                                 drop(data);
                                 task_metrics.record_ingress_backlog(
+                                    ingress_generation,
                                     receiver.pending_bytes(),
+                                    receiver.take_interval_peak_pending_bytes(),
                                     receiver.peak_pending_bytes(),
                                 );
                                 event_proxy.queue_wakeup();
@@ -187,7 +192,12 @@ impl SerialParserIngress {
                             let _ = callback.send(());
                         }
                     }
-                    task_metrics.record_ingress_backlog(0, receiver.peak_pending_bytes());
+                    task_metrics.record_ingress_backlog(
+                        ingress_generation,
+                        0,
+                        receiver.take_interval_peak_pending_bytes(),
+                        receiver.peak_pending_bytes(),
+                    );
                 });
             })?;
 
@@ -196,6 +206,7 @@ impl SerialParserIngress {
             source_closed,
             task: Some(task),
             metrics,
+            ingress_generation,
             on_source_closed,
             completion_state,
         })
@@ -206,6 +217,7 @@ impl SerialParserIngress {
             sender: self.sender.clone(),
             source_closed: self.source_closed.clone(),
             metrics: self.metrics.clone(),
+            ingress_generation: self.ingress_generation,
             on_source_closed: self.on_source_closed.clone(),
         }
     }
@@ -250,13 +262,17 @@ impl SerialIngressProducer {
         let result = futures::executor::block_on(poll_fn(|cx| {
             let result = Future::poll(send.as_mut(), cx);
             self.metrics.record_ingress_backlog(
+                self.ingress_generation,
                 self.sender.pending_bytes(),
+                self.sender.take_interval_peak_pending_bytes(),
                 self.sender.peak_pending_bytes(),
             );
             result
         }));
         self.metrics.record_ingress_backlog(
+            self.ingress_generation,
             self.sender.pending_bytes(),
+            self.sender.take_interval_peak_pending_bytes(),
             self.sender.peak_pending_bytes(),
         );
         result
@@ -335,13 +351,16 @@ pub(crate) fn advance_serial_term(
     }
     performance_metrics.record_parser_chunk(data.len());
 
-    let wait_started = Instant::now();
-    let mut term = term.lock();
-    let wait = wait_started.elapsed();
-    let hold_started = Instant::now();
-    processor.advance(&mut *term, data);
-    let hold = hold_started.elapsed();
-    drop(term);
-
-    performance_metrics.record_term_lock(wait, hold);
+    if performance_metrics.is_enabled() {
+        let wait_started = Instant::now();
+        let mut term = term.lock();
+        let wait = wait_started.elapsed();
+        let hold_started = Instant::now();
+        processor.advance(&mut *term, data);
+        let hold = hold_started.elapsed();
+        drop(term);
+        performance_metrics.record_term_lock(wait, hold);
+    } else {
+        processor.advance(&mut *term.lock(), data);
+    }
 }

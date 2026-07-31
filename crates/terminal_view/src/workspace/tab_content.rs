@@ -40,6 +40,15 @@ impl TabContent for TerminalWorkspace {
         self.active_pane().read(cx).duplicate_supported(cx)
     }
 
+    fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab_metric_state(true, cx);
+        self.set_active_pane_metric_state(cx);
+    }
+
+    fn on_deactivate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab_metric_state(false, cx);
+    }
+
     fn duplicate(
         &mut self,
         window: &mut Window,
