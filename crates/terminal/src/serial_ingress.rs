@@ -64,15 +64,6 @@ pub(crate) struct SerialParserIngress {
 }
 
 impl SerialParserIngress {
-    pub(crate) fn spawn(
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_proxy: GpuiEventProxy,
-        metrics: Arc<TerminalPerformanceMetrics>,
-        on_source_closed: Option<UnboundedSender<()>>,
-    ) -> std::io::Result<Self> {
-        Self::spawn_with_recording(term, event_proxy, metrics, on_source_closed, None)
-    }
-
     pub(crate) fn spawn_with_recording(
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,
@@ -106,6 +97,7 @@ impl SerialParserIngress {
         Self::spawn_with_budget_and_callback(term, event_proxy, metrics, budget, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn spawn_with_budget_and_callback(
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,

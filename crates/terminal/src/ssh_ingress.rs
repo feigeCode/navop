@@ -52,14 +52,6 @@ pub(crate) struct SshParserIngress {
 }
 
 impl SshParserIngress {
-    pub(crate) fn spawn(
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_proxy: GpuiEventProxy,
-        metrics: Arc<TerminalPerformanceMetrics>,
-    ) -> Self {
-        Self::spawn_with_recording(term, event_proxy, metrics, None)
-    }
-
     pub(crate) fn spawn_with_recording(
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,
@@ -72,6 +64,7 @@ impl SshParserIngress {
         Self::spawn_with_budget_and_recording(term, event_proxy, metrics, budget, recording_tap)
     }
 
+    #[cfg(test)]
     pub(crate) fn spawn_with_budget(
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,

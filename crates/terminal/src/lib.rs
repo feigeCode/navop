@@ -14,7 +14,6 @@ pub mod shell_integration;
 pub mod ssh_backend;
 mod ssh_ingress;
 mod ssh_session_identity;
-mod ssh_session_installation;
 pub mod terminal;
 pub mod types;
 #[cfg(any(test, target_os = "windows"))]
