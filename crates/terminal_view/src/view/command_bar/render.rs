@@ -277,21 +277,6 @@ impl TerminalCommandBar {
                     )
                     .child(detail),
             )
-            .when(self.operation_history_available, |controls| {
-                controls.child(
-                    Button::new("terminal-command-operation-history-toggle")
-                        .icon(IconName::TerminalHistoryColor)
-                        .ghost()
-                        .xsmall()
-                        .when(self.operation_history_open, |button| {
-                            button.bg(self.colors.muted)
-                        })
-                        .tooltip(t!("TerminalOperationHistory.tooltip").to_string())
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.emit(TerminalCommandBarEvent::ToggleOperationHistory);
-                        })),
-                )
-            })
             .children(self.render_recording_control_buttons(status, cx))
             .into_any_element()
     }

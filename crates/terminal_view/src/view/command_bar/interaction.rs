@@ -42,8 +42,6 @@ impl TerminalCommandBar {
             colors: config.colors,
             recording_path_prompt_pending: false,
             recording_control_error: None,
-            operation_history_available: config.operation_history_available,
-            operation_history_open: false,
             _subscriptions: subscriptions,
         };
         this.load_quick_commands(cx);
@@ -104,14 +102,10 @@ impl TerminalCommandBar {
         &mut self,
         recording_path_prompt_pending: bool,
         recording_control_error: Option<String>,
-        operation_history_available: bool,
-        operation_history_open: bool,
         cx: &mut Context<Self>,
     ) {
         self.recording_path_prompt_pending = recording_path_prompt_pending;
         self.recording_control_error = recording_control_error;
-        self.operation_history_available = operation_history_available;
-        self.operation_history_open = operation_history_open;
         cx.notify();
     }
 

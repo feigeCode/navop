@@ -237,14 +237,10 @@ impl TerminalView {
     pub(super) fn sync_command_bar_session_controls(&self, cx: &mut Context<Self>) {
         let recording_path_prompt_pending = self.recording_path_prompt_pending;
         let recording_control_error = self.recording_control_error.clone();
-        let operation_history_available = self.operation_history_is_available(cx);
-        let operation_history_open = self.operation_history_panel_is_open();
         self.command_bar.update(cx, |bar, cx| {
             bar.set_session_controls_state(
                 recording_path_prompt_pending,
                 recording_control_error,
-                operation_history_available,
-                operation_history_open,
                 cx,
             );
         });

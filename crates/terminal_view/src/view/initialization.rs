@@ -65,10 +65,6 @@ impl TerminalView {
                     terminal: terminal.clone(),
                     connection_id,
                     colors: default_theme.colors(),
-                    operation_history_available: terminal
-                        .read(cx)
-                        .operation_history_request()
-                        .is_some(),
                 },
                 window,
                 cx,
@@ -232,8 +228,6 @@ impl TerminalView {
             recording_playback_slider_dragging: false,
             recording_playback_control_error: None,
             recording_playback_ticker: None,
-            operation_history: OperationHistoryLoadState::default(),
-            operation_history_panel: OperationHistoryPanelState::default(),
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
@@ -261,7 +255,6 @@ impl TerminalView {
         };
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
-        this.sync_operation_history(cx);
         this
     }
 }

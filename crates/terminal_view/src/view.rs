@@ -103,8 +103,7 @@ use std::ops::Deref;
 use terminal::LocalConfig;
 use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
-    TerminalConnectionKind, TerminalModelEvent, TerminalOperationHistoryLoad, TerminalScrollProxy,
-    resolve_local_working_dir,
+    TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
@@ -130,7 +129,6 @@ mod input_handler;
 mod keybindings;
 mod mouse_down;
 mod mouse_selection;
-mod operation_history;
 mod paste_confirmation;
 mod preferences;
 mod recording_footer;
@@ -165,7 +163,6 @@ use keybindings::{
     terminal_paste_defaults, terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
-use operation_history::{OperationHistoryLoadState, OperationHistoryPanelState};
 pub use recording_playback_config::RecordingPlaybackViewConfig;
 use resize_event_handler::ResizeEventHandler;
 pub(crate) use state::TerminalDuplicateSource;
@@ -245,10 +242,6 @@ pub struct TerminalView {
     recording_playback_control_error: Option<String>,
     /// 仅在 Playback 正在播放时存在，drop 即取消。
     recording_playback_ticker: Option<Task<()>>,
-    /// 当前 reconnect generation 的只读 operation history 加载状态。
-    operation_history: OperationHistoryLoadState<TerminalOperationHistoryLoad>,
-    /// 当前 pane 独占的只读 operation history drawer 状态。
-    operation_history_panel: OperationHistoryPanelState,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求
