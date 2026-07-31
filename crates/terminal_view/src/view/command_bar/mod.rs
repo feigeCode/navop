@@ -15,6 +15,7 @@ mod quick_interaction;
 mod quick_render;
 mod quick_render_list;
 mod quick_render_sidebar;
+mod recording_render;
 mod render;
 mod suggestion_render;
 
@@ -57,6 +58,7 @@ pub(super) struct TerminalCommandBar {
     quick_group_filter: QuickGroupFilter,
     selected_quick_command: Option<usize>,
     quick_commands_open: bool,
+    recording_controls_open: bool,
     collapsed: bool,
     input_height: f32,
     autocomplete_enabled: bool,

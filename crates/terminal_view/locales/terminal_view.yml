@@ -1905,6 +1905,10 @@ Conflict:
     zh-HK: "%{name} 等 %{count} 個文件"
 
 TerminalRecording:
+  control:
+    en: Recording
+    zh-CN: 录制
+    zh-HK: 錄製
   ready:
     en: Ready
     zh-CN: 准备录制

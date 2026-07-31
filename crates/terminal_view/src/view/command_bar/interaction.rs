@@ -36,6 +36,7 @@ impl TerminalCommandBar {
             quick_group_filter: QuickGroupFilter::default(),
             selected_quick_command: None,
             quick_commands_open: false,
+            recording_controls_open: false,
             collapsed: true,
             input_height: COMMAND_BAR_INPUT_DEFAULT_HEIGHT,
             autocomplete_enabled: true,
@@ -217,6 +218,11 @@ impl TerminalCommandBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape" && self.recording_controls_open {
+            self.close_recording_controls(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if !self.input_has_focus(window, cx) {
             return;
         }
@@ -230,7 +236,11 @@ impl TerminalCommandBar {
                 true
             }
             "tab" if !self.suggestions.is_empty() => self.accept_selection(window, cx),
-            "escape" if !self.suggestions.is_empty() || self.quick_commands_open => {
+            "escape"
+                if !self.suggestions.is_empty()
+                    || self.quick_commands_open
+                    || self.recording_controls_open =>
+            {
                 self.reset_overlays(cx);
                 cx.notify();
                 true
@@ -251,10 +261,40 @@ impl TerminalCommandBar {
 
     pub(super) fn reset_overlays(&mut self, cx: &mut Context<Self>) {
         self.quick_commands_open = false;
+        self.recording_controls_open = false;
         self.selected_quick_command = None;
         self.suggestions.clear();
         self.selected_suggestion = None;
         self.clear_inline_completion(cx);
+    }
+
+    pub(super) fn toggle_recording_controls(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording_controls_open {
+            self.close_recording_controls(window, cx);
+            return;
+        }
+        self.recording_controls_open = true;
+        self.quick_commands_open = false;
+        self.selected_quick_command = None;
+        self.suggestions.clear();
+        self.selected_suggestion = None;
+        self.clear_inline_completion(cx);
+        cx.notify();
+    }
+
+    pub(super) fn close_recording_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.recording_controls_open = false;
+        if self.collapsed {
+            cx.emit(TerminalCommandBarEvent::FocusTerminal);
+            cx.notify();
+        } else {
+            self.focus_input(window, cx);
+            self.refresh_suggestions(cx);
+        }
     }
 
     pub(super) fn clear_inline_completion(&self, cx: &mut Context<Self>) {

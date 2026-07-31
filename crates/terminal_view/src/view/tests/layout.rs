@@ -279,10 +279,13 @@ fn terminal_command_bar_is_only_rendered_for_live_terminal_input() {
 
 #[test]
 fn terminal_recording_controls_live_in_the_command_bar() {
-    let command_bar_source = include_str!("../command_bar/render.rs");
+    let command_bar_source = include_str!("../command_bar/recording_render.rs");
+    let command_bar_layout_source = include_str!("../command_bar/render.rs");
     let footer_source = include_str!("../recording_playback_render.rs");
 
-    assert!(command_bar_source.contains("render_session_controls"));
+    assert!(command_bar_layout_source.contains("render_recording_button"));
+    assert!(command_bar_layout_source.contains("render_recording_controls"));
+    assert!(command_bar_source.contains("terminal-command-recording\""));
     assert!(command_bar_source.contains("terminal-command-recording-start"));
     assert!(command_bar_source.contains("terminal-command-recording-pause"));
     assert!(command_bar_source.contains("terminal-command-recording-resume"));
@@ -372,7 +375,7 @@ fn command_bar_reflows_the_canvas_and_preserves_bounds_driven_pty_resize() {
 fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() {
     let view_source = include_str!("../../view.rs");
     let recording_source = include_str!("../recording_footer.rs");
-    let command_bar_source = include_str!("../command_bar/render.rs");
+    let command_bar_source = include_str!("../command_bar/recording_render.rs");
     let event_source = include_str!("../command_bar_events.rs");
     let render_source = include_str!("../render_layout.rs");
 
@@ -412,7 +415,7 @@ fn command_bar_recording_controls_are_pane_private_and_use_safe_terminal_apis() 
 
 #[test]
 fn command_bar_discloses_output_only_capture_and_visible_failures() {
-    let command_bar_source = include_str!("../command_bar/render.rs");
+    let command_bar_source = include_str!("../command_bar/recording_render.rs");
 
     assert!(command_bar_source.contains("TerminalRecording.output_only"));
     assert!(command_bar_source.contains("TerminalRecording.input_included"));
@@ -623,8 +626,9 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .and_then(|source| source.split("fn render_quick_command_button").next())
         .expect("terminal toggle button should exist");
     assert!(terminal_toggle.contains("terminal-command-terminal-toggle"));
-    assert!(terminal_toggle.contains("IconName::SquareTerminal"));
     assert!(terminal_toggle.contains("self.target_label(cx)"));
+    assert!(terminal_toggle.contains("IconName::ChevronUp"));
+    assert!(terminal_toggle.contains("IconName::ChevronDown"));
     assert!(terminal_toggle.contains("when(!self.collapsed"));
     assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
     assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
@@ -696,6 +700,20 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         include_str!("../command_bar/quick_render_sidebar.rs")
             .contains("vertical_scrollbar(&self.quick_group_scroll_handle)")
     );
+
+    let recording_source = include_str!("../command_bar/recording_render.rs");
+    let command_bar_state_source = include_str!("../command_bar/mod.rs");
+    assert!(command_bar_state_source.contains("recording_controls_open: bool"));
+    assert!(render_source.contains("self.render_recording_button(cx)"));
+    assert!(render_source.contains("when(self.recording_controls_open"));
+    assert!(recording_source.contains("terminal-command-recording\""));
+    assert!(recording_source.contains("TerminalRecording.control"));
+    assert!(recording_source.contains("toggle_recording_controls"));
+    assert!(recording_source.contains("render_recording_controls"));
+    assert!(recording_source.contains("bottom(px(self.popover_bottom_offset()))"));
+    assert!(recording_source.contains("relative(0.96)"));
+    assert!(recording_source.contains("on_mouse_down_out"));
+    assert!(recording_source.contains("window.defer(cx"));
 }
 
 #[test]
