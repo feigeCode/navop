@@ -55,6 +55,7 @@ pub(super) struct TerminalCommandBar {
     suggestions: Vec<CommandSuggestion>,
     selected_suggestion: Option<usize>,
     history_navigation: Option<CommandHistoryNavigation>,
+    history_input_value: Option<String>,
     quick_query: String,
     quick_group_filter: QuickGroupFilter,
     selected_quick_command: Option<usize>,

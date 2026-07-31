@@ -202,6 +202,7 @@ impl TerminalCommandBar {
                 div().flex_1().min_w_0().h(px(self.input_height)).child(
                     Input::new(&self.input_state)
                         .appearance(false)
+                        .vertical_navigation(false)
                         .local_style(LocalInputStyle {
                             background: self.colors.background,
                             foreground: self.colors.foreground,
@@ -241,6 +242,8 @@ impl Render for TerminalCommandBar {
             .text_color(self.colors.foreground)
             .px_3()
             .py_px()
+            .on_action(cx.listener(Self::handle_history_previous))
+            .on_action(cx.listener(Self::handle_history_next))
             .on_key_down(cx.listener(Self::handle_key_down))
             .when(
                 focused && !self.collapsed && !self.suggestions.is_empty(),

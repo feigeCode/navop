@@ -661,9 +661,25 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     let quick_source = include_str!("../command_bar/quick_render.rs");
     let suggestion_source = include_str!("../command_bar/suggestion_render.rs");
 
-    for key in ["\"up\"", "\"down\"", "\"tab\"", "\"escape\""] {
+    for key in ["\"tab\"", "\"escape\""] {
         assert!(interaction_source.contains(key));
     }
+    assert!(
+        render_source.contains(".vertical_navigation(false)"),
+        "command input must delegate Up/Down instead of consuming them as cursor movement"
+    );
+    assert!(render_source.contains(".on_action(cx.listener(Self::handle_history_previous))"));
+    assert!(render_source.contains(".on_action(cx.listener(Self::handle_history_next))"));
+    assert!(interaction_source.contains("fn handle_history_previous"));
+    assert!(interaction_source.contains("fn handle_history_next"));
+    assert!(
+        interaction_source.contains(".history_search_results(\"\", HISTORY_NAVIGATION_LIMIT)"),
+        "command bar history navigation must include scoped history-command repository entries"
+    );
+    assert!(
+        interaction_source.contains("self.history_input_value.as_deref()"),
+        "programmatic history values must not reset navigation through InputEvent::Change"
+    );
     let refresh = interaction_source
         .split("fn refresh_suggestions")
         .nth(1)
