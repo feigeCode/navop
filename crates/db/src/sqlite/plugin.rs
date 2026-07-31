@@ -1235,7 +1235,7 @@ impl DatabasePlugin for SqlitePlugin {
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         let where_clause = self.build_table_change_where_clause(request, original_data);
         let has_primary_key = request.columns.iter().any(|c| c.is_primary_key);

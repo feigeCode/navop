@@ -153,7 +153,7 @@ impl RemoteDesktopView {
     }
 
     fn reset_session_state(&mut self, message: Option<String>, reason: SessionResetReason) {
-        self.modifiers = Modifiers::default();
+        self.keyboard_state = RdpKeyboardState::default();
         self.connected = false;
         if let Some(message) = message {
             self.status = SharedString::from(message);

@@ -88,6 +88,38 @@ fn manifest_without_query_extension_parses() {
     .expect("manifest parses");
 
     assert_eq!(manifest.id, "demo");
+    assert!(manifest.engines.onetcli.is_empty());
+}
+
+#[test]
+fn checks_driver_host_version_requirement() {
+    let mut manifest = manifest("demo", "Demo");
+    manifest.engines.onetcli = ">=0.10.0".to_string();
+
+    manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.0").unwrap())
+        .unwrap();
+    manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.1").unwrap())
+        .unwrap();
+
+    for incompatible in ["0.9.9", "0.10.1-alpha.1"] {
+        let error = manifest
+            .check_host_compatibility(&semver::Version::parse(incompatible).unwrap())
+            .unwrap_err();
+        assert!(format!("{error}").contains("要求 Navop >=0.10.0"));
+    }
+}
+
+#[test]
+fn rejects_invalid_driver_host_version_requirement() {
+    let mut manifest = manifest("demo", "Demo");
+    manifest.engines.onetcli = "not-a-range".to_string();
+
+    let error = manifest
+        .check_host_compatibility(&semver::Version::parse("0.10.0").unwrap())
+        .unwrap_err();
+    assert!(format!("{error}").contains("invalid engines.onetcli"));
 }
 
 #[test]
@@ -711,6 +743,7 @@ fn manifest(id: &str, name: &str) -> IpcDriverManifest {
         category: None,
         description: String::new(),
         version: String::new(),
+        engines: Default::default(),
         compatibility: serde_json::Value::Null,
         entry: IpcDriverEntry {
             command: "./driver".to_string(),

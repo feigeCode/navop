@@ -90,6 +90,8 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             version: String::new(),
             description: String::new(),
             file_extensions: Vec::new(),
+            required_host_version: None,
+            host_compatible: true,
             asset_url: path.display().to_string(),
             sha256: None,
             fallback_asset_url: None,
@@ -296,6 +298,7 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
 }
 
 fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {
+    let host_compatible = entry.check_host_compatibility().is_ok();
     let asset_url = entry.asset_url().unwrap_or_default();
     let fallback_asset_url = entry.fallback_asset_url();
     let sha256 = entry.sha256();
@@ -309,6 +312,9 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
         version: entry.version,
         description: entry.description,
         file_extensions: entry.file_extensions,
+        required_host_version: (!entry.engines.onetcli.trim().is_empty())
+            .then_some(entry.engines.onetcli),
+        host_compatible,
         asset_url,
         sha256,
         fallback_asset_url,
@@ -344,7 +350,8 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
             manifest_urls.push(manifest_fallback_url);
         }
     }
-    host_downloader::MarketplaceEntry::from_resolved_urls(
+    let required_host_version = entry.required_host_version.clone();
+    let mut host_entry = host_downloader::MarketplaceEntry::from_resolved_urls(
         entry.id,
         to_host_kind(entry.kind),
         entry.name,
@@ -354,7 +361,11 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
         download_urls,
         entry.sha256,
     )
-    .with_manifest_urls(manifest_urls)
+    .with_manifest_urls(manifest_urls);
+    if let Some(required) = required_host_version {
+        host_entry.engines.onetcli = required;
+    }
+    host_entry
 }
 
 fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::ExtensionKind {
@@ -493,6 +504,7 @@ mod tests {
                     "name": "Fake PostgreSQL",
                     "version": "1.2.3",
                     "release_tag": "fake_pg-v1.2.3",
+                    "engines": { "onetcli": ">=0.10.0" },
                     "manifest": "fake_pg/manifest.json"
                 }]
             }"#,
@@ -505,7 +517,12 @@ mod tests {
         let host_entry = manifest.into_entries().remove(0);
 
         let view_entry = to_view_entry(host_entry);
+        assert_eq!(
+            Some(">=0.10.0"),
+            view_entry.required_host_version.as_deref()
+        );
         let round_tripped = to_host_entry(view_entry);
+        assert_eq!(">=0.10.0", round_tripped.engines.onetcli);
 
         assert!(round_tripped.needs_extension_manifest());
         assert_eq!(

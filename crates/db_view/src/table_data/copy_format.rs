@@ -59,7 +59,7 @@ impl CopyFormatter {
     /// 格式化数据为指定格式
     pub fn format(
         format: CopyFormat,
-        data: &[Vec<String>],
+        data: &[Vec<Option<String>>],
         columns: &[SharedString],
         metadata: &TableMetadata,
     ) -> String {
@@ -76,19 +76,27 @@ impl CopyFormatter {
     }
 
     /// TSV 格式（Tab 分隔）
-    fn format_tsv(data: &[Vec<String>]) -> String {
+    fn format_tsv(data: &[Vec<Option<String>>]) -> String {
         data.iter()
-            .map(|row| row.join("\t"))
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.as_deref().unwrap_or("\\N"))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     /// CSV 格式
-    fn format_csv(data: &[Vec<String>]) -> String {
+    fn format_csv(data: &[Vec<Option<String>>]) -> String {
         data.iter()
             .map(|row| {
                 row.iter()
-                    .map(|cell| Self::escape_csv_field(cell))
+                    .map(|cell| match cell {
+                        Some(cell) => Self::escape_csv_field(cell),
+                        None => "\\N".to_string(),
+                    })
                     .collect::<Vec<_>>()
                     .join(",")
             })
@@ -97,7 +105,7 @@ impl CopyFormatter {
     }
 
     /// JSON 格式
-    fn format_json(data: &[Vec<String>], columns: &[SharedString]) -> String {
+    fn format_json(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
         let rows: Vec<String> = data
             .iter()
             .map(|row| {
@@ -116,7 +124,7 @@ impl CopyFormatter {
     }
 
     /// Markdown 表格格式
-    fn format_markdown(data: &[Vec<String>], columns: &[SharedString]) -> String {
+    fn format_markdown(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
         if data.is_empty() {
             return String::new();
         }
@@ -138,7 +146,10 @@ impl CopyFormatter {
 
         // 数据行
         for row in data {
-            let escaped: Vec<String> = row.iter().map(|cell| cell.replace('|', "\\|")).collect();
+            let escaped: Vec<String> = row
+                .iter()
+                .map(|cell| cell.as_deref().unwrap_or("\\N").replace('|', "\\|"))
+                .collect();
             result.push_str(&format!("| {} |", escaped.join(" | ")));
             result.push('\n');
         }
@@ -148,7 +159,7 @@ impl CopyFormatter {
 
     /// SQL INSERT 语句
     fn format_sql_insert(
-        data: &[Vec<String>],
+        data: &[Vec<Option<String>>],
         columns: &[SharedString],
         metadata: &TableMetadata,
     ) -> String {
@@ -185,7 +196,7 @@ impl CopyFormatter {
 
     /// SQL UPDATE 语句
     fn format_sql_update(
-        data: &[Vec<String>],
+        data: &[Vec<Option<String>>],
         columns: &[SharedString],
         metadata: &TableMetadata,
     ) -> String {
@@ -225,7 +236,12 @@ impl CopyFormatter {
                     .filter_map(|&i| {
                         let col_name = columns.get(i).map(|s| s.as_ref())?;
                         let value = row.get(i)?;
-                        Some(format!("{} = {}", col_name, Self::to_sql_value(value)))
+                        Some(match value {
+                            None => format!("{} IS NULL", col_name),
+                            Some(_) => {
+                                format!("{} = {}", col_name, Self::to_sql_value(value))
+                            }
+                        })
                     })
                     .collect();
 
@@ -248,7 +264,7 @@ impl CopyFormatter {
 
     /// SQL DELETE 语句
     fn format_sql_delete(
-        data: &[Vec<String>],
+        data: &[Vec<Option<String>>],
         columns: &[SharedString],
         metadata: &TableMetadata,
     ) -> String {
@@ -276,7 +292,12 @@ impl CopyFormatter {
                     .filter_map(|&i| {
                         let col_name = columns.get(i).map(|s| s.as_ref())?;
                         let value = row.get(i)?;
-                        Some(format!("{} = {}", col_name, Self::to_sql_value(value)))
+                        Some(match value {
+                            None => format!("{} IS NULL", col_name),
+                            Some(_) => {
+                                format!("{} = {}", col_name, Self::to_sql_value(value))
+                            }
+                        })
                     })
                     .collect();
 
@@ -297,7 +318,7 @@ impl CopyFormatter {
     }
 
     /// SQL IN 子句（适用于单列）
-    fn format_sql_in(data: &[Vec<String>], columns: &[SharedString]) -> String {
+    fn format_sql_in(data: &[Vec<Option<String>>], columns: &[SharedString]) -> String {
         if data.is_empty() {
             return String::new();
         }
@@ -308,9 +329,24 @@ impl CopyFormatter {
             let values: Vec<String> = data
                 .iter()
                 .filter_map(|row| row.first())
+                .filter(|value| value.is_some())
                 .map(|v| Self::to_sql_value(v))
                 .collect();
-            return format!("{} IN ({})", col_name, values.join(", "));
+            let has_null = data
+                .iter()
+                .filter_map(|row| row.first())
+                .any(Option::is_none);
+            return match (values.is_empty(), has_null) {
+                (false, true) => format!(
+                    "({} IN ({}) OR {} IS NULL)",
+                    col_name,
+                    values.join(", "),
+                    col_name
+                ),
+                (false, false) => format!("{} IN ({})", col_name, values.join(", ")),
+                (true, true) => format!("{} IS NULL", col_name),
+                (true, false) => String::new(),
+            };
         }
 
         // 多列时生成 OR 条件
@@ -322,7 +358,10 @@ impl CopyFormatter {
                     .enumerate()
                     .map(|(i, v)| {
                         let col_name = columns.get(i).map(|s| s.as_ref()).unwrap_or("col");
-                        format!("{} = {}", col_name, Self::to_sql_value(v))
+                        match v {
+                            None => format!("{} IS NULL", col_name),
+                            Some(_) => format!("{} = {}", col_name, Self::to_sql_value(v)),
+                        }
                     })
                     .collect();
                 format!("({})", parts.join(" AND "))
@@ -336,7 +375,14 @@ impl CopyFormatter {
 
     /// 转义 CSV 字段
     fn escape_csv_field(field: &str) -> String {
-        if field.contains(',') || field.contains('"') || field.contains('\n') {
+        // 空字符串和与 NULL marker 相同的文本必须强制加引号，才能与 SQL NULL 区分。
+        if field.is_empty()
+            || field == "\\N"
+            || field.contains(',')
+            || field.contains('"')
+            || field.contains('\n')
+            || field.contains('\r')
+        {
             format!("\"{}\"", field.replace('"', "\"\""))
         } else {
             field.to_string()
@@ -344,7 +390,10 @@ impl CopyFormatter {
     }
 
     /// 转换为 JSON 值
-    fn to_json_value(value: &str) -> String {
+    fn to_json_value(value: &Option<String>) -> String {
+        let Some(value) = value else {
+            return "null".to_string();
+        };
         // 尝试解析为数字
         if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
             return value.to_string();
@@ -352,10 +401,6 @@ impl CopyFormatter {
         // 布尔值
         if value == "true" || value == "false" {
             return value.to_string();
-        }
-        // NULL
-        if value.is_empty() || value.eq_ignore_ascii_case("null") {
-            return "null".to_string();
         }
         // 字符串（转义）
         let escaped = value
@@ -368,11 +413,10 @@ impl CopyFormatter {
     }
 
     /// 转换为 SQL 值
-    fn to_sql_value(value: &str) -> String {
-        // NULL
-        if value.is_empty() || value.eq_ignore_ascii_case("null") {
+    fn to_sql_value(value: &Option<String>) -> String {
+        let Some(value) = value else {
             return "NULL".to_string();
-        }
+        };
         // 数字
         if value.parse::<i64>().is_ok() || value.parse::<f64>().is_ok() {
             return value.to_string();
@@ -389,8 +433,8 @@ mod tests {
     #[test]
     fn test_format_csv() {
         let data = vec![
-            vec!["a".to_string(), "b,c".to_string()],
-            vec!["d".to_string(), "e\"f".to_string()],
+            vec![Some("a".to_string()), Some("b,c".to_string())],
+            vec![Some("d".to_string()), Some("e\"f".to_string())],
         ];
         let result = CopyFormatter::format_csv(&data);
         assert_eq!(result, "a,\"b,c\"\nd,\"e\"\"f\"");
@@ -399,8 +443,8 @@ mod tests {
     #[test]
     fn test_format_sql_insert() {
         let data = vec![
-            vec!["1".to_string(), "Alice".to_string()],
-            vec!["2".to_string(), "Bob".to_string()],
+            vec![Some("1".to_string()), Some("Alice".to_string())],
+            vec![Some("2".to_string()), Some("Bob".to_string())],
         ];
         let columns = vec!["id".into(), "name".into()];
         let metadata = TableMetadata::new("users");
@@ -411,9 +455,36 @@ mod tests {
 
     #[test]
     fn test_to_sql_value() {
-        assert_eq!(CopyFormatter::to_sql_value("123"), "123");
-        assert_eq!(CopyFormatter::to_sql_value("hello"), "'hello'");
-        assert_eq!(CopyFormatter::to_sql_value("it's"), "'it''s'");
-        assert_eq!(CopyFormatter::to_sql_value(""), "NULL");
+        assert_eq!(CopyFormatter::to_sql_value(&Some("123".into())), "123");
+        assert_eq!(
+            CopyFormatter::to_sql_value(&Some("hello".into())),
+            "'hello'"
+        );
+        assert_eq!(CopyFormatter::to_sql_value(&Some("it's".into())), "'it''s'");
+        assert_eq!(CopyFormatter::to_sql_value(&Some(String::new())), "''");
+        assert_eq!(CopyFormatter::to_sql_value(&Some("NULL".into())), "'NULL'");
+        assert_eq!(CopyFormatter::to_sql_value(&None), "NULL");
+    }
+
+    #[test]
+    fn structured_formats_preserve_null_empty_and_literal_null_text() {
+        let data = vec![vec![None, Some(String::new()), Some("NULL".into())]];
+        let columns = vec!["nullable".into(), "empty".into(), "literal".into()];
+        let metadata = TableMetadata::new("values_table");
+
+        assert_eq!(CopyFormatter::format_csv(&data), "\\N,\"\",NULL");
+        assert_eq!(
+            CopyFormatter::format_csv(&[vec![Some("\\N".into())]]),
+            "\"\\N\""
+        );
+        assert_eq!(CopyFormatter::format_tsv(&data), "\\N\t\tNULL");
+        assert_eq!(
+            CopyFormatter::format_json(&data, &columns),
+            "[\n  {\n    \"nullable\": null,\n    \"empty\": \"\",\n    \"literal\": \"NULL\"\n  }\n]"
+        );
+        assert!(
+            CopyFormatter::format_sql_insert(&data, &columns, &metadata)
+                .contains("(NULL, '', 'NULL')")
+        );
     }
 }

@@ -153,7 +153,9 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
     entry: &MarketplaceEntry,
     on_progress: DownloadProgressCallback,
 ) -> Result<PathBuf> {
+    entry.check_host_compatibility()?;
     let entry = resolve_entry_downloads_if_needed(&http_client, entry).await?;
+    entry.check_host_compatibility()?;
     let download_urls = entry.download_urls();
     if download_urls.is_empty() {
         anyhow::bail!("marketplace entry {} 缺少可下载 artifact", entry.id);

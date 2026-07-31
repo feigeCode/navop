@@ -1904,7 +1904,6 @@ pub trait DatabasePlugin: Send + Sync {
     fn format_copy_value(&self, value: &Option<String>, col_info: Option<&ColumnInfo>) -> String {
         match value {
             None => "NULL".to_string(),
-            Some(v) if v.is_empty() => "NULL".to_string(),
             Some(v) => {
                 if let Some(info) = col_info {
                     let data_type = info.data_type.to_uppercase();
@@ -2014,7 +2013,6 @@ pub trait DatabasePlugin: Send + Sync {
                 let quoted_col = self.quote_identifier(col_name);
                 match val {
                     None => Some(format!("{} IS NULL", quoted_col)),
-                    Some(v) if v.is_empty() => Some(format!("{} IS NULL", quoted_col)),
                     _ => {
                         let formatted = self.format_copy_value(val, col_info);
                         Some(format!("{} = {}", quoted_col, formatted))
@@ -2053,10 +2051,9 @@ pub trait DatabasePlugin: Send + Sync {
                     .collect();
                 let values: Vec<String> = data
                     .iter()
-                    .map(|value| {
-                        if value == "NULL" || value.is_empty() {
-                            "NULL".to_string()
-                        } else {
+                    .map(|value| match value {
+                        TableCellValue::Null => "NULL".to_string(),
+                        TableCellValue::Text(value) => {
                             format!("'{}'", value.replace('\'', "''"))
                         }
                     })
@@ -2091,10 +2088,11 @@ pub trait DatabasePlugin: Send + Sync {
                             change.column_name.clone()
                         };
                         let ident = self.quote_identifier(&column_name);
-                        let value = if change.new_value == "NULL" {
-                            "NULL".to_string()
-                        } else {
-                            format!("'{}'", change.new_value.replace('\'', "''"))
+                        let value = match &change.new_value {
+                            TableCellValue::Null => "NULL".to_string(),
+                            TableCellValue::Text(value) => {
+                                format!("'{}'", value.replace('\'', "''"))
+                            }
                         };
                         format!("{} = {}", ident, value)
                     })
@@ -2183,13 +2181,13 @@ pub trait DatabasePlugin: Send + Sync {
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String);
 
     fn build_table_change_where_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> String {
         let column_names: Vec<&str> = request.columns.iter().map(|c| c.name.as_str()).collect();
 
@@ -2225,10 +2223,11 @@ pub trait DatabasePlugin: Send + Sync {
             if let (Some(column), Some(value)) = (column_names.get(index), original_data.get(index))
             {
                 let ident = self.quote_identifier(column);
-                if value == "NULL" {
-                    parts.push(format!("{} IS NULL", ident));
-                } else {
-                    parts.push(format!("{} = '{}'", ident, value.replace('\'', "''")));
+                match value {
+                    TableCellValue::Null => parts.push(format!("{} IS NULL", ident)),
+                    TableCellValue::Text(value) => {
+                        parts.push(format!("{} = '{}'", ident, value.replace('\'', "''")));
+                    }
                 }
             }
         }
@@ -2689,11 +2688,7 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Escape a string value for SQL (override for database-specific escaping)
     fn escape_sql_value(&self, value: &str) -> String {
-        if value.is_empty() || value.eq_ignore_ascii_case("null") {
-            "NULL".to_string()
-        } else {
-            format!("'{}'", value.replace('\'', "''"))
-        }
+        format!("'{}'", value.replace('\'', "''"))
     }
 
     /// Import data from the specified format
@@ -3164,6 +3159,53 @@ mod tests {
         assert!(plugin.capabilities().supports_functions);
 
         assert_eq!(" LIMIT 10 OFFSET 20", plugin.format_pagination(10, 20, ""));
+    }
+
+    #[test]
+    fn copy_sql_preserves_null_empty_and_literal_null_text() {
+        let plugin = MySqlPlugin::new();
+        let columns = ["nullable", "empty", "literal"]
+            .into_iter()
+            .map(|name| ColumnInfo {
+                name: name.to_string(),
+                data_type: "VARCHAR".to_string(),
+                is_nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                comment: None,
+                charset: None,
+                collation: None,
+            })
+            .collect();
+        let row = vec![None, Some(String::new()), Some("NULL".to_string())];
+        let request = CopySqlRequest::new("states", columns)
+            .with_rows(vec![row.clone()])
+            .with_original_rows(vec![row]);
+
+        assert_eq!(
+            plugin.generate_copy_insert_sql(&request),
+            "INSERT INTO `states` (`nullable`, `empty`, `literal`) VALUES (NULL, '', 'NULL');"
+        );
+        assert_eq!(
+            plugin.generate_copy_update_sql(&request),
+            "UPDATE `states` SET `nullable` = NULL, `empty` = '', `literal` = 'NULL' WHERE `nullable` IS NULL AND `empty` = '' AND `literal` = 'NULL';"
+        );
+        assert_eq!(
+            plugin.generate_copy_delete_sql(&request),
+            "DELETE FROM `states` WHERE `nullable` IS NULL AND `empty` = '' AND `literal` = 'NULL';"
+        );
+    }
+
+    #[test]
+    fn legacy_string_insert_builder_never_treats_text_as_sql_null() {
+        let plugin = MySqlPlugin::new();
+        let columns = vec!["empty".to_string(), "literal".to_string()];
+        let values = vec![String::new(), "NULL".to_string()];
+
+        assert_eq!(
+            plugin.build_insert_statement("states", &columns, &values),
+            "INSERT INTO `states` (`empty`, `literal`) VALUES ('', 'NULL')"
+        );
     }
 
     // ==================== is_query_stmt tests (AST-based) ====================

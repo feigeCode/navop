@@ -613,28 +613,68 @@ pub struct TableColumnMeta {
     pub index: usize,
 }
 
+/// A cell value used while persisting table edits.
+///
+/// This type deliberately distinguishes SQL `NULL` from text values such as
+/// the empty string or the literal string `"NULL"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableCellValue {
+    Null,
+    Text(String),
+}
+
+impl TableCellValue {
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Null => None,
+            Self::Text(value) => Some(value),
+        }
+    }
+}
+
+impl From<Option<String>> for TableCellValue {
+    fn from(value: Option<String>) -> Self {
+        match value {
+            Some(value) => Self::Text(value),
+            None => Self::Null,
+        }
+    }
+}
+
+impl From<String> for TableCellValue {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+impl From<&str> for TableCellValue {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
 /// Represents a single cell change when persisting table edits
 #[derive(Debug, Clone)]
 pub struct TableCellChange {
     pub column_index: usize,
     pub column_name: String,
-    pub old_value: String,
-    pub new_value: String,
+    pub old_value: TableCellValue,
+    pub new_value: TableCellValue,
 }
 
 /// Represents a table row change for persistence operations
 #[derive(Debug, Clone)]
 pub enum TableRowChange {
     Added {
-        data: Vec<String>,
+        data: Vec<TableCellValue>,
     },
     Updated {
-        original_data: Vec<String>,
+        original_data: Vec<TableCellValue>,
         changes: Vec<TableCellChange>,
         rowid: Option<String>,
     },
     Deleted {
-        original_data: Vec<String>,
+        original_data: Vec<TableCellValue>,
         rowid: Option<String>,
     },
 }

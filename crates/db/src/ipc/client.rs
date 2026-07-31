@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::connection::DbError;
-use crate::ipc::registry::IpcDriverManifest;
+use crate::ipc::registry::{IpcDriverManifest, current_host_version};
 use extension_host::error::HostError;
 use extension_host::negotiation::{ExtensionSession, NegotiationConfig};
 use extension_host::process::{SpawnConfig, SpawnTransport, default_socket_name};
@@ -225,7 +225,7 @@ fn command_working_dir(driver: &IpcDriverManifest) -> PathBuf {
 
 /// 构造 init 握手参数。
 fn build_negotiation(driver: &IpcDriverManifest) -> NegotiationConfig {
-    let host_version = env!("CARGO_PKG_VERSION").to_string();
+    let host_version = current_host_version().to_string();
     let instance_id = uuid::Uuid::new_v4().to_string();
     let config = NegotiationConfig::new(host_version, instance_id)
         .offer_api("database", "1.0")
@@ -306,6 +306,7 @@ mod tests {
             category: None,
             description: String::new(),
             version: String::new(),
+            engines: Default::default(),
             compatibility: Value::Null,
             entry: IpcDriverEntry {
                 command: command.into(),

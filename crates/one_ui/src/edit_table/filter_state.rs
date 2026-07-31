@@ -1,13 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
+use super::FilterValueKey;
+
 #[derive(Clone, Debug)]
 pub struct ColumnFilter {
-    pub selected_values: HashSet<String>,
+    pub selected_values: HashSet<FilterValueKey>,
     pub is_active: bool,
 }
 
 impl ColumnFilter {
-    pub fn new(selected_values: HashSet<String>, is_active: bool) -> Self {
+    pub fn new(selected_values: HashSet<FilterValueKey>, is_active: bool) -> Self {
         Self {
             selected_values,
             is_active,
@@ -29,7 +31,7 @@ impl FilterState {
         }
     }
 
-    pub fn set_filter(&mut self, col_ix: usize, selected_values: HashSet<String>) {
+    pub fn set_filter(&mut self, col_ix: usize, selected_values: HashSet<FilterValueKey>) {
         let is_active = !selected_values.is_empty();
         self.filters
             .insert(col_ix, ColumnFilter::new(selected_values, is_active));
@@ -38,8 +40,8 @@ impl FilterState {
     pub fn set_filter_with_all_values(
         &mut self,
         col_ix: usize,
-        selected_values: HashSet<String>,
-        all_values: HashSet<String>,
+        selected_values: HashSet<FilterValueKey>,
+        all_values: HashSet<FilterValueKey>,
     ) {
         let is_active = !selected_values.is_empty() && selected_values != all_values;
         self.filters
@@ -66,7 +68,7 @@ impl FilterState {
         self.filters.get(&col_ix)
     }
 
-    pub fn apply_filters(&mut self, rows: &[Vec<String>]) -> Vec<usize> {
+    pub fn apply_filters(&mut self, rows: &[Vec<Option<String>>]) -> Vec<usize> {
         if self.filters.is_empty() {
             self.filtered_row_indices = (0..rows.len()).collect();
             return self.filtered_row_indices.clone();
@@ -81,8 +83,13 @@ impl FilterState {
                         return true;
                     }
 
-                    let cell_value = row.get(*col_ix).map(|s| s.as_str()).unwrap_or("NULL");
-                    filter.selected_values.contains(cell_value)
+                    let cell_value = row
+                        .get(*col_ix)
+                        .cloned()
+                        .flatten()
+                        .map(FilterValueKey::Text)
+                        .unwrap_or(FilterValueKey::Null);
+                    filter.selected_values.contains(&cell_value)
                 })
             })
             .map(|(ix, _)| ix)
@@ -116,5 +123,29 @@ impl FilterState {
 impl Default for FilterState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filters_distinguish_null_empty_and_literal_null_text() {
+        let rows = vec![
+            vec![None],
+            vec![Some(String::new())],
+            vec![Some("NULL".to_string())],
+        ];
+
+        let mut state = FilterState::new();
+        state.set_filter(0, HashSet::from([FilterValueKey::Null]));
+        assert_eq!(vec![0], state.apply_filters(&rows));
+
+        state.set_filter(0, HashSet::from([FilterValueKey::Text(String::new())]));
+        assert_eq!(vec![1], state.apply_filters(&rows));
+
+        state.set_filter(0, HashSet::from([FilterValueKey::Text("NULL".to_string())]));
+        assert_eq!(vec![2], state.apply_filters(&rows));
     }
 }

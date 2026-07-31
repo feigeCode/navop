@@ -80,6 +80,8 @@ pub struct MarketplaceEntry {
     pub version: String,
     pub description: String,
     pub file_extensions: Vec<String>,
+    pub required_host_version: Option<String>,
+    pub host_compatible: bool,
     pub asset_url: String,
     pub sha256: Option<String>,
     pub fallback_asset_url: Option<String>,

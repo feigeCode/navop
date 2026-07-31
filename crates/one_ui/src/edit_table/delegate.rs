@@ -1,6 +1,6 @@
 use std::{collections::HashSet, ops::Range};
 
-use crate::edit_table::filter_panel::FilterValue;
+use crate::edit_table::filter_panel::{FilterValue, FilterValueKey};
 use crate::edit_table::{Column, ColumnSort, EditTableState, loading::Loading};
 use gpui::{
     AnyElement, App, Context, Div, Entity, InteractiveElement as _, IntoElement,
@@ -454,7 +454,7 @@ pub trait EditTableDelegate: Sized + 'static {
     fn on_column_filter_changed(
         &mut self,
         col_ix: usize,
-        selected_values: HashSet<String>,
+        selected_values: HashSet<FilterValueKey>,
         window: &mut Window,
         cx: &mut Context<EditTableState<Self>>,
     ) {
@@ -478,6 +478,14 @@ pub trait EditTableDelegate: Sized + 'static {
         String::new()
     }
 
+    /// 获取保留 SQL NULL 语义的单元格值（用于结构化复制/导出）。
+    ///
+    /// 默认实现兼容只实现了 [`Self::get_cell_value`] 的 delegate；数据库表格
+    /// delegate 应覆盖此方法，让 `None` 表示 SQL NULL。
+    fn get_optional_cell_value(&self, row_ix: usize, col_ix: usize, cx: &App) -> Option<String> {
+        Some(self.get_cell_value(row_ix, col_ix, cx))
+    }
+
     /// 批量设置单元格值（用于粘贴）
     /// 返回 true 表示成功，false 表示失败或不支持
     fn set_cell_values(
@@ -492,7 +500,7 @@ pub trait EditTableDelegate: Sized + 'static {
     /// 复制选中单元格时的回调
     fn on_copy(
         &mut self,
-        _data: Vec<Vec<String>>,
+        _data: Vec<Vec<Option<String>>>,
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) {

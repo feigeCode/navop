@@ -164,7 +164,12 @@ fn wire_format_and_options(config: &ExportConfig) -> (wire_data::DataFormat, Val
             let options = config.csv_config.clone().unwrap_or_default();
             (
                 wire_data::DataFormat::Csv,
-                csv_options('\t', options.include_header, options.text_qualifier),
+                csv_options(
+                    '\t',
+                    options.include_header,
+                    options.text_qualifier,
+                    &options.null_string,
+                ),
             )
         }
         DataFormat::Csv => {
@@ -175,6 +180,7 @@ fn wire_format_and_options(config: &ExportConfig) -> (wire_data::DataFormat, Val
                     options.field_delimiter,
                     options.include_header,
                     options.text_qualifier,
+                    &options.null_string,
                 ),
             )
         }
@@ -182,12 +188,13 @@ fn wire_format_and_options(config: &ExportConfig) -> (wire_data::DataFormat, Val
     }
 }
 
-fn csv_options(delimiter: char, header: bool, quote: Option<char>) -> Value {
+fn csv_options(delimiter: char, header: bool, quote: Option<char>, null_string: &str) -> Value {
     serde_json::json!({
         "delimiter": delimiter.to_string(),
         "header": header,
         "quote": quote.unwrap_or('"').to_string(),
-        "encoding": "utf-8"
+        "encoding": "utf-8",
+        "null_string": null_string
     })
 }
 
@@ -267,4 +274,27 @@ fn is_not_supported(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<DbError>()
         .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::import_export::CsvExportConfig;
+
+    #[test]
+    fn csv_wire_options_preserve_configured_null_string() {
+        let config = ExportConfig {
+            format: DataFormat::Csv,
+            csv_config: Some(CsvExportConfig {
+                null_string: "<NULL>".to_string(),
+                ..CsvExportConfig::default()
+            }),
+            ..ExportConfig::default()
+        };
+
+        let (_, options) = wire_format_and_options(&config);
+        assert_eq!(options["null_string"], "<NULL>");
+        assert_eq!(options["delimiter"], ",");
+        assert_eq!(options["header"], true);
+    }
 }

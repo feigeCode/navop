@@ -31,8 +31,7 @@ use gpui::{
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, TitleBar,
-    WindowExt,
+    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -2496,18 +2495,6 @@ impl Render for GlobalProxySettingsView {
         v_flex()
             .size_full()
             .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(t!("Settings.General.Proxy.dialog_title").to_string()),
-                ),
-            )
             .child(
                 div().flex_1().min_h_0().overflow_y_scrollbar().p_4().child(
                     v_flex()

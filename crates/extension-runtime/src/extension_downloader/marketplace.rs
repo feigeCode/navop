@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use serde_json::Value;
 
 use crate::extension::ExtensionKind;
+use crate::extension::manifest::current_host_version;
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
 const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
@@ -47,6 +49,8 @@ pub struct MarketplaceEntry {
     #[serde(default)]
     pub file_extensions: Vec<String>,
     #[serde(default)]
+    pub engines: MarketplaceEngines,
+    #[serde(default)]
     pub manifest: String,
     #[serde(default)]
     pub artifacts: HashMap<String, MarketplaceArtifact>,
@@ -60,6 +64,12 @@ pub struct MarketplaceEntry {
     github_manifest_url: Option<String>,
     #[serde(skip)]
     resolved_manifest_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MarketplaceEngines {
+    pub onetcli: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +132,7 @@ impl MarketplaceEntry {
             release_tag: String::new(),
             description: description.into(),
             file_extensions,
+            engines: MarketplaceEngines::default(),
             manifest: String::new(),
             artifacts: HashMap::new(),
             resolved_download_urls: download_urls,
@@ -130,6 +141,34 @@ impl MarketplaceEntry {
             github_manifest_url: None,
             resolved_manifest_urls: Vec::new(),
         }
+    }
+
+    pub(crate) fn check_host_compatibility(&self) -> anyhow::Result<()> {
+        self.check_host_compatibility_with(&current_host_version())
+    }
+
+    fn check_host_compatibility_with(&self, current: &Version) -> anyhow::Result<()> {
+        let required = self.engines.onetcli.trim();
+        if required.is_empty() {
+            return Ok(());
+        }
+        let requirement = VersionReq::parse(required).map_err(|error| {
+            anyhow::anyhow!(
+                "marketplace entry {} 的 engines.onetcli {:?} 不是合法 SemVer range: {}",
+                self.id,
+                required,
+                error
+            )
+        })?;
+        if !requirement.matches(current) {
+            anyhow::bail!(
+                "插件 {} 要求 Navop {}, 当前 Navop 版本 {}, 请先升级 Navop 或安装兼容版本",
+                self.name,
+                required,
+                current
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn with_manifest_urls(mut self, manifest_urls: Vec<String>) -> Self {
@@ -380,6 +419,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            engines: Default::default(),
             manifest: String::new(),
             artifacts: HashMap::from([
                 (
@@ -413,5 +453,42 @@ mod tests {
             artifact.file
         );
         assert_eq!(Some("linux-arm64-sha"), artifact.sha256.as_deref());
+    }
+
+    #[test]
+    fn marketplace_entry_defaults_to_no_host_requirement() {
+        let entry: MarketplaceEntry =
+            serde_json::from_str(r#"{"id":"demo","name":"Demo"}"#).unwrap();
+
+        assert!(entry.engines.onetcli.is_empty());
+        entry
+            .check_host_compatibility_with(&Version::parse("0.1.0").unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn marketplace_entry_checks_host_requirement() {
+        let mut entry: MarketplaceEntry =
+            serde_json::from_str(r#"{"id":"demo","name":"Demo"}"#).unwrap();
+        entry.engines.onetcli = ">=0.10.0".to_string();
+
+        entry
+            .check_host_compatibility_with(&Version::parse("0.10.0").unwrap())
+            .unwrap();
+        entry
+            .check_host_compatibility_with(&Version::parse("0.10.1").unwrap())
+            .unwrap();
+        for incompatible in ["0.9.9", "0.10.1-alpha.1"] {
+            let error = entry
+                .check_host_compatibility_with(&Version::parse(incompatible).unwrap())
+                .unwrap_err();
+            assert!(error.to_string().contains("要求 Navop >=0.10.0"));
+        }
+
+        entry.engines.onetcli = "not-a-range".to_string();
+        let error = entry
+            .check_host_compatibility_with(&Version::parse("0.10.0").unwrap())
+            .unwrap_err();
+        assert!(error.to_string().contains("不是合法 SemVer range"));
     }
 }

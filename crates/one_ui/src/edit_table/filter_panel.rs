@@ -11,8 +11,24 @@ use gpui_component::{
     ActiveTheme, IndexPath, Selectable, checkbox::Checkbox, h_flex, label::Label,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FilterValueKey {
+    Null,
+    Text(String),
+}
+
+impl FilterValueKey {
+    fn element_id(&self) -> String {
+        match self {
+            Self::Null => "null".to_string(),
+            Self::Text(value) => format!("text-{value}"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FilterValue {
+    pub key: FilterValueKey,
     pub value: String,
     pub count: usize,
     pub checked: bool,
@@ -22,10 +38,28 @@ pub struct FilterValue {
 impl FilterValue {
     pub fn new(value: String, count: usize) -> Self {
         Self {
+            key: FilterValueKey::Text(value.clone()),
             value,
             count,
             checked: false,
             selected: false,
+        }
+    }
+
+    pub fn null(count: usize) -> Self {
+        Self {
+            key: FilterValueKey::Null,
+            value: "<NULL>".to_string(),
+            count,
+            checked: false,
+            selected: false,
+        }
+    }
+
+    pub fn from_key(key: FilterValueKey, count: usize) -> Self {
+        match key {
+            FilterValueKey::Null => Self::null(count),
+            FilterValueKey::Text(value) => Self::new(value, count),
         }
     }
 }
@@ -67,10 +101,11 @@ impl RenderOnce for FilterListItem {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let on_toggle = self.on_toggle.clone();
         let value_str = self.value.value.clone();
+        let element_id = self.value.key.element_id();
         let checked = self.value.checked;
 
         h_flex()
-            .id(SharedString::from(format!("filter-item-{}", value_str)))
+            .id(SharedString::from(format!("filter-item-{element_id}")))
             .w_full()
             .px_2()
             .py_1()
@@ -85,13 +120,13 @@ impl RenderOnce for FilterListItem {
             })
             .child(
                 h_flex()
-                    .id(SharedString::from(format!("label-{}", value_str)))
+                    .id(SharedString::from(format!("label-{element_id}")))
                     .flex_1()
                     .gap_2()
                     .items_center()
                     .overflow_x_hidden()
                     .child(
-                        Checkbox::new(SharedString::from(format!("filter-{}", value_str)))
+                        Checkbox::new(SharedString::from(format!("filter-{element_id}")))
                             .checked(checked),
                     )
                     .child(Label::new(self.value.value.clone()))
@@ -110,7 +145,7 @@ pub struct FilterPanel {
     pub(crate) values: Vec<FilterValue>,
     selected_index: Option<IndexPath>,
     confirmed_index: Option<IndexPath>,
-    on_toggle: Option<Rc<dyn Fn(&str, &mut Window, &mut App)>>,
+    on_toggle: Option<Rc<dyn Fn(&FilterValueKey, &mut Window, &mut App)>>,
     filtered_values: Vec<FilterValue>,
 }
 
@@ -126,40 +161,40 @@ impl FilterPanel {
         }
     }
 
-    pub fn on_toggle(mut self, handler: impl Fn(&str, &mut Window, &mut App) + 'static) -> Self {
+    pub fn on_toggle(
+        mut self,
+        handler: impl Fn(&FilterValueKey, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_toggle = Some(Rc::new(handler));
         self
     }
 
-    pub fn get_selected_values(&self) -> HashSet<String> {
+    pub fn get_selected_values(&self) -> HashSet<FilterValueKey> {
         self.values
             .iter()
             .filter(|v| v.selected)
-            .map(|v| v.value.clone())
+            .map(|v| v.key.clone())
             .collect()
     }
 
-    pub fn toggle_value(&mut self, value: &str) {
-        if let Some(v) = self.values.iter_mut().find(|v| v.value == value) {
+    pub fn toggle_value(&mut self, key: &FilterValueKey) {
+        if let Some(v) = self.values.iter_mut().find(|v| &v.key == key) {
             v.selected = !v.selected;
             v.checked = v.selected;
         }
 
-        if let Some(v) = self.filtered_values.iter_mut().find(|v| v.value == value) {
+        if let Some(v) = self.filtered_values.iter_mut().find(|v| &v.key == key) {
             v.selected = !v.selected;
             v.checked = v.selected;
         }
     }
 
     pub fn select_all(&mut self) {
-        let visible_values: HashSet<String> = self
-            .filtered_values
-            .iter()
-            .map(|v| v.value.clone())
-            .collect();
+        let visible_values: HashSet<FilterValueKey> =
+            self.filtered_values.iter().map(|v| v.key.clone()).collect();
 
         for v in &mut self.values {
-            if visible_values.contains(&v.value) {
+            if visible_values.contains(&v.key) {
                 v.selected = true;
                 v.checked = true;
             }
@@ -172,14 +207,11 @@ impl FilterPanel {
     }
 
     pub fn deselect_all(&mut self) {
-        let visible_values: HashSet<String> = self
-            .filtered_values
-            .iter()
-            .map(|v| v.value.clone())
-            .collect();
+        let visible_values: HashSet<FilterValueKey> =
+            self.filtered_values.iter().map(|v| v.key.clone()).collect();
 
         for v in &mut self.values {
-            if visible_values.contains(&v.value) {
+            if visible_values.contains(&v.key) {
                 v.selected = false;
                 v.checked = false;
             }
@@ -249,9 +281,9 @@ impl ListDelegate for FilterPanel {
 
             if let Some(on_toggle) = self.on_toggle.as_ref() {
                 let on_toggle = on_toggle.clone();
-                let value_str = value.value.clone();
+                let value_key = value.key.clone();
                 item = item.on_toggle(move |window, cx| {
-                    on_toggle(&value_str, window, cx);
+                    on_toggle(&value_key, window, cx);
                 });
             }
 

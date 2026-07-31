@@ -127,8 +127,15 @@ impl OraclePlugin {
         }
     }
 
-    fn table_change_value_expr(&self, value: &str, column: Option<&ColumnInfo>) -> String {
-        if value == "NULL" || value.is_empty() {
+    fn table_change_value_expr(
+        &self,
+        value: &TableCellValue,
+        column: Option<&ColumnInfo>,
+    ) -> String {
+        let TableCellValue::Text(value) = value else {
+            return "NULL".to_string();
+        };
+        if value.is_empty() {
             return "NULL".to_string();
         }
 
@@ -2632,7 +2639,7 @@ ORDER BY username;"#
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         let where_clause = self.build_table_change_where_clause(request, original_data);
         (where_clause, String::new())
@@ -2983,12 +2990,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Updated {
-                original_data: vec!["1".to_string(), "old".to_string()],
+                original_data: vec!["1".into(), "old".into()],
                 changes: vec![TableCellChange {
                     column_index: 1,
                     column_name: "BODY".to_string(),
-                    old_value: "old".to_string(),
-                    new_value: long_value,
+                    old_value: "old".into(),
+                    new_value: long_value.into(),
                 }],
                 rowid: Some("AAABBB".to_string()),
             }],
@@ -3014,12 +3021,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Updated {
-                original_data: vec!["1".to_string(), "Bob".to_string()],
+                original_data: vec!["1".into(), "Bob".into()],
                 changes: vec![TableCellChange {
                     column_index: 1,
                     column_name: "NAME".to_string(),
-                    old_value: "Bob".to_string(),
-                    new_value: "Alice's".to_string(),
+                    old_value: "Bob".into(),
+                    new_value: "Alice's".into(),
                 }],
                 rowid: Some("AAABBB".to_string()),
             }],
@@ -3047,12 +3054,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Updated {
-                original_data: vec!["1".to_string(), "old".to_string()],
+                original_data: vec!["1".into(), "old".into()],
                 changes: vec![TableCellChange {
                     column_index: 1,
                     column_name: "NOTE".to_string(),
-                    old_value: "old".to_string(),
-                    new_value: long_value,
+                    old_value: "old".into(),
+                    new_value: long_value.into(),
                 }],
                 rowid: Some("AAABBB".to_string()),
             }],
@@ -3079,7 +3086,7 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Added {
-                data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+                data: vec!["1".into(), "2026-06-21 14:05:06".into()],
             }],
         };
 
@@ -3104,12 +3111,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Updated {
-                original_data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+                original_data: vec!["1".into(), "2026-06-21 14:05:06".into()],
                 changes: vec![TableCellChange {
                     column_index: 1,
                     column_name: "CREATED_AT".to_string(),
-                    old_value: "2026-06-21 14:05:06".to_string(),
-                    new_value: "2026-06-21 14:05:06.123456".to_string(),
+                    old_value: "2026-06-21 14:05:06".into(),
+                    new_value: "2026-06-21 14:05:06.123456".into(),
                 }],
                 rowid: Some("AAABBB".to_string()),
             }],
@@ -3136,7 +3143,7 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Added {
-                data: vec!["1".to_string(), "2026-06-21 14:05:06 +08:00".to_string()],
+                data: vec!["1".into(), "2026-06-21 14:05:06 +08:00".into()],
             }],
         };
 
@@ -3144,6 +3151,31 @@ mod tests {
 
         assert_eq!(
             "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"UPDATED_AT\") VALUES ('1', TO_TIMESTAMP_TZ('2026-06-21 14:05:06 +08:00', 'YYYY-MM-DD HH24:MI:SS TZH:TZM'));",
+            sql
+        );
+    }
+
+    #[test]
+    fn table_change_sql_distinguishes_null_from_literal_null_text() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "MESSAGES".to_string(),
+            columns: vec![
+                column_info("NULLABLE_VALUE", "VARCHAR2", false),
+                column_info("LITERAL_NULL", "VARCHAR2", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec![TableCellValue::Null, "NULL".into()],
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "INSERT INTO \"APP\".\"MESSAGES\" (\"NULLABLE_VALUE\", \"LITERAL_NULL\") VALUES (NULL, 'NULL');",
             sql
         );
     }

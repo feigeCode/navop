@@ -283,12 +283,20 @@ impl ExtensionManagerView {
     ) -> gpui::AnyElement {
         let state = marketplace_install_state(&self.installed, &entry);
         let label = match state {
+            MarketplaceInstallState::NotInstalled if !entry.host_compatible => {
+                t!("Extension.requires_upgrade").to_string()
+            }
             MarketplaceInstallState::NotInstalled => t!("Extension.install").to_string(),
             MarketplaceInstallState::Installed => t!("Extension.installed").to_string(),
+            MarketplaceInstallState::UpdateAvailable if !entry.host_compatible => {
+                t!("Extension.requires_upgrade").to_string()
+            }
             MarketplaceInstallState::UpdateAvailable => t!("Extension.update").to_string(),
         };
-        let disabled =
-            self.loading || self.busy.is_some() || state == MarketplaceInstallState::Installed;
+        let disabled = self.loading
+            || self.busy.is_some()
+            || state == MarketplaceInstallState::Installed
+            || !entry.host_compatible;
         let entry_for_click = entry.clone();
         let action = Button::new(format!("extension-manager-install-{}", entry.id))
             .small()
@@ -358,11 +366,22 @@ fn extension_card(
 }
 
 fn marketplace_description(entry: &MarketplaceEntry) -> String {
-    if !entry.description.trim().is_empty() {
-        return entry.description.clone();
+    let description = if !entry.description.trim().is_empty() {
+        entry.description.clone()
+    } else {
+        let id = marketplace_entry_install_id(entry);
+        format!("{id} - {}", entry.asset_url)
+    };
+    if entry.host_compatible {
+        return description;
     }
-    let id = marketplace_entry_install_id(entry);
-    format!("{id} - {}", entry.asset_url)
+    let Some(required) = entry.required_host_version.as_deref() else {
+        return description;
+    };
+    format!(
+        "{description}\n{}",
+        t!("Extension.requires_host", version = required)
+    )
 }
 
 fn empty_state(message: String, cx: &Context<ExtensionManagerView>) -> gpui::AnyElement {

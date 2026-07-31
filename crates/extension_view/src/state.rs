@@ -235,6 +235,8 @@ mod tests {
             version: "1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            required_host_version: None,
+            host_compatible: true,
             asset_url: format!("https://example.test/{id}.tar.gz"),
             sha256: None,
             fallback_asset_url: None,

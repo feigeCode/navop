@@ -450,6 +450,7 @@ mod tests {
             category: None,
             description: String::new(),
             version: String::new(),
+            engines: Default::default(),
             compatibility: serde_json::Value::Null,
             entry: IpcDriverEntry {
                 command: "driver".into(),

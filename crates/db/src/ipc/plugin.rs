@@ -414,6 +414,7 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         category: None,
         description: String::new(),
         version: String::new(),
+        engines: Default::default(),
         compatibility: serde_json::Value::Null,
         entry: crate::ipc::registry::IpcDriverEntry {
             command: String::new(),
@@ -1484,7 +1485,7 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         (
             self.build_table_change_where_clause(request, original_data),
@@ -2568,7 +2569,7 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Added {
-                data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+                data: vec!["1".into(), "2026-06-21 14:05:06".into()],
             }],
         };
 
@@ -2596,12 +2597,12 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Updated {
-                original_data: vec!["1".to_string(), "old".to_string()],
+                original_data: vec!["1".into(), "old".into()],
                 changes: vec![TableCellChange {
                     column_index: 1,
                     column_name: "BODY".to_string(),
-                    old_value: "old".to_string(),
-                    new_value: "a".repeat(3_050),
+                    old_value: "old".into(),
+                    new_value: "a".repeat(3_050).into(),
                 }],
                 rowid: Some("AAABBB".to_string()),
             }],

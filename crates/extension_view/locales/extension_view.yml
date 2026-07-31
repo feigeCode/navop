@@ -71,6 +71,14 @@ Extension:
     en: Update
     zh-CN: 更新
     zh-HK: 更新
+  requires_upgrade:
+    en: Upgrade Navop
+    zh-CN: 升级 Navop
+    zh-HK: 升級 Navop
+  requires_host:
+    en: "Requires Navop %{version}; upgrade Navop or install a compatible extension version."
+    zh-CN: "要求 Navop %{version}；请升级 Navop 或安装兼容的扩展版本。"
+    zh-HK: "要求 Navop %{version}；請升級 Navop 或安裝相容的擴展版本。"
   reload:
     en: Reload
     zh-CN: 重新加载

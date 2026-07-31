@@ -15,24 +15,29 @@ use crate::import_export::{
 pub struct CsvFormatHandler;
 
 impl CsvFormatHandler {
-    pub(crate) fn parse_csv_data_with_config(
+    pub(crate) fn parse_csv_data_with_null_string(
         data: &str,
         delimiter: char,
         qualifier: Option<char>,
+        null_string: Option<&str>,
     ) -> Vec<Vec<Option<String>>> {
         let mut records = Vec::new();
         let mut current_record: Vec<Option<String>> = Vec::new();
         let mut current_field = String::new();
         let mut in_quotes = false;
         let mut was_quoted = false;
+        let mut record_has_syntax = false;
         let mut chars = data.chars().peekable();
 
         let push_field =
             |record: &mut Vec<Option<String>>, field: &mut String, quoted: &mut bool| {
-                let value = if field.is_empty() && !*quoted {
+                let field_value = std::mem::take(field);
+                let is_null_marker =
+                    !*quoted && null_string.is_some_and(|marker| field_value == marker);
+                let value = if !*quoted && (field_value.is_empty() || is_null_marker) {
                     None
                 } else {
-                    Some(std::mem::take(field))
+                    Some(field_value)
                 };
                 record.push(value);
                 *quoted = false;
@@ -41,6 +46,7 @@ impl CsvFormatHandler {
         while let Some(ch) = chars.next() {
             if let Some(q) = qualifier {
                 if ch == q {
+                    record_has_syntax = true;
                     if in_quotes {
                         if chars.peek() == Some(&q) {
                             chars.next();
@@ -57,6 +63,7 @@ impl CsvFormatHandler {
             }
 
             if !in_quotes && ch == delimiter {
+                record_has_syntax = true;
                 push_field(&mut current_record, &mut current_field, &mut was_quoted);
                 continue;
             }
@@ -66,49 +73,57 @@ impl CsvFormatHandler {
                     chars.next();
                 }
                 push_field(&mut current_record, &mut current_field, &mut was_quoted);
-                if !current_record.iter().all(Option::is_none) {
+                if record_has_syntax {
                     records.push(std::mem::take(&mut current_record));
                 } else {
                     current_record.clear();
                 }
+                record_has_syntax = false;
                 continue;
             }
 
+            record_has_syntax = true;
             current_field.push(ch);
         }
 
         push_field(&mut current_record, &mut current_field, &mut was_quoted);
-        if !current_record.iter().all(Option::is_none) {
+        if record_has_syntax {
             records.push(current_record);
         }
 
         records
     }
 
-    fn escape_csv_field(field: &str, delimiter: char, qualifier: Option<char>) -> String {
-        // 空字符串需要用引号包裹以区分 NULL
+    fn escape_csv_field(
+        field: &str,
+        delimiter: char,
+        qualifier: Option<char>,
+        null_string: &str,
+    ) -> Result<String> {
+        // 空字符串和与 NULL marker 相同的文本都需要用引号包裹，以保留三态语义。
         let needs_quote = field.is_empty()
+            || field == null_string
             || field.contains(delimiter)
             || field.contains('\n')
             || field.contains('\r')
             || qualifier.map(|q| field.contains(q)).unwrap_or(false);
 
         if needs_quote {
-            if let Some(q) = qualifier {
-                let escaped = field.replace(q, &format!("{}{}", q, q));
-                format!("{}{}{}", q, escaped, q)
-            } else {
-                field.to_string()
-            }
+            let q = qualifier.ok_or_else(|| {
+                anyhow!(
+                    "CSV text qualifier is required to safely export empty, NULL-marker, delimited, or multiline text"
+                )
+            })?;
+            let escaped = field.replace(q, &format!("{}{}", q, q));
+            Ok(format!("{}{}{}", q, escaped, q))
         } else {
-            field.to_string()
+            Ok(field.to_string())
         }
     }
 
-    fn append_sql_value(insert_sql: &mut String, value: &Option<String>) {
+    pub(crate) fn append_sql_value(insert_sql: &mut String, value: &Option<String>) {
         match value {
             None => insert_sql.push_str("NULL"),
-            Some(v) if v.eq_ignore_ascii_case("null") => insert_sql.push_str("NULL"),
             Some(v) => {
                 insert_sql.push('\'');
                 insert_sql.push_str(&v.replace('\'', "''"));
@@ -141,8 +156,10 @@ impl FormatHandler for CsvFormatHandler {
         let delimiter = csv_config.field_delimiter;
         let qualifier = csv_config.text_qualifier;
         let has_header = csv_config.has_header;
+        let null_string = csv_config.null_string;
 
-        let records = Self::parse_csv_data_with_config(data, delimiter, qualifier);
+        let records =
+            Self::parse_csv_data_with_null_string(data, delimiter, qualifier, Some(&null_string));
         if records.is_empty() {
             return Ok(ImportResult {
                 success: true,
@@ -172,6 +189,9 @@ impl FormatHandler for CsvFormatHandler {
 
         if columns.is_empty() {
             return Err(anyhow!("CSV header is empty"));
+        }
+        if columns.iter().any(|column| column.trim().is_empty()) {
+            return Err(anyhow!("CSV header contains empty column names"));
         }
 
         if config.truncate_before_import {
@@ -288,6 +308,7 @@ impl FormatHandler for CsvFormatHandler {
         let qualifier = csv_config.text_qualifier;
         let include_header = csv_config.include_header;
         let record_terminator = csv_config.record_terminator;
+        let null_string = csv_config.null_string;
 
         let send_progress = |event: ExportProgressEvent| {
             if let Some(tx) = &progress_tx {
@@ -339,7 +360,12 @@ impl FormatHandler for CsvFormatHandler {
                         if i > 0 {
                             table_output.push(delimiter);
                         }
-                        table_output.push_str(&Self::escape_csv_field(col, delimiter, qualifier));
+                        table_output.push_str(&Self::escape_csv_field(
+                            col,
+                            delimiter,
+                            qualifier,
+                            &null_string,
+                        )?);
                     }
                     table_output.push_str(&record_terminator);
                 }
@@ -350,8 +376,14 @@ impl FormatHandler for CsvFormatHandler {
                         if i > 0 {
                             table_output.push(delimiter);
                         }
-                        if let Some(v) = val {
-                            table_output.push_str(&Self::escape_csv_field(v, delimiter, qualifier));
+                        match val {
+                            Some(v) => table_output.push_str(&Self::escape_csv_field(
+                                v,
+                                delimiter,
+                                qualifier,
+                                &null_string,
+                            )?),
+                            None => table_output.push_str(&null_string),
                         }
                     }
                     table_output.push_str(&record_terminator);
@@ -408,7 +440,7 @@ mod tests {
 
         sql.clear();
         CsvFormatHandler::append_sql_value(&mut sql, &Some("null".to_string()));
-        assert_eq!(sql, "NULL");
+        assert_eq!(sql, "'null'");
 
         sql.clear();
         CsvFormatHandler::append_sql_value(&mut sql, &Some("O'Reilly".to_string()));
@@ -418,7 +450,8 @@ mod tests {
     #[test]
     fn test_parse_csv_data_supports_multiline_quoted_field() {
         let input = "id,content\n1,\"line1\nline2\"\n2,plain\n";
-        let records = CsvFormatHandler::parse_csv_data_with_config(input, ',', Some('"'));
+        let records =
+            CsvFormatHandler::parse_csv_data_with_null_string(input, ',', Some('"'), None);
         assert_eq!(records.len(), 3);
         assert_eq!(
             records[0],
@@ -432,5 +465,52 @@ mod tests {
             records[2],
             vec![Some("2".to_string()), Some("plain".to_string())]
         );
+    }
+
+    #[test]
+    fn parse_csv_distinguishes_null_empty_and_literal_null_text() {
+        let records = CsvFormatHandler::parse_csv_data_with_null_string(
+            "\\N,\"\",NULL,\"\\N\"\n",
+            ',',
+            Some('"'),
+            Some("\\N"),
+        );
+        assert_eq!(
+            records,
+            vec![vec![
+                None,
+                Some(String::new()),
+                Some("NULL".to_string()),
+                Some("\\N".to_string()),
+            ]]
+        );
+    }
+
+    #[test]
+    fn parse_csv_preserves_a_row_containing_only_null_markers() {
+        let records = CsvFormatHandler::parse_csv_data_with_null_string(
+            "\\N,\\N\n\n",
+            ',',
+            Some('"'),
+            Some("\\N"),
+        );
+        assert_eq!(records, vec![vec![None, None]]);
+    }
+
+    #[test]
+    fn escape_csv_quotes_empty_and_literal_null_marker() {
+        assert_eq!(
+            CsvFormatHandler::escape_csv_field("", ',', Some('"'), "\\N").unwrap(),
+            "\"\""
+        );
+        assert_eq!(
+            CsvFormatHandler::escape_csv_field("\\N", ',', Some('"'), "\\N").unwrap(),
+            "\"\\N\""
+        );
+        assert_eq!(
+            CsvFormatHandler::escape_csv_field("NULL", ',', Some('"'), "\\N").unwrap(),
+            "NULL"
+        );
+        assert!(CsvFormatHandler::escape_csv_field("", ',', None, "\\N").is_err());
     }
 }

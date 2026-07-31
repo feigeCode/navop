@@ -4,7 +4,7 @@ use extension_protocol::row::{CellValue, Row};
 use serde_json::Value;
 
 use crate::import_export::formats::CsvFormatHandler;
-use crate::import_export::{DataFormat, ImportConfig};
+use crate::import_export::{CsvImportConfig, DataFormat, ImportConfig};
 
 pub(crate) struct ParsedRows {
     pub format: wire_data::DataFormat,
@@ -16,7 +16,7 @@ pub(crate) fn parse_rows(config: &ImportConfig, data: &str) -> Result<ParsedRows
     match config.format {
         DataFormat::Json => parse_json_rows(data),
         DataFormat::Csv => parse_delimited_rows(config, data, wire_data::DataFormat::Csv),
-        DataFormat::Txt => parse_txt_rows(data),
+        DataFormat::Txt => parse_txt_rows(config, data),
         DataFormat::Sql | DataFormat::Xml => unreachable!("handled by fallback"),
     }
 }
@@ -56,8 +56,20 @@ fn parse_delimited_rows(
     format: wire_data::DataFormat,
 ) -> Result<ParsedRows> {
     let csv = config.csv_config.clone().unwrap_or_default();
-    let records =
-        CsvFormatHandler::parse_csv_data_with_config(data, csv.field_delimiter, csv.text_qualifier);
+    parse_delimited_rows_with_config(&csv, data, format)
+}
+
+fn parse_delimited_rows_with_config(
+    csv: &CsvImportConfig,
+    data: &str,
+    format: wire_data::DataFormat,
+) -> Result<ParsedRows> {
+    let records = CsvFormatHandler::parse_csv_data_with_null_string(
+        data,
+        csv.field_delimiter,
+        csv.text_qualifier,
+        Some(&csv.null_string),
+    );
     if records.is_empty() {
         return Ok(parsed(format, Vec::new(), Vec::new()));
     }
@@ -73,19 +85,18 @@ fn parse_delimited_rows(
     ))
 }
 
-fn parse_txt_rows(data: &str) -> Result<ParsedRows> {
-    let lines: Vec<&str> = data.lines().collect();
-    if lines.is_empty() {
-        return Ok(parsed(wire_data::DataFormat::Csv, Vec::new(), Vec::new()));
-    }
-    let columns: Vec<String> = lines[0].split('\t').map(str::to_string).collect();
-    let rows = lines
-        .iter()
-        .skip(1)
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| line.split('\t').map(text_cell).collect())
-        .collect();
-    Ok(parsed(wire_data::DataFormat::Csv, columns, rows))
+fn parse_txt_rows(config: &ImportConfig, data: &str) -> Result<ParsedRows> {
+    let csv = config
+        .csv_config
+        .clone()
+        .unwrap_or_else(|| CsvImportConfig {
+            field_delimiter: '\t',
+            text_qualifier: Some('"'),
+            has_header: true,
+            record_terminator: "\n".to_string(),
+            null_string: "\\N".to_string(),
+        });
+    parse_delimited_rows_with_config(&csv, data, wire_data::DataFormat::Csv)
 }
 
 fn parsed(format: wire_data::DataFormat, columns: Vec<String>, rows: Vec<Row>) -> ParsedRows {
@@ -148,5 +159,78 @@ fn number_to_cell(value: &serde_json::Number) -> CellValue {
 fn text_cell(value: impl ToString) -> CellValue {
     CellValue::Text {
         value: value.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn csv_rows_preserve_null_empty_and_literal_null_text() {
+        let config = ImportConfig {
+            format: DataFormat::Csv,
+            csv_config: Some(CsvImportConfig {
+                has_header: true,
+                null_string: "\\N".to_string(),
+                ..CsvImportConfig::default()
+            }),
+            ..ImportConfig::default()
+        };
+
+        let parsed = parse_rows(
+            &config,
+            "nullable,empty,literal,marker\n\\N,\"\",NULL,\"\\N\"\n",
+        )
+        .expect("CSV should parse");
+        assert_eq!(
+            parsed.rows,
+            vec![vec![
+                CellValue::Null,
+                CellValue::Text {
+                    value: String::new()
+                },
+                CellValue::Text {
+                    value: "NULL".to_string()
+                },
+                CellValue::Text {
+                    value: "\\N".to_string()
+                },
+            ]]
+        );
+    }
+
+    #[test]
+    fn txt_rows_preserve_null_empty_literal_and_marker_text() {
+        let config = ImportConfig {
+            format: DataFormat::Txt,
+            csv_config: Some(CsvImportConfig {
+                field_delimiter: '\t',
+                text_qualifier: Some('"'),
+                null_string: "\\N".to_string(),
+                ..CsvImportConfig::default()
+            }),
+            ..ImportConfig::default()
+        };
+
+        let parsed = parse_rows(
+            &config,
+            "nullable\tempty\tliteral\tmarker\n\\N\t\"\"\tNULL\t\"\\N\"\n",
+        )
+        .expect("TXT parses");
+        assert_eq!(
+            parsed.rows,
+            vec![vec![
+                CellValue::Null,
+                CellValue::Text {
+                    value: String::new()
+                },
+                CellValue::Text {
+                    value: "NULL".to_string()
+                },
+                CellValue::Text {
+                    value: "\\N".to_string()
+                },
+            ]]
+        );
     }
 }

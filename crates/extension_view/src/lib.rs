@@ -123,6 +123,8 @@ mod tests {
             version: version.to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            required_host_version: None,
+            host_compatible: true,
             asset_url: "https://example.test/ext.tar.gz".to_string(),
             sha256: None,
             fallback_asset_url: None,
