@@ -5,7 +5,6 @@ use crate::view::command_bar_model::{
 use gpui::{AppContext, Context, KeyDownEvent, Window};
 use gpui_component::input::InputEvent;
 use one_core::storage::{GlobalStorageState, QuickCommandRepository};
-use terminal::terminal::TerminalConnectionKind;
 
 const HISTORY_QUERY_LIMIT: usize = 16;
 
@@ -173,19 +172,6 @@ impl TerminalCommandBar {
     pub(super) fn focus_input(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input_state
             .update(cx, |state, cx| state.focus(window, cx));
-    }
-
-    pub(super) fn target_label(&self, cx: &App) -> String {
-        let terminal = self.terminal.read(cx);
-        if let Some(name) = terminal.connection_name().filter(|name| !name.is_empty()) {
-            return name.to_string();
-        }
-        match terminal.connection_kind() {
-            TerminalConnectionKind::Local => rust_i18n::t!("TerminalCommandBar.local_shell"),
-            TerminalConnectionKind::Ssh => rust_i18n::t!("TerminalCommandBar.remote_shell"),
-            TerminalConnectionKind::Serial => rust_i18n::t!("TerminalCommandBar.serial_terminal"),
-        }
-        .to_string()
     }
 
     fn move_selection(&mut self, direction: SelectionDirection, cx: &mut Context<Self>) {

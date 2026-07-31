@@ -19,7 +19,6 @@ const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0;
 const COMMAND_BAR_INPUT_MAX_HEIGHT: f32 = 400.0;
 const COMMAND_BAR_RESIZE_HANDLE_HEIGHT: f32 = 6.0;
 const COMMAND_BAR_POPOVER_GAP: f32 = 8.0;
-const COMMAND_BAR_TERMINAL_TOGGLE_WIDTH: f32 = 144.0;
 
 #[derive(Clone)]
 struct CommandBarResize {
@@ -128,21 +127,11 @@ impl TerminalCommandBar {
 
     fn render_terminal_toggle_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("terminal-command-terminal-toggle")
-            .w(px(COMMAND_BAR_TERMINAL_TOGGLE_WIDTH))
             .child(
                 h_flex()
-                    .w_full()
-                    .min_w_0()
                     .items_center()
                     .gap_1()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_left()
-                            .child(self.target_label(cx)),
-                    )
+                    .child(Icon::new(IconName::SquareTerminal).xsmall())
                     .child(
                         Icon::new(if self.collapsed {
                             IconName::ChevronUp

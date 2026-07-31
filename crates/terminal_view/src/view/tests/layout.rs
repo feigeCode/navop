@@ -626,9 +626,10 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .and_then(|source| source.split("fn render_quick_command_button").next())
         .expect("terminal toggle button should exist");
     assert!(terminal_toggle.contains("terminal-command-terminal-toggle"));
-    assert!(terminal_toggle.contains("self.target_label(cx)"));
+    assert!(terminal_toggle.contains("IconName::SquareTerminal"));
     assert!(terminal_toggle.contains("IconName::ChevronUp"));
     assert!(terminal_toggle.contains("IconName::ChevronDown"));
+    assert!(!terminal_toggle.contains("self.target_label(cx)"));
     assert!(terminal_toggle.contains("when(!self.collapsed"));
     assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
     assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
