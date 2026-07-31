@@ -13,7 +13,7 @@ use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 pub(crate) use column::{ColGroup, DragColumn, DragSelectCell, ResizeColumn};
 pub use column::{Column, ColumnFixed, ColumnSort};
 pub use delegate::{CellEditor, EditTableDelegate};
-pub use filter_panel::FilterValue;
+pub use filter_panel::{FilterValue, FilterValueKey};
 pub use filter_state::FilterState;
 pub use selection::{CellCoord, CellRange, TableSelection};
 use state::{

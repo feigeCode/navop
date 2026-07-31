@@ -548,6 +548,7 @@ impl DataExportView {
                 text_qualifier,
                 include_header,
                 record_terminator,
+                null_string: "\\N".to_string(),
             })
         } else {
             None

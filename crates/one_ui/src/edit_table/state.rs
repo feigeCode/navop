@@ -65,7 +65,7 @@ pub enum EditTableEvent {
     /// 选区变化事件
     SelectionChanged(TableSelection),
     /// 复制数据事件
-    CopyData(Vec<Vec<String>>),
+    CopyData(Vec<Vec<Option<String>>>),
     /// 粘贴数据事件
     PasteData {
         data: Vec<Vec<String>>,
@@ -733,7 +733,7 @@ where
     pub fn set_column_filter(
         &mut self,
         col_ix: usize,
-        selected_values: HashSet<String>,
+        selected_values: HashSet<FilterValueKey>,
         cx: &mut Context<Self>,
     ) {
         self.filter_state.set_filter(col_ix, selected_values);
@@ -743,14 +743,12 @@ where
     pub fn set_column_filter_with_all_values(
         &mut self,
         col_ix: usize,
-        selected_values: HashSet<String>,
+        selected_values: HashSet<FilterValueKey>,
         cx: &mut Context<Self>,
     ) {
         let filter_values = self.delegate.get_column_filter_values(col_ix, cx);
-        let all_values: HashSet<String> = filter_values
-            .iter()
-            .map(|fv| fv.value.to_string())
-            .collect();
+        let all_values: HashSet<FilterValueKey> =
+            filter_values.iter().map(|fv| fv.key.clone()).collect();
 
         self.filter_state
             .set_filter_with_all_values(col_ix, selected_values, all_values);
@@ -779,7 +777,7 @@ where
             .into_iter()
             .map(|mut fv| {
                 let checked = current_filter
-                    .map(|f| f.selected_values.contains(&fv.value))
+                    .map(|f| f.selected_values.contains(&fv.key))
                     .unwrap_or(false);
                 fv.checked = checked;
                 fv
@@ -808,7 +806,7 @@ where
     pub fn toggle_filter_value_realtime(
         &mut self,
         col_ix: usize,
-        value: &str,
+        value: &FilterValueKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -873,7 +871,7 @@ where
         }
     }
 
-    pub fn toggle_filter_value(&mut self, value: &str, cx: &mut Context<Self>) {
+    pub fn toggle_filter_value(&mut self, value: &FilterValueKey, cx: &mut Context<Self>) {
         self.update_filter_panel(cx, |panel| {
             panel.toggle_value(value);
         });
@@ -1593,6 +1591,36 @@ where
         if data.is_empty() { None } else { Some(data) }
     }
 
+    /// 获取选中区域的数据，同时保留 SQL NULL (`None`) 与文本值 (`Some`) 的区别。
+    pub fn get_optional_selection_data(
+        &self,
+        cx: &Context<Self>,
+    ) -> Option<Vec<Vec<Option<String>>>> {
+        if self.selection.is_empty() {
+            return None;
+        }
+
+        let range = self.selection.first_range()?;
+        let row_number_offset = if self.delegate.row_number_enabled(cx) {
+            1
+        } else {
+            0
+        };
+        let ((min_row, min_col), (max_row, max_col)) = range.normalized();
+
+        let mut data = Vec::new();
+        for row in min_row..=max_row {
+            let mut row_data = Vec::new();
+            for col in min_col..=max_col {
+                let delegate_col = col.saturating_sub(row_number_offset);
+                row_data.push(self.delegate.get_optional_cell_value(row, delegate_col, cx));
+            }
+            data.push(row_data);
+        }
+
+        if data.is_empty() { None } else { Some(data) }
+    }
+
     /// 获取选中区域的列名（供业务层使用）
     pub fn get_selection_columns(&self, cx: &Context<Self>) -> Vec<SharedString> {
         let Some(range) = self.selection.first_range() else {
@@ -1631,14 +1659,14 @@ where
         };
         let ((min_row, min_col), (max_row, max_col)) = range.normalized();
 
-        // 收集选中单元格的值
-        let mut data: Vec<Vec<String>> = Vec::new();
+        // 收集选中单元格的原始值，保留 SQL NULL 与文本值的区别。
+        let mut data: Vec<Vec<Option<String>>> = Vec::new();
         for row in min_row..=max_row {
-            let mut row_data: Vec<String> = Vec::new();
+            let mut row_data: Vec<Option<String>> = Vec::new();
             for col in min_col..=max_col {
                 // 转换为 delegate 的列索引（去除行号列偏移）
                 let delegate_col = col.saturating_sub(row_number_offset);
-                let value = self.delegate.get_cell_value(row, delegate_col, cx);
+                let value = self.delegate.get_optional_cell_value(row, delegate_col, cx);
                 row_data.push(value);
             }
             data.push(row_data);
@@ -1651,7 +1679,12 @@ where
         // 转换为 TSV 格式（Tab 分隔，与 Excel 兼容）
         let text = data
             .iter()
-            .map(|row| row.join("\t"))
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.as_deref().unwrap_or("\\N"))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
             .collect::<Vec<_>>()
             .join("\n");
 

@@ -3224,7 +3224,7 @@ mod tests {
         fn build_where_and_limit_clause(
             &self,
             _request: &TableSaveRequest,
-            _original_data: &[String],
+            _original_data: &[TableCellValue],
         ) -> (String, String) {
             (String::new(), self.build_limit_clause())
         }

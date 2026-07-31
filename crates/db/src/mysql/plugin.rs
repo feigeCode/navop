@@ -2232,7 +2232,7 @@ ORDER BY User, Host;"#
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         let where_clause = self.build_table_change_where_clause(request, original_data);
         (where_clause, self.build_limit_clause())

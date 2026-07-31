@@ -2176,7 +2176,7 @@ ORDER BY rolname;"#
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         let where_clause = self.build_table_change_where_clause(request, original_data);
         (where_clause, self.build_limit_clause())
@@ -2574,8 +2574,8 @@ mod tests {
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
-        ColumnDefinition, ColumnInfo, ForeignKeyDefinition, IndexDefinition, TableDesign,
-        TableOptions, TableRowChange, TableSaveRequest,
+        ColumnDefinition, ColumnInfo, ForeignKeyDefinition, IndexDefinition, TableCellChange,
+        TableDesign, TableOptions, TableRowChange, TableSaveRequest,
     };
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -3765,7 +3765,7 @@ mod tests {
             ],
             index_infos: vec![],
             changes: vec![TableRowChange::Deleted {
-                original_data: vec!["42".to_string(), "Ada".to_string()],
+                original_data: vec!["42".into(), "Ada".into()],
                 rowid: None,
             }],
         };
@@ -3773,6 +3773,281 @@ mod tests {
         let sql = plugin.generate_table_changes_sql(&request);
 
         assert_eq!("DELETE FROM \"public\".\"users\" WHERE \"id\" = '42';", sql);
+    }
+
+    #[test]
+    fn test_generate_update_row_sql_sets_nullable_value_to_null() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "id".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "score".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["42".into(), "7".into()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "score".to_string(),
+                    old_value: "7".into(),
+                    new_value: TableCellValue::Null,
+                }],
+                rowid: None,
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "UPDATE \"public\".\"users\" SET \"score\" = NULL WHERE \"id\" = '42';",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_generate_update_row_sql_matches_original_null_with_is_null() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "metrics".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "label".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: false,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "score".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["daily".into(), TableCellValue::Null],
+                changes: vec![TableCellChange {
+                    column_index: 0,
+                    column_name: "label".to_string(),
+                    old_value: "daily".into(),
+                    new_value: "weekly".into(),
+                }],
+                rowid: None,
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "UPDATE \"public\".\"metrics\" SET \"label\" = 'weekly' WHERE \"label\" = 'daily' AND \"score\" IS NULL;",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_generate_update_row_sql_preserves_empty_and_literal_null_text() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "messages".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "id".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    is_nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "body".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "note".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["42".into(), "old body".into(), "old note".into()],
+                changes: vec![
+                    TableCellChange {
+                        column_index: 1,
+                        column_name: "body".to_string(),
+                        old_value: "old body".into(),
+                        new_value: "".into(),
+                    },
+                    TableCellChange {
+                        column_index: 2,
+                        column_name: "note".to_string(),
+                        old_value: "old note".into(),
+                        new_value: "NULL".into(),
+                    },
+                ],
+                rowid: None,
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "UPDATE \"public\".\"messages\" SET \"body\" = '', \"note\" = 'NULL' WHERE \"id\" = '42';",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_generate_insert_row_sql_distinguishes_null_empty_and_literal_null() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "messages".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "nullable_value".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "empty_value".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "literal_null".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec![TableCellValue::Null, "".into(), "NULL".into()],
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "INSERT INTO \"public\".\"messages\" (\"nullable_value\", \"empty_value\", \"literal_null\") VALUES (NULL, '', 'NULL');",
+            sql
+        );
+    }
+
+    #[test]
+    fn test_generate_delete_row_sql_distinguishes_null_empty_and_literal_null() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            table: "messages".to_string(),
+            columns: vec![
+                ColumnInfo {
+                    name: "nullable_value".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "empty_value".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+                ColumnInfo {
+                    name: "literal_null".to_string(),
+                    data_type: "TEXT".to_string(),
+                    is_nullable: true,
+                    is_primary_key: false,
+                    default_value: None,
+                    comment: None,
+                    charset: None,
+                    collation: None,
+                },
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Deleted {
+                original_data: vec![TableCellValue::Null, "".into(), "NULL".into()],
+                rowid: None,
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "DELETE FROM \"public\".\"messages\" WHERE \"nullable_value\" IS NULL AND \"empty_value\" = '' AND \"literal_null\" = 'NULL';",
+            sql
+        );
     }
 
     // ==================== Data Types Tests ====================

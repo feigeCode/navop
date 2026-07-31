@@ -27,7 +27,7 @@ use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
     BinaryCell, ColumnInfo, DbManager, ExecOptions, GlobalDbState, IndexInfo, QueryResult,
-    SqlResult, TableCellChange, TableDataRequest, TableRowChange, TableSaveRequest,
+    SqlResult, TableCellChange, TableCellValue, TableDataRequest, TableRowChange, TableSaveRequest,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
@@ -297,19 +297,12 @@ fn build_export_bytes(
         return Ok(None);
     }
 
-    let mut export_rows: Vec<Vec<String>> = rows
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|value| value.unwrap_or_else(|| "NULL".to_string()))
-                .collect()
-        })
-        .collect();
+    let mut export_rows = rows;
 
     if format.include_header() {
         let header = columns
             .iter()
-            .map(|column| column.as_ref().to_string())
+            .map(|column| Some(column.as_ref().to_string()))
             .collect();
         export_rows.insert(0, header);
     }
@@ -325,15 +318,17 @@ fn build_export_bytes(
     }
 }
 
-fn build_xlsx_bytes(rows: &[Vec<String>]) -> Result<Vec<u8>, String> {
+fn build_xlsx_bytes(rows: &[Vec<Option<String>>]) -> Result<Vec<u8>, String> {
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
 
     for (row_index, row) in rows.iter().enumerate() {
         for (col_index, cell) in row.iter().enumerate() {
-            worksheet
-                .write_string(row_index as u32, col_index as u16, cell)
-                .map_err(|error| error.to_string())?;
+            if let Some(cell) = cell {
+                worksheet
+                    .write_string(row_index as u32, col_index as u16, cell)
+                    .map_err(|error| error.to_string())?;
+            }
         }
     }
 
@@ -1853,10 +1848,7 @@ impl DataGrid {
             .into_iter()
             .filter_map(|change| match change {
                 RowChange::Added { data } => Some(TableRowChange::Added {
-                    data: data
-                        .into_iter()
-                        .map(|opt| opt.unwrap_or_default())
-                        .collect(),
+                    data: data.into_iter().map(TableCellValue::from).collect(),
                 }),
                 RowChange::Updated {
                     original_data,
@@ -1872,8 +1864,8 @@ impl DataGrid {
                             } else {
                                 c.col_name
                             },
-                            old_value: c.old_value.unwrap_or_default(),
-                            new_value: c.new_value.unwrap_or_default(),
+                            old_value: TableCellValue::from(c.old_value),
+                            new_value: TableCellValue::from(c.new_value),
                         })
                         .collect();
 
@@ -1883,7 +1875,7 @@ impl DataGrid {
                         Some(TableRowChange::Updated {
                             original_data: original_data
                                 .into_iter()
-                                .map(|opt| opt.unwrap_or_default())
+                                .map(TableCellValue::from)
                                 .collect(),
                             changes: converted,
                             rowid,
@@ -1896,7 +1888,7 @@ impl DataGrid {
                 } => Some(TableRowChange::Deleted {
                     original_data: original_data
                         .into_iter()
-                        .map(|opt| opt.unwrap_or_default())
+                        .map(TableCellValue::from)
                         .collect(),
                     rowid,
                 }),
@@ -2928,11 +2920,12 @@ pub fn notification(cx: &mut App, error: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
+        DataGrid, ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
         build_large_text_editor_title, collect_delete_row_indices, resolve_large_text_editor_route,
         table_has_unsaved_changes,
     };
-    use db::DbManager;
+    use crate::table_data::results_delegate::{CellChange, RowChange};
+    use db::{DbManager, TableCellValue, TableRowChange};
     use gpui::SharedString;
     use one_core::settings::LargeTextCellEditorOpenMode;
     use one_core::storage::DatabaseType;
@@ -2964,6 +2957,92 @@ mod tests {
     #[test]
     fn table_has_no_unsaved_changes_without_editing_or_pending_changes() {
         assert!(!table_has_unsaved_changes(None, 0));
+    }
+
+    #[test]
+    fn convert_row_changes_preserves_null_separately_from_empty_string() {
+        let changes = vec![RowChange::Updated {
+            original_data: vec![
+                Some("42".to_string()),
+                None,
+                Some(String::new()),
+                Some("NULL".to_string()),
+            ],
+            changes: vec![
+                CellChange {
+                    col_ix: 1,
+                    col_name: "score".to_string(),
+                    old_value: Some("7".to_string()),
+                    new_value: None,
+                },
+                CellChange {
+                    col_ix: 3,
+                    col_name: "note".to_string(),
+                    old_value: Some("old".to_string()),
+                    new_value: Some("NULL".to_string()),
+                },
+            ],
+            rowid: None,
+        }];
+
+        let converted =
+            DataGrid::convert_row_changes(changes, &["id".to_string(), "score".to_string()]);
+
+        let TableRowChange::Updated {
+            original_data,
+            changes,
+            ..
+        } = &converted[0]
+        else {
+            panic!("expected an updated row");
+        };
+        assert_eq!(
+            original_data,
+            &[
+                TableCellValue::Text("42".to_string()),
+                TableCellValue::Null,
+                TableCellValue::Text(String::new()),
+                TableCellValue::Text("NULL".to_string()),
+            ]
+        );
+        assert_eq!(changes[0].old_value, TableCellValue::Text("7".to_string()));
+        assert_eq!(changes[0].new_value, TableCellValue::Null);
+        assert_eq!(
+            changes[1].new_value,
+            TableCellValue::Text("NULL".to_string())
+        );
+    }
+
+    #[test]
+    fn convert_added_and_deleted_rows_preserve_all_cell_value_states() {
+        let values = vec![None, Some(String::new()), Some("NULL".to_string())];
+        let converted = DataGrid::convert_row_changes(
+            vec![
+                RowChange::Added {
+                    data: values.clone(),
+                },
+                RowChange::Deleted {
+                    original_data: values,
+                    rowid: None,
+                },
+            ],
+            &[],
+        );
+        let expected = vec![
+            TableCellValue::Null,
+            TableCellValue::Text(String::new()),
+            TableCellValue::Text("NULL".to_string()),
+        ];
+
+        let TableRowChange::Added { data } = &converted[0] else {
+            panic!("expected an added row");
+        };
+        assert_eq!(data, &expected);
+
+        let TableRowChange::Deleted { original_data, .. } = &converted[1] else {
+            panic!("expected a deleted row");
+        };
+        assert_eq!(original_data, &expected);
     }
 
     fn read_xlsx_entry(bytes: &[u8], entry_name: &str) -> String {
@@ -3110,6 +3189,35 @@ mod tests {
             shared_strings.contains("Line 1\nLine 2")
                 || shared_strings.contains("Line 1&#10;Line 2")
                 || shared_strings.contains("Line 1&#xA;Line 2")
+        );
+    }
+
+    #[test]
+    fn build_export_bytes_preserves_null_empty_and_literal_null_text() {
+        let rows = vec![vec![None, Some(String::new()), Some("NULL".to_string())]];
+        let columns = vec!["nullable".into(), "empty".into(), "literal".into()];
+        let metadata = TableMetadata::new("sample");
+
+        let csv = super::build_export_bytes(
+            ExportFormat::Csv,
+            rows.clone(),
+            columns.clone(),
+            metadata.clone(),
+        )
+        .expect("CSV export should build")
+        .expect("CSV export should produce bytes");
+        assert_eq!(
+            String::from_utf8(csv).expect("CSV is UTF-8"),
+            "nullable,empty,literal\n\\N,\"\",NULL"
+        );
+
+        let sql = super::build_export_bytes(ExportFormat::InsertSql, rows, columns, metadata)
+            .expect("SQL export should build")
+            .expect("SQL export should produce bytes");
+        assert!(
+            String::from_utf8(sql)
+                .expect("SQL is UTF-8")
+                .contains("(NULL, '', 'NULL')")
         );
     }
 }

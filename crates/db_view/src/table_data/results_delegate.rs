@@ -26,7 +26,7 @@ use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
 use one_ui::edit_table::{
     CellEditor, Column, ColumnSort, EditTableDelegate, EditTableEvent, EditTableState,
-    filter_panel::FilterValue,
+    filter_panel::{FilterValue, FilterValueKey},
 };
 use rust_i18n::t;
 use uuid::Uuid;
@@ -110,7 +110,7 @@ pub struct EditorTableDelegate {
     /// When set, only these row indices from `rows` will be displayed
     filtered_row_indices: Option<Vec<usize>>,
     /// Column filter conditions: col_ix -> selected values
-    column_filters: HashMap<usize, HashSet<String>>,
+    column_filters: HashMap<usize, HashSet<FilterValueKey>>,
     /// Local table data search query. Empty means no row search.
     row_search_query: String,
     /// Whether cells are editable
@@ -788,7 +788,7 @@ impl EditorTableDelegate {
     // ============================================================================
 
     /// 应用筛选到数据（支持多列筛选）
-    pub fn apply_filter(&mut self, col_ix: usize, selected_values: HashSet<String>) {
+    pub fn apply_filter(&mut self, col_ix: usize, selected_values: HashSet<FilterValueKey>) {
         // 存储该列的筛选条件
         self.column_filters.insert(col_ix, selected_values);
         self.active_filter_columns.insert(col_ix);
@@ -828,10 +828,11 @@ impl EditorTableDelegate {
             .all(|(&col_ix, selected_values)| {
                 let cell_value = row
                     .get(col_ix)
-                    .and_then(|opt| opt.as_ref())
-                    .map(|s| s.as_str())
-                    .unwrap_or("NULL");
-                selected_values.contains(cell_value)
+                    .cloned()
+                    .flatten()
+                    .map(FilterValueKey::Text)
+                    .unwrap_or(FilterValueKey::Null);
+                selected_values.contains(&cell_value)
             })
     }
 
@@ -993,7 +994,7 @@ impl EditTableDelegate for EditorTableDelegate {
             cx: &mut App,
         ) {
             table.update(cx, |state, cx| {
-                let Some(data) = state.get_selection_data(cx) else {
+                let Some(data) = state.get_optional_selection_data(cx) else {
                     return;
                 };
                 let columns = state.get_selection_columns(cx);
@@ -2231,10 +2232,10 @@ impl EditTableDelegate for EditorTableDelegate {
     fn get_column_filter_values(&self, col_ix: usize, _cx: &App) -> Vec<FilterValue> {
         use std::collections::HashMap;
 
-        let mut value_counts: HashMap<String, usize> = HashMap::new();
+        let mut value_counts: HashMap<FilterValueKey, usize> = HashMap::new();
 
         // 获取其他列的筛选条件（排除当前列）
-        let other_filters: HashMap<usize, &HashSet<String>> = self
+        let other_filters: HashMap<usize, &HashSet<FilterValueKey>> = self
             .column_filters
             .iter()
             .filter(|(c, _)| **c != col_ix)
@@ -2246,26 +2247,29 @@ impl EditTableDelegate for EditorTableDelegate {
             let passes_other_filters = other_filters.iter().all(|(&other_col, selected_values)| {
                 let cell_value = row
                     .get(other_col)
-                    .and_then(|opt| opt.as_ref())
-                    .map(|s| s.as_str())
-                    .unwrap_or("NULL");
-                selected_values.contains(cell_value)
+                    .cloned()
+                    .flatten()
+                    .map(FilterValueKey::Text)
+                    .unwrap_or(FilterValueKey::Null);
+                selected_values.contains(&cell_value)
             });
 
             if passes_other_filters && row_matches_search_query(row, &self.row_search_query) {
                 let value = row
                     .get(col_ix)
-                    .and_then(|opt| opt.clone())
-                    .unwrap_or_else(|| "NULL".to_string());
+                    .cloned()
+                    .flatten()
+                    .map(FilterValueKey::Text)
+                    .unwrap_or(FilterValueKey::Null);
                 *value_counts.entry(value).or_insert(0) += 1;
             }
         }
 
         let mut result: Vec<_> = value_counts
             .into_iter()
-            .map(|(value, count)| FilterValue::new(value, count))
+            .map(|(value, count)| FilterValue::from_key(value, count))
             .collect();
-        result.sort_by(|a, b| a.value.cmp(&b.value));
+        result.sort_by(|a, b| a.value.cmp(&b.value).then_with(|| a.key.cmp(&b.key)));
         result
     }
 
@@ -2276,7 +2280,7 @@ impl EditTableDelegate for EditorTableDelegate {
     fn on_column_filter_changed(
         &mut self,
         col_ix: usize,
-        selected_values: HashSet<String>,
+        selected_values: HashSet<FilterValueKey>,
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) {
@@ -2315,6 +2319,20 @@ impl EditTableDelegate for EditorTableDelegate {
             .unwrap_or_else(|| "NULL".to_string())
     }
 
+    fn get_optional_cell_value(&self, row_ix: usize, col_ix: usize, _cx: &App) -> Option<String> {
+        let actual_row = self.map_display_to_actual_row(row_ix);
+
+        if let Some(bytes) = self.binary_cells.get(&(actual_row, col_ix)) {
+            return Some(binary_cell_copy_text(bytes.as_slice()));
+        }
+
+        self.rows
+            .get(actual_row)
+            .and_then(|row| row.get(col_ix))
+            .cloned()
+            .flatten()
+    }
+
     fn set_cell_values(
         &mut self,
         changes: Vec<(usize, usize, String)>,
@@ -2348,7 +2366,7 @@ impl EditTableDelegate for EditorTableDelegate {
 
     fn on_copy(
         &mut self,
-        _data: Vec<Vec<String>>,
+        _data: Vec<Vec<Option<String>>>,
         _window: &mut Window,
         _cx: &mut Context<EditTableState<Self>>,
     ) {
@@ -2533,7 +2551,7 @@ mod tests {
     use db::ColumnInfo;
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
-    use one_ui::edit_table::{Column, ColumnSort};
+    use one_ui::edit_table::{Column, ColumnSort, FilterValueKey};
     use std::collections::{HashMap, HashSet};
 
     fn test_delegate(rows: Vec<Vec<Option<String>>>) -> EditorTableDelegate {
@@ -2638,12 +2656,34 @@ mod tests {
             vec![Some("active".to_string()), Some("Bob".to_string())],
         ]);
 
-        delegate.apply_filter(0, HashSet::from(["active".to_string()]));
+        delegate.apply_filter(
+            0,
+            HashSet::from([FilterValueKey::Text("active".to_string())]),
+        );
         delegate.set_row_search_query("alice");
 
         assert_eq!(1, delegate.filtered_row_count());
         assert_eq!(Some(0), delegate.resolve_display_row(0));
         assert_eq!(None, delegate.resolve_display_row(1));
+    }
+
+    #[test]
+    fn column_filter_distinguishes_null_from_literal_null_text() {
+        let rows = vec![
+            vec![None],
+            vec![Some("NULL".to_string())],
+            vec![Some(String::new())],
+        ];
+
+        let mut null_delegate = test_delegate(rows.clone());
+        null_delegate.apply_filter(0, HashSet::from([FilterValueKey::Null]));
+        assert_eq!(1, null_delegate.filtered_row_count());
+        assert_eq!(Some(0), null_delegate.resolve_display_row(0));
+
+        let mut text_delegate = test_delegate(rows);
+        text_delegate.apply_filter(0, HashSet::from([FilterValueKey::Text("NULL".to_string())]));
+        assert_eq!(1, text_delegate.filtered_row_count());
+        assert_eq!(Some(1), text_delegate.resolve_display_row(0));
     }
 
     #[test]

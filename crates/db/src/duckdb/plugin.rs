@@ -1340,7 +1340,7 @@ impl DatabasePlugin for DuckDbPlugin {
     fn build_where_and_limit_clause(
         &self,
         request: &TableSaveRequest,
-        original_data: &[String],
+        original_data: &[TableCellValue],
     ) -> (String, String) {
         self.sqlite
             .build_where_and_limit_clause(request, original_data)

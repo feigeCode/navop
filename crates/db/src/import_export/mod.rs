@@ -52,6 +52,8 @@ pub struct CsvImportConfig {
     pub text_qualifier: Option<char>,
     pub has_header: bool,
     pub record_terminator: String,
+    /// 未加引号时表示 SQL NULL 的字符串。
+    pub null_string: String,
 }
 
 impl Default for CsvImportConfig {
@@ -61,6 +63,7 @@ impl Default for CsvImportConfig {
             text_qualifier: Some('"'),
             has_header: true,
             record_terminator: "\n".to_string(),
+            null_string: "\\N".to_string(),
         }
     }
 }
@@ -72,6 +75,8 @@ pub struct CsvExportConfig {
     pub text_qualifier: Option<char>,
     pub include_header: bool,
     pub record_terminator: String,
+    /// SQL NULL 的导出表示；空字符串仍使用带引号的空字段。
+    pub null_string: String,
 }
 
 impl Default for CsvExportConfig {
@@ -81,6 +86,7 @@ impl Default for CsvExportConfig {
             text_qualifier: Some('"'),
             include_header: true,
             record_terminator: "\n".to_string(),
+            null_string: "\\N".to_string(),
         }
     }
 }

@@ -426,6 +426,7 @@ impl TableImportView {
                 text_qualifier,
                 has_header,
                 record_terminator,
+                null_string: "\\N".to_string(),
             })
         } else {
             None
