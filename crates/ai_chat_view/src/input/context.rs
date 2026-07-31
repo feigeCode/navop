@@ -8,7 +8,7 @@
 //! 设计要点:
 //! - `scopes` 是**开放 `Vec`**,数量随目标类型动态变化,不写死 Database/Schema;
 //! - 模型下拉项用 [`ComposerModelOption`] 表达,避免从展示文案反解析 provider/model;
-//! - 工具模式 / 任务模式的下拉项用 [`ComposerMenuOption`] 表达。
+//! - 工具执行模式的下拉项用 [`ComposerMenuOption`] 表达。
 
 use gpui::SharedString;
 use rust_i18n::t;
@@ -471,10 +471,8 @@ pub struct AgentComposerContext {
     pub agent_options: Vec<ComposerAgentOption>,
     /// 当前模型(底部高亮 chip);`None` 时显示「选择模型」。
     pub model: Option<ComposerModel>,
-    /// 工具模式当前文案(如 `自动`)。
-    pub tool_label: SharedString,
-    /// 任务模式当前文案(如 `诊断`)。
-    pub task_label: SharedString,
+    /// 工具执行模式当前文案(如 `自动`)。
+    pub execution_mode_label: SharedString,
 }
 
 #[cfg(test)]

@@ -470,6 +470,26 @@ fn get_schema_supports_all_creatable_connection_types() {
 }
 
 #[test]
+fn port_forwarding_schema_exposes_remote_mode() {
+    let registry = connection_tool_registry(repo());
+
+    let result = futures::executor::block_on(registry.call(
+        "connections.get_schema",
+        json!({ "kind": "port_forwarding" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("schema tool should run");
+    let fields = result.structured_content["fields"]
+        .as_array()
+        .expect("fields should be an array");
+
+    assert_eq!(
+        json!(["Local", "Remote", "Dynamic"]),
+        field_by_name(fields, "kind")["enum"]
+    );
+}
+
+#[test]
 fn mongodb_schema_exposes_explicit_driver_variants() {
     let registry = connection_tool_registry(repo());
 
@@ -885,6 +905,99 @@ fn validate_rejects_invalid_numeric_fields_without_writing() {
         }]),
         result.structured_content["invalid_fields"]
     );
+}
+
+#[test]
+fn validate_rejects_zero_target_port_for_tcp_forwarding() {
+    for forwarding_kind in ["Local", "Remote"] {
+        let repo = repo();
+        let registry = connection_tool_registry(repo.clone());
+
+        let result = futures::executor::block_on(registry.call(
+            "connections.validate",
+            json!({
+                "kind": "port_forwarding",
+                "values": {
+                    "name": format!("{forwarding_kind} forwarding"),
+                    "kind": forwarding_kind,
+                    "ssh_connection_id": 1,
+                    "bind_port": 0,
+                    "target_host": "127.0.0.1",
+                    "target_port": 0
+                }
+            }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        ))
+        .expect("validate tool should run");
+
+        assert_eq!(json!(false), result.structured_content["ok"]);
+        assert_eq!(json!(false), result.structured_content["can_apply"]);
+        assert_eq!(json!([]), result.structured_content["missing_required"]);
+        assert_eq!(
+            json!([{
+                "field": "target_port",
+                "message": "must be an integer between 1 and 65535"
+            }]),
+            result.structured_content["invalid_fields"]
+        );
+        assert_eq!(0, repo.count().expect("count should run"));
+    }
+}
+
+#[test]
+fn validate_accepts_dynamic_forwarding_without_target() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo.clone());
+
+    let result = futures::executor::block_on(registry.call(
+        "connections.validate",
+        json!({
+            "kind": "port_forwarding",
+            "values": {
+                "name": "Dynamic forwarding",
+                "kind": "Dynamic",
+                "ssh_connection_id": 1,
+                "bind_port": 0
+            }
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("validate tool should run");
+
+    assert_eq!(json!(true), result.structured_content["ok"]);
+    assert_eq!(json!(true), result.structured_content["can_apply"]);
+    assert_eq!(json!([]), result.structured_content["missing_required"]);
+    assert_eq!(json!([]), result.structured_content["invalid_fields"]);
+    assert_eq!(0, repo.count().expect("count should run"));
+}
+
+#[test]
+fn validate_accepts_lowercase_port_forwarding_kinds() {
+    for forwarding_kind in ["local", "remote", "dynamic"] {
+        let repo = repo();
+        let registry = connection_tool_registry(repo.clone());
+        let mut values = json!({
+            "name": format!("{forwarding_kind} forwarding"),
+            "kind": forwarding_kind,
+            "ssh_connection_id": 1,
+            "bind_port": 0
+        });
+        if forwarding_kind != "dynamic" {
+            values["target_host"] = json!("127.0.0.1");
+            values["target_port"] = json!(3000);
+        }
+
+        let result = futures::executor::block_on(registry.call(
+            "connections.validate",
+            json!({ "kind": "port_forwarding", "values": values }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        ))
+        .expect("validate tool should run");
+
+        assert_eq!(json!(true), result.structured_content["ok"]);
+        assert_eq!(json!([]), result.structured_content["missing_required"]);
+        assert_eq!(json!([]), result.structured_content["invalid_fields"]);
+    }
 }
 
 pub(super) fn create_connection(

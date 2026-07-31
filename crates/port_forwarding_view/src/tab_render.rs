@@ -7,6 +7,7 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, StyledExt, h_flex, scroll::ScrollableElement,
     v_flex,
 };
+use one_core::storage::PortForwardingKind;
 use rust_i18n::t;
 
 use crate::tab::PortForwardingTab;
@@ -123,6 +124,7 @@ fn render_header(
 }
 
 fn render_route(tab: &PortForwardingTab, cx: &mut Context<PortForwardingTab>) -> impl IntoElement {
+    let (source_label, target_label) = endpoint_labels(tab.kind);
     v_flex()
         .p_5()
         .gap_4()
@@ -141,12 +143,7 @@ fn render_route(tab: &PortForwardingTab, cx: &mut Context<PortForwardingTab>) ->
                 .w_full()
                 .justify_between()
                 .items_center()
-                .child(endpoint(
-                    &t!("PortForwardingTab.local_endpoint"),
-                    &tab.bind_label,
-                    false,
-                    cx,
-                ))
+                .child(endpoint(&source_label, &tab.bind_label, false, cx))
                 .child(Icon::new(IconName::ArrowRight).with_size(Size::Medium))
                 .child(endpoint(
                     &t!("PortForwardingTab.ssh_tunnel"),
@@ -155,13 +152,25 @@ fn render_route(tab: &PortForwardingTab, cx: &mut Context<PortForwardingTab>) ->
                     cx,
                 ))
                 .child(Icon::new(IconName::ArrowRight).with_size(Size::Medium))
-                .child(endpoint(
-                    &t!("PortForwardingTab.remote_target"),
-                    &tab.target_label,
-                    false,
-                    cx,
-                )),
+                .child(endpoint(&target_label, &tab.target_label, false, cx)),
         )
+}
+
+fn endpoint_labels(kind: PortForwardingKind) -> (String, String) {
+    match kind {
+        PortForwardingKind::Local => (
+            t!("PortForwardingTab.local_endpoint").to_string(),
+            t!("PortForwardingTab.remote_target").to_string(),
+        ),
+        PortForwardingKind::Remote => (
+            t!("PortForwardingTab.remote_endpoint").to_string(),
+            t!("PortForwardingTab.local_target").to_string(),
+        ),
+        PortForwardingKind::Dynamic => (
+            t!("PortForwardingTab.local_endpoint").to_string(),
+            t!("PortForwardingTab.dynamic_target").to_string(),
+        ),
+    }
 }
 
 fn endpoint(
@@ -254,7 +263,7 @@ fn render_events(tab: &PortForwardingTab, cx: &mut Context<PortForwardingTab>) -
 
 fn actual_bind(tab: &PortForwardingTab) -> String {
     match &tab.state {
-        PortForwardingTabState::Running { local_addr } => local_addr.to_string(),
+        PortForwardingTabState::Running { bind_addr } => bind_addr.clone(),
         _ => tab.bind_label.clone(),
     }
 }
@@ -278,8 +287,9 @@ fn status_label(state: &PortForwardingTabState) -> String {
 
 fn kind_label(tab: &PortForwardingTab) -> String {
     match tab.kind {
-        one_core::storage::PortForwardingKind::Local => t!("PortForwardingTab.local_title"),
-        one_core::storage::PortForwardingKind::Dynamic => t!("PortForwardingTab.dynamic_title"),
+        PortForwardingKind::Local => t!("PortForwardingTab.local_title"),
+        PortForwardingKind::Remote => t!("PortForwardingTab.remote_title"),
+        PortForwardingKind::Dynamic => t!("PortForwardingTab.dynamic_title"),
     }
     .to_string()
 }

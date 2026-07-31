@@ -396,6 +396,10 @@ fn port_forwarding_endpoint(connection: &StoredConnection) -> Option<String> {
             "{}:{} -> {}:{}",
             params.bind_host, params.bind_port, params.target_host, params.target_port
         ),
+        one_core::storage::PortForwardingKind::Remote => format!(
+            "{}:{} <- {}:{}",
+            params.bind_host, params.bind_port, params.target_host, params.target_port
+        ),
         one_core::storage::PortForwardingKind::Dynamic => {
             format!("SOCKS {}:{}", params.bind_host, params.bind_port)
         }

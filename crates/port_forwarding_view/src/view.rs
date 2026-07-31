@@ -89,7 +89,7 @@ impl PortForwardingFormWindow {
                         t!("PortForwarding.bind_port").to_string(),
                         Input::new(&self.bind_port_input),
                     ))
-                    .when(kind == PortForwardingKind::Local, |form| {
+                    .when(kind != PortForwardingKind::Dynamic, |form| {
                         form.child(self.render_row(
                             t!("PortForwarding.target_host").to_string(),
                             Input::new(&self.target_host_input),

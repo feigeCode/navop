@@ -6,6 +6,10 @@ use gpui::{Context, Window};
 use notify::EventKind;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 use std::path::PathBuf;
+#[cfg(not(test))]
+use std::sync::mpsc::TryRecvError;
+#[cfg(not(test))]
+use std::time::Duration;
 
 pub(crate) fn watch_markdown_file(
     path: PathBuf,
@@ -21,7 +25,7 @@ pub(crate) fn watch_markdown_file(
 
     #[cfg(not(test))]
     {
-        let (sender, receiver) = smol::channel::unbounded();
+        let (sender, receiver) = std::sync::mpsc::channel();
         let watched_path = canonical_path(&path);
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -35,7 +39,7 @@ pub(crate) fn watch_markdown_file(
                         .iter()
                         .any(|event_path| canonical_path(event_path) == watched_path)
                 {
-                    let _ = sender.try_send(());
+                    let _ = sender.send(());
                 }
             })?;
         let parent = path
@@ -53,7 +57,7 @@ fn canonical_path(path: &std::path::Path) -> PathBuf {
 
 #[cfg(not(test))]
 fn observe_file_events(
-    receiver: smol::channel::Receiver<()>,
+    receiver: std::sync::mpsc::Receiver<()>,
     document_id: String,
     window: &mut Window,
     cx: &mut Context<NotesView>,
@@ -61,8 +65,21 @@ fn observe_file_events(
     let weak = cx.entity().downgrade();
     let window_handle = window.window_handle();
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        while receiver.recv().await.is_ok() {
-            while receiver.try_recv().is_ok() {}
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(100))
+                .await;
+            let mut file_changed = false;
+            loop {
+                match receiver.try_recv() {
+                    Ok(()) => file_changed = true,
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return,
+                }
+            }
+            if !file_changed {
+                continue;
+            }
             let id = document_id.clone();
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 let _ = weak.update(cx, |view, cx| {

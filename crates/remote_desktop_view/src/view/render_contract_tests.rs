@@ -1,6 +1,6 @@
 #[test]
 fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() {
-    let source = include_str!("render.rs");
+    let source = include_str!("render.rs").replace("\r\n", "\n");
 
     let canvas_start = source
         .find("fn remote_desktop_frame_canvas")
@@ -47,7 +47,7 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
         "the remote cursor must be painted over the framebuffer"
     );
 
-    assert_parent_bounded_remote_desktop_content(source);
+    assert_parent_bounded_remote_desktop_content(&source);
 }
 
 #[test]
@@ -85,18 +85,24 @@ fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cur
         .find("self.cursor.set_pointer_hovered(true);")
         .expect("pointer movement must keep hover state synchronized");
     let cursor_position = pointer_move
-        .find("self.cursor.set_position(x, y);")
+        .find("let position_changed = self.cursor.set_position(x, y);")
         .expect("local pointer movement must predict the canvas cursor position");
-    let native_refresh = pointer_move
-        .find("self.cursor.refresh_native_cursor();")
-        .expect("native cursor state must be refreshed after local prediction");
+    let native_rehide = pointer_move
+        .find("self.cursor.rehide_native_cursor_after_pointer_move();")
+        .expect("native cursor must be hidden once after local prediction");
+    let immediate_repaint = pointer_move
+        .find("cx.notify();")
+        .expect("canvas cursor movement must request an immediate repaint");
     let remote_input = pointer_move
         .find("self.send_input(RemoteDesktopInput::MouseMove { x, y });")
         .expect("pointer movement must still be sent to the remote session");
 
     assert!(pointer_hover < cursor_position);
-    assert!(cursor_position < native_refresh);
-    assert!(native_refresh < remote_input);
+    assert!(cursor_position < native_rehide);
+    assert!(native_rehide < immediate_repaint);
+    assert!(immediate_repaint < remote_input);
+    assert!(pointer_move.contains("if position_changed {"));
+    assert!(!pointer_move.contains("refresh_native_cursor"));
 }
 
 fn assert_parent_bounded_remote_desktop_content(source: &str) {

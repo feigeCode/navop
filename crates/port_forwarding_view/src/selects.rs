@@ -79,6 +79,9 @@ impl ForwardingKindSelectItem {
                 kind: PortForwardingKind::Local,
             },
             Self {
+                kind: PortForwardingKind::Remote,
+            },
+            Self {
                 kind: PortForwardingKind::Dynamic,
             },
         ]

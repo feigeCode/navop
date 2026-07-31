@@ -5,7 +5,7 @@
 //! `RuntimeEvent` 归约进 `AgentTranscript`。
 //!
 //! 作为输入框的"上层"集成点:把 [`ResourceContext`] 映射为输入框展示用的
-//! [`AgentComposerContext`],注入模型 / 工具 / 任务模式的下拉选项,并处理输入框
+//! [`AgentComposerContext`],注入模型 / 工具执行模式的下拉选项,并处理输入框
 //! emit 的选择事件(目标轮换、模型 / 模式切换)。
 
 use std::collections::{HashMap, HashSet};
@@ -38,6 +38,7 @@ use gpui_component::{
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
+use one_core::settings::{AiChatToolExecutionMode, AppSettings};
 use one_core::sidebar_contribution::SidebarPlacement;
 use rust_i18n::t;
 use tokio::sync::broadcast::error::RecvError;
@@ -806,9 +807,8 @@ pub struct AgentChatView {
     acp_public_mcp_approval_provider: Option<AcpPublicMcpApprovalProvider>,
     scroll_handle: ScrollHandle,
     auto_scroll: AutoScrollState,
-    task_kind: TaskKind,
-    /// 当前工具模式展示文案(本轮执行参数,占位)。
-    selected_tool: SharedString,
+    /// 当前工具执行模式。由 AI Chat 设置恢复，并用于后续提交。
+    tool_execution_mode: ToolExecutionMode,
     /// 当前模型。切换时通过 runtime_factory 重建 Runtime,影响后续提交。
     selected_model: Option<ComposerModelOption>,
     model_options: Vec<ComposerModelOption>,
@@ -853,9 +853,8 @@ impl AgentChatView {
         self.runtime_factory = runtime_factory;
         let model_options = self.model_options.clone();
         let tool_options = self.tool_options.clone();
-        let task_options = default_task_options();
         self.input.update(cx, |input, cx| {
-            input.set_menu_options(model_options, tool_options, task_options, cx);
+            input.set_menu_options(model_options, tool_options, cx);
         });
         if let Some(retained) = retained {
             self.selected_model = Some(retained);
@@ -939,16 +938,14 @@ impl AgentChatView {
             input.update(cx, |input, cx| input.set_edge_to_edge(true, cx));
         }
 
-        let task_kind = default_task_kind();
-        let selected_tool = default_tool_label();
+        let tool_execution_mode =
+            runtime_tool_execution_mode(AppSettings::current(cx).ai_chat.tool_execution_mode);
         let tool_options = default_tool_options();
-        let task_options = default_task_options();
 
         let skills = AgentSkillState::load_default();
         let init_ctx = build_composer_context(
             &resources,
-            task_kind,
-            &selected_tool,
+            tool_execution_mode,
             selected_model.as_ref(),
             None,
             &[],
@@ -968,12 +965,7 @@ impl AgentChatView {
             .collect();
         input.update(cx, |inp, cx| {
             inp.set_target_options(target_options, cx);
-            inp.set_menu_options(
-                model_options.clone(),
-                tool_options.clone(),
-                task_options,
-                cx,
-            );
+            inp.set_menu_options(model_options.clone(), tool_options.clone(), cx);
             inp.set_context(init_ctx, cx);
         });
 
@@ -1039,8 +1031,7 @@ impl AgentChatView {
             acp_public_mcp_approval_provider: None,
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
-            task_kind,
-            selected_tool,
+            tool_execution_mode,
             selected_model,
             model_options,
             tool_options,
@@ -1183,7 +1174,7 @@ impl AgentChatView {
             return;
         }
         let requires_safety_confirmation = current_acp_tool_mode(cx)
-            .unwrap_or_else(|| tool_execution_mode_from_label(&self.selected_tool))
+            .unwrap_or(self.tool_execution_mode)
             == ToolExecutionMode::Manual;
         self.transcript
             .push_acp_permission(&request, requires_safety_confirmation);
@@ -1409,8 +1400,7 @@ impl AgentChatView {
                     self.select_model(&id, &provider_id, &model, cx);
                 }
             }
-            AgentInputEvent::SelectToolMode { id } => self.select_tool(&id, cx),
-            AgentInputEvent::SelectTaskMode { id } => self.select_task(&id, cx),
+            AgentInputEvent::SelectExecutionMode { id } => self.select_execution_mode(&id, cx),
             AgentInputEvent::SelectAgentBackend { id } => {
                 if !self.is_running {
                     self.select_backend(id, cx);
@@ -1752,20 +1742,24 @@ impl AgentChatView {
         self.set_session_running(session_uid, true, cx);
 
         let runtime = self.runtime.clone();
-        let task_kind = self.task_kind;
-        let tool_mode = tool_execution_mode_from_label(&self.selected_tool);
+        let tool_mode = self.tool_execution_mode;
         let session_uid = session_uid.to_string();
         cx.spawn(async move |this, cx| {
             #[cfg(test)]
             let result = runtime
-                .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
+                .run_turn_blocking_with_tool_mode(&session_id, input, TaskKind::Agent, tool_mode)
                 .await;
 
             #[cfg(not(test))]
             let result = {
                 let task = Tokio::spawn(cx, async move {
                     runtime
-                        .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
+                        .run_turn_blocking_with_tool_mode(
+                            &session_id,
+                            input,
+                            TaskKind::Agent,
+                            tool_mode,
+                        )
                         .await
                 });
                 match task.await {
@@ -2404,8 +2398,7 @@ impl AgentChatView {
     fn sync_composer(&self, cx: &mut Context<Self>) {
         let ctx = build_composer_context(
             &self.resources,
-            self.task_kind,
-            &self.selected_tool,
+            self.tool_execution_mode,
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -2578,12 +2571,12 @@ impl AgentChatView {
         cx.notify();
     }
 
-    fn select_tool(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn select_execution_mode(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.is_running {
             return;
         }
         if let Some(opt) = self.tool_options.iter().find(|o| o.id.as_ref() == id) {
-            let mode = tool_execution_mode_from_label(&opt.label);
+            let mode = tool_execution_mode_from_id(opt.id.as_ref());
             if self.backend == Backend::Acp
                 && let Err(error) = set_current_acp_tool_mode(cx, mode)
             {
@@ -2598,19 +2591,12 @@ impl AgentChatView {
                 cx.notify();
                 return;
             }
-            self.selected_tool = opt.label.clone();
+            AppSettings::update_and_save(cx, |settings| {
+                settings.ai_chat.tool_execution_mode = settings_tool_execution_mode(mode);
+            });
+            self.tool_execution_mode = mode;
             self.sync_composer(cx);
             cx.notify();
-        }
-    }
-
-    fn select_task(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.is_running {
-            return;
-        }
-        if let Some(kind) = task_kind_from_id(id) {
-            self.set_task_kind(kind, cx);
-            self.sync_composer(cx);
         }
     }
 
@@ -2879,7 +2865,6 @@ impl AgentChatView {
         self.persist_current(cx);
         self.stash_current_transcript();
 
-        let should_use_ask_mode = persistence::should_use_ask_mode(cx, uid);
         let target_id = SessionId::from_string(uid.to_string());
         let target = if let Some(session) = self.runtime.session(&target_id) {
             session
@@ -2899,9 +2884,6 @@ impl AgentChatView {
         self.closed_sessions.remove(uid);
         self.session_id = target.id().clone();
         self.system_instruction = target.system_instruction();
-        if should_use_ask_mode {
-            self.task_kind = TaskKind::Ask;
-        }
         self.current_session = self.session_id.to_string();
         if let Some(transcript) = self.session_transcripts.remove(uid) {
             self.transcript = transcript;
@@ -3040,13 +3022,6 @@ impl AgentChatView {
         cx.notify();
     }
 
-    fn set_task_kind(&mut self, task_kind: TaskKind, cx: &mut Context<Self>) {
-        if !self.is_running {
-            self.task_kind = task_kind;
-            cx.notify();
-        }
-    }
-
     /// 从外部发送消息(兼容 sidebar 的 ask_ai 功能)。
     pub fn send_external_message(&mut self, message: String, cx: &mut Context<Self>) {
         if message.trim().is_empty() {
@@ -3084,8 +3059,7 @@ impl AgentChatView {
             .collect();
         let ctx = build_composer_context(
             &self.resources,
-            self.task_kind,
-            &self.selected_tool,
+            self.tool_execution_mode,
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -3154,8 +3128,7 @@ impl AgentChatView {
             .collect();
         let ctx = build_composer_context(
             &self.resources,
-            self.task_kind,
-            &self.selected_tool,
+            self.tool_execution_mode,
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
             self.transcript.active_subagents(),
@@ -3793,8 +3766,7 @@ impl Render for AgentChatView {
 
 fn build_composer_context(
     resources: &ResourceContext,
-    task_kind: TaskKind,
-    tool_label: &SharedString,
+    tool_execution_mode: ToolExecutionMode,
     model: Option<&ComposerModelOption>,
     plan: Option<&PlanCardData>,
     subagents: &[SubAgentCardData],
@@ -3807,7 +3779,7 @@ fn build_composer_context(
     skill_summary: ComposerSkillSummary,
     skill_items: Vec<ComposerSkillItem>,
 ) -> AgentComposerContext {
-    let mut context = build_context(resources, task_kind, tool_label, model);
+    let mut context = build_context(resources, tool_execution_mode, model);
     context.resource_source_options = resource_source_options(resources, available_resources);
     context.resource_pool_items = resource_pool_items(resources, available_resources);
     context.skill_summary = skill_summary;
@@ -3928,8 +3900,7 @@ fn acp_mode_label(state: &AcpSessionState) -> Option<String> {
 /// 由资源上下文构建输入框展示用上下文。
 fn build_context(
     resources: &ResourceContext,
-    task_kind: TaskKind,
-    tool_label: &SharedString,
+    tool_execution_mode: ToolExecutionMode,
     model: Option<&ComposerModelOption>,
 ) -> AgentComposerContext {
     let current = resources.current();
@@ -3964,8 +3935,7 @@ fn build_context(
         subagent_items: Vec::new(),
         agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
-        tool_label: tool_label.clone(),
-        task_label: SharedString::from(task_kind_label(task_kind)),
+        execution_mode_label: SharedString::from(tool_execution_mode_label(tool_execution_mode)),
     }
 }
 
@@ -4487,30 +4457,27 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
     }
 }
 
-fn task_kind_label(kind: TaskKind) -> String {
-    match kind {
-        TaskKind::Agent => t!("AgentUi.auto_mode").to_string(),
-        TaskKind::Ask => t!("AgentUi.ask_mode").to_string(),
-        TaskKind::Plan => t!("AgentUi.plan_mode").to_string(),
-    }
-}
-
-fn task_kind_from_id(id: &str) -> Option<TaskKind> {
+fn tool_execution_mode_from_id(id: &str) -> ToolExecutionMode {
     match id {
-        "agent" => Some(TaskKind::Agent),
-        "ask" => Some(TaskKind::Ask),
-        "plan" => Some(TaskKind::Plan),
-        _ => None,
+        "readonly" => ToolExecutionMode::ReadOnly,
+        "manual" => ToolExecutionMode::Manual,
+        _ => ToolExecutionMode::Auto,
     }
 }
 
-fn tool_execution_mode_from_label(label: &SharedString) -> ToolExecutionMode {
-    if label.as_ref() == t!("AgentUi.readonly") {
-        ToolExecutionMode::ReadOnly
-    } else if label.as_ref() == t!("AgentUi.manual_confirmation") {
-        ToolExecutionMode::Manual
-    } else {
-        ToolExecutionMode::Auto
+fn runtime_tool_execution_mode(mode: AiChatToolExecutionMode) -> ToolExecutionMode {
+    match mode {
+        AiChatToolExecutionMode::Auto => ToolExecutionMode::Auto,
+        AiChatToolExecutionMode::ReadOnly => ToolExecutionMode::ReadOnly,
+        AiChatToolExecutionMode::Manual => ToolExecutionMode::Manual,
+    }
+}
+
+fn settings_tool_execution_mode(mode: ToolExecutionMode) -> AiChatToolExecutionMode {
+    match mode {
+        ToolExecutionMode::Auto => AiChatToolExecutionMode::Auto,
+        ToolExecutionMode::ReadOnly => AiChatToolExecutionMode::ReadOnly,
+        ToolExecutionMode::Manual => AiChatToolExecutionMode::Manual,
     }
 }
 
@@ -4520,10 +4487,6 @@ fn tool_execution_mode_label(mode: ToolExecutionMode) -> String {
         ToolExecutionMode::ReadOnly => t!("AgentUi.readonly").to_string(),
         ToolExecutionMode::Manual => t!("AgentUi.manual_confirmation").to_string(),
     }
-}
-
-fn default_tool_label() -> SharedString {
-    SharedString::from(t!("AgentUi.manual_confirmation").to_string())
 }
 
 fn static_runtime_model_option(runtime: &Runtime) -> ComposerModelOption {
@@ -4668,21 +4631,6 @@ fn default_tool_options() -> Vec<ComposerMenuOption> {
         ComposerMenuOption::new("auto", t!("AgentUi.auto").to_string()),
         ComposerMenuOption::new("readonly", t!("AgentUi.readonly").to_string()),
         ComposerMenuOption::new("manual", t!("AgentUi.manual_confirmation").to_string()),
-    ]
-}
-
-fn default_task_kind() -> TaskKind {
-    TaskKind::Agent
-}
-
-fn default_task_options() -> Vec<ComposerMenuOption> {
-    vec![
-        ComposerMenuOption::new("agent", t!("AgentUi.auto_mode").to_string())
-            .with_hint(t!("AgentUi.auto_mode_hint").to_string()),
-        ComposerMenuOption::new("ask", t!("AgentUi.ask_mode").to_string())
-            .with_hint(t!("AgentUi.ask_mode_hint").to_string()),
-        ComposerMenuOption::new("plan", t!("AgentUi.plan_mode").to_string())
-            .with_hint(t!("AgentUi.plan_mode_hint").to_string()),
     ]
 }
 
@@ -5126,16 +5074,14 @@ mod tests {
 
     #[test]
     fn build_context_without_target_is_empty() {
-        let ctx = build_context(
-            &ResourceContext::new(),
-            TaskKind::Agent,
-            &SharedString::from("自动"),
-            None,
-        );
+        let ctx = build_context(&ResourceContext::new(), ToolExecutionMode::Auto, None);
         assert!(ctx.target.is_none());
         assert!(ctx.scopes.is_empty());
         assert!(ctx.capabilities.is_empty());
-        assert_eq!(ctx.task_label.as_ref(), "Auto Mode");
+        assert_eq!(
+            ctx.execution_mode_label.as_ref(),
+            t!("AgentUi.auto").as_ref()
+        );
     }
 
     #[test]
@@ -5151,8 +5097,7 @@ mod tests {
         );
         let ctx = build_context(
             &resources,
-            TaskKind::Agent,
-            &SharedString::from("只读"),
+            ToolExecutionMode::ReadOnly,
             Some(&ComposerModelOption::new(
                 "openai:gpt-4.1",
                 "openai",
@@ -5164,8 +5109,10 @@ mod tests {
         assert_eq!(ctx.scopes.len(), 2);
         assert_eq!(ctx.scopes[0].value.as_ref(), "ai_app");
         assert_eq!(ctx.scopes[1].value.as_ref(), "public");
-        assert_eq!(ctx.task_label.as_ref(), "Auto Mode");
-        assert_eq!(ctx.tool_label.as_ref(), "只读");
+        assert_eq!(
+            ctx.execution_mode_label.as_ref(),
+            t!("AgentUi.readonly").as_ref()
+        );
     }
 
     #[test]
@@ -5174,12 +5121,7 @@ mod tests {
             .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
             .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"));
 
-        let context = build_context(
-            &resources,
-            TaskKind::Agent,
-            &SharedString::from("自动"),
-            None,
-        );
+        let context = build_context(&resources, ToolExecutionMode::Auto, None);
 
         assert_eq!(context.resource_pool.total_resources, 2);
         assert_eq!(
@@ -5200,12 +5142,7 @@ mod tests {
             .with_resource(ResourceRef::new("db-a", ResourceKind::Postgres, "prod-db"))
             .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
 
-        let context = build_context(
-            &resources,
-            TaskKind::Agent,
-            &SharedString::from("自动"),
-            None,
-        );
+        let context = build_context(&resources, ToolExecutionMode::Auto, None);
 
         let filters = context
             .resource_type_filters
@@ -6911,53 +6848,51 @@ mod tests {
     }
 
     #[test]
-    fn task_kind_round_trips() {
-        assert_eq!(task_kind_from_id("agent"), Some(TaskKind::Agent));
-        assert_eq!(task_kind_from_id("ask"), Some(TaskKind::Ask));
-        assert_eq!(task_kind_from_id("plan"), Some(TaskKind::Plan));
-        assert_eq!(task_kind_from_id("chat"), None);
-        assert_eq!(task_kind_from_id("nope"), None);
-    }
-
-    #[test]
-    fn tool_label_maps_to_runtime_execution_mode() {
-        assert_eq!(
-            ToolExecutionMode::Auto,
-            tool_execution_mode_from_label(&SharedString::from(t!("AgentUi.auto").to_string()))
-        );
+    fn execution_mode_ids_map_to_runtime_modes() {
+        assert_eq!(ToolExecutionMode::Auto, tool_execution_mode_from_id("auto"));
         assert_eq!(
             ToolExecutionMode::ReadOnly,
-            tool_execution_mode_from_label(&SharedString::from(t!("AgentUi.readonly").to_string()))
+            tool_execution_mode_from_id("readonly")
         );
         assert_eq!(
             ToolExecutionMode::Manual,
-            tool_execution_mode_from_label(&SharedString::from(
-                t!("AgentUi.manual_confirmation").to_string()
-            ))
+            tool_execution_mode_from_id("manual")
+        );
+        assert_eq!(ToolExecutionMode::Auto, tool_execution_mode_from_id("nope"));
+    }
+
+    #[test]
+    fn settings_execution_mode_round_trips_to_runtime_mode() {
+        assert_eq!(
+            ToolExecutionMode::Auto,
+            runtime_tool_execution_mode(AiChatToolExecutionMode::Auto)
+        );
+        assert_eq!(
+            ToolExecutionMode::ReadOnly,
+            runtime_tool_execution_mode(AiChatToolExecutionMode::ReadOnly)
+        );
+        assert_eq!(
+            ToolExecutionMode::Manual,
+            runtime_tool_execution_mode(AiChatToolExecutionMode::Manual)
+        );
+        assert_eq!(
+            AiChatToolExecutionMode::Auto,
+            settings_tool_execution_mode(ToolExecutionMode::Auto)
         );
     }
 
     #[test]
-    fn default_tool_label_is_manual_confirmation() {
-        assert_eq!(
-            t!("AgentUi.manual_confirmation").as_ref(),
-            default_tool_label().as_ref()
-        );
-    }
+    fn composer_only_exposes_tool_execution_modes() {
+        let options = default_tool_options();
 
-    #[test]
-    fn composer_defaults_to_auto_ask_plan_modes() {
-        let options = default_task_options();
-
-        assert_eq!(TaskKind::Agent, default_task_kind());
         assert_eq!(
-            vec!["agent", "ask", "plan"],
+            vec!["auto", "readonly", "manual"],
             options
                 .iter()
                 .map(|option| option.id.as_ref())
                 .collect::<Vec<_>>()
         );
-        assert_eq!(options[0].label.as_ref(), "Auto Mode");
+        assert_eq!(options[0].label.as_ref(), t!("AgentUi.auto").as_ref());
     }
 
     #[test]
@@ -6982,8 +6917,7 @@ mod tests {
 
         let local = build_composer_context(
             &ResourceContext::new(),
-            TaskKind::Agent,
-            &SharedString::from("自动"),
+            ToolExecutionMode::Auto,
             None,
             Some(&plan),
             &[],
@@ -6998,8 +6932,7 @@ mod tests {
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
-            TaskKind::Agent,
-            &SharedString::from("自动"),
+            ToolExecutionMode::Auto,
             None,
             Some(&plan),
             &[],
@@ -7029,8 +6962,7 @@ mod tests {
     fn local_backend_option_is_not_named_after_a_specific_cli() {
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            TaskKind::Agent,
-            &SharedString::from("自动"),
+            ToolExecutionMode::Auto,
             None,
             None,
             &[],
@@ -7070,8 +7002,7 @@ mod tests {
 
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            TaskKind::Agent,
-            &SharedString::from("自动"),
+            ToolExecutionMode::Auto,
             None,
             None,
             &subagents,
@@ -7242,8 +7173,7 @@ mod tests {
 
         let ctx = build_composer_context(
             &ResourceContext::new(),
-            TaskKind::Ask,
-            &SharedString::from(t!("AgentUi.auto").to_string()),
+            ToolExecutionMode::Auto,
             None,
             None,
             &[],
@@ -7272,45 +7202,21 @@ mod tests {
     }
 
     #[gpui::test]
-    fn gpui_submit_ask_mode_does_not_pass_tools(cx: &mut TestAppContext) {
+    fn gpui_defaults_to_auto_execution_mode(cx: &mut TestAppContext) {
         init_test_ui(cx);
-        let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
-        let runtime = test_runtime_with_model(model.clone());
+        cx.update(|cx| {
+            AppSettings::update(cx, |settings| {
+                settings.ai_chat.tool_execution_mode = AiChatToolExecutionMode::Auto;
+            });
+        });
+        let runtime = test_runtime("m");
         let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
 
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
-        view.update_in(cx, |view, window, cx| {
-            view.select_task("ask", cx);
-            let input = view.input.clone();
-            view.on_input_event(
-                &input,
-                &AgentInputEvent::Submit {
-                    text: "解释一下索引".into(),
-                    mentions: Vec::new(),
-                    images: Vec::new(),
-                },
-                window,
-                cx,
-            );
+        view.read_with(cx, |view, _| {
+            assert_eq!(ToolExecutionMode::Auto, view.tool_execution_mode);
         });
-        run_gpui_until(cx, || model.request_count() >= 1);
-
-        let requests = model.received_requests();
-        assert_eq!(1, requests.len());
-        assert!(
-            requests[0].tools.is_empty(),
-            "Ask 模式完整 GPUI 提交链路不能向模型传 tools"
-        );
-        assert!(
-            requests[0].tool_choice.is_none(),
-            "Ask 模式完整 GPUI 提交链路不能向模型传 tool_choice"
-        );
-        assert!(
-            !requests[0].messages[0]
-                .content_as_text()
-                .contains("update_plan")
-        );
     }
 
     #[gpui::test]
@@ -7323,7 +7229,7 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update_in(cx, |view, window, cx| {
-            view.select_tool("readonly", cx);
+            view.tool_execution_mode = ToolExecutionMode::ReadOnly;
             let input = view.input.clone();
             view.on_input_event(
                 &input,
@@ -7365,6 +7271,7 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update_in(cx, |view, window, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
             let input = view.input.clone();
             view.on_input_event(
                 &input,
@@ -7399,7 +7306,10 @@ mod tests {
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         let (envelope, mut outcome_rx) = AcpPermissionEnvelope::new(test_acp_permission_request());
 
-        view.update(cx, |view, cx| view.receive_acp_permission(envelope, cx));
+        view.update(cx, |view, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
+            view.receive_acp_permission(envelope, cx);
+        });
         cx.dispatch_action(SelectAcpPermissionOption {
             request_id: "session:call".into(),
             option_id: "allow".into(),
@@ -7442,7 +7352,7 @@ mod tests {
         let (envelope, _outcome_rx) = AcpPermissionEnvelope::new(request.clone());
 
         view.update(cx, |view, cx| {
-            view.selected_tool = SharedString::from(t!("AgentUi.auto").to_string());
+            view.tool_execution_mode = ToolExecutionMode::Auto;
             view.receive_acp_permission(envelope, cx);
         });
 
@@ -7803,6 +7713,7 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update_in(cx, |view, window, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
             let input = view.input.clone();
             view.on_input_event(
                 &input,
@@ -7843,6 +7754,7 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update_in(cx, |view, window, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
             let input = view.input.clone();
             view.on_input_event(
                 &input,
@@ -7885,6 +7797,7 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update_in(cx, |view, window, cx| {
+            view.tool_execution_mode = ToolExecutionMode::Manual;
             for index in 0..16 {
                 view.transcript.push_system(format!(
                     "滚动前置消息 {index}: 用于让确认卡进入可滚动区域。"

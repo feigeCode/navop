@@ -193,7 +193,7 @@ fn forwarding_fields(locale: &str, params: PortForwardingParams) -> Vec<(&'stati
             format!("{}:{}", params.bind_host, params.bind_port),
         ),
     ];
-    if params.kind == PortForwardingKind::Local {
+    if params.kind != PortForwardingKind::Dynamic {
         fields.push((
             "target_address",
             format!("{}:{}", params.target_host, params.target_port),
@@ -325,6 +325,7 @@ fn database_type_label(locale: &str, database_type: &one_core::storage::Database
 fn forwarding_mode_key(kind: PortForwardingKind) -> &'static str {
     match kind {
         PortForwardingKind::Local => "Connection.Share.forwarding_local",
+        PortForwardingKind::Remote => "Connection.Share.forwarding_remote",
         PortForwardingKind::Dynamic => "Connection.Share.forwarding_dynamic",
     }
 }

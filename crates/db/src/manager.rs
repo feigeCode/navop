@@ -957,6 +957,18 @@ impl GlobalDbState {
         }
     }
 
+    /// Convert statement-level SQL errors into operation errors for schema actions.
+    ///
+    /// Interactive query execution intentionally keeps `SqlResult::Error` as a
+    /// successful transport result so the editor can render it. Schema actions,
+    /// however, use the outer `Result` to decide whether to show a success toast.
+    fn wrapper_operation_result(result: Vec<SqlResult>) -> anyhow::Result<SqlResult> {
+        match Self::wrapper_result(result)? {
+            SqlResult::Error(error) => Err(anyhow::anyhow!(error.message)),
+            result => Ok(result),
+        }
+    }
+
     pub async fn drop_database(
         &self,
         cx: &mut AsyncApp,
@@ -971,7 +983,7 @@ impl GlobalDbState {
 
         let result = self.execute_with_session(cx, config, sql, None).await?;
 
-        Self::wrapper_result(result)
+        Self::wrapper_operation_result(result)
     }
 
     /// Drop table
@@ -999,7 +1011,7 @@ impl GlobalDbState {
             .execute_with_session_internal(cx, config, sql, None, schema)
             .await?;
 
-        Self::wrapper_result(result)
+        Self::wrapper_operation_result(result)
     }
 
     /// Truncate table
@@ -1037,7 +1049,7 @@ impl GlobalDbState {
             .execute_with_session_internal(cx, config, sql, None, schema)
             .await?;
 
-        Self::wrapper_result(result)
+        Self::wrapper_operation_result(result)
     }
 
     /// Rename table
@@ -1049,15 +1061,19 @@ impl GlobalDbState {
         old_name: String,
         new_name: String,
     ) -> anyhow::Result<SqlResult> {
-        let config = self
+        let mut config = self
             .get_config(&config_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
         let plugin = self.get_plugin(&config.database_type)?;
         let sql = plugin.rename_table(&database, &old_name, &new_name);
 
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database);
+        }
+
         let result = self.execute_with_session(cx, config, sql, None).await?;
 
-        Self::wrapper_result(result)
+        Self::wrapper_operation_result(result)
     }
 
     /// Drop view
@@ -1076,7 +1092,7 @@ impl GlobalDbState {
 
         let result = self.execute_with_session(cx, config, sql, None).await?;
 
-        Self::wrapper_result(result)
+        Self::wrapper_operation_result(result)
     }
 
     /// Register a connection configuration
@@ -3358,6 +3374,28 @@ mod tests {
             proxy: None,
             extra_params: Default::default(),
         }
+    }
+
+    #[test]
+    fn wrapper_operation_result_surfaces_statement_errors() {
+        let result =
+            GlobalDbState::wrapper_operation_result(vec![SqlResult::Error(SqlErrorInfo {
+                sql: "RENAME TABLE `old` TO `new`".to_string(),
+                message: "table does not exist".to_string(),
+            })]);
+
+        assert_eq!("table does not exist", result.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn wrapper_result_preserves_statement_errors_for_query_execution() {
+        let result = GlobalDbState::wrapper_result(vec![SqlResult::Error(SqlErrorInfo {
+            sql: "SELECT missing_column".to_string(),
+            message: "unknown column".to_string(),
+        })])
+        .unwrap();
+
+        assert!(matches!(result, SqlResult::Error(_)));
     }
 
     fn external_driver_manifest(id: &str, quote: &str, supports_schema: bool) -> IpcDriverManifest {

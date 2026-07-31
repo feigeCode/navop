@@ -36,7 +36,7 @@
 
 - Use SSH and local terminals with draggable splits, quick commands, history, broadcast input, shell integration, and terminal AI.
 - Manage remote files with SFTP uploads, downloads, search, favorites, remote editing, drag-and-drop, and server-to-server copy.
-- Create reusable local and dynamic SOCKS port-forwarding connections.
+- Create reusable local, remote (`ssh -R`), and dynamic SOCKS port-forwarding connections.
 - Open serial connections, monitor servers, and connect to remote desktops through installable RDP and VNC providers.
 
 ### Editing, AI, and extensibility

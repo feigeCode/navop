@@ -9,21 +9,15 @@ use gpui_component::{Icon, IconName, Sizable, Size};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, PortForwardingKind, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
-use port_forwarding::{
-    DynamicForwardingRequest, LocalForwardingRequest, LocalPortForwardActivity,
-    PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
-};
+use port_forwarding::PortForwardingRuntime;
 use rust_i18n::t;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::PortForwardingTabConfig;
 use crate::tab_render::render_tab;
+use crate::tab_request::{StartRequest, build_request};
 use crate::tab_state::PortForwardingTabState;
 
-enum StartRequest {
-    Local(LocalForwardingRequest),
-    Dynamic(DynamicForwardingRequest),
-}
 pub struct PortForwardingTab {
     pub(crate) connection_id: i64,
     pub(crate) name: String,
@@ -86,10 +80,15 @@ impl PortForwardingTab {
         let task = Tokio::spawn_result(cx, async move {
             let mut runtime = runtime.lock().await;
             match request {
-                StartRequest::Local(request) => runtime.start_local(connection_id, request).await,
-                StartRequest::Dynamic(request) => {
-                    runtime.start_dynamic(connection_id, request).await
-                }
+                StartRequest::Local(request) => runtime
+                    .start_local(connection_id, request)
+                    .await
+                    .map(|addr| addr.to_string()),
+                StartRequest::Remote(request) => runtime.start_remote(connection_id, request).await,
+                StartRequest::Dynamic(request) => runtime
+                    .start_dynamic(connection_id, request)
+                    .await
+                    .map(|addr| addr.to_string()),
             }
         });
         cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -99,11 +98,7 @@ impl PortForwardingTab {
         .detach();
     }
 
-    fn finish_start(
-        &mut self,
-        result: anyhow::Result<std::net::SocketAddr>,
-        cx: &mut Context<Self>,
-    ) {
+    fn finish_start(&mut self, result: anyhow::Result<String>, cx: &mut Context<Self>) {
         self.start_in_flight = false;
         if let Some(reply) = self.pending_close.take() {
             self.finish_start_for_pending_close(result, reply, cx);
@@ -111,11 +106,10 @@ impl PortForwardingTab {
         }
         match result {
             Ok(addr) => {
-                self.state = self.state.clone().started(addr);
+                self.state = self.state.clone().started(addr.clone());
                 self.started_at = Some(Instant::now());
-                self.events.push(
-                    t!("PortForwardingTab.event_started", addr = addr.to_string()).to_string(),
-                );
+                self.events
+                    .push(t!("PortForwardingTab.event_started", addr = addr).to_string());
                 cx.global_mut::<ActiveConnections>().add(self.connection_id);
             }
             Err(error) => {
@@ -135,7 +129,7 @@ impl PortForwardingTab {
 
     fn finish_start_for_pending_close(
         &mut self,
-        result: anyhow::Result<std::net::SocketAddr>,
+        result: anyhow::Result<String>,
         reply: oneshot::Sender<bool>,
         cx: &mut Context<Self>,
     ) {
@@ -232,25 +226,6 @@ impl PortForwardingTab {
             let _ = reply.send(can_close);
         }
         cx.notify();
-    }
-}
-
-fn build_request(
-    connection: &StoredConnection,
-    ssh: &StoredConnection,
-    kind: PortForwardingKind,
-    activity_tx: mpsc::UnboundedSender<LocalPortForwardActivity>,
-) -> anyhow::Result<StartRequest> {
-    match kind {
-        PortForwardingKind::Local => {
-            build_local_forwarding_request(connection, ssh).map(|mut request| {
-                request.activity_tx = Some(activity_tx);
-                StartRequest::Local(request)
-            })
-        }
-        PortForwardingKind::Dynamic => {
-            build_dynamic_forwarding_request(connection, ssh).map(StartRequest::Dynamic)
-        }
     }
 }
 

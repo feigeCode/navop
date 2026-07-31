@@ -39,6 +39,8 @@ const SIDEBAR_SIDE_DEFAULT_WIDTH: Pixels = px(320.0);
 const SIDEBAR_BOTTOM_DEFAULT_HEIGHT: Pixels = px(260.0);
 const SIDEBAR_HANDLE_PADDING: Pixels = px(4.0);
 const SIDEBAR_HANDLE_SIZE: Pixels = px(1.0);
+const TAB_MIN_WIDTH: Pixels = px(60.0);
+const TAB_RENAME_MIN_WIDTH: Pixels = px(280.0);
 const TAB_CONTAINER_CONTEXT: &str = "TabContainer";
 
 #[derive(Clone, Copy)]
@@ -109,6 +111,19 @@ fn render_tab_title(title: SharedString, text_color: gpui::Hsla) -> AnyElement {
         .text_ellipsis()
         .child(title)
         .into_any_element()
+}
+
+fn tab_width_bounds(tab_max_width: Pixels, is_renaming: bool) -> (Pixels, Pixels) {
+    if !is_renaming {
+        return (TAB_MIN_WIDTH, tab_max_width);
+    }
+
+    let max_width = if tab_max_width < TAB_RENAME_MIN_WIDTH {
+        TAB_RENAME_MIN_WIDTH
+    } else {
+        tab_max_width
+    };
+    (TAB_RENAME_MIN_WIDTH, max_width)
 }
 
 pub(crate) fn sidebar_panel_initial_visibility(policy: SidebarPanelPolicy) -> bool {
@@ -3252,6 +3267,8 @@ impl TabContainer {
                             .as_ref()
                             .filter(|renaming_id| *renaming_id == &tab_id)
                             .and_then(|_| self.rename_input.clone());
+                        let (tab_min_width, tab_max_width) =
+                            tab_width_bounds(tab_max_width, rename_input_for_tab.is_some());
                         let show_title_tooltip = rename_input_for_tab.is_none();
                         let tooltip_title = title.clone();
 
@@ -3265,7 +3282,7 @@ impl TabContainer {
                             .gap_2()
                             .h(px(32.0))
                             .text_ellipsis()
-                            .min_w(px(60.0))
+                            .min_w(tab_min_width)
                             .max_w(tab_max_width)
                             .px_3()
                             .rounded(px(6.0))
@@ -4148,9 +4165,26 @@ mod tests {
     fn regular_tab_width_adapts_to_its_title() {
         let source = include_str!("tab_container.rs");
         let fixed_width = [".w(", "tab_width", ")"].concat();
-        assert!(source.contains(".min_w(px(60.0))"));
+        assert_eq!(
+            (TAB_MIN_WIDTH, px(140.0)),
+            tab_width_bounds(px(140.0), false)
+        );
+        assert_eq!((TAB_MIN_WIDTH, px(40.0)), tab_width_bounds(px(40.0), false));
+        assert!(source.contains(".min_w(tab_min_width)"));
         assert!(source.contains(".max_w(tab_max_width)"));
         assert!(!source.contains(&fixed_width));
+    }
+
+    #[test]
+    fn renaming_tab_reserves_readable_input_width() {
+        assert_eq!(
+            (TAB_RENAME_MIN_WIDTH, TAB_RENAME_MIN_WIDTH),
+            tab_width_bounds(px(100.0), true)
+        );
+        assert_eq!(
+            (TAB_RENAME_MIN_WIDTH, px(320.0)),
+            tab_width_bounds(px(320.0), true)
+        );
     }
 
     #[gpui::test]

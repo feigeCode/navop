@@ -81,13 +81,6 @@ pub fn set_archived(cx: &App, uid: &str, archived: bool) -> bool {
         .unwrap_or(false)
 }
 
-/// 旧版 `chat_sessions` 记录没有 Agent snapshot,应按 Ask 会话恢复和续聊。
-pub fn should_use_ask_mode(cx: &App, uid: &str) -> bool {
-    agent_session_repository(cx)
-        .and_then(|repo| repo.is_legacy_chat_uid(uid).ok())
-        .unwrap_or(false)
-}
-
 fn agent_session_repository(cx: &App) -> Option<std::sync::Arc<AgentSessionRepository>> {
     cx.try_global::<GlobalStorageState>()
         .and_then(|state| state.storage.get::<AgentSessionRepository>())
@@ -344,7 +337,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn legacy_chat_sessions_are_listed_and_loaded_as_ask_history(cx: &mut TestAppContext) {
+    fn legacy_chat_sessions_are_listed_and_loaded_as_agent_history(cx: &mut TestAppContext) {
         let storage = test_storage();
         let legacy_id = seed_legacy_chat(&storage);
         let legacy_uid = legacy_id.to_string();
@@ -358,8 +351,6 @@ mod tests {
                 .iter()
                 .any(|summary| summary.id == legacy_uid && summary.name.as_ref() == "旧 Ask 会话")
         );
-        assert!(cx.update(|cx| should_use_ask_mode(cx, &legacy_uid)));
-
         let snapshot = cx
             .update(|cx| load_snapshot(cx, &legacy_uid))
             .expect("legacy snapshot");

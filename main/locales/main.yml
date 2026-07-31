@@ -1434,6 +1434,10 @@ Connection:
       en: Local
       zh-CN: 本地转发
       zh-HK: 本機轉送
+    forwarding_remote:
+      en: Remote
+      zh-CN: 远程转发
+      zh-HK: 遠端轉送
     forwarding_dynamic:
       en: Dynamic SOCKS
       zh-CN: 动态 SOCKS
@@ -1546,9 +1550,9 @@ NewConnection:
     zh-CN: 串口设备连接
     zh-HK: 串口裝置連線
   description_port_forwarding:
-    en: SSH local port forwarding or SOCKS tunnel
-    zh-CN: SSH 本地端口转发或 SOCKS 隧道
-    zh-HK: SSH 本地端口轉發或 SOCKS 隧道
+    en: SSH local, remote, or SOCKS port forwarding
+    zh-CN: SSH 本地、远程端口转发或 SOCKS 隧道
+    zh-HK: SSH 本機、遠端連接埠轉發或 SOCKS 隧道
   description_more_connections:
     en: Find more connection drivers in Extensions
     zh-CN: 前往扩展市场发现更多连接类型

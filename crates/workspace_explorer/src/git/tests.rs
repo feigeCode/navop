@@ -335,6 +335,7 @@ fn empty_repository() -> PathBuf {
     let root = unique_test_path();
     std::fs::create_dir_all(&root).unwrap();
     run_test_git(&root, &["init", "-q"]);
+    run_test_git(&root, &["config", "core.autocrlf", "false"]);
     run_test_git(&root, &["config", "user.name", "Workspace Explorer Test"]);
     run_test_git(
         &root,

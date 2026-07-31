@@ -1,5 +1,6 @@
 use std::env;
 use std::net::SocketAddr;
+use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -8,18 +9,22 @@ use one_core::storage::{
 };
 use port_forwarding::{
     PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
+    build_remote_forwarding_request,
 };
 use ssh::LocalPortForwardActivity;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
 const ENABLE_ENV: &str = "ONETCLI_DOCKER_E2E";
 const SSH_CONNECTION_ID: i64 = 91001;
 const LOCAL_FORWARDING_ID: i64 = 91002;
 const DYNAMIC_FORWARDING_ID: i64 = 91003;
+const REMOTE_FORWARDING_ID: i64 = 91004;
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const SSH_CONNECT_TIMEOUT_SECS: u64 = 10;
+const SSH_CONTAINER: &str = "onetcli-pf-ssh";
+const REMOTE_RESPONSE_MARKER: &str = "navop-remote-forwarding-ok";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires Docker SSH and HTTP services"]
@@ -65,6 +70,38 @@ async fn docker_local_and_dynamic_forwarding_roundtrip() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker SSH service"]
+async fn docker_remote_forwarding_roundtrip() -> Result<()> {
+    ensure_docker_e2e_enabled()?;
+
+    let ssh_port = env_u16("ONETCLI_DOCKER_SSH_PORT", 2222)?;
+    let ssh_user = env_string("ONETCLI_DOCKER_SSH_USER", "onetcli");
+    let ssh_password = env_string("ONETCLI_DOCKER_SSH_PASSWORD", "onetcli-pass");
+    let ssh_connection = ssh_connection(ssh_port, ssh_user, ssh_password);
+    let (target_addr, target_task) = start_remote_http_target().await?;
+    let mut runtime = PortForwardingRuntime::new();
+
+    let forwarding = port_forwarding_connection(
+        REMOTE_FORWARDING_ID,
+        PortForwardingKind::Remote,
+        target_addr.ip().to_string(),
+        target_addr.port(),
+    );
+    let request = build_remote_forwarding_request(&forwarding, &ssh_connection)?;
+    let remote_addr = runtime.start_remote(REMOTE_FORWARDING_ID, request).await?;
+    let remote_port = parse_forwarded_port(&remote_addr)?;
+
+    assert_remote_http_response(remote_port)?;
+    target_task
+        .await
+        .context("remote HTTP target task failed")??;
+    assert!(runtime.stop(REMOTE_FORWARDING_ID).await?);
+    assert!(!runtime.is_running(REMOTE_FORWARDING_ID));
+    assert_remote_listener_closed(remote_port)?;
+    Ok(())
+}
+
 async fn start_local_forwarding(
     runtime: &mut PortForwardingRuntime,
     ssh_connection: &StoredConnection,
@@ -95,6 +132,66 @@ async fn start_dynamic_forwarding(
     );
     let request = build_dynamic_forwarding_request(&forwarding, ssh_connection)?;
     runtime.start_dynamic(DYNAMIC_FORWARDING_ID, request).await
+}
+
+async fn start_remote_http_target() -> Result<(SocketAddr, tokio::task::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = timeout(IO_TIMEOUT, listener.accept())
+            .await
+            .context("timed out waiting for remote forwarded connection")??;
+        let mut request = [0u8; 1024];
+        timeout(IO_TIMEOUT, stream.read(&mut request))
+            .await
+            .context("timed out reading remote forwarded request")??;
+        let response = format!(
+            "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            REMOTE_RESPONSE_MARKER.len(),
+            REMOTE_RESPONSE_MARKER
+        );
+        stream.write_all(response.as_bytes()).await?;
+        Ok(())
+    });
+    Ok((addr, task))
+}
+
+fn parse_forwarded_port(remote_addr: &str) -> Result<u16> {
+    remote_addr
+        .rsplit_once(':')
+        .context("remote forwarded address should contain a port")?
+        .1
+        .parse()
+        .context("remote forwarded address should end with a u16 port")
+}
+
+fn assert_remote_http_response(remote_port: u16) -> Result<()> {
+    let url = format!("http://127.0.0.1:{remote_port}/");
+    let output = docker_exec(["wget", "-qO-", "-T", "5", &url])?;
+    let response = String::from_utf8(output.stdout).context("remote response should be UTF-8")?;
+    assert!(
+        output.status.success() && response.contains(REMOTE_RESPONSE_MARKER),
+        "remote response should contain {REMOTE_RESPONSE_MARKER:?}, got: {response}"
+    );
+    Ok(())
+}
+
+fn assert_remote_listener_closed(remote_port: u16) -> Result<()> {
+    let port = remote_port.to_string();
+    let output = docker_exec(["nc", "-z", "-w", "2", "127.0.0.1", &port])?;
+    if output.status.success() {
+        bail!("remote forwarded socket should be closed: 127.0.0.1:{remote_port}");
+    }
+    Ok(())
+}
+
+fn docker_exec<const N: usize>(args: [&str; N]) -> Result<Output> {
+    Command::new("docker")
+        .arg("exec")
+        .arg(SSH_CONTAINER)
+        .args(args)
+        .output()
+        .context("failed to execute command in Docker SSH container")
 }
 
 fn ssh_connection(port: u16, username: String, password: String) -> StoredConnection {

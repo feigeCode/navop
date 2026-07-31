@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -14,6 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, oneshot};
 use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 
+use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
     HostKeyVerifier,
@@ -319,6 +320,7 @@ struct RusshHandler {
     x11_handle: Option<X11ProxyHandle>,
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
+    remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
 }
 
 impl RusshHandler {
@@ -326,11 +328,13 @@ impl RusshHandler {
         identity: HostKeyIdentity,
         host_key_verifier: HostKeyVerifier,
         x11_handle: Option<X11ProxyHandle>,
+        remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
     ) -> Self {
         Self {
             x11_handle,
             identity,
             host_key_verifier,
+            remote_forward_target,
         }
     }
 }
@@ -422,6 +426,44 @@ impl client::Handler for RusshHandler {
         });
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = self
+            .remote_forward_target
+            .read()
+            .ok()
+            .and_then(|target| target.clone());
+        let Some(target) = target else {
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        let connected_address = connected_address.to_string();
+        let originator_address = originator_address.to_string();
+        tokio::spawn(async move {
+            target
+                .accept_channel(
+                    channel,
+                    reply,
+                    connected_address,
+                    connected_port,
+                    originator_address,
+                    originator_port,
+                )
+                .await;
+        });
+        Ok(())
+    }
 }
 
 pub struct RusshClient {
@@ -430,6 +472,7 @@ pub struct RusshClient {
     _jump_session: Option<client::Handle<RusshHandler>>,
     /// 本机 X11 转发管理器（仅在配置启用且本机 X server 可用时存在）。
     x11_proxy: Option<X11Proxy>,
+    remote_forward_target: Arc<RwLock<Option<RemoteForwardTarget>>>,
 }
 
 pub struct LocalPortForwardTunnel {
@@ -1354,6 +1397,41 @@ impl RusshClient {
             .await?;
         Ok(channel)
     }
+
+    pub(crate) fn set_remote_forward_target(&mut self, target: RemoteForwardTarget) -> Result<()> {
+        let mut configured = self
+            .remote_forward_target
+            .write()
+            .map_err(|_| anyhow::anyhow!("remote forwarding target lock poisoned"))?;
+        *configured = Some(target);
+        Ok(())
+    }
+
+    pub(crate) async fn request_remote_forward(
+        &self,
+        bind_host: &str,
+        bind_port: u16,
+    ) -> Result<u16> {
+        let allocated = self
+            .session
+            .tcpip_forward(bind_host, u32::from(bind_port))
+            .await?;
+        if bind_port != 0 {
+            return Ok(bind_port);
+        }
+        u16::try_from(allocated).context("server allocated an invalid remote forwarding port")
+    }
+
+    pub(crate) async fn cancel_remote_forward(
+        &self,
+        bind_host: &str,
+        bind_port: u16,
+    ) -> Result<()> {
+        self.session
+            .cancel_tcpip_forward(bind_host, u32::from(bind_port))
+            .await?;
+        Ok(())
+    }
 }
 
 pub async fn start_local_port_forward(
@@ -1504,6 +1582,7 @@ impl SshClient for RusshClient {
         let target_host_key_identity = config.target_host_key_identity();
         let jump_host_key_identity = config.jump_host_key_identity();
         let host_key_verifier = config.host_key_verifier.clone();
+        let remote_forward_target = Arc::new(RwLock::new(None));
 
         let connect = async {
             // 情况1: 使用跳板机连接
@@ -1517,11 +1596,21 @@ impl SshClient for RusshClient {
                 let jump_session = if let Some(ref proxy) = config.proxy {
                     tracing::info!("通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                     let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                    let handler = RusshHandler::new(jump_identity, host_key_verifier.clone(), None);
+                    let handler = RusshHandler::new(
+                        jump_identity,
+                        host_key_verifier.clone(),
+                        None,
+                        Arc::new(RwLock::new(None)),
+                    );
                     client::connect_stream(russh_config.clone(), stream, handler).await?
                 } else {
                     let addrs = (jump.host.as_str(), jump.port);
-                    let handler = RusshHandler::new(jump_identity, host_key_verifier.clone(), None);
+                    let handler = RusshHandler::new(
+                        jump_identity,
+                        host_key_verifier.clone(),
+                        None,
+                        Arc::new(RwLock::new(None)),
+                    );
                     client::connect(russh_config.clone(), addrs, handler).await?
                 };
 
@@ -1548,6 +1637,7 @@ impl SshClient for RusshClient {
                     target_host_key_identity.clone(),
                     host_key_verifier.clone(),
                     x11_handle.clone(),
+                    Arc::clone(&remote_forward_target),
                 );
                 let mut session =
                     client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
@@ -1568,6 +1658,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: Some(jump_session),
                     x11_proxy: x11_proxy.clone(),
+                    remote_forward_target: Arc::clone(&remote_forward_target),
                 })
             }
             // 情况2: 仅使用代理连接
@@ -1584,6 +1675,7 @@ impl SshClient for RusshClient {
                     target_host_key_identity.clone(),
                     host_key_verifier.clone(),
                     x11_handle.clone(),
+                    Arc::clone(&remote_forward_target),
                 );
                 let mut session = client::connect_stream(russh_config, stream, handler).await?;
 
@@ -1601,6 +1693,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
+                    remote_forward_target: Arc::clone(&remote_forward_target),
                 })
             }
             // 情况3: 直接连接
@@ -1610,6 +1703,7 @@ impl SshClient for RusshClient {
                     target_host_key_identity.clone(),
                     host_key_verifier.clone(),
                     x11_handle.clone(),
+                    Arc::clone(&remote_forward_target),
                 );
                 let mut session = client::connect(russh_config, addrs, handler).await?;
 
@@ -1627,6 +1721,7 @@ impl SshClient for RusshClient {
                     session,
                     _jump_session: None,
                     x11_proxy: x11_proxy.clone(),
+                    remote_forward_target: Arc::clone(&remote_forward_target),
                 })
             }
         };

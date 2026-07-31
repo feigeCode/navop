@@ -207,14 +207,19 @@ pub(super) fn forwarding_command(
     let _ = non_empty(&ssh.host)?;
     let mut parts = vec!["ssh".to_string(), "-N".to_string()];
     match forwarding.kind {
-        PortForwardingKind::Local => {
+        PortForwardingKind::Local | PortForwardingKind::Remote => {
             let target_host = non_empty(&forwarding.target_host)?;
             let specification = format!(
                 "{}:{}",
                 host_port(bind_host, forwarding.bind_port),
                 host_port(target_host, forwarding.target_port)
             );
-            parts.extend(["-L".to_string(), shell_quote(&specification)]);
+            let flag = match forwarding.kind {
+                PortForwardingKind::Local => "-L",
+                PortForwardingKind::Remote => "-R",
+                PortForwardingKind::Dynamic => unreachable!(),
+            };
+            parts.extend([flag.to_string(), shell_quote(&specification)]);
         }
         PortForwardingKind::Dynamic => {
             parts.extend([
@@ -727,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarding_commands_cover_local_and_dynamic_modes() {
+    fn forwarding_commands_cover_local_remote_and_dynamic_modes() {
         let mut ssh = ssh_params(SshAuthMethod::Agent);
         ssh.host = "bastion".to_string();
         ssh.port = 22;
@@ -745,6 +750,12 @@ mod tests {
         };
         assert_eq!(
             Some("ssh -N -L '127.0.0.1:3307:db internal:3306' -p 22 alice@bastion".to_string()),
+            forwarding_command(&forwarding, &ssh)
+        );
+
+        forwarding.kind = PortForwardingKind::Remote;
+        assert_eq!(
+            Some("ssh -N -R '127.0.0.1:3307:db internal:3306' -p 22 alice@bastion".to_string()),
             forwarding_command(&forwarding, &ssh)
         );
 

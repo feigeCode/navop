@@ -803,6 +803,7 @@ impl Default for SerialParams {
 pub enum PortForwardingKind {
     #[default]
     Local,
+    Remote,
     Dynamic,
 }
 
@@ -810,6 +811,7 @@ impl PortForwardingKind {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Local => "Local",
+            Self::Remote => "Remote",
             Self::Dynamic => "Dynamic SOCKS",
         }
     }
@@ -1235,6 +1237,10 @@ fn default_port_forwarding_name(name: String, params: &PortForwardingParams) -> 
     let default_name = match params.kind {
         PortForwardingKind::Local => format!(
             "{}:{} -> {}:{}",
+            params.bind_host, params.bind_port, params.target_host, params.target_port
+        ),
+        PortForwardingKind::Remote => format!(
+            "{}:{} <- {}:{}",
             params.bind_host, params.bind_port, params.target_host, params.target_port
         ),
         PortForwardingKind::Dynamic => {
@@ -2272,6 +2278,25 @@ mod serial_tests {
         assert_eq!(rt.bind_port, 15432);
         assert_eq!(rt.target_host, "db.internal");
         assert_eq!(rt.target_port, 5432);
+    }
+
+    #[test]
+    fn stored_connection_remote_forwarding_roundtrip() {
+        let params = PortForwardingParams {
+            ssh_connection_id: 7,
+            kind: PortForwardingKind::Remote,
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 18080,
+            target_host: "127.0.0.1".to_string(),
+            target_port: 3000,
+        };
+        let conn = StoredConnection::new_port_forwarding(String::new(), params, Some(42));
+
+        assert_eq!(conn.name, "127.0.0.1:18080 <- 127.0.0.1:3000");
+        let rt = conn.to_port_forwarding_params().unwrap();
+        assert_eq!(rt.kind, PortForwardingKind::Remote);
+        assert_eq!(rt.bind_port, 18080);
+        assert_eq!(rt.target_port, 3000);
     }
 
     #[test]

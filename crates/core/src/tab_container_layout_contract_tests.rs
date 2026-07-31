@@ -173,7 +173,7 @@ fn windows_native_controls_occlude_the_tab_drag_region() {
 
 #[test]
 fn tab_items_keep_visible_blocks_and_a_distinct_active_outline() {
-    let source = include_str!("tab_container.rs");
+    let source = include_str!("tab_container.rs").replace("\r\n", "\n");
     let tab_bar_start = source
         .find("pub fn render_tab_bar")
         .expect("tab bar renderer");

@@ -196,7 +196,7 @@ impl PortForwardingFormWindow {
             return Err(t!("PortForwarding.validation_bind_host").to_string());
         }
         let bind_port = parse_port(&self.bind_port_input, &t!("PortForwarding.bind_port"), cx)?;
-        let (target_host, target_port) = if kind == PortForwardingKind::Local {
+        let (target_host, target_port) = if kind != PortForwardingKind::Dynamic {
             let target_host = trimmed_text(&self.target_host_input, cx);
             let target_port = parse_port(
                 &self.target_port_input,
@@ -268,6 +268,10 @@ impl PortForwardingFormWindow {
         match params.kind {
             PortForwardingKind::Local => format!(
                 "{}:{} -> {}:{}",
+                params.bind_host, params.bind_port, params.target_host, params.target_port
+            ),
+            PortForwardingKind::Remote => format!(
+                "{}:{} <- {}:{}",
                 params.bind_host, params.bind_port, params.target_host, params.target_port
             ),
             PortForwardingKind::Dynamic => {

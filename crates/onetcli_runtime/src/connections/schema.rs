@@ -451,7 +451,12 @@ fn port_forwarding_schema() -> Value {
     json!([
         field("name", "string", true, Value::Null),
         field("ssh_connection_id", "integer", true, Value::Null),
-        enum_field("kind", &["Local", "Dynamic"], false, json!("Local")),
+        enum_field(
+            "kind",
+            &["Local", "Remote", "Dynamic"],
+            false,
+            json!("Local"),
+        ),
         field("bind_host", "string", false, json!("127.0.0.1")),
         field("bind_port", "integer", true, Value::Null),
         field("target_host", "string", false, Value::Null),

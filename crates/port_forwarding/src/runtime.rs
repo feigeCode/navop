@@ -10,8 +10,9 @@ use one_core::storage::{
 use ssh::{
     DynamicSocksConfig, DynamicSocksTunnel, HostKeyVerifier, JumpServerConnectConfig,
     LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
-    ProxyType, SshAuth, SshConnectConfig, start_dynamic_socks_forward,
-    start_local_port_forward_with_config,
+    ProxyType, RemotePortForwardConfig, RemotePortForwardTunnel, SshAuth, SshConnectConfig,
+    start_dynamic_socks_forward, start_local_port_forward_with_config,
+    start_remote_port_forward_with_config,
 };
 
 pub struct LocalForwardingRequest {
@@ -29,9 +30,18 @@ pub struct DynamicForwardingRequest {
     pub bind_port: u16,
 }
 
+pub struct RemoteForwardingRequest {
+    pub ssh_config: SshConnectConfig,
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+}
+
 #[derive(Default)]
 pub struct PortForwardingRuntime {
     local_tunnels: HashMap<i64, LocalPortForwardTunnel>,
+    remote_tunnels: HashMap<i64, RemotePortForwardTunnel>,
     dynamic_tunnels: HashMap<i64, DynamicSocksTunnel>,
 }
 
@@ -66,21 +76,47 @@ impl PortForwardingRuntime {
 
     pub fn is_running(&self, connection_id: i64) -> bool {
         self.local_tunnels.contains_key(&connection_id)
+            || self.remote_tunnels.contains_key(&connection_id)
             || self.dynamic_tunnels.contains_key(&connection_id)
     }
 
     pub async fn stop(&mut self, connection_id: i64) -> Result<bool> {
-        if let Some(tunnel) = self.local_tunnels.get_mut(&connection_id) {
+        if let Some(mut tunnel) = self.local_tunnels.remove(&connection_id) {
             tunnel.close().await?;
-            self.local_tunnels.remove(&connection_id);
             return Ok(true);
         }
-        if let Some(tunnel) = self.dynamic_tunnels.get_mut(&connection_id) {
+        if let Some(mut tunnel) = self.dynamic_tunnels.remove(&connection_id) {
             tunnel.close().await?;
-            self.dynamic_tunnels.remove(&connection_id);
+            return Ok(true);
+        }
+        if let Some(mut tunnel) = self.remote_tunnels.remove(&connection_id) {
+            tunnel.close().await?;
             return Ok(true);
         }
         Ok(false)
+    }
+
+    pub async fn start_remote(
+        &mut self,
+        connection_id: i64,
+        request: RemoteForwardingRequest,
+    ) -> Result<String> {
+        if self.is_running(connection_id) {
+            bail!("Port Forwarding connection is already running");
+        }
+        let tunnel = start_remote_port_forward_with_config(
+            request.ssh_config,
+            RemotePortForwardConfig {
+                bind_host: request.bind_host,
+                bind_port: request.bind_port,
+                target_host: request.target_host,
+                target_port: request.target_port,
+            },
+        )
+        .await?;
+        let remote_addr = tunnel.remote_addr();
+        self.remote_tunnels.insert(connection_id, tunnel);
+        Ok(remote_addr)
     }
 
     pub async fn start_dynamic(
@@ -109,13 +145,7 @@ pub fn build_local_forwarding_request(
     forwarding_connection: &StoredConnection,
     ssh_connection: &StoredConnection,
 ) -> Result<LocalForwardingRequest> {
-    if forwarding_connection.connection_type != ConnectionType::PortForwarding {
-        bail!("connection is not a Port Forwarding connection");
-    }
-    if ssh_connection.connection_type != ConnectionType::SshSftp {
-        bail!("referenced connection is not an SSH/SFTP connection");
-    }
-
+    validate_forwarding_connections(forwarding_connection, ssh_connection)?;
     let params = forwarding_connection
         .to_port_forwarding_params()
         .context("failed to parse Port Forwarding params")?;
@@ -144,13 +174,7 @@ pub fn build_dynamic_forwarding_request(
     forwarding_connection: &StoredConnection,
     ssh_connection: &StoredConnection,
 ) -> Result<DynamicForwardingRequest> {
-    if forwarding_connection.connection_type != ConnectionType::PortForwarding {
-        bail!("connection is not a Port Forwarding connection");
-    }
-    if ssh_connection.connection_type != ConnectionType::SshSftp {
-        bail!("referenced connection is not an SSH/SFTP connection");
-    }
-
+    validate_forwarding_connections(forwarding_connection, ssh_connection)?;
     let params = forwarding_connection
         .to_port_forwarding_params()
         .context("failed to parse Port Forwarding params")?;
@@ -170,6 +194,45 @@ pub fn build_dynamic_forwarding_request(
         bind_host: params.bind_host,
         bind_port: params.bind_port,
     })
+}
+
+pub fn build_remote_forwarding_request(
+    forwarding_connection: &StoredConnection,
+    ssh_connection: &StoredConnection,
+) -> Result<RemoteForwardingRequest> {
+    validate_forwarding_connections(forwarding_connection, ssh_connection)?;
+    let params = forwarding_connection
+        .to_port_forwarding_params()
+        .context("failed to parse Port Forwarding params")?;
+    if params.kind != PortForwardingKind::Remote {
+        bail!("connection is not Remote Port Forwarding");
+    }
+    if ssh_connection.id != Some(params.ssh_connection_id) {
+        bail!("referenced SSH connection id does not match Port Forwarding params");
+    }
+    let ssh_params = ssh_connection
+        .to_ssh_params()
+        .context("failed to parse referenced SSH params")?;
+    Ok(RemoteForwardingRequest {
+        ssh_config: build_ssh_connect_config(&ssh_params),
+        bind_host: params.bind_host,
+        bind_port: params.bind_port,
+        target_host: params.target_host,
+        target_port: params.target_port,
+    })
+}
+
+fn validate_forwarding_connections(
+    forwarding_connection: &StoredConnection,
+    ssh_connection: &StoredConnection,
+) -> Result<()> {
+    if forwarding_connection.connection_type != ConnectionType::PortForwarding {
+        bail!("connection is not a Port Forwarding connection");
+    }
+    if ssh_connection.connection_type != ConnectionType::SshSftp {
+        bail!("referenced connection is not an SSH/SFTP connection");
+    }
+    Ok(())
 }
 
 fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {

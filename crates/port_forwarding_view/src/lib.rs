@@ -9,6 +9,7 @@ mod tab_activity;
 mod tab_close;
 mod tab_config;
 mod tab_render;
+mod tab_request;
 mod tab_state;
 mod view;
 

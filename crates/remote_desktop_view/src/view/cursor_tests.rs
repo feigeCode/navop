@@ -128,6 +128,15 @@ fn bitmap_cursor_is_not_paintable_until_position_and_image_are_ready() {
 }
 
 #[test]
+fn repeated_pointer_coordinates_do_not_report_a_position_change() {
+    let mut state = RemoteCursorState::default();
+
+    assert!(state.set_position(25, 40));
+    assert!(!state.set_position(25, 40));
+    assert!(state.set_position(26, 40));
+}
+
+#[test]
 fn native_cursor_management_is_opt_in_for_rdp_only() {
     assert!(!RemoteCursorState::default().manage_native_cursor);
     assert!(RemoteCursorState::new(true).manage_native_cursor);
