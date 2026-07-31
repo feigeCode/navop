@@ -59,6 +59,33 @@ pub enum ResourceCapability {
     Other(String),
 }
 
+impl ResourceCapability {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ResourceCapability::Query => "query",
+            ResourceCapability::Execute => "execute",
+            ResourceCapability::DatabaseQuery => "database_query",
+            ResourceCapability::DatabaseExecute => "database_execute",
+            ResourceCapability::ManageConnection => "manage_connection",
+            ResourceCapability::ReadFile => "read_file",
+            ResourceCapability::WriteFile => "write_file",
+            ResourceCapability::ExecCommand => "exec_command",
+            ResourceCapability::TerminalExec => "terminal_exec",
+            ResourceCapability::TerminalControl => "terminal_control",
+            ResourceCapability::RemoteExec => "remote_exec",
+            ResourceCapability::List => "list",
+            ResourceCapability::OpenSession => "open_session",
+            ResourceCapability::Other(value) => value,
+        }
+    }
+}
+
+impl fmt::Display for ResourceCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceOrigin {

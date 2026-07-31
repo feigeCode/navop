@@ -81,7 +81,7 @@ fn read_schema() -> Value {
         "properties": {
             "target": {
                 "type": "string",
-                "description": "Active visible terminal resource id, label, or alias."
+                "description": "Exact `id` of the active visible terminal to read. Call `connections.list_sessions` with kind=\"terminal\" and copy an `id` from the result. Do not invent or reuse a stale terminal id; labels and aliases are accepted only when they resolve unambiguously."
             },
             "lines": {
                 "type": "integer",

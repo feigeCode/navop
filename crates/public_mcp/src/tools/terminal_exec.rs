@@ -77,7 +77,7 @@ fn exec_schema() -> Value {
         "properties": {
             "target": {
                 "type": "string",
-                "description": "Active terminal resource id, label, or alias."
+                "description": "Exact `id` of the active visible terminal that should receive the command. Call `connections.list_sessions` with capability=\"terminal_exec\" and copy an `id` from the result. Do not invent or reuse a stale terminal id; labels and aliases are accepted only when they resolve unambiguously."
             },
             "command": {
                 "type": "string",

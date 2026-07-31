@@ -20,6 +20,12 @@ fn runtime_provider_mcp_schema_uses_target_field() {
     assert_eq!(json!(["target", "sql"]), schema["required"]);
     assert!(properties.contains_key("target"));
     assert!(!properties.contains_key("connection"));
+    assert!(
+        properties["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connections.list_sessions")
+    );
 }
 
 #[test]
@@ -188,6 +194,80 @@ fn runtime_provider_rejects_target_without_tool_required_capability() {
 }
 
 #[test]
+fn runtime_provider_target_error_lists_compatible_targets() {
+    let handler = Arc::new(
+        RuntimeConnectionTool::new("ssh.exec")
+            .with_target_kinds(vec![ResourceKind::Terminal])
+            .with_target_capabilities(vec![ResourceCapability::RemoteExec]),
+    );
+    let registry = registry_with_pool(
+        handler,
+        ResourcePool::new()
+            .with_resource(ResourceRef::new(
+                "saved-ssh",
+                ResourceKind::Ssh,
+                "production",
+            ))
+            .with_resource(
+                terminal_resource("session-ssh-1", "production")
+                    .with_capability(ResourceCapability::RemoteExec),
+            ),
+    );
+
+    let error = futures::executor::block_on(registry.call_tool(
+        "ssh.exec",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("stale-session")),
+            ("sql".to_string(), json!("uname -a")),
+        ])),
+        context(),
+    ))
+    .expect_err("unknown target should include compatible recovery candidates");
+    let message = error.to_string();
+
+    assert!(message.contains("target is not in resource pool"));
+    assert!(message.contains("session-ssh-1"));
+    assert!(message.contains("production"));
+    assert!(!message.contains("saved-ssh"));
+    assert!(message.contains("connections.list_sessions"));
+    assert!(message.contains("retry"));
+}
+
+#[test]
+fn runtime_provider_visible_terminal_error_lists_terminal_exec_targets() {
+    let handler = Arc::new(
+        RuntimeConnectionTool::new("terminal.exec")
+            .with_target_kinds(vec![ResourceKind::Terminal])
+            .with_target_capabilities(vec![ResourceCapability::TerminalExec]),
+    );
+    let registry = registry_with_pool(
+        handler,
+        ResourcePool::new()
+            .with_resource(terminal_resource("terminal-read-only", "logs"))
+            .with_resource(
+                terminal_resource("terminal-visible-1", "workspace")
+                    .with_capability(ResourceCapability::TerminalExec),
+            ),
+    );
+
+    let error = futures::executor::block_on(registry.call_tool(
+        "terminal.exec",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("stale-terminal")),
+            ("sql".to_string(), json!("pwd")),
+        ])),
+        context(),
+    ))
+    .expect_err("stale visible terminal should include executable terminal candidates");
+    let message = error.to_string();
+
+    assert!(message.contains("terminal-visible-1"));
+    assert!(message.contains("workspace"));
+    assert!(!message.contains("terminal-read-only"));
+    assert!(message.contains("connections.list_sessions"));
+}
+
+#[test]
 fn runtime_provider_reads_resource_pool_at_call_time() {
     let handler = Arc::new(RuntimeConnectionTool::new("db.query"));
     let pool = Arc::new(Mutex::new(ResourcePool::new()));
@@ -272,6 +352,38 @@ fn runtime_provider_lists_resource_pool_sessions_with_kind_filter() {
     assert_eq!(json!(1), redis_content["total"]);
     assert_eq!("redis-prod", redis_content["sessions"][0]["id"]);
     assert_eq!("redis", redis_content["sessions"][0]["kind"]);
+}
+
+#[test]
+fn runtime_provider_lists_sessions_with_capability_filter() {
+    let registry = registry_with_pool(
+        Arc::new(RuntimeConnectionTool::new("ssh.exec")),
+        ResourcePool::new()
+            .with_resource(ResourceRef::new(
+                "saved-ssh",
+                ResourceKind::Ssh,
+                "production",
+            ))
+            .with_resource(
+                terminal_resource("session-ssh-1", "production")
+                    .with_capability(ResourceCapability::RemoteExec),
+            ),
+    );
+
+    let result = futures::executor::block_on(registry.call_tool(
+        "connections.list_sessions",
+        Some(rmcp::model::JsonObject::from_iter([(
+            "capability".to_string(),
+            json!("remote_exec"),
+        )])),
+        context(),
+    ))
+    .expect("capability-filtered list sessions should run");
+    let content = result.structured_content.unwrap();
+
+    assert_eq!(json!(1), content["total"]);
+    assert_eq!("session-ssh-1", content["sessions"][0]["id"]);
+    assert_eq!("remote_exec", content["capability"]);
 }
 
 #[test]

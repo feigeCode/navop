@@ -229,7 +229,7 @@ fn runtime_tool_to_mcp_tool(descriptor: ToolDescriptor) -> Tool {
 fn resource_sessions_tool() -> Tool {
     Tool::new(
         CONNECTIONS_LIST_SESSIONS_TOOL,
-        "List saved and active Navop connection sessions from the current resource pool. Pass kind or connection_type to filter; omit filters to return all available resources.",
+        "List saved and active Navop connection sessions from the current resource pool. Copy the exact `id` of a compatible result into another tool's `target`. Pass kind, connection_type, or capability to filter; for ssh.exec use capability=\"remote_exec\".",
         schema_object(resource_sessions_schema()),
     )
     .with_annotations(
@@ -252,6 +252,10 @@ fn resource_sessions_schema() -> Value {
             "connection_type": {
                 "type": "string",
                 "description": "Alias of kind. Omit both filters to list all resources."
+            },
+            "capability": {
+                "type": "string",
+                "description": "Required resource capability filter, for example remote_exec, terminal_exec, database_query, read_file, or write_file. For ssh.exec use remote_exec."
             }
         }
     })
@@ -262,17 +266,20 @@ fn list_resource_sessions(
     input: Value,
 ) -> Result<CallToolResult, McpError> {
     let kind = resource_session_kind_filter(&input)?;
+    let capability = resource_session_capability_filter(&input)?;
     let sessions = resource_pool
         .resources
         .into_iter()
         .filter(|resource| resource_matches_session_kind(resource, kind.as_deref()))
+        .filter(|resource| resource_matches_session_capability(resource, capability.as_deref()))
         .map(resource_session_value)
         .collect::<Vec<_>>();
     let total = sessions.len();
     Ok(CallToolResult::structured(json!({
         "sessions": sessions,
         "total": total,
-        "kind": kind
+        "kind": kind,
+        "capability": capability
     })))
 }
 
@@ -292,20 +299,28 @@ fn resource_session_value(resource: ResourceRef) -> Value {
 
 fn resource_session_kind_filter(input: &Value) -> Result<Option<String>, McpError> {
     for field in ["kind", "connection_type"] {
-        match input.get(field) {
-            Some(Value::String(value)) if !value.trim().is_empty() => {
-                return Ok(Some(value.trim().to_ascii_lowercase()));
-            }
-            Some(Value::String(_)) | Some(Value::Null) | None => {}
-            Some(_) => {
-                return Err(McpError::invalid_params(
-                    format!("field `{field}` must be a string"),
-                    None,
-                ));
-            }
+        if let Some(value) = resource_session_string_filter(input, field)? {
+            return Ok(Some(value));
         }
     }
     Ok(None)
+}
+
+fn resource_session_capability_filter(input: &Value) -> Result<Option<String>, McpError> {
+    resource_session_string_filter(input, "capability")
+}
+
+fn resource_session_string_filter(input: &Value, field: &str) -> Result<Option<String>, McpError> {
+    match input.get(field) {
+        Some(Value::String(value)) if !value.trim().is_empty() => {
+            Ok(Some(value.trim().to_ascii_lowercase()))
+        }
+        Some(Value::String(_)) | Some(Value::Null) | None => Ok(None),
+        Some(_) => Err(McpError::invalid_params(
+            format!("field `{field}` must be a string"),
+            None,
+        )),
+    }
 }
 
 fn resource_matches_session_kind(resource: &ResourceRef, kind: Option<&str>) -> bool {
@@ -325,6 +340,16 @@ fn resource_matches_session_kind(resource: &ResourceRef, kind: Option<&str>) -> 
         "terminal" | "local" | "serial" => matches!(resource.kind, ResourceKind::Terminal),
         other => resource.kind.as_str() == other,
     }
+}
+
+fn resource_matches_session_capability(resource: &ResourceRef, capability: Option<&str>) -> bool {
+    let Some(capability) = capability else {
+        return true;
+    };
+    resource
+        .capabilities
+        .iter()
+        .any(|candidate| candidate.as_str().eq_ignore_ascii_case(capability))
 }
 
 fn is_database_resource(kind: &ResourceKind) -> bool {

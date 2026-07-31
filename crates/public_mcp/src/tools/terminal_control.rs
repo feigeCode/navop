@@ -78,7 +78,7 @@ fn control_schema() -> Value {
         "properties": {
             "target": {
                 "type": "string",
-                "description": "Active terminal resource id, label, or alias."
+                "description": "Exact `id` of the active visible terminal to control. Call `connections.list_sessions` with capability=\"terminal_control\" and copy an `id` from the result. Do not invent or reuse a stale terminal id; labels and aliases are accepted only when they resolve unambiguously."
             },
             "action": {
                 "type": "string",

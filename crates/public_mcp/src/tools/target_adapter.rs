@@ -11,7 +11,8 @@ pub(super) fn mcp_target_schema(schema: Value) -> Value {
     };
     if let Some(target) = target_property(properties) {
         remove_provider_target_fields(properties);
-        properties.entry("target".to_string()).or_insert(target);
+        let target = properties.entry("target".to_string()).or_insert(target);
+        enrich_target_property(target);
     }
     rewrite_required_targets(&mut schema);
     schema
@@ -138,11 +139,72 @@ fn resolve_target_value(
         None => resource_pool.resolve_target(target),
     }
     .map(|resource| resource.id.as_str().to_string())
-    .map_err(target_resolution_error)
+    .map_err(|error| target_resolution_error(error, resource_pool, target_spec))
 }
 
-fn target_resolution_error(error: TargetResolutionError) -> McpError {
-    McpError::invalid_params(error.to_string(), None)
+fn target_resolution_error(
+    error: TargetResolutionError,
+    resource_pool: &ResourcePool,
+    target_spec: Option<&ToolTargetSpec>,
+) -> McpError {
+    let available_targets = compatible_targets(resource_pool, target_spec);
+    let recovery = if available_targets.is_empty() {
+        "No compatible target is currently available. Open or reconnect the required session, call `connections.list_sessions`, then retry with an exact `id`."
+            .to_string()
+    } else {
+        let candidates = available_targets
+            .iter()
+            .map(|target| {
+                format!(
+                    "`{}` ({}, {})",
+                    target["id"].as_str().unwrap_or_default(),
+                    target["label"].as_str().unwrap_or_default(),
+                    target["kind"].as_str().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Available compatible targets: {candidates}. Copy an exact `id` from this list or `connections.list_sessions` and retry."
+        )
+    };
+    let message = format!("{error}. {recovery}");
+    McpError::invalid_params(
+        message,
+        Some(json!({
+            "error": "target_resolution",
+            "available_targets": available_targets,
+            "recovery": recovery,
+        })),
+    )
+}
+
+fn compatible_targets(
+    resource_pool: &ResourcePool,
+    target_spec: Option<&ToolTargetSpec>,
+) -> Vec<Value> {
+    resource_pool
+        .resources
+        .iter()
+        .filter(|resource| {
+            target_spec.is_none_or(|spec| {
+                (spec.supported_kinds.is_empty() || spec.supported_kinds.contains(&resource.kind))
+                    && spec
+                        .required_capabilities
+                        .iter()
+                        .all(|capability| resource.capabilities.contains(capability))
+            })
+        })
+        .take(8)
+        .map(|resource| {
+            json!({
+                "id": resource.id.as_str(),
+                "label": resource.label,
+                "kind": resource.kind.as_str(),
+                "capabilities": resource.capabilities,
+            })
+        })
+        .collect()
 }
 
 fn rewrite_required_targets(schema: &mut Value) {
@@ -165,6 +227,30 @@ fn rewrite_required_targets(schema: &mut Value) {
 fn default_target_property() -> Value {
     json!({
         "type": "string",
-        "description": "Target resource id from the MCP-visible resource set."
+        "description": default_target_description()
     })
+}
+
+fn enrich_target_property(target: &mut Value) {
+    let Some(target) = target.as_object_mut() else {
+        return;
+    };
+    let description = target
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    if description.contains("connections.list_sessions") {
+        return;
+    }
+    let description = if description.is_empty() {
+        default_target_description().to_string()
+    } else {
+        format!("{description} {}", default_target_description())
+    };
+    target.insert("description".to_string(), Value::String(description));
+}
+
+fn default_target_description() -> &'static str {
+    "Target resource. Call `connections.list_sessions` when needed and copy an exact `id` from its result; labels and aliases are accepted only when they resolve unambiguously."
 }

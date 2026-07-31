@@ -134,6 +134,18 @@ fn terminal_exec_descriptor_uses_target_and_command_schema() {
 
     assert_eq!(json!(["target", "command"]), tool.input_schema["required"]);
     assert_eq!("string", tool.input_schema["properties"]["target"]["type"]);
+    assert!(
+        tool.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("terminal_exec")
+    );
+    assert!(
+        tool.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connections.list_sessions")
+    );
     assert_eq!("string", tool.input_schema["properties"]["command"]["type"]);
     assert_eq!(
         json!(0),
