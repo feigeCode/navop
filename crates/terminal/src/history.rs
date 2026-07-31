@@ -255,6 +255,16 @@ fn collect_unique_commands(session: &VecDeque<HistoryEntry>, persisted: &[String
     commands
 }
 
+pub fn collect_recent_history(
+    session: &VecDeque<HistoryEntry>,
+    persisted: &[String],
+    limit: usize,
+) -> Vec<String> {
+    let mut commands = collect_unique_commands(session, persisted);
+    commands.truncate(limit);
+    commands
+}
+
 /// 按 frecency 评分对 session 条目排序的辅助
 ///
 /// 返回 (command, frecency_score) 映射
@@ -498,6 +508,26 @@ mod tests {
         assert_eq!(entries.len(), 2);
         let git_entry = entries.iter().find(|e| e.command == "git status").unwrap();
         assert!(git_entry.use_count >= 2);
+    }
+
+    #[test]
+    fn recent_history_is_newest_first_and_deduplicates_persisted_entries() {
+        let session = session_from_strings(&["git status", "cargo test"]);
+        let persisted = vec![
+            "pwd".to_string(),
+            "git status".to_string(),
+            "docker ps".to_string(),
+        ];
+
+        assert_eq!(
+            collect_recent_history(&session, &persisted, 4),
+            vec![
+                "cargo test".to_string(),
+                "git status".to_string(),
+                "docker ps".to_string(),
+                "pwd".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use super::command_bar_model::CommandSuggestion;
+use super::command_bar_model::{CommandHistoryNavigation, CommandSuggestion};
 use crate::theme::TerminalColors;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
@@ -54,6 +54,7 @@ pub(super) struct TerminalCommandBar {
     quick_commands: Vec<QuickCommand>,
     suggestions: Vec<CommandSuggestion>,
     selected_suggestion: Option<usize>,
+    history_navigation: Option<CommandHistoryNavigation>,
     quick_query: String,
     quick_group_filter: QuickGroupFilter,
     selected_quick_command: Option<usize>,

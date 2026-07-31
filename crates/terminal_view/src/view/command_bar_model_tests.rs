@@ -123,25 +123,32 @@ fn grouped_quick_commands_filter_across_metadata() {
 }
 
 #[test]
-fn selection_wraps_in_both_directions() {
-    assert_eq!(Some(0), next_selection(3, None, SelectionDirection::Next));
-    assert_eq!(
-        Some(1),
-        next_selection(3, Some(0), SelectionDirection::Next)
+fn command_history_navigation_moves_back_and_restores_the_draft() {
+    let mut navigation = CommandHistoryNavigation::new(
+        vec![
+            "cargo test".to_string(),
+            "git status".to_string(),
+            "pwd".to_string(),
+        ],
+        "git ".to_string(),
     );
-    assert_eq!(
-        Some(0),
-        next_selection(3, Some(2), SelectionDirection::Next)
-    );
-    assert_eq!(
-        Some(2),
-        next_selection(3, None, SelectionDirection::Previous)
-    );
-    assert_eq!(
-        Some(2),
-        next_selection(3, Some(0), SelectionDirection::Previous)
-    );
-    assert_eq!(None, next_selection(0, Some(0), SelectionDirection::Next));
+
+    assert_eq!(Some("cargo test"), navigation.previous());
+    assert_eq!(Some("git status"), navigation.previous());
+    assert_eq!(Some("pwd"), navigation.previous());
+    assert_eq!(Some("pwd"), navigation.previous());
+    assert_eq!(Some("git status"), navigation.next());
+    assert_eq!(Some("cargo test"), navigation.next());
+    assert_eq!(Some("git "), navigation.next());
+    assert_eq!(None, navigation.next());
+}
+
+#[test]
+fn command_history_navigation_ignores_empty_history() {
+    let mut navigation = CommandHistoryNavigation::new(Vec::new(), "draft".to_string());
+
+    assert_eq!(None, navigation.previous());
+    assert_eq!(None, navigation.next());
 }
 
 #[test]

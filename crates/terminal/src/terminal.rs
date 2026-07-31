@@ -48,7 +48,7 @@ use std::path::Path;
 
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
-    collect_history_search_results, collect_history_suggestions_with_cwd,
+    collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
 use crate::operation_journal::{
@@ -2776,6 +2776,10 @@ impl Terminal {
             self.current_working_dir.as_deref(),
         );
         merge_history_matches(db_matches, fallback, limit)
+    }
+
+    pub fn recent_history(&self, limit: usize) -> Vec<String> {
+        collect_recent_history(&self.session_history, &self.persisted_history, limit)
     }
 
     pub fn history_search_results(&self, query: &str, limit: usize) -> Vec<String> {

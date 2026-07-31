@@ -1,12 +1,13 @@
 use super::*;
 use crate::view::command_bar_model::{
-    SelectionDirection, build_command_suggestions, command_inline_suffix, next_selection,
+    SelectionDirection, build_command_suggestions, command_inline_suffix,
 };
 use gpui::{AppContext, Context, KeyDownEvent, Window};
 use gpui_component::input::InputEvent;
 use one_core::storage::{GlobalStorageState, QuickCommandRepository};
 
 const HISTORY_QUERY_LIMIT: usize = 16;
+const HISTORY_NAVIGATION_LIMIT: usize = 200;
 
 impl TerminalCommandBar {
     pub(in crate::view) fn new(
@@ -31,6 +32,7 @@ impl TerminalCommandBar {
             quick_commands: Vec::new(),
             suggestions: Vec::new(),
             selected_suggestion: None,
+            history_navigation: None,
             quick_query: String::new(),
             quick_group_filter: QuickGroupFilter::default(),
             selected_quick_command: None,
@@ -66,7 +68,7 @@ impl TerminalCommandBar {
             input,
             window,
             |this, _state, event, window, cx| match event {
-                InputEvent::Change => this.refresh_suggestions(cx),
+                InputEvent::Change => this.handle_input_change(cx),
                 InputEvent::Focus => {
                     this.load_quick_commands(cx);
                     this.refresh_suggestions(cx);
@@ -140,6 +142,11 @@ impl TerminalCommandBar {
         cx.notify();
     }
 
+    fn handle_input_change(&mut self, cx: &mut Context<Self>) {
+        self.reset_history_navigation();
+        self.refresh_suggestions(cx);
+    }
+
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let selected = self
             .selected_suggestion
@@ -153,6 +160,7 @@ impl TerminalCommandBar {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.suggestions.clear();
         self.selected_suggestion = None;
+        self.reset_history_navigation();
         self.clear_inline_completion(cx);
         cx.emit(TerminalCommandBarEvent::Submit(command));
         cx.notify();
@@ -174,10 +182,48 @@ impl TerminalCommandBar {
             .update(cx, |state, cx| state.focus(window, cx));
     }
 
-    fn move_selection(&mut self, direction: SelectionDirection, cx: &mut Context<Self>) {
-        self.selected_suggestion =
-            next_selection(self.suggestions.len(), self.selected_suggestion, direction);
+    fn navigate_history(
+        &mut self,
+        direction: SelectionDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.history_navigation.is_none() {
+            if direction == SelectionDirection::Next {
+                return false;
+            }
+            let entries = self
+                .terminal
+                .read(cx)
+                .recent_history(HISTORY_NAVIGATION_LIMIT);
+            let draft = self.input_state.read(cx).value().to_string();
+            self.history_navigation = Some(CommandHistoryNavigation::new(entries, draft));
+        }
+
+        let value = self
+            .history_navigation
+            .as_mut()
+            .and_then(|navigation| match direction {
+                SelectionDirection::Previous => navigation.previous(),
+                SelectionDirection::Next => navigation.next(),
+            })
+            .map(str::to_string);
+        let Some(value) = value else {
+            return false;
+        };
+
+        self.input_state.update(cx, |state, cx| {
+            set_command_input_value(state, value, window, cx);
+        });
+        self.suggestions.clear();
+        self.selected_suggestion = None;
+        self.clear_inline_completion(cx);
         cx.notify();
+        true
+    }
+
+    fn reset_history_navigation(&mut self) {
+        self.history_navigation = None;
     }
 
     fn accept_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -193,6 +239,7 @@ impl TerminalCommandBar {
         });
         self.suggestions.clear();
         self.selected_suggestion = None;
+        self.reset_history_navigation();
         self.clear_inline_completion(cx);
         cx.notify();
         true
@@ -213,14 +260,8 @@ impl TerminalCommandBar {
             return;
         }
         let handled = match event.keystroke.key.as_str() {
-            "up" if !self.suggestions.is_empty() => {
-                self.move_selection(SelectionDirection::Previous, cx);
-                true
-            }
-            "down" if !self.suggestions.is_empty() => {
-                self.move_selection(SelectionDirection::Next, cx);
-                true
-            }
+            "up" | "arrowup" => self.navigate_history(SelectionDirection::Previous, window, cx),
+            "down" | "arrowdown" => self.navigate_history(SelectionDirection::Next, window, cx),
             "tab" if !self.suggestions.is_empty() => self.accept_selection(window, cx),
             "escape"
                 if !self.suggestions.is_empty()
@@ -251,6 +292,7 @@ impl TerminalCommandBar {
         self.selected_quick_command = None;
         self.suggestions.clear();
         self.selected_suggestion = None;
+        self.reset_history_navigation();
         self.clear_inline_completion(cx);
     }
 
