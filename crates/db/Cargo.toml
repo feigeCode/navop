@@ -42,6 +42,7 @@ dashmap.workspace = true
 moka.workspace = true
 smol.workspace = true
 regex.workspace = true
+semver.workspace = true
 thiserror.workspace = true
 extension-host.workspace = true
 extension-protocol.workspace = true

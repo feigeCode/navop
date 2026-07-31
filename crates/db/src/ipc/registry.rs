@@ -2,11 +2,12 @@ use crate::connection::DbError;
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use extension_protocol::method;
 use one_core::storage::DatabaseType;
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, RwLock};
 use tracing::{debug, info, warn};
 
 mod discovery;
@@ -14,6 +15,7 @@ mod entry;
 
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
 static IPC_DRIVER_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static IPC_HOST_VERSION: OnceLock<RwLock<Option<Version>>> = OnceLock::new();
 
 fn default_driver_api() -> String {
     "database".to_string()
@@ -36,6 +38,8 @@ pub struct IpcDriverManifest {
     pub description: String,
     #[serde(default)]
     pub version: String,
+    #[serde(default)]
+    pub engines: IpcDriverEngines,
     /// Sidecar/server compatibility metadata. SQL registry keeps this opaque so
     /// non-SQL selectors can evolve without coupling `db` to their schemas.
     #[serde(default)]
@@ -54,6 +58,12 @@ pub struct IpcDriverManifest {
     pub ui: IpcDriverUi,
     #[serde(skip)]
     pub manifest_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IpcDriverEngines {
+    pub onetcli: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,8 +365,52 @@ impl IpcDriverManifest {
                 )));
             }
         }
+        self.check_host_compatibility(&current_host_version())?;
         Ok(())
     }
+
+    pub fn check_host_compatibility(&self, host_version: &Version) -> Result<(), DbError> {
+        let required = self.engines.onetcli.trim();
+        if required.is_empty() {
+            return Ok(());
+        }
+        let requirement = VersionReq::parse(required).map_err(|error| {
+            DbError::connection(format!(
+                "external driver '{}' has invalid engines.onetcli {:?}: {}",
+                self.id, required, error
+            ))
+        })?;
+        if !requirement.matches(host_version) {
+            return Err(DbError::connection(format!(
+                "数据库驱动 '{}' 要求 Navop {}, 当前 Navop 版本 {}, 请升级 Navop 或安装兼容版本",
+                self.name, required, host_version
+            )));
+        }
+        Ok(())
+    }
+}
+
+pub fn set_host_version(version: &str) -> Result<(), semver::Error> {
+    let version = Version::parse(version)?;
+    if let Ok(mut current) = host_version_override().write() {
+        *current = Some(version);
+    }
+    Ok(())
+}
+
+pub fn current_host_version() -> Version {
+    if let Some(version) = host_version_override()
+        .read()
+        .ok()
+        .and_then(|version| version.clone())
+    {
+        return version;
+    }
+    Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
+}
+
+fn host_version_override() -> &'static RwLock<Option<Version>> {
+    IPC_HOST_VERSION.get_or_init(|| RwLock::new(None))
 }
 
 fn load_yaml_file(path: &Path) -> Result<serde_yaml::Value, DbError> {

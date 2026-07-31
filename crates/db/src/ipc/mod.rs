@@ -15,6 +15,7 @@ pub use display::{IpcDriverDisplay, driver_icon_from_asset_path, driver_icon_fro
 pub use method_support::{MethodSet, MethodSupport};
 pub use plugin::ExternalDatabasePlugin;
 pub use registry::{
-    IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport, LimitStyle,
+    IpcDriverEngines, IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport,
+    LimitStyle, current_host_version, set_host_version,
 };
 pub use resources::{DriverAssetSource, DriverResourceLoader};

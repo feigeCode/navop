@@ -242,13 +242,15 @@ fn main() {
     });
 
     app.run(move |cx| {
+        db::ipc::set_host_version(env!("CARGO_PKG_VERSION"))
+            .expect("main package version must be valid semver");
+        extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
+            .expect("main package version must be valid semver");
         onetcli_app::init(cx);
         if !one_core::app_paths::is_portable() {
             file_association::schedule_registration(cx);
         }
         notes::init(cx);
-        extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
-            .expect("main package version must be valid semver");
         extension_runtime::init(cx);
 
         let saved_size = AppSettings::current(cx).main_window_size;

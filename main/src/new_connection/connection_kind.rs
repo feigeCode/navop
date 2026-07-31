@@ -394,6 +394,7 @@ mod tests {
             api: "database".into(),
             description: String::new(),
             version: String::new(),
+            engines: Default::default(),
             compatibility: serde_json::Value::Null,
             entry: IpcDriverEntry {
                 command: "./driver".to_string(),

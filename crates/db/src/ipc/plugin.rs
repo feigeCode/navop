@@ -414,6 +414,7 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         category: None,
         description: String::new(),
         version: String::new(),
+        engines: Default::default(),
         compatibility: serde_json::Value::Null,
         entry: crate::ipc::registry::IpcDriverEntry {
             command: String::new(),
