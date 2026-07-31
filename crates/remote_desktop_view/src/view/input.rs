@@ -22,13 +22,14 @@ impl RemoteDesktopView {
     pub(super) fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if is_clipboard_platform_shortcut(&event.keystroke) {
             cx.stop_propagation();
             return;
         }
+        self.sync_rdp_keyboard_state(event.keystroke.modifiers, window.capslock());
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -40,13 +41,14 @@ impl RemoteDesktopView {
     pub(super) fn handle_key_up(
         &mut self,
         event: &KeyUpEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if is_clipboard_platform_shortcut(&event.keystroke) {
             cx.stop_propagation();
             return;
         }
+        self.sync_rdp_keyboard_state(event.keystroke.modifiers, window.capslock());
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -156,14 +158,22 @@ impl RemoteDesktopView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let previous = self.modifiers;
-        self.modifiers = event.modifiers;
-        if self.options.protocol == RemoteDesktopProtocol::Rdp {
-            for input in modifier_inputs(previous, event.modifiers) {
-                self.send_input(input);
-            }
-        }
+        self.sync_rdp_keyboard_state(event.modifiers, event.capslock);
         cx.stop_propagation();
+    }
+
+    fn sync_rdp_keyboard_state(&mut self, modifiers: Modifiers, capslock: Capslock) {
+        let current = RdpKeyboardState {
+            modifiers,
+            capslock,
+        };
+        let previous = std::mem::replace(&mut self.keyboard_state, current);
+        if self.options.protocol != RemoteDesktopProtocol::Rdp {
+            return;
+        }
+        for input in keyboard_state_inputs(previous, current) {
+            self.send_input(input);
+        }
     }
 
     pub(super) fn send_pointer_move(

@@ -14,7 +14,7 @@ use rust_i18n::t;
 
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
-use crate::modifiers::modifier_inputs;
+use crate::modifiers::{RdpKeyboardState, keyboard_state_inputs};
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
 use crate::shortcuts::{
     ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
@@ -97,7 +97,7 @@ pub struct RemoteDesktopView {
     pending_resize_size: Option<(u16, u16)>,
     pending_resize_updated_at: Option<Instant>,
     last_resize_sent_at: Option<Instant>,
-    modifiers: Modifiers,
+    keyboard_state: RdpKeyboardState,
     last_clipboard_text: Option<String>,
     last_clipboard_files: Option<Vec<String>>,
     last_clipboard_sync_at: Option<Instant>,
@@ -166,7 +166,7 @@ impl RemoteDesktopView {
             pending_resize_size: None,
             pending_resize_updated_at: None,
             last_resize_sent_at: None,
-            modifiers: Modifiers::default(),
+            keyboard_state: RdpKeyboardState::default(),
             last_clipboard_text: None,
             last_clipboard_files: None,
             last_clipboard_sync_at: None,
