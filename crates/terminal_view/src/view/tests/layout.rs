@@ -25,6 +25,90 @@ fn connection_overlay_returns_after_host_key_confirmation_finishes() {
 }
 
 #[test]
+fn disconnected_terminal_uses_a_non_blocking_status_banner() {
+    assert_eq!(
+        Some(ConnectionStatusPresentation::Banner),
+        connection_status_presentation(
+            &ConnectionState::Disconnected { error: None },
+            false,
+            false,
+        )
+    );
+    assert_eq!(
+        Some(ConnectionStatusPresentation::Banner),
+        connection_status_presentation(&ConnectionState::Connecting, false, false)
+    );
+}
+
+#[test]
+fn ssh_mfa_keeps_the_blocking_connection_dialog() {
+    assert_eq!(
+        Some(ConnectionStatusPresentation::Dialog),
+        connection_status_presentation(&ConnectionState::Connecting, false, true)
+    );
+}
+
+#[test]
+fn host_key_confirmation_and_connected_state_hide_connection_status() {
+    assert_eq!(
+        None,
+        connection_status_presentation(&ConnectionState::Disconnected { error: None }, true, false,)
+    );
+    assert_eq!(
+        None,
+        connection_status_presentation(&ConnectionState::Connected, false, false)
+    );
+}
+
+#[test]
+fn connection_status_rendering_does_not_restore_the_full_screen_backdrop() {
+    let source = include_str!("../connection_overlay.rs");
+
+    assert!(source.contains("render_connection_banner"));
+    assert!(source.contains("render_connection_dialog"));
+    assert!(
+        !source.contains(".bg(Hsla {"),
+        "ordinary reconnect feedback must not cover the terminal with a dark backdrop"
+    );
+}
+
+#[test]
+fn reconnect_success_reports_that_a_new_remote_shell_was_opened() {
+    let terminal_events = include_str!("../terminal_events.rs");
+    let locales = include_str!("../../../locales/terminal_view.yml");
+
+    assert!(terminal_events.contains("SshSession.reconnected_new_shell"));
+    assert!(locales.contains("reconnected_new_shell:"));
+    assert!(locales.contains("已重新连接并打开新的远端 Shell"));
+}
+
+#[test]
+fn reconnect_follow_up_is_only_armed_after_an_ssh_reconnect_starts() {
+    assert_eq!(
+        (false, false),
+        reconnect_follow_up_state(false, TerminalConnectionKind::Ssh)
+    );
+    assert_eq!(
+        (true, false),
+        reconnect_follow_up_state(true, TerminalConnectionKind::Serial)
+    );
+    assert_eq!(
+        (true, true),
+        reconnect_follow_up_state(true, TerminalConnectionKind::Ssh)
+    );
+}
+
+#[test]
+fn initial_connecting_status_does_not_claim_that_it_is_reconnecting() {
+    let overlay = include_str!("../connection_overlay.rs");
+    let locales = include_str!("../../../locales/terminal_view.yml");
+
+    assert!(overlay.contains("SshSession.connecting_preserves_terminal"));
+    assert!(overlay.contains("SshSession.reconnecting_preserves_terminal"));
+    assert!(locales.contains("connecting_preserves_terminal:"));
+}
+
+#[test]
 fn terminal_tools_sidebar_defaults_to_a_roomier_width() {
     assert_eq!(px(400.0), TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH);
 }

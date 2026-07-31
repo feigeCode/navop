@@ -3341,19 +3341,19 @@ impl Terminal {
     }
 
     /// 重新连接 SSH 或串口
-    pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+    pub fn reconnect(&mut self, cx: &mut Context<Self>) -> bool {
         if self.is_read_only() {
-            return;
+            return false;
         }
         if let Some(config) = self.ssh_config.clone() {
             let Some(session_manager) = self.ssh_session_manager.clone() else {
-                return;
+                return false;
             };
             let Some(event_tx) = self.event_tx.clone() else {
-                return;
+                return false;
             };
             let Some(event_proxy) = self.event_proxy.clone() else {
-                return;
+                return false;
             };
 
             self.connection_state = ConnectionState::Connecting;
@@ -3402,7 +3402,7 @@ impl Terminal {
             .detach();
         } else if let Some(params) = self.serial_params.clone() {
             let Some(event_proxy) = self.event_proxy.clone() else {
-                return;
+                return false;
             };
 
             self.connection_state = ConnectionState::Connecting;
@@ -3429,10 +3429,11 @@ impl Terminal {
                 cx,
             );
         } else {
-            return;
+            return false;
         }
 
         cx.emit(TerminalModelEvent::Wakeup);
+        true
     }
 
     fn prepare_surface_for_reconnect(&mut self) {

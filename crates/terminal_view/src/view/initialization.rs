@@ -233,6 +233,7 @@ impl TerminalView {
             cd_completion_loading_parent: None,
             ssh_mfa_inputs: Vec::new(),
             focus_terminal_after_connect: false,
+            reconnect_success_pending: false,
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,

@@ -5,6 +5,7 @@ struct TerminalViewportState {
     connection_state: ConnectionState,
     can_reconnect: bool,
     has_pending_host_key_verification: bool,
+    has_ssh_mfa_request: bool,
     has_selection: bool,
     selection_text: Option<String>,
     accepts_live_input: bool,
@@ -12,14 +13,34 @@ struct TerminalViewportState {
     show_scrollbar: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConnectionStatusPresentation {
+    Banner,
+    Dialog,
+}
+
+pub(super) fn connection_status_presentation(
+    connection_state: &ConnectionState,
+    has_pending_host_key_verification: bool,
+    has_ssh_mfa_request: bool,
+) -> Option<ConnectionStatusPresentation> {
+    if has_pending_host_key_verification || matches!(connection_state, ConnectionState::Connected) {
+        return None;
+    }
+    if has_ssh_mfa_request {
+        Some(ConnectionStatusPresentation::Dialog)
+    } else {
+        Some(ConnectionStatusPresentation::Banner)
+    }
+}
+
+#[cfg(test)]
 pub(super) fn should_show_connection_overlay(
     connection_state: &ConnectionState,
     has_pending_host_key_verification: bool,
 ) -> bool {
-    matches!(
-        connection_state,
-        ConnectionState::Disconnected { .. } | ConnectionState::Connecting
-    ) && !has_pending_host_key_verification
+    connection_status_presentation(connection_state, has_pending_host_key_verification, false)
+        .is_some()
 }
 
 impl TerminalView {
@@ -65,6 +86,7 @@ impl TerminalView {
             connection_state,
             can_reconnect,
             has_pending_host_key_verification: terminal.host_key_verification_request().is_some(),
+            has_ssh_mfa_request: terminal.ssh_mfa_request().is_some(),
             has_selection,
             selection_text,
             accepts_live_input,
@@ -80,9 +102,10 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus_handle = self.focus_handle.clone();
-        let show_connection_overlay = should_show_connection_overlay(
+        let connection_status = connection_status_presentation(
             &state.connection_state,
             state.has_pending_host_key_verification,
+            state.has_ssh_mfa_request,
         );
         div()
             .track_focus(&focus_handle)
@@ -117,9 +140,14 @@ impl TerminalView {
             .when_some(self.render_addon_tooltip(), |this, tooltip| {
                 this.child(tooltip)
             })
-            .when(show_connection_overlay, |this| {
-                this.child(self.render_connection_overlay(state.can_reconnect, cx))
-            })
+            .when(
+                connection_status == Some(ConnectionStatusPresentation::Banner),
+                |this| this.child(self.render_connection_banner(state.can_reconnect, cx)),
+            )
+            .when(
+                connection_status == Some(ConnectionStatusPresentation::Dialog),
+                |this| this.child(self.render_connection_dialog(cx)),
+            )
             .into_any_element()
     }
 

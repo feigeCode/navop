@@ -10,7 +10,7 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
-use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_component::{
     ActiveTheme, BlinkCursor, Disableable, Icon, IconName, Selectable, Sizable, WindowExt, h_flex,
@@ -250,6 +250,7 @@ pub struct TerminalView {
     cd_completion_loading_parent: Option<String>,
     ssh_mfa_inputs: Vec<SshMfaInput>,
     focus_terminal_after_connect: bool,
+    reconnect_success_pending: bool,
 
     current_theme: TerminalTheme,
 

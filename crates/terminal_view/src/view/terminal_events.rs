@@ -154,10 +154,19 @@ impl TerminalView {
         match connection_state {
             ConnectionState::Connected if !has_mfa_request => {
                 self.focus_terminal_after_connect = false;
+                if self.reconnect_success_pending {
+                    self.reconnect_success_pending = false;
+                    window.push_notification(
+                        Notification::success(t!("SshSession.reconnected_new_shell").to_string())
+                            .autohide(true),
+                        cx,
+                    );
+                }
                 self.focus_terminal(window, cx);
             }
             ConnectionState::Disconnected { .. } => {
                 self.focus_terminal_after_connect = false;
+                self.reconnect_success_pending = false;
             }
             _ => {}
         }

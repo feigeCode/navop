@@ -1,5 +1,8 @@
+use super::preferences::reconnect_follow_up_state;
 use super::recording_footer::{format_recording_elapsed, recording_output_path};
-use super::render_surface::should_show_connection_overlay;
+use super::render_surface::{
+    ConnectionStatusPresentation, connection_status_presentation, should_show_connection_overlay,
+};
 use super::tab_content::recording_playback_tab_title;
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,

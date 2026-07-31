@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) fn reconnect_follow_up_state(
+    reconnect_started: bool,
+    connection_kind: TerminalConnectionKind,
+) -> (bool, bool) {
+    (
+        reconnect_started,
+        reconnect_started && connection_kind == TerminalConnectionKind::Ssh,
+    )
+}
+
 impl TerminalView {
     pub fn sync_sidebar_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.current_theme.clone();
@@ -195,10 +205,17 @@ impl TerminalView {
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
-        self.focus_terminal_after_connect = true;
-        self.terminal.update(cx, |terminal, cx| {
-            terminal.reconnect(cx);
-        });
+        let connection_kind = self.terminal.read(cx).connection_kind();
+        let reconnect_started = self
+            .terminal
+            .update(cx, |terminal, cx| terminal.reconnect(cx));
+        (
+            self.focus_terminal_after_connect,
+            self.reconnect_success_pending,
+        ) = reconnect_follow_up_state(reconnect_started, connection_kind);
+        if !reconnect_started {
+            return;
+        }
 
         cx.spawn(async move |this, cx| {
             loop {
