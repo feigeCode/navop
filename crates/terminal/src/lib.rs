@@ -3,7 +3,6 @@ pub(crate) mod exec_supervisor;
 pub mod history;
 pub mod ingress_queue;
 mod local_shell;
-pub mod operation_journal;
 pub mod osc;
 pub mod performance_metrics;
 pub mod pty_backend;
@@ -34,11 +33,7 @@ pub use ssh_backend::SshBackend;
 pub use ssh_session_identity::{
     PersistedSshSessionIdentity, PersistedSshSessionIdentityError, SshSessionIdentityTransition,
 };
-pub use terminal::{
-    TerminalOperationHistoryLoad, TerminalOperationHistoryRequest,
-    TerminalOperationHistoryRequestKey, TerminalScrollProxy, TerminalSessionMode,
-    TerminalTextSnapshot,
-};
+pub use terminal::{TerminalScrollProxy, TerminalSessionMode, TerminalTextSnapshot};
 pub use types::{
     LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
     TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,
