@@ -617,15 +617,38 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
         .nth(1)
         .and_then(|source| source.split("impl Render for TerminalCommandBar").next())
         .expect("expanded command input row should exist");
-    assert!(render_source.contains("terminal-command-collapse-toggle-expanded"));
+    let terminal_toggle = render_source
+        .split("fn render_terminal_toggle_button")
+        .nth(1)
+        .and_then(|source| source.split("fn render_quick_command_button").next())
+        .expect("terminal toggle button should exist");
+    assert!(terminal_toggle.contains("terminal-command-terminal-toggle"));
+    assert!(terminal_toggle.contains("IconName::SquareTerminal"));
+    assert!(terminal_toggle.contains("self.target_label(cx)"));
+    assert!(terminal_toggle.contains("when(!self.collapsed"));
     assert!(render_source.contains("this.toggle_collapsed(window, cx)"));
     assert!(expanded_row.contains("self.render_expanded_actions(cx)"));
-    assert!(!expanded_row.contains("target_label"));
+    assert!(expanded_row.contains("self.render_terminal_toggle_button(cx)"));
     assert!(!expanded_row.contains("IconName::ChevronRight"));
-    assert!(expanded_row.contains("pr(px(COMMAND_BAR_ACTIONS_WIDTH))"));
-    assert!(expanded_row.contains(".absolute()"));
-    assert!(expanded_row.contains(".top_2()"));
-    assert!(expanded_row.contains(".right_0()"));
+    assert!(!render_source.contains("terminal-command-collapse-toggle-expanded"));
+    assert!(!render_source.contains("terminal-command-collapse-toggle\""));
+    assert!(expanded_row.contains("h_flex()"));
+    assert!(expanded_row.contains(".min_w_0()"));
+    assert!(expanded_row.contains(".flex_1()"));
+    assert!(expanded_row.contains(".flex_shrink_0()"));
+    assert!(!expanded_row.contains(".absolute()"));
+    assert!(!render_source.contains("COMMAND_BAR_ACTIONS_WIDTH"));
+    let terminal_toggle_position = expanded_row
+        .find("self.render_terminal_toggle_button(cx)")
+        .expect("terminal toggle should render in the expanded row");
+    let input_position = expanded_row
+        .find("Input::new(&self.input_state)")
+        .expect("command input should render in the expanded row");
+    let actions_position = expanded_row
+        .find("self.render_expanded_actions(cx)")
+        .expect("expanded actions should render in the expanded row");
+    assert!(terminal_toggle_position < input_position);
+    assert!(input_position < actions_position);
     assert!(render_source.contains("child(self.render_quick_command_button(cx))"));
     assert!(render_source.contains("when(self.quick_commands_open"));
     let choose_quick_command = quick_interaction_source
