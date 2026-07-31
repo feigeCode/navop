@@ -4,11 +4,22 @@ struct TerminalViewportState {
     font_family: SharedString,
     connection_state: ConnectionState,
     can_reconnect: bool,
+    has_pending_host_key_verification: bool,
     has_selection: bool,
     selection_text: Option<String>,
     accepts_live_input: bool,
     right_click_paste: bool,
     show_scrollbar: bool,
+}
+
+pub(super) fn should_show_connection_overlay(
+    connection_state: &ConnectionState,
+    has_pending_host_key_verification: bool,
+) -> bool {
+    matches!(
+        connection_state,
+        ConnectionState::Disconnected { .. } | ConnectionState::Connecting
+    ) && !has_pending_host_key_verification
 }
 
 impl TerminalView {
@@ -53,6 +64,7 @@ impl TerminalView {
             font_family,
             connection_state,
             can_reconnect,
+            has_pending_host_key_verification: terminal.host_key_verification_request().is_some(),
             has_selection,
             selection_text,
             accepts_live_input,
@@ -68,9 +80,9 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus_handle = self.focus_handle.clone();
-        let disconnected = matches!(
+        let show_connection_overlay = should_show_connection_overlay(
             &state.connection_state,
-            ConnectionState::Disconnected { .. } | ConnectionState::Connecting
+            state.has_pending_host_key_verification,
         );
         div()
             .track_focus(&focus_handle)
@@ -105,7 +117,7 @@ impl TerminalView {
             .when_some(self.render_addon_tooltip(), |this, tooltip| {
                 this.child(tooltip)
             })
-            .when(disconnected, |this| {
+            .when(show_connection_overlay, |this| {
                 this.child(self.render_connection_overlay(state.can_reconnect, cx))
             })
             .into_any_element()

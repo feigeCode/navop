@@ -1,4 +1,5 @@
 use super::recording_footer::{format_recording_elapsed, recording_output_path};
+use super::render_surface::should_show_connection_overlay;
 use super::tab_content::recording_playback_tab_title;
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
@@ -29,7 +30,7 @@ use gpui::{
 use one_core::storage::models::{SerialParams, SshAuthMethod, SshParams, StoredConnection};
 use std::cell::Cell as StdCell;
 use terminal::LocalConfig;
-use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
+use terminal::terminal::{ConnectionState, TerminalConnectionKind, TerminalModelEvent};
 
 mod capabilities;
 mod core;

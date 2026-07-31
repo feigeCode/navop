@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn pending_host_key_confirmation_suppresses_connection_overlay() {
+    for connection_state in [
+        ConnectionState::Disconnected { error: None },
+        ConnectionState::Connecting,
+    ] {
+        assert!(!should_show_connection_overlay(&connection_state, true));
+    }
+}
+
+#[test]
+fn connection_overlay_returns_after_host_key_confirmation_finishes() {
+    for connection_state in [
+        ConnectionState::Disconnected { error: None },
+        ConnectionState::Connecting,
+    ] {
+        assert!(should_show_connection_overlay(&connection_state, false));
+    }
+    assert!(!should_show_connection_overlay(
+        &ConnectionState::Connected,
+        false
+    ));
+}
+
+#[test]
 fn terminal_tools_sidebar_defaults_to_a_roomier_width() {
     assert_eq!(px(400.0), TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH);
 }
