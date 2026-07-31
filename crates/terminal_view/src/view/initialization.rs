@@ -136,6 +136,10 @@ impl TerminalView {
         });
 
         let focus_handle = cx.focus_handle();
+        let terminal_performance_metrics = terminal.read(cx).performance_metrics();
+        let performance_metrics = terminal_performance_metrics
+            .is_enabled()
+            .then_some(terminal_performance_metrics);
 
         // 焦点获得/失去订阅
         let focus_subscription = cx.on_focus(&focus_handle, window, |this, _window, cx| {
@@ -215,6 +219,7 @@ impl TerminalView {
             mouse_position: None,
             render_cache: RenderCache::new(DEFAULT_ROWS, DEFAULT_COLS, colors),
             focus_handle,
+            performance_metrics,
             terminal_bounds: Bounds::default(),
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
@@ -256,6 +261,7 @@ impl TerminalView {
         };
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
+        this.start_performance_diagnostics(connection_id, connection_kind, cx);
         this
     }
 }

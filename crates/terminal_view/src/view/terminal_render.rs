@@ -53,6 +53,8 @@ impl TerminalView {
             self.line_height_scale,
             cursor_visible,
             self.cell_width, // 传入预计算的 cell_width，确保与 resize 一致
+            self.performance_metrics.clone(),
+            self.focus_handle.clone(),
         )
         .into_element()
     }

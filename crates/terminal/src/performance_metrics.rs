@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+pub const TERMINAL_PERFORMANCE_METRICS_ENV: &str = "NAVOP_TERMINAL_PERFORMANCE_METRICS";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalActivity {
     Focused,
@@ -128,8 +130,8 @@ pub struct TerminalPerformanceWindow {
     pub ssh_invalidations: u64,
 }
 
-#[derive(Default)]
 pub struct TerminalPerformanceMetrics {
+    enabled: bool,
     ingress_bytes: AtomicU64,
     ingress_pending_bytes: AtomicU64,
     ingress_pending_bytes_max: AtomicU64,
@@ -157,8 +159,68 @@ pub struct TerminalPerformanceMetrics {
     view_visible: AtomicBool,
 }
 
+impl Default for TerminalPerformanceMetrics {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 impl TerminalPerformanceMetrics {
+    pub fn disabled() -> Self {
+        Self::with_enabled(false)
+    }
+
+    pub fn enabled() -> Self {
+        Self::with_enabled(true)
+    }
+
+    /// Creates metrics using the developer diagnostic environment switch.
+    ///
+    /// Runtime configuration overrides the compile-time value. Only explicit
+    /// truthy values (`1`, `true`, `yes`, `on`) enable collection.
+    pub fn for_runtime() -> Self {
+        Self::with_enabled(terminal_performance_metrics_enabled())
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn with_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ingress_bytes: AtomicU64::new(0),
+            ingress_pending_bytes: AtomicU64::new(0),
+            ingress_pending_bytes_max: AtomicU64::new(0),
+            parser_chunks: AtomicU64::new(0),
+            parser_chunk_bytes: AtomicU64::new(0),
+            parser_chunk_max_bytes: AtomicU64::new(0),
+            user_input_bytes: AtomicU64::new(0),
+            terminal_response_bytes: AtomicU64::new(0),
+            term_lock_samples: AtomicU64::new(0),
+            term_lock_wait_ns: AtomicU64::new(0),
+            term_lock_wait_max_ns: AtomicU64::new(0),
+            term_lock_hold_ns: AtomicU64::new(0),
+            term_lock_hold_max_ns: AtomicU64::new(0),
+            wakeup_requests: AtomicU64::new(0),
+            wakeup_queued: AtomicU64::new(0),
+            wakeup_coalesced: AtomicU64::new(0),
+            render_samples: AtomicU64::new(0),
+            render_ns: AtomicU64::new(0),
+            render_max_ns: AtomicU64::new(0),
+            ssh_connects: AtomicU64::new(0),
+            ssh_reconnects: AtomicU64::new(0),
+            ssh_invalidations: AtomicU64::new(0),
+            last_render_tick_ns: AtomicU64::new(0),
+            last_render_focused: AtomicBool::new(false),
+            view_visible: AtomicBool::new(false),
+        }
+    }
+
     pub fn record_parser_chunk(&self, bytes: usize) {
+        if !self.enabled {
+            return;
+        }
         let bytes = usize_to_u64(bytes);
         add(&self.ingress_bytes, bytes);
         add(&self.parser_chunks, 1);
@@ -168,6 +230,9 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn record_ingress_backlog(&self, current_bytes: usize, peak_bytes: usize) {
+        if !self.enabled {
+            return;
+        }
         let current_bytes = usize_to_u64(current_bytes);
         let peak_bytes = usize_to_u64(peak_bytes).max(current_bytes);
         self.ingress_pending_bytes
@@ -177,6 +242,9 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn record_input(&self, source: TerminalInputMetricSource, bytes: usize) {
+        if !self.enabled {
+            return;
+        }
         let target = match source {
             TerminalInputMetricSource::User => &self.user_input_bytes,
             TerminalInputMetricSource::TerminalResponse => &self.terminal_response_bytes,
@@ -185,28 +253,46 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn record_term_lock(&self, wait: Duration, hold: Duration) {
+        if !self.enabled {
+            return;
+        }
         add(&self.term_lock_samples, 1);
         record_duration(&self.term_lock_wait_ns, &self.term_lock_wait_max_ns, wait);
         record_duration(&self.term_lock_hold_ns, &self.term_lock_hold_max_ns, hold);
     }
 
     pub fn record_wakeup_request(&self) {
+        if !self.enabled {
+            return;
+        }
         add(&self.wakeup_requests, 1);
     }
 
     pub fn record_wakeup_queued(&self) {
+        if !self.enabled {
+            return;
+        }
         add(&self.wakeup_queued, 1);
     }
 
     pub fn record_wakeup_coalesced(&self) {
+        if !self.enabled {
+            return;
+        }
         add(&self.wakeup_coalesced, 1);
     }
 
     pub fn record_render(&self, duration: Duration, focused: bool) {
+        if !self.enabled {
+            return;
+        }
         self.record_render_at(duration, focused, monotonic_now());
     }
 
     pub fn record_render_at(&self, duration: Duration, focused: bool, rendered_at: Duration) {
+        if !self.enabled {
+            return;
+        }
         add(&self.render_samples, 1);
         record_duration(&self.render_ns, &self.render_max_ns, duration);
         self.last_render_focused.store(focused, Ordering::Release);
@@ -216,10 +302,16 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn set_view_visible(&self, visible: bool) {
+        if !self.enabled {
+            return;
+        }
         self.view_visible.store(visible, Ordering::Release);
     }
 
     pub fn record_ssh_connect(&self, reconnect: bool) {
+        if !self.enabled {
+            return;
+        }
         add(&self.ssh_connects, 1);
         if reconnect {
             add(&self.ssh_reconnects, 1);
@@ -227,10 +319,16 @@ impl TerminalPerformanceMetrics {
     }
 
     pub fn record_ssh_invalidation(&self) {
+        if !self.enabled {
+            return;
+        }
         add(&self.ssh_invalidations, 1);
     }
 
     pub fn snapshot(&self) -> TerminalPerformanceSnapshot {
+        if !self.enabled {
+            return TerminalPerformanceSnapshot::default();
+        }
         // Each field is intentionally loaded independently. Metrics consumers
         // must treat this as observability data, not a coherent state snapshot.
         TerminalPerformanceSnapshot {
@@ -261,6 +359,30 @@ impl TerminalPerformanceMetrics {
             view_visible: self.view_visible.load(Ordering::Acquire),
         }
     }
+}
+
+pub fn terminal_performance_metrics_enabled() -> bool {
+    let runtime = std::env::var(TERMINAL_PERFORMANCE_METRICS_ENV).ok();
+    terminal_performance_metrics_enabled_from(
+        runtime.as_deref(),
+        option_env!("NAVOP_TERMINAL_PERFORMANCE_METRICS"),
+    )
+}
+
+fn terminal_performance_metrics_enabled_from(
+    runtime: Option<&str>,
+    build_time: Option<&str>,
+) -> bool {
+    runtime
+        .or(build_time)
+        .is_some_and(terminal_performance_metrics_truthy)
+}
+
+fn terminal_performance_metrics_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn add(target: &AtomicU64, value: u64) {
@@ -315,4 +437,32 @@ fn monotonic_now() -> Duration {
 
 fn encode_tick(value: Duration) -> u64 {
     duration_ns(value).saturating_add(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_performance_metrics_enabled_from;
+
+    #[test]
+    fn runtime_metrics_switch_overrides_build_time_and_accepts_truthy_values() {
+        for value in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(terminal_performance_metrics_enabled_from(
+                Some(value),
+                Some("false")
+            ));
+        }
+
+        for value in ["", "0", "false", "no", "off", "unexpected"] {
+            assert!(!terminal_performance_metrics_enabled_from(
+                Some(value),
+                Some("true")
+            ));
+        }
+
+        assert!(terminal_performance_metrics_enabled_from(
+            None,
+            Some("true")
+        ));
+        assert!(!terminal_performance_metrics_enabled_from(None, None));
+    }
 }

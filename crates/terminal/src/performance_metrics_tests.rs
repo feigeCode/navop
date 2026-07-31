@@ -7,7 +7,7 @@ use std::time::Duration;
 
 #[test]
 fn metrics_aggregate_counts_backlog_and_maxima_without_payloads() {
-    let metrics = TerminalPerformanceMetrics::default();
+    let metrics = TerminalPerformanceMetrics::enabled();
 
     metrics.record_parser_chunk(4_096);
     metrics.record_parser_chunk(1_024);
@@ -41,8 +41,29 @@ fn metrics_aggregate_counts_backlog_and_maxima_without_payloads() {
 }
 
 #[test]
-fn metrics_record_lock_render_and_activity_state() {
+fn metrics_are_disabled_by_default_and_ignore_recording_calls() {
     let metrics = TerminalPerformanceMetrics::default();
+    assert!(!metrics.is_enabled());
+
+    metrics.record_parser_chunk(4_096);
+    metrics.record_ingress_backlog(512, 4_096);
+    metrics.record_input(TerminalInputMetricSource::User, 7);
+    metrics.record_input(TerminalInputMetricSource::TerminalResponse, 11);
+    metrics.record_term_lock(Duration::from_nanos(10), Duration::from_nanos(30));
+    metrics.record_wakeup_request();
+    metrics.record_wakeup_queued();
+    metrics.record_wakeup_coalesced();
+    metrics.record_render_at(Duration::from_nanos(50), true, Duration::from_secs(2));
+    metrics.set_view_visible(true);
+    metrics.record_ssh_connect(true);
+    metrics.record_ssh_invalidation();
+
+    assert_eq!(TerminalPerformanceSnapshot::default(), metrics.snapshot());
+}
+
+#[test]
+fn metrics_record_lock_render_and_activity_state() {
+    let metrics = TerminalPerformanceMetrics::enabled();
     assert_eq!(TerminalActivity::Background, metrics.snapshot().activity());
 
     metrics.record_term_lock(Duration::from_nanos(10), Duration::from_nanos(30));
@@ -68,7 +89,7 @@ fn metrics_record_lock_render_and_activity_state() {
 
 #[test]
 fn metrics_saturate_duration_totals_instead_of_wrapping() {
-    let metrics = TerminalPerformanceMetrics::default();
+    let metrics = TerminalPerformanceMetrics::enabled();
 
     metrics.record_term_lock(Duration::MAX, Duration::MAX);
     metrics.record_term_lock(Duration::from_nanos(1), Duration::from_nanos(1));
@@ -118,7 +139,7 @@ fn metrics_window_uses_saturating_deltas_and_handles_zero_elapsed_time() {
 
 #[test]
 fn metrics_support_concurrent_atomic_updates() {
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let workers = (0..4)
         .map(|_| {
             let metrics = metrics.clone();

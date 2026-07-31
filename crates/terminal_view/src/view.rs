@@ -130,6 +130,7 @@ mod keybindings;
 mod mouse_down;
 mod mouse_selection;
 mod paste_confirmation;
+mod performance_diagnostics;
 mod preferences;
 mod recording_footer;
 mod recording_playback_config;
@@ -217,6 +218,9 @@ pub struct TerminalView {
 
     render_cache: RenderCache,
     focus_handle: FocusHandle,
+    /// Present only when the developer performance diagnostics switch was
+    /// enabled when this terminal was created.
+    performance_metrics: Option<Arc<terminal::TerminalPerformanceMetrics>>,
 
     terminal_bounds: Bounds<Pixels>,
 

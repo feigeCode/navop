@@ -360,7 +360,7 @@ async fn sustained_transport_holds_only_one_source_chunk_and_never_exceeds_the_b
 #[tokio::test]
 async fn parser_worker_preserves_order_drains_and_coalesces_wakeups() {
     let (event_tx, mut event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Arc::new(FairMutex::new(Term::new(
         TermConfig::default(),
@@ -411,7 +411,7 @@ async fn parser_worker_preserves_order_drains_and_coalesces_wakeups() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parser_worker_holds_byte_reservation_through_term_lock_and_parser_consumption() {
     let (event_tx, _event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Arc::new(FairMutex::new(Term::new(
         TermConfig::default(),
@@ -492,7 +492,7 @@ async fn parser_worker_abort_discards_unconsumed_backlog_without_payload_metrics
     const SECRET: &[u8] = b"never-retain-this-payload";
 
     let (event_tx, mut event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Arc::new(FairMutex::new(Term::new(
         TermConfig::default(),
@@ -549,7 +549,7 @@ async fn parser_worker_records_accepted_raw_output_at_the_parser_boundary() {
     let recording = TestRecording::start(RecordingBackend::Ssh, false);
     let payload = b"\xffssh\x1b]133;A\x07output".to_vec();
     let (event_tx, _event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Arc::new(FairMutex::new(Term::new(
         TermConfig::default(),

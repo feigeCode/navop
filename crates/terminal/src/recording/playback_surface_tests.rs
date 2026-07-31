@@ -64,7 +64,7 @@ fn runtime(
     Arc<TerminalPerformanceMetrics>,
 ) {
     let (event_tx, event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let runtime = TerminalPlaybackRuntime::new(
         playback(capture_input, events),
         1_000,

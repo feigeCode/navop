@@ -86,7 +86,7 @@ fn terminal_harness() -> (
     tokio::sync::mpsc::UnboundedReceiver<TerminalEvent>,
 ) {
     let (event_tx, event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let event_proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Arc::new(FairMutex::new(Term::new(
         TermConfig::default(),

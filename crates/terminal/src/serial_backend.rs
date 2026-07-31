@@ -306,7 +306,7 @@ mod tests {
     fn advance_serial_term_records_parser_and_lock_metrics_once() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, _event_proxy) = create_test_term(event_tx);
-        let metrics = TerminalPerformanceMetrics::default();
+        let metrics = TerminalPerformanceMetrics::enabled();
         let mut processor = Processor::<StdSyncHandler>::new();
         let data = b"serial output\r\n";
 
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn serial_backend_records_direct_and_handle_input_without_double_counting() {
         let (command_tx, mut command_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let backend = SerialBackend {
             command_tx,
             shutdown: CancellationToken::new(),

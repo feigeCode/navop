@@ -1192,7 +1192,7 @@ mod tests {
     #[test]
     fn ssh_backend_records_direct_and_handle_input_without_double_counting() {
         let (command_tx, mut command_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let backend = SshBackend {
             command_tx,
             exec_ids: Arc::new(AtomicU64::new(1)),

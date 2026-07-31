@@ -36,7 +36,7 @@ fn test_term() -> (
     UnboundedReceiver<TerminalEvent>,
 ) {
     let (event_tx, event_rx) = unbounded_channel();
-    let metrics = Arc::new(TerminalPerformanceMetrics::default());
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
     let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
     let term = Term::new(TermConfig::default(), &BaselineDimensions, proxy.clone());
     (Arc::new(FairMutex::new(term)), proxy, metrics, event_rx)

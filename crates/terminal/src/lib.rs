@@ -24,8 +24,9 @@ pub use local_shell::{
     local_config_from_settings_with_profile,
 };
 pub use performance_metrics::{
-    TerminalActivity, TerminalInputMetricSource, TerminalPerformanceMetrics,
-    TerminalPerformanceSnapshot, TerminalPerformanceWindow,
+    TERMINAL_PERFORMANCE_METRICS_ENV, TerminalActivity, TerminalInputMetricSource,
+    TerminalPerformanceMetrics, TerminalPerformanceSnapshot, TerminalPerformanceWindow,
+    terminal_performance_metrics_enabled,
 };
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;

@@ -1672,11 +1672,31 @@ impl Terminal {
         alacritty_terminal::term::color::Colors,
         Arc<TerminalPerformanceMetrics>,
     ) {
+        Self::create_term_with_metrics(
+            cols,
+            rows,
+            scrollback_lines,
+            event_tx,
+            Arc::new(TerminalPerformanceMetrics::for_runtime()),
+        )
+    }
+
+    fn create_term_with_metrics(
+        cols: usize,
+        rows: usize,
+        scrollback_lines: usize,
+        event_tx: UnboundedSender<TerminalEvent>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+    ) -> (
+        Arc<FairMutex<Term<GpuiEventProxy>>>,
+        GpuiEventProxy,
+        alacritty_terminal::term::color::Colors,
+        Arc<TerminalPerformanceMetrics>,
+    ) {
         let term_config = TermConfig {
             scrolling_history: scrollback_lines,
             ..Default::default()
         };
-        let performance_metrics = Arc::new(TerminalPerformanceMetrics::default());
         let event_proxy = GpuiEventProxy::with_metrics(event_tx, performance_metrics.clone());
         let term = Term::new(
             term_config,
@@ -3005,7 +3025,7 @@ mod tests {
     };
     use crate::{
         TerminalBackend, TerminalControlHandle, TerminalEvent, TerminalExecHandle,
-        TerminalInputHandle, TerminalSize,
+        TerminalInputHandle, TerminalPerformanceMetrics, TerminalSize,
     };
     use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
@@ -4477,8 +4497,9 @@ mod tests {
     #[test]
     fn create_term_shares_performance_metrics_with_event_proxy() {
         let (event_tx, mut event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let (_term, event_proxy, _colors, metrics) =
-            Terminal::create_term(80, 24, 10_000, event_tx);
+            Terminal::create_term_with_metrics(80, 24, 10_000, event_tx, metrics);
 
         assert!(Arc::ptr_eq(&metrics, &event_proxy.performance_metrics()));
 
@@ -4493,8 +4514,13 @@ mod tests {
     #[test]
     fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, _event_proxy, _colors, performance_metrics) =
-            Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let (term, _event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
+            80,
+            24,
+            10_000,
+            event_tx.clone(),
+            Arc::new(TerminalPerformanceMetrics::enabled()),
+        );
         let shared_metrics = performance_metrics.clone();
         let original_term = term.clone();
         let mut terminal = Terminal {

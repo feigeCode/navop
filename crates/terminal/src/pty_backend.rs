@@ -947,7 +947,7 @@ mod tests {
     fn osc_tracking_reader_records_each_non_empty_pty_read() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (command_tx, mut command_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let mut pty = OscTrackingPty::new(
             TestEventedPty::new(b"local output".to_vec()),
             event_tx,
@@ -977,7 +977,7 @@ mod tests {
         );
         let (event_tx, _event_rx) = unbounded_channel();
         let (command_tx, _command_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let mut pty = OscTrackingPty::new(
             TestEventedPty::new(b"\xffraw\x1b]133;A\x07output".to_vec()),
             event_tx,
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn event_proxy_records_wakeup_request_queue_and_coalescing() {
         let (event_tx, mut event_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
 
         proxy.send_event(AlacTermEvent::Wakeup);
@@ -1073,7 +1073,7 @@ mod tests {
     #[test]
     fn event_proxy_only_records_queued_wakeup_after_successful_send() {
         let (event_tx, event_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
         drop(event_rx);
 
@@ -1088,7 +1088,7 @@ mod tests {
     #[test]
     fn event_proxy_records_all_terminal_responses_without_a_write_back_sink() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
 
         proxy.send_event(AlacTermEvent::PtyWrite("pty".to_string()));
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn playback_safe_event_proxy_only_allows_grid_wakeup() {
         let (event_tx, mut event_rx) = unbounded_channel();
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let proxy = GpuiEventProxy::playback_safe(event_tx, metrics.clone());
         let (write_tx, mut write_rx) = unbounded_channel::<Vec<u8>>();
 
@@ -1194,7 +1194,8 @@ mod tests {
     #[test]
     fn text_area_size_request_uses_current_window_size() {
         let (tx, _rx) = unbounded_channel::<TerminalEvent>();
-        let proxy = GpuiEventProxy::new(tx);
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
+        let proxy = GpuiEventProxy::with_metrics(tx, metrics);
 
         // 注入一个回写通道收集 reply 字节
         let captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));

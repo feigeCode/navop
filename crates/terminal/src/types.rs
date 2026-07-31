@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn metrics_input_handle_records_user_bytes_once() {
-        let metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = written.clone();
         let handle = TerminalInputHandle::with_metrics(metrics.clone(), move |bytes| {
