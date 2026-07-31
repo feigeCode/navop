@@ -310,7 +310,13 @@ fn exec_schema_value() -> Value {
 
 fn exec_schema() -> Arc<JsonObject> {
     let mut props = JsonObject::new();
-    props.insert("target".to_string(), string_schema());
+    props.insert(
+        "target".to_string(),
+        json!({
+            "type": "string",
+            "description": "Exact `id` of an active terminal resource with the `remote_exec` capability. Call `connections.list_sessions` with capability=\"remote_exec\" and copy an `id` from the result. Do not invent or reuse a stale session id."
+        }),
+    );
     props.insert("command".to_string(), string_schema());
     props.insert("connection".to_string(), string_schema());
     props.insert("connection_id".to_string(), string_schema());

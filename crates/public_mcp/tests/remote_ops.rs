@@ -140,6 +140,18 @@ fn ssh_exec_schema_uses_terminal_target_input() {
 
     assert_eq!(json!(["target", "command"]), exec.input_schema["required"]);
     assert_eq!("string", exec.input_schema["properties"]["target"]["type"]);
+    assert!(
+        exec.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("remote_exec")
+    );
+    assert!(
+        exec.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connections.list_sessions")
+    );
     assert_eq!(
         "string",
         exec.input_schema["properties"]["session_id"]["type"]

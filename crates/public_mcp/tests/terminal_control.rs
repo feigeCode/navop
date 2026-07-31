@@ -94,6 +94,18 @@ fn terminal_control_descriptor_requires_interrupt_action() {
         json!(["interrupt"]),
         descriptor.input_schema["properties"]["action"]["enum"]
     );
+    assert!(
+        descriptor.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("terminal_control")
+    );
+    assert!(
+        descriptor.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connections.list_sessions")
+    );
     assert_eq!(RiskLevel::High, descriptor.annotations.risk);
     assert!(descriptor.annotations.open_world);
     assert!(!descriptor.annotations.supports_parallel);

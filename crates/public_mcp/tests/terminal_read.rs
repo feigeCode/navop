@@ -56,6 +56,18 @@ fn terminal_read_is_registered_as_bounded_read_only_tool() {
         .expect("terminal.read should be listed");
 
     assert_eq!(json!(["target"]), tool.input_schema["required"]);
+    assert!(
+        tool.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("kind=\"terminal\"")
+    );
+    assert!(
+        tool.input_schema["properties"]["target"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connections.list_sessions")
+    );
     assert_eq!(
         json!(80),
         tool.input_schema["properties"]["lines"]["default"]
