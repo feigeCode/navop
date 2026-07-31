@@ -170,7 +170,7 @@ pub use recording_playback_config::RecordingPlaybackViewConfig;
 use resize_event_handler::ResizeEventHandler;
 pub(crate) use state::TerminalDuplicateSource;
 use state::*;
-use tab_content::{recording_playback_display_name, recording_playback_tab_title};
+use tab_content::recording_playback_display_name;
 
 pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 
