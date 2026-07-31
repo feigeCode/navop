@@ -36,7 +36,6 @@ pub struct NotesView {
     pub(crate) focus_handle: FocusHandle,
     pub(crate) standalone_markdown: bool,
     pub(crate) sidebar_collapsed: bool,
-    pub(crate) markdown_outline_open: bool,
     pub(crate) editor_theme: Option<MarkdownEditorTheme>,
 }
 
@@ -150,7 +149,6 @@ impl NotesView {
             focus_handle: cx.focus_handle(),
             standalone_markdown,
             sidebar_collapsed: false,
-            markdown_outline_open: false,
             editor_theme,
         }
     }
