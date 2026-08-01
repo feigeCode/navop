@@ -19,7 +19,9 @@ use rust_xlsxwriter::Workbook;
 use tracing::{error, log::trace};
 
 use crate::import_export::table_export_view::DataExportView;
-use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_input};
+use crate::search_shortcut::{
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenTableDesigner, focus_search_input,
+};
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
@@ -118,6 +120,7 @@ struct TextEditorDialogRequest {
 pub enum DataGridEvent {
     LargeTextSelectionChanged,
     ToggleLargeTextEditorRequested,
+    SaveChangesRequested,
     OpenTableDesignerRequested,
 }
 
@@ -1420,16 +1423,8 @@ impl DataGrid {
         self.show_sql_preview(window, cx);
     }
 
-    fn handle_commit_changes(
-        &mut self,
-        event: &ClickEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.table.update(cx, |state, cx| {
-            state.commit_cell_edit(window, cx);
-        });
-        self.handle_save_changes(event, window, cx);
+    fn handle_commit_changes(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(DataGridEvent::SaveChangesRequested);
     }
 
     fn handle_large_text_editor(
@@ -1444,6 +1439,15 @@ impl DataGrid {
     fn handle_open_table_designer(
         &mut self,
         _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DataGridEvent::OpenTableDesignerRequested);
+    }
+
+    fn on_action_open_table_designer(
+        &mut self,
+        _: &OpenTableDesigner,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2854,6 +2858,7 @@ impl Render for DataGrid {
                     .on_action(cx.listener(Self::handle_page_change_10000))
                     .on_action(cx.listener(Self::handle_page_change_100000))
                     .on_action(cx.listener(Self::on_action_focus_search))
+                    .on_action(cx.listener(Self::on_action_open_table_designer))
                     .key_context(DB_SEARCH_CONTEXT)
             })
             .size_full()

@@ -9,6 +9,14 @@ use gpui_component::{ActiveTheme, h_flex};
 
 const PAGE_PREVIEW_WIDTH: gpui::Pixels = px(420.0);
 
+fn run_save_if_flushed(flushed: bool, save: impl FnOnce()) -> bool {
+    if !flushed {
+        return false;
+    }
+    save();
+    true
+}
+
 pub struct CellPreviewHost {
     data_grid: Entity<DataGrid>,
     preview_panel: Entity<CellPreviewPanel>,
@@ -23,10 +31,15 @@ impl CellPreviewHost {
         let grid_sub = cx.subscribe_in(
             &data_grid,
             window,
-            |this, _, event: &DataGridEvent, window, cx| {
-                if let DataGridEvent::ToggleLargeTextEditorRequested = event {
+            |this, _, event: &DataGridEvent, window, cx| match event {
+                DataGridEvent::ToggleLargeTextEditorRequested => {
                     this.toggle_preview(window, cx);
                 }
+                DataGridEvent::SaveChangesRequested => {
+                    this.save_changes(window, cx);
+                }
+                DataGridEvent::LargeTextSelectionChanged
+                | DataGridEvent::OpenTableDesignerRequested => {}
             },
         );
 
@@ -46,6 +59,15 @@ impl CellPreviewHost {
 
         self.preview_panel
             .update(cx, |panel, cx| panel.flush_pending(cx))
+    }
+
+    fn save_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let flushed = self.flush_pending(cx);
+        run_save_if_flushed(flushed, || {
+            self.data_grid.update(cx, |grid, cx| {
+                grid.save_changes(window, cx);
+            });
+        })
     }
 
     fn toggle_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -113,5 +135,27 @@ impl Render for CellPreviewHost {
                         .child(self.preview_panel.clone()),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_save_if_flushed;
+    use std::cell::Cell;
+
+    #[test]
+    fn save_runs_after_successful_flush() {
+        let saved = Cell::new(false);
+
+        assert!(run_save_if_flushed(true, || saved.set(true)));
+        assert!(saved.get());
+    }
+
+    #[test]
+    fn save_is_skipped_when_flush_fails() {
+        let saved = Cell::new(false);
+
+        assert!(!run_save_if_flushed(false, || saved.set(true)));
+        assert!(!saved.get());
     }
 }

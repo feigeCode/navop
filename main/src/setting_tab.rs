@@ -3109,6 +3109,13 @@ const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["cmd-shift-d"],
+        keys_other: &["ctrl-shift-d"],
+        label_key: "Settings.Shortcuts.database_open_table_designer",
+        action_id: Some(action_id::DB_OPEN_TABLE_DESIGNER),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["cmd-enter", "ctrl-enter"],
         keys_other: &["cmd-enter", "ctrl-enter"],
         label_key: "Settings.Shortcuts.sql_run_query",

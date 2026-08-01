@@ -3071,6 +3071,10 @@ Settings:
       en: Query Selected Table
       zh-CN: 查询选中表
       zh-HK: 查詢選中表
+    database_open_table_designer:
+      en: Design Current Table
+      zh-CN: 设计当前表
+      zh-HK: 設計當前表
     sql_run_query:
       en: Run Current Query
       zh-CN: 执行当前查询
