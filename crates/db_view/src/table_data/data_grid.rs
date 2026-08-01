@@ -20,7 +20,8 @@ use tracing::{error, log::trace};
 
 use crate::import_export::table_export_view::DataExportView;
 use crate::search_shortcut::{
-    DB_SEARCH_CONTEXT, FocusSearchInput, OpenTableDesigner, focus_search_input,
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, OpenTableDesigner,
+    focus_search_input,
 };
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
@@ -122,6 +123,7 @@ pub enum DataGridEvent {
     ToggleLargeTextEditorRequested,
     SaveChangesRequested,
     OpenTableDesignerRequested,
+    OpenTableQueryRequested,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1452,6 +1454,15 @@ impl DataGrid {
         cx: &mut Context<Self>,
     ) {
         cx.emit(DataGridEvent::OpenTableDesignerRequested);
+    }
+
+    fn on_action_open_table_query(
+        &mut self,
+        _: &OpenSelectedTableQuery,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DataGridEvent::OpenTableQueryRequested);
     }
 
     fn handle_toolbar_refresh(
@@ -2859,6 +2870,7 @@ impl Render for DataGrid {
                     .on_action(cx.listener(Self::handle_page_change_100000))
                     .on_action(cx.listener(Self::on_action_focus_search))
                     .on_action(cx.listener(Self::on_action_open_table_designer))
+                    .on_action(cx.listener(Self::on_action_open_table_query))
                     .key_context(DB_SEARCH_CONTEXT)
             })
             .size_full()

@@ -2,12 +2,36 @@ use crate::sidebar::cell_preview_panel::CellPreviewPanel;
 use crate::table_data::data_grid::{DataGrid, DataGridEvent};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    App, AppContext, Context, DragMoveEvent, Entity, EntityId, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement,
     Styled, Subscription, Window, div, px,
 };
 use gpui_component::{ActiveTheme, h_flex};
+use std::{cell::Cell, rc::Rc};
 
-const PAGE_PREVIEW_WIDTH: gpui::Pixels = px(420.0);
+const DEFAULT_PREVIEW_WIDTH: Pixels = px(420.0);
+const MIN_PREVIEW_WIDTH: Pixels = px(280.0);
+const MAX_PREVIEW_WIDTH: Pixels = px(800.0);
+const PREVIEW_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
+
+#[derive(Clone)]
+struct ResizeCellPreview {
+    entity_id: EntityId,
+    initial_width: Pixels,
+    initial_x: Rc<Cell<Option<Pixels>>>,
+}
+
+impl Render for ResizeCellPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.0))
+    }
+}
+
+fn resized_preview_width(initial_width: Pixels, initial_x: Pixels, current_x: Pixels) -> Pixels {
+    (initial_width + initial_x - current_x)
+        .max(MIN_PREVIEW_WIDTH)
+        .min(MAX_PREVIEW_WIDTH)
+}
 
 fn run_save_if_flushed(flushed: bool, save: impl FnOnce()) -> bool {
     if !flushed {
@@ -21,6 +45,7 @@ pub struct CellPreviewHost {
     data_grid: Entity<DataGrid>,
     preview_panel: Entity<CellPreviewPanel>,
     is_preview_open: bool,
+    preview_width: Pixels,
     _grid_sub: Subscription,
     focus_handle: FocusHandle,
 }
@@ -39,7 +64,8 @@ impl CellPreviewHost {
                     this.save_changes(window, cx);
                 }
                 DataGridEvent::LargeTextSelectionChanged
-                | DataGridEvent::OpenTableDesignerRequested => {}
+                | DataGridEvent::OpenTableDesignerRequested
+                | DataGridEvent::OpenTableQueryRequested => {}
             },
         );
 
@@ -47,6 +73,7 @@ impl CellPreviewHost {
             data_grid,
             preview_panel,
             is_preview_open: false,
+            preview_width: DEFAULT_PREVIEW_WIDTH,
             _grid_sub: grid_sub,
             focus_handle: cx.focus_handle(),
         }
@@ -125,13 +152,64 @@ impl Render for CellPreviewHost {
                     .child(self.data_grid.clone()),
             )
             .when(self.is_preview_open, |this| {
+                let initial_x = Rc::new(Cell::new(None));
                 this.child(
                     div()
-                        .w(PAGE_PREVIEW_WIDTH)
+                        .id("cell-preview-resize")
+                        .group("cell-preview-resize")
+                        .w(PREVIEW_RESIZE_HANDLE_WIDTH)
                         .h_full()
                         .flex_shrink_0()
-                        .border_l_1()
-                        .border_color(cx.theme().border)
+                        .cursor_col_resize()
+                        .occlude()
+                        .flex()
+                        .justify_end()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .h_full()
+                                .w(px(1.0))
+                                .bg(cx.theme().border)
+                                .group_hover("cell-preview-resize", |this| {
+                                    this.bg(cx.theme().primary)
+                                }),
+                        )
+                        .on_drag_move(cx.listener(
+                            |this, e: &DragMoveEvent<ResizeCellPreview>, _window, cx| {
+                                let drag = e.drag(cx);
+                                if drag.entity_id != cx.entity_id() {
+                                    return;
+                                }
+                                let Some(initial_x) = drag.initial_x.get() else {
+                                    return;
+                                };
+
+                                this.preview_width = resized_preview_width(
+                                    drag.initial_width,
+                                    initial_x,
+                                    e.event.position.x,
+                                );
+                                cx.notify();
+                            },
+                        ))
+                        .on_drag(
+                            ResizeCellPreview {
+                                entity_id: cx.entity_id(),
+                                initial_width: self.preview_width,
+                                initial_x,
+                            },
+                            |drag, _, window, cx| {
+                                drag.initial_x.set(Some(window.mouse_position().x));
+                                cx.stop_propagation();
+                                cx.new(|_| drag.clone())
+                            },
+                        ),
+                )
+                .child(
+                    div()
+                        .w(self.preview_width)
+                        .h_full()
+                        .flex_shrink_0()
                         .child(self.preview_panel.clone()),
                 )
             })
@@ -140,12 +218,12 @@ impl Render for CellPreviewHost {
 
 #[cfg(test)]
 mod tests {
-    use super::run_save_if_flushed;
-    use std::cell::Cell;
+    use super::*;
+    use std::cell::Cell as FlagCell;
 
     #[test]
     fn save_runs_after_successful_flush() {
-        let saved = Cell::new(false);
+        let saved = FlagCell::new(false);
 
         assert!(run_save_if_flushed(true, || saved.set(true)));
         assert!(saved.get());
@@ -153,9 +231,37 @@ mod tests {
 
     #[test]
     fn save_is_skipped_when_flush_fails() {
-        let saved = Cell::new(false);
+        let saved = FlagCell::new(false);
 
         assert!(!run_save_if_flushed(false, || saved.set(true)));
         assert!(!saved.get());
+    }
+
+    #[test]
+    fn preview_width_grows_when_left_handle_moves_left() {
+        assert_eq!(
+            px(480.0),
+            resized_preview_width(px(420.0), px(500.0), px(440.0))
+        );
+    }
+
+    #[test]
+    fn preview_width_shrinks_when_left_handle_moves_right() {
+        assert_eq!(
+            px(360.0),
+            resized_preview_width(px(420.0), px(500.0), px(560.0))
+        );
+    }
+
+    #[test]
+    fn preview_width_is_clamped_to_supported_bounds() {
+        assert_eq!(
+            MIN_PREVIEW_WIDTH,
+            resized_preview_width(px(300.0), px(500.0), px(600.0))
+        );
+        assert_eq!(
+            MAX_PREVIEW_WIDTH,
+            resized_preview_width(px(780.0), px(500.0), px(400.0))
+        );
     }
 }

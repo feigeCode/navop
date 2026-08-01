@@ -1151,6 +1151,12 @@ impl DatabaseEventHandler {
                                     cx.emit(DbTreeViewEvent::DesignTable { node_id });
                                 });
                             }
+                            TableDataTabEvent::OpenTableQueryRequested => {
+                                let node_id = node_id_for_sub.clone();
+                                tree_view_for_sub.update(cx, |_, cx| {
+                                    cx.emit(DbTreeViewEvent::CreateNewQuery { node_id });
+                                });
+                            }
                         },
                     )
                     .detach();

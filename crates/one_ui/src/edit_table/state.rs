@@ -341,6 +341,45 @@ where
         cx.notify();
     }
 
+    pub fn extend_row_selection_to(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        let can_extend =
+            self.selection_state == SelectionState::Row && self.selection.anchor.is_some();
+        let is_down = match self.selected_row {
+            Some(selected_row) => row_ix > selected_row,
+            None => true,
+        };
+        let row_number_offset = if self.delegate.row_number_enabled(cx) {
+            1
+        } else {
+            0
+        };
+        let end_col = self.col_groups.len().saturating_sub(1);
+
+        self.selection_state = SelectionState::Row;
+        self.right_clicked_row = None;
+        self.selected_row = Some(row_ix);
+        self.selected_col = None;
+        self.selected_cell = None;
+        if can_extend {
+            self.selection
+                .extend_row_to(row_ix, row_number_offset, end_col);
+        } else {
+            self.selection
+                .select_row(row_ix, row_number_offset, end_col);
+        }
+        self.vertical_scroll_handle.scroll_to_item(
+            row_ix,
+            if is_down {
+                ScrollStrategy::Bottom
+            } else {
+                ScrollStrategy::Top
+            },
+        );
+        cx.emit(EditTableEvent::SelectRow(row_ix));
+        cx.emit(EditTableEvent::SelectionChanged(self.selection.clone()));
+        cx.notify();
+    }
+
     pub fn selected_col(&self) -> Option<usize> {
         self.selected_col
     }
@@ -630,6 +669,10 @@ where
     /// 检查单元格是否在选区内
     pub fn is_cell_in_selection(&self, row_ix: usize, col_ix: usize) -> bool {
         self.selection.contains(row_ix, col_ix)
+    }
+
+    fn is_row_in_selection(&self, row_ix: usize) -> bool {
+        self.selection_state == SelectionState::Row && self.selection.contains_row(row_ix)
     }
 
     /// 获取活动单元格
@@ -1039,7 +1082,11 @@ where
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_selected_row(row_ix, cx);
+        if self.delegate.multi_select_enabled(cx) && e.modifiers().shift {
+            self.extend_row_selection_to(row_ix, cx);
+        } else {
+            self.set_selected_row(row_ix, cx);
+        }
         if e.click_count() == 2 {
             cx.emit(EditTableEvent::DoubleClickedCell(row_ix, 0))
         }
@@ -1063,6 +1110,8 @@ where
         let edit_enabled = self.delegate.cell_edit_enabled(cx);
         let multi_select_enabled = self.delegate.multi_select_enabled(cx);
         let is_row_number_col = self.delegate.row_number_enabled(cx) && col_ix == 0;
+        let shift_pressed = e.modifiers().shift;
+        let ctrl_pressed = e.modifiers().secondary();
 
         // 处理正在编辑的单元格
         if edit_enabled {
@@ -1085,12 +1134,13 @@ where
         // 单击处理 - 多选逻辑
         if is_row_number_col {
             // 点击行号列，选择整行
-            self.set_selected_row(row_ix, cx);
+            if multi_select_enabled && shift_pressed {
+                self.extend_row_selection_to(row_ix, cx);
+            } else {
+                self.set_selected_row(row_ix, cx);
+            }
             return;
         }
-
-        let shift_pressed = e.modifiers().shift;
-        let ctrl_pressed = e.modifiers().secondary();
 
         tracing::debug!(
             "on_cell_click: row={}, col={}, shift={}, ctrl/cmd={}, multi_select_enabled={}",
@@ -2735,7 +2785,7 @@ where
     ) -> Stateful<Div> {
         let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
         let is_stripe_row = self.options.stripe && row_ix % 2 != 0;
-        let is_selected = self.selected_row == Some(row_ix);
+        let is_selected = self.is_row_in_selection(row_ix);
         let is_row_deleted = self.delegate.is_row_deleted(row_ix, cx);
         let is_row_added = self.delegate.is_row_added(row_ix, cx);
         let _view = cx.entity().clone();
@@ -2827,22 +2877,17 @@ where
                         })
                         .child(self.delegate.render_last_empty_col(window, cx)),
                 )
-                .when_some(self.selected_row, |this, _| {
-                    this.when(
-                        is_selected && self.selection_state == SelectionState::Row,
-                        |this| {
-                            this.border_color(gpui::transparent_white()).child(
-                                div()
-                                    .top(if row_ix == 0 { px(0.) } else { px(-1.) })
-                                    .left(px(0.))
-                                    .right(px(0.))
-                                    .bottom(px(-1.))
-                                    .absolute()
-                                    .bg(cx.theme().table_active)
-                                    .border_2()
-                                    .border_color(cx.theme().table_active_border),
-                            )
-                        },
+                .when(is_selected, |this| {
+                    this.border_color(gpui::transparent_white()).child(
+                        div()
+                            .top(if row_ix == 0 { px(0.) } else { px(-1.) })
+                            .left(px(0.))
+                            .right(px(0.))
+                            .bottom(px(-1.))
+                            .absolute()
+                            .bg(cx.theme().table_active)
+                            .border_2()
+                            .border_color(cx.theme().table_active_border),
                     )
                 })
                 .when(self.right_clicked_row == Some(row_ix), |this| {

@@ -176,6 +176,13 @@ impl TableSelection {
         self.ranges.iter().any(|range| range.contains(row, col))
     }
 
+    /// 检查指定行是否在任一选区内
+    pub fn contains_row(&self, row: usize) -> bool {
+        self.ranges
+            .iter()
+            .any(|range| range.row_range().contains(&row))
+    }
+
     /// 获取所有选中的单元格坐标
     pub fn all_cells(&self) -> Vec<CellCoord> {
         let mut result = Vec::new();
@@ -227,6 +234,18 @@ impl TableSelection {
             .push(CellRange::new((row, start_col), (row, end_col)));
         self.anchor = Some((row, start_col));
         self.active = Some((row, start_col));
+    }
+
+    /// 从原始锚点扩展整行选区，供 Shift+点击行号使用
+    pub fn extend_row_to(&mut self, row: usize, start_col: usize, end_col: usize) {
+        if let Some((anchor_row, _)) = self.anchor {
+            self.ranges.clear();
+            self.ranges
+                .push(CellRange::new((anchor_row, start_col), (row, end_col)));
+            self.active = Some((row, start_col));
+        } else {
+            self.select_row(row, start_col, end_col);
+        }
     }
 
     /// 选择列
@@ -328,5 +347,44 @@ mod tests {
         assert!(selection.contains(2, 2));
         assert!(selection.contains(3, 3));
         assert!(!selection.contains(0, 0));
+    }
+
+    #[test]
+    fn row_selection_extends_forward_across_all_data_columns() {
+        let mut selection = TableSelection::new();
+        selection.select_row(2, 1, 4);
+        selection.extend_row_to(5, 1, 4);
+
+        assert_eq!(2..6, selection.first_range().unwrap().row_range());
+        assert_eq!(Some((2, 1)), selection.anchor);
+        assert_eq!(Some((5, 1)), selection.active);
+        assert!(selection.contains(4, 1));
+        assert!(selection.contains(4, 4));
+        assert!(!selection.contains(4, 0));
+    }
+
+    #[test]
+    fn row_selection_extends_backward_and_keeps_original_anchor() {
+        let mut selection = TableSelection::new();
+        selection.select_row(5, 1, 4);
+        selection.extend_row_to(2, 1, 4);
+
+        assert_eq!(2..6, selection.first_range().unwrap().row_range());
+        assert_eq!(Some((5, 1)), selection.anchor);
+        assert_eq!(Some((2, 1)), selection.active);
+    }
+
+    #[test]
+    fn repeated_row_extension_reuses_the_initial_anchor() {
+        let mut selection = TableSelection::new();
+        selection.select_row(2, 1, 4);
+        selection.extend_row_to(5, 1, 4);
+        selection.extend_row_to(3, 1, 4);
+
+        assert_eq!(2..4, selection.first_range().unwrap().row_range());
+        assert_eq!(Some((2, 1)), selection.anchor);
+        assert!(selection.contains_row(2));
+        assert!(selection.contains_row(3));
+        assert!(!selection.contains_row(4));
     }
 }

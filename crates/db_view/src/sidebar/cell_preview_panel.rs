@@ -65,7 +65,8 @@ impl CellPreviewPanel {
                 }
                 DataGridEvent::ToggleLargeTextEditorRequested
                 | DataGridEvent::SaveChangesRequested
-                | DataGridEvent::OpenTableDesignerRequested => {}
+                | DataGridEvent::OpenTableDesignerRequested
+                | DataGridEvent::OpenTableQueryRequested => {}
             },
         ));
         self.load_selected_cell(window, cx);

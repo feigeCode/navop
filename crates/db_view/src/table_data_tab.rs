@@ -11,9 +11,24 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 use std::sync::{Arc, Mutex};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TableDataTabEvent {
     OpenTableDesignerRequested,
+    OpenTableQueryRequested,
+}
+
+fn forwarded_table_data_event(
+    event: &crate::table_data::data_grid::DataGridEvent,
+) -> Option<TableDataTabEvent> {
+    match event {
+        crate::table_data::data_grid::DataGridEvent::OpenTableDesignerRequested => {
+            Some(TableDataTabEvent::OpenTableDesignerRequested)
+        }
+        crate::table_data::data_grid::DataGridEvent::OpenTableQueryRequested => {
+            Some(TableDataTabEvent::OpenTableQueryRequested)
+        }
+        _ => None,
+    }
 }
 
 pub struct TableDataTabContent {
@@ -55,11 +70,10 @@ impl TableDataTabContent {
         let data_grid_sub = cx.subscribe_in(
             &data_grid,
             window,
-            |_this, _, event: &crate::table_data::data_grid::DataGridEvent, _, cx| match event {
-                crate::table_data::data_grid::DataGridEvent::OpenTableDesignerRequested => {
-                    cx.emit(TableDataTabEvent::OpenTableDesignerRequested);
+            |_this, _, event: &crate::table_data::data_grid::DataGridEvent, _, cx| {
+                if let Some(event) = forwarded_table_data_event(event) {
+                    cx.emit(event);
                 }
-                _ => {}
             },
         );
 
@@ -211,6 +225,32 @@ mod tests {
         assert_eq!(
             "orders - Data (analytics)",
             table_data_tab_title("analytics", "orders")
+        );
+    }
+
+    #[test]
+    fn forwards_table_level_actions_from_data_grid() {
+        assert_eq!(
+            Some(TableDataTabEvent::OpenTableDesignerRequested),
+            forwarded_table_data_event(
+                &crate::table_data::data_grid::DataGridEvent::OpenTableDesignerRequested
+            )
+        );
+        assert_eq!(
+            Some(TableDataTabEvent::OpenTableQueryRequested),
+            forwarded_table_data_event(
+                &crate::table_data::data_grid::DataGridEvent::OpenTableQueryRequested
+            )
+        );
+    }
+
+    #[test]
+    fn ignores_non_table_level_data_grid_events() {
+        assert_eq!(
+            None,
+            forwarded_table_data_event(
+                &crate::table_data::data_grid::DataGridEvent::LargeTextSelectionChanged
+            )
         );
     }
 }
