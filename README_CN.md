@@ -85,22 +85,41 @@
 
 Navop 可将选定的宿主权威工具开放给外部 Codex、Claude、MCP 客户端和自动化程序。请在 **设置 > 通用 > MCP > MCP Server** 中开启服务、选择权限档位，并在 **Tool Exposure** 中只启用需要的工具组。
 
-runtime 只监听动态 loopback 端口，并使用 Navop 写入用户专属 discovery 文件的 token 验证客户端。工具 Schema、权限、审批、连接、会话、结果和审计始终由正在运行的 Navop 应用控制。
+runtime 只监听动态 loopback 端口，并使用 Navop 写入用户专属 discovery 文件的 token 验证客户端。实时工具与 Schema、Tool Exposure、权限、审批、资源 ID、会话、结果和审计始终由正在运行的 Navop 应用控制。CLI 与 Skill 本身不实现 SSH、SFTP、终端、数据库、Redis 或 MongoDB 的业务逻辑。
 
-终端型 Agent 可使用独立发布的 [`@navop/cli`](https://github.com/feigeCode/navop-mcp)，MCP 客户端可通过 [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) stdio bridge 接入：
+终端型 Agent 需要安装 Node.js 20+、[`@navop/cli`](https://github.com/feigeCode/navop-mcp) 及其内置的 Navop Skill：
 
 ```bash
+navop --version
 npm install -g @navop/cli@latest
-navop status --json
-navop tools --json
-navop schema <tool-name> --json
-navop call <tool-name> --arguments '<json-object>' --json
+navop --version
 
-# 无需全局安装即可启动 MCP stdio bridge
-npx -y @navop/mcp@latest
+# 为 Codex 安装 Skill；Agents 兼容客户端可改用 --target agents
+navop skill install --target codex --scope user
 ```
 
-CLI 与 Agent Skill 只在需要时发现命令和实时 Schema，减少重复的工具上下文。目前的能力范围包括 runtime 发现、SSH、可见终端、SQL 数据库、Redis、MongoDB、SFTP、连接、工作区与宿主注册函数。实际可用能力始终取决于 Navop 运行状态、Tool Exposure 配置和权限档位：
+Skill 只在上下文中保留紧凑工作流，并按需发现命令与实时 Schema。Agent 发起的实际操作命令必须包含 `--json`，`--help` 仅用于发现语法；先检查 runtime 状态，再发现当前命令和工具：
+
+```bash
+navop status --json
+navop --help
+navop tool list --json
+navop tool schema <tool-name> --json
+navop db query --help
+navop db exec --help
+```
+
+从 `navop status --json` 中读取 `permissionMode`、`availableTools`、`toolGroups`、`disabledToolGroups` 与 `guidance`。运行中宿主返回的 `tools/list`、`navop.runtime_status` 结果与实时 Schema 才是权威依据；不能因为 CLI 提供了某个便捷命令，就假定对应能力已经开放。
+
+优先使用 `navop --help` 中提供的领域命令。SQL 只读语句使用 `navop db query`；DDL、DML、脚本及其他可能写入的 SQL 使用 `navop db exec`。只有没有领域命令能够表达实时 Schema 时，才使用底层宿主工具调用：
+
+```bash
+navop tool call <tool-name> --arguments '<json-object-matching-live-schema>' --json
+```
+
+不要猜测工具名称、参数、资源 ID 或会话 ID，只能使用当前 Navop 实时返回的值。必须遵守 Navop 的权限与审批结果；写操作超时或连接中断后，不要自动重试，因为操作结果可能已经发生但状态未知。
+
+实际可用能力取决于正在运行的 Navop、已打开的资源、启用的 Tool Exposure 工具组和权限档位：
 
 | 权限档位 | 行为 |
 | --- | --- |
@@ -108,7 +127,13 @@ CLI 与 Agent Skill 只在需要时发现命令和实时 Schema，减少重复�
 | 确认 / `ask` | 写操作需要在 Navop UI 中审批 |
 | 自动 / `allow` | 自动执行写操作，但破坏性操作仍需明确意图 |
 
-客户端配置与命令文档请查看 [Navop MCP 与 CLI 仓库](https://github.com/feigeCode/navop-mcp)。
+独立的 [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) 仅用于为原生 MCP 客户端提供 stdio bridge：
+
+```bash
+npx -y @navop/mcp@latest
+```
+
+安装、更新、命令参考和客户端配置请查看 [Navop MCP 与 CLI 仓库](https://github.com/feigeCode/navop-mcp)。
 
 ## 应用截图
 

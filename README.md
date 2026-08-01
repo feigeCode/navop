@@ -85,22 +85,41 @@
 
 Navop can expose selected host-authoritative tools to external Codex, Claude, MCP clients, and automation. Enable the server under **Settings > General > MCP > MCP Server**, choose a permission profile, and select the required groups under **Tool Exposure**.
 
-The runtime listens on a dynamic loopback-only port and authenticates clients with the token in Navop's user-only discovery file. Tool schemas, permissions, approvals, connections, sessions, results, and auditing remain controlled by the running Navop application.
+The runtime listens on a dynamic loopback-only port and authenticates clients with the token in Navop's user-only discovery file. Navop remains authoritative for live tools and schemas, Tool Exposure, permissions, approvals, resource IDs, sessions, results, and audit records. The CLI and Skill do not implement SSH, SFTP, terminal, database, Redis, or MongoDB business logic.
 
-Use the separately published [`@navop/cli`](https://github.com/feigeCode/navop-mcp) package for terminal-capable agents, or [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) as a stdio bridge for MCP clients:
+For terminal-capable Agents, install Node.js 20+, the [`@navop/cli`](https://github.com/feigeCode/navop-mcp) package, and the bundled Navop Skill:
 
 ```bash
+navop --version
 npm install -g @navop/cli@latest
-navop status --json
-navop tools --json
-navop schema <tool-name> --json
-navop call <tool-name> --arguments '<json-object>' --json
+navop --version
 
-# Start the MCP stdio bridge without a global install
-npx -y @navop/mcp@latest
+# Install the Skill for Codex, or use --target agents for Agents-compatible clients
+navop skill install --target codex --scope user
 ```
 
-The CLI and Agent Skill discover commands and live schemas only when needed, reducing recurring tool context. Available capabilities currently include runtime discovery, SSH, visible terminals, SQL databases, Redis, MongoDB, SFTP, connections, workspaces, and registered host functions. Actual availability always depends on the running Navop instance, enabled Tool Exposure groups, and the selected permission profile:
+The Skill keeps a compact workflow in context and discovers commands and live schemas only when needed. Every Agent-initiated operational command must include `--json`; use `--help` only to discover syntax. Start with runtime status, then inspect the live command and tool surface:
+
+```bash
+navop status --json
+navop --help
+navop tool list --json
+navop tool schema <tool-name> --json
+navop db query --help
+navop db exec --help
+```
+
+Read `permissionMode`, `availableTools`, `toolGroups`, `disabledToolGroups`, and `guidance` from `navop status --json`. The running host's `tools/list` response, `navop.runtime_status` result, and live schemas are authoritative; never assume a capability exists because the CLI exposes a convenience command.
+
+Prefer a domain command shown by `navop --help`. For SQL, use `navop db query` for read-only statements and `navop db exec` for DDL, DML, scripts, and other write-capable SQL. Use the low-level host tool fallback only when no domain command can represent the live schema:
+
+```bash
+navop tool call <tool-name> --arguments '<json-object-matching-live-schema>' --json
+```
+
+Never guess tool names, arguments, resource IDs, or session IDs. Use only values returned by the running Navop instance, preserve its approval decisions, and do not retry a mutation after a timeout or connection loss because its outcome may be unknown.
+
+Actual capabilities depend on the running application, open resources, enabled Tool Exposure groups, and permission profile:
 
 | Profile | Behavior |
 | --- | --- |
@@ -108,7 +127,13 @@ The CLI and Agent Skill discover commands and live schemas only when needed, red
 | Confirm / `ask` | Requires approval in the Navop UI for mutations |
 | Auto / `allow` | Runs mutations automatically; destructive intent must still be explicit |
 
-See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) for client setup and command documentation.
+The separate [`@navop/mcp`](https://github.com/feigeCode/navop-mcp) package is only the stdio bridge for native MCP clients:
+
+```bash
+npx -y @navop/mcp@latest
+```
+
+See the [Navop MCP and CLI repository](https://github.com/feigeCode/navop-mcp) for installation, updates, command reference, and client configuration.
 
 ## Screenshots
 
