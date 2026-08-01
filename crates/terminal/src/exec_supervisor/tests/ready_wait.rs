@@ -62,3 +62,20 @@ fn human_input_cancels_pending_ready_wait() {
         supervisor.on_input(TerminalInputSource::User, b"x")
     );
 }
+
+#[test]
+fn external_input_cancels_pending_ready_wait() {
+    let mut supervisor = ready_supervisor();
+    supervisor.on_input(TerminalInputSource::User, b"sleep 1\n");
+    let mut waiting_request = request("pwd");
+    waiting_request.ready_timeout = Duration::from_secs(5);
+    supervisor.start(36, waiting_request);
+
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 36,
+            error: TerminalExecError::ConcurrentUserInput,
+        }],
+        supervisor.on_input(TerminalInputSource::ExternalInput, b"x")
+    );
+}

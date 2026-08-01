@@ -30,6 +30,18 @@ pub struct TerminalExecResult {
     pub completion: TerminalExecCompletion,
     pub exit_code: Option<i32>,
     pub output: String,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub captured_bytes: usize,
+    #[serde(default)]
+    pub discarded_bytes: u64,
+    /// `terminal.exec` 即时响应是否因 MCP 响应上限而仅返回了最新尾部。
+    #[serde(default)]
+    pub response_truncated: bool,
+    /// `output` 字段实际返回的 UTF-8 字节数。
+    #[serde(default)]
+    pub response_bytes: usize,
     pub duration_ms: u64,
     pub command_id: Option<String>,
 }

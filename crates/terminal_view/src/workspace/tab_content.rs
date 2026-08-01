@@ -37,7 +37,16 @@ impl TabContent for TerminalWorkspace {
     }
 
     fn can_duplicate(&self, cx: &App) -> bool {
-        self.active_pane().read(cx).duplicate_supported()
+        self.active_pane().read(cx).duplicate_supported(cx)
+    }
+
+    fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab_metric_state(true, cx);
+        self.set_active_pane_metric_state(cx);
+    }
+
+    fn on_deactivate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab_metric_state(false, cx);
     }
 
     fn duplicate(
@@ -45,7 +54,10 @@ impl TabContent for TerminalWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn TabContentView>> {
-        let source = self.active_pane().read(cx).duplicate_source_snapshot(cx);
+        if !self.active_pane().read(cx).duplicate_supported(cx) {
+            return None;
+        }
+        let source = self.active_pane().read(cx).duplicate_source_snapshot(cx)?;
         let duplicate = cx.new(|cx| {
             let main = cx.new(|cx| {
                 TerminalView::new_from_duplicate_source(source, window, cx).with_workspace_pane()

@@ -34,6 +34,9 @@ impl TerminalView {
         }
         self.line_height = self.font_size * self.line_height_scale;
         self.apply_pending_scrollbar_offset(cx);
+        self.sync_recording_ticker(cx);
+        self.sync_recording_playback_ticker(cx);
+        self.sync_recording_playback_slider(window, cx);
 
         let terminal_mode = self.terminal.read(cx).mode();
         self.handle_alt_screen_transition(terminal_mode, cx);
@@ -99,6 +102,11 @@ impl TerminalView {
             .min_h_0()
             .overflow_hidden()
             .bg(bg_color)
+            .key_context(TERMINAL_CONTEXT)
+            .on_action(cx.listener(Self::start_recording_action))
+            .on_action(cx.listener(Self::pause_recording_action))
+            .on_action(cx.listener(Self::resume_recording_action))
+            .on_action(cx.listener(Self::stop_recording_action))
             .when_some(state.left_panel, |this, panel| {
                 this.child(self.render_left_region(panel, state.sidebar_size, cx))
             })
@@ -166,6 +174,7 @@ impl TerminalView {
         state: CenterRegionState,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let show_command_bar = self.accepts_live_terminal_input(cx);
         let workspace_editor = self
             .workspace_editor
             .as_ref()
@@ -186,7 +195,9 @@ impl TerminalView {
                 .min_w_0()
                 .overflow_hidden()
                 .child(self.render_terminal_viewport(state.font_family, cx))
-                .child(self.command_bar.clone())
+                .when(show_command_bar, |this| {
+                    this.child(self.command_bar.clone())
+                })
                 .into_any_element()
         };
         v_flex()
@@ -197,6 +208,7 @@ impl TerminalView {
             .min_w_0()
             .overflow_hidden()
             .child(primary_content)
+            .child(self.render_terminal_session_footer(cx))
             .when_some(state.bottom_panel, |this, panel| {
                 this.child(self.render_bottom_region(panel, state.sidebar_size, cx))
             })

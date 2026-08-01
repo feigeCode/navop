@@ -204,3 +204,53 @@ fn shift_left_click_extends_existing_terminal_selection_only() {
         true
     ));
 }
+
+#[test]
+fn playback_scroll_bypasses_live_alt_screen_and_vi_paths() {
+    let source = include_str!("../scroll.rs");
+    let handler = source
+        .split("pub(super) fn handle_scroll")
+        .nth(1)
+        .and_then(|source| source.split("pub(super) fn pixel_to_point").next())
+        .expect("scroll handler should exist");
+
+    let capability = handler
+        .find("let accepts_live_input = self.accepts_live_terminal_input(cx);")
+        .expect("scroll routing must inspect the live input capability");
+    let alt_screen = handler
+        .find("if accepts_live_input && mode.contains(TermMode::ALT_SCREEN)")
+        .expect("alt-screen forwarding must be live-only");
+    let vi_cursor = handler
+        .find("if accepts_live_input && mode.contains(TermMode::VI)")
+        .expect("VI cursor scrolling must be live-only");
+    let local_scrollback = handler
+        .rfind("scroll_display")
+        .expect("local display scrolling should remain available");
+
+    assert!(capability < alt_screen);
+    assert!(alt_screen < vi_cursor);
+    assert!(vi_cursor < local_scrollback);
+}
+
+#[test]
+fn playback_sgr_mode_never_defers_local_left_button_selection() {
+    let source = include_str!("../mouse_down.rs");
+    let handler = source
+        .split("pub(super) fn handle_mouse_down")
+        .nth(1)
+        .and_then(|source| {
+            source
+                .split("pub(super) fn handle_middle_mouse_down")
+                .next()
+        })
+        .expect("mouse-down handler should exist");
+
+    let capability = handler
+        .find("let accepts_live_input = self.accepts_live_terminal_input(cx);")
+        .expect("mouse-down routing must inspect the live input capability");
+    let deferred_press = handler
+        .find("&& should_defer_sgr_left_press")
+        .expect("pending SGR press must be restricted to live input");
+
+    assert!(capability < deferred_press);
+}

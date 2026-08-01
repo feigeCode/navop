@@ -64,8 +64,12 @@ fn should_dim_input(disabled: bool, code_editor: bool) -> bool {
     disabled && !code_editor
 }
 
-fn should_handle_vertical_navigation(is_multi_line: bool, context_menu_open: bool) -> bool {
-    is_multi_line || context_menu_open
+fn should_handle_vertical_navigation(
+    is_multi_line: bool,
+    context_menu_open: bool,
+    vertical_navigation_enabled: bool,
+) -> bool {
+    (is_multi_line && vertical_navigation_enabled) || context_menu_open
 }
 
 /// A text input element bind to an [`InputState`].
@@ -93,6 +97,7 @@ pub struct Input {
     bare: bool,
     editor_scrollbar: bool,
     text_layout_margin: bool,
+    vertical_navigation_enabled: bool,
 
     /// An optional context menu builder to allow a custom context menu on the input.
     ///
@@ -145,6 +150,7 @@ impl Input {
             bare: false,
             editor_scrollbar: true,
             text_layout_margin: true,
+            vertical_navigation_enabled: true,
             context_menu_builder: None,
         }
     }
@@ -174,6 +180,16 @@ impl Input {
     /// Set the appearance of the input field, if false the input field will no border, background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
+        self
+    }
+
+    /// Enable or disable the input's built-in Up/Down cursor movement.
+    ///
+    /// Components that use a multi-line input for command history navigation can
+    /// disable this and handle the input `MoveUp`/`MoveDown` actions themselves.
+    /// Context-menu navigation remains enabled.
+    pub fn vertical_navigation(mut self, enabled: bool) -> Self {
+        self.vertical_navigation_enabled = enabled;
         self
     }
 
@@ -381,6 +397,7 @@ impl RenderOnce for Input {
         let handle_vertical_navigation = should_handle_vertical_navigation(
             state.mode.is_multi_line(),
             state.is_context_menu_open(cx),
+            self.vertical_navigation_enabled,
         );
         let gap_x = match self.size {
             Size::Small => px(4.),
@@ -622,5 +639,15 @@ mod tests {
 
         assert_eq!(colors, fallback);
         assert!(should_dim_input(true, false));
+    }
+
+    #[test]
+    fn vertical_navigation_can_be_delegated_by_multi_line_inputs() {
+        assert!(should_handle_vertical_navigation(true, false, true));
+        assert!(!should_handle_vertical_navigation(true, false, false));
+        assert!(
+            should_handle_vertical_navigation(true, true, false),
+            "context menus must keep receiving Up/Down actions"
+        );
     }
 }

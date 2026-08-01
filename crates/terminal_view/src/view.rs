@@ -10,9 +10,11 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
-use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_component::{
-    ActiveTheme, BlinkCursor, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex,
+    ActiveTheme, BlinkCursor, Disableable, Icon, IconName, Selectable, Sizable, WindowExt, h_flex,
+    kbd::Kbd, v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -100,32 +102,13 @@ use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
 use terminal::LocalConfig;
 use terminal::terminal::{
-    ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind, TerminalModelEvent,
-    TerminalScrollProxy, resolve_local_working_dir,
+    ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
+    TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
 
-actions!(
-    terminal_view,
-    [
-        SendTab,
-        SendShiftTab,
-        Copy,
-        Paste,
-        SelectAll,
-        ClearSelection,
-        ClearScreen,
-        SearchForward,
-        SearchBackward,
-        ToggleViMode,
-        ViModeStartSelection,
-        IncreaseFont,
-        DecreaseFont,
-        ResetFont,
-    ]
-);
-
+mod actions;
 mod appearance;
 mod clipboard;
 mod clipboard_image;
@@ -139,13 +122,22 @@ mod helpers;
 mod history_actions;
 mod history_query;
 mod history_render;
+mod host_key_confirmation;
+mod init_config;
 mod initialization;
 mod input_handler;
 mod keybindings;
 mod mouse_down;
 mod mouse_selection;
 mod paste_confirmation;
+mod performance_diagnostics;
 mod preferences;
+mod recording_footer;
+mod recording_playback_config;
+mod recording_playback_controls;
+mod recording_playback_footer;
+mod recording_playback_render;
+mod registrations;
 mod render;
 mod render_layout;
 mod render_surface;
@@ -162,17 +154,21 @@ mod text_input;
 mod tool_dock;
 mod vi_input;
 
+use actions::*;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
 use helpers::*;
+use init_config::TerminalViewInit;
 use keybindings::{
     TERMINAL_CLEAR_SCREEN_SHORTCUT, TERMINAL_CONTEXT, TERMINAL_COPY_SHORTCUT,
     TERMINAL_PASTE_SHORTCUT, TERMINAL_SELECT_ALL_SHORTCUT, TERMINAL_TOGGLE_VI_MODE_SHORTCUT,
     terminal_paste_defaults, terminal_shortcut_label,
 };
 pub use keybindings::{init, refresh_keybindings};
+pub use recording_playback_config::RecordingPlaybackViewConfig;
 use resize_event_handler::ResizeEventHandler;
 pub(crate) use state::TerminalDuplicateSource;
 use state::*;
+use tab_content::recording_playback_display_name;
 
 pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 
@@ -180,7 +176,8 @@ pub(crate) const TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
 pub struct TerminalView {
     /// Terminal model entity
     terminal: Entity<Terminal>,
-    duplicate_source: TerminalDuplicateSource,
+    duplicate_source: Option<TerminalDuplicateSource>,
+    recording_playback_name: Option<SharedString>,
     /// 本地终端工作目录
     local_working_dir: Option<PathBuf>,
     /// 光标闪烁管理器
@@ -221,6 +218,9 @@ pub struct TerminalView {
 
     render_cache: RenderCache,
     focus_handle: FocusHandle,
+    /// Present only when the developer performance diagnostics switch was
+    /// enabled when this terminal was created.
+    performance_metrics: Option<Arc<terminal::TerminalPerformanceMetrics>>,
 
     terminal_bounds: Bounds<Pixels>,
 
@@ -232,6 +232,20 @@ pub struct TerminalView {
     local_command_running: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<Task<()>>,
+    /// 当前 pane 是否正在等待用户选择录制文件保存目录。
+    recording_path_prompt_pending: bool,
+    /// 当前 pane 最近一次录制控制错误；在 command bar 中直接展示。
+    recording_control_error: Option<String>,
+    /// 仅在录制时间持续增长时存在，用于每秒刷新 command bar。
+    recording_ticker: Option<Task<()>>,
+    /// 当前 pane 独占的 Playback seek 控件状态。
+    recording_playback_slider: Entity<SliderState>,
+    /// 用户拖动期间只预览位置，Release 后才重建 Playback grid。
+    recording_playback_slider_dragging: bool,
+    /// 最近一次 Playback 控制错误；成功控制后清除。
+    recording_playback_control_error: Option<String>,
+    /// 仅在 Playback 正在播放时存在，drop 即取消。
+    recording_playback_ticker: Option<Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求
@@ -240,6 +254,7 @@ pub struct TerminalView {
     cd_completion_loading_parent: Option<String>,
     ssh_mfa_inputs: Vec<SshMfaInput>,
     focus_terminal_after_connect: bool,
+    reconnect_success_pending: bool,
 
     current_theme: TerminalTheme,
 

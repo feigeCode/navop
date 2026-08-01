@@ -7,6 +7,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let accepts_live_input = self.accepts_live_terminal_input(cx);
         if self.terminal.read(cx).ssh_mfa_request().is_none() {
             window.focus(&self.focus_handle, cx);
         }
@@ -24,7 +25,7 @@ impl TerminalView {
             return;
         }
         let mode = self.terminal.read(cx).mode();
-        if should_defer_sgr_left_press(event.button, event.modifiers, mode) {
+        if accepts_live_input && should_defer_sgr_left_press(event.button, event.modifiers, mode) {
             self.mouse_state.pending_sgr_left_press = Some(PendingSgrMousePress {
                 point: self.pixel_to_point(event.position, self.terminal_bounds, cx),
                 position: event.position,
@@ -72,7 +73,8 @@ impl TerminalView {
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
         let line_text = self.get_addon_line_text(screen_line, column, cx);
-        let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+        let is_local =
+            self.terminal.read(cx).live_connection_kind() == Some(TerminalConnectionKind::Local);
         let consumed = {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(
@@ -135,6 +137,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         // SGR 鼠标模式下中键按下走 TUI 报告而不是 middle-click paste
         if self.try_report_sgr_mouse_button(
             MouseButton::Middle,
@@ -161,6 +166,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         if !should_direct_paste_on_right_click(self.right_click_paste, event.button) {
             return;
         }

@@ -8,10 +8,13 @@ use terminal::terminal::TerminalConnectionKind;
 use super::pane_tab_transfer::TerminalPaneTabMetadata;
 use super::resize::WorkspaceSidebarResize;
 use super::{TerminalPaneId, TerminalSplitTree};
-use crate::view::{TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalView};
+use crate::view::{
+    RecordingPlaybackViewConfig, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalView,
+};
 
 pub struct TerminalWorkspace {
     pub(super) active_pane_id: TerminalPaneId,
+    pub(super) tab_active: bool,
     pub(super) next_pane_id: u64,
     pub(super) panes: HashMap<TerminalPaneId, Entity<TerminalView>>,
     pub(super) split_tree: TerminalSplitTree,
@@ -81,6 +84,17 @@ impl TerminalWorkspace {
         Self::from_pane(main, window, cx)
     }
 
+    pub fn new_recording_playback(
+        config: RecordingPlaybackViewConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let main = cx.new(|cx| {
+            TerminalView::new_recording_playback(config, window, cx).with_workspace_pane()
+        });
+        Self::from_pane(main, window, cx)
+    }
+
     pub(super) fn from_pane(
         pane: Entity<TerminalView>,
         window: &mut Window,
@@ -93,6 +107,7 @@ impl TerminalWorkspace {
         pane_tab_metadata.insert(initial_pane_id, TerminalPaneTabMetadata::generated());
         let mut this = Self {
             active_pane_id: initial_pane_id,
+            tab_active: false,
             next_pane_id: 2,
             panes,
             split_tree: TerminalSplitTree::new(initial_pane_id),
@@ -103,6 +118,7 @@ impl TerminalWorkspace {
             pane_subscriptions: HashMap::new(),
         };
         this.subscribe_to_pane(initial_pane_id, pane, window, cx);
+        this.set_active_pane_metric_state(cx);
         this
     }
 
@@ -120,5 +136,23 @@ impl TerminalWorkspace {
             .cloned()
             .or_else(|| self.panes.values().next().cloned())
             .expect("terminal workspace must contain one pane")
+    }
+
+    pub(super) fn set_tab_metric_state(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.tab_active = active;
+        for pane in self.panes.values() {
+            pane.update(cx, |pane, _cx| {
+                pane.set_performance_tab_active(active);
+            });
+        }
+    }
+
+    pub(super) fn set_active_pane_metric_state(&self, cx: &mut Context<Self>) {
+        for (pane_id, pane) in &self.panes {
+            let active = *pane_id == self.active_pane_id;
+            pane.update(cx, |pane, _cx| {
+                pane.set_performance_pane_active(active);
+            });
+        }
     }
 }

@@ -120,8 +120,13 @@ impl ClientHello {
 
     /// 用替换后的认证数据重新编码整个报文。
     pub fn encode_with(&self, auth_data: &[u8]) -> Vec<u8> {
+        self.encode_with_auth(&self.auth_name, auth_data)
+    }
+
+    /// 用指定的认证协议和认证数据重新编码整个报文。
+    pub fn encode_with_auth(&self, auth_name: &str, auth_data: &[u8]) -> Vec<u8> {
         let mut out =
-            Vec::with_capacity(HEADER_LEN + align4(self.auth_name.len()) + align4(auth_data.len()));
+            Vec::with_capacity(HEADER_LEN + align4(auth_name.len()) + align4(auth_data.len()));
         out.push(match self.order {
             ByteOrder::Msb => b'B',
             ByteOrder::Lsb => b'l',
@@ -129,11 +134,11 @@ impl ClientHello {
         out.push(0);
         self.order.push_u16(&mut out, self.major);
         self.order.push_u16(&mut out, self.minor);
-        self.order.push_u16(&mut out, self.auth_name.len() as u16);
+        self.order.push_u16(&mut out, auth_name.len() as u16);
         self.order.push_u16(&mut out, auth_data.len() as u16);
         self.order.push_u16(&mut out, 0);
-        out.extend_from_slice(self.auth_name.as_bytes());
-        pad_zeros(&mut out, self.auth_name.len());
+        out.extend_from_slice(auth_name.as_bytes());
+        pad_zeros(&mut out, auth_name.len());
         out.extend_from_slice(auth_data);
         pad_zeros(&mut out, auth_data.len());
         out
@@ -226,6 +231,19 @@ mod tests {
         assert_eq!(decoded.auth_data, vec![0x99; 16]);
         assert_eq!(decoded.major, 11);
         assert_eq!(decoded.auth_name, ForwardRequest::AUTH_NAME);
+    }
+
+    #[test]
+    fn reencode_can_remove_auth_for_a_no_auth_local_server() {
+        let original = hello(ByteOrder::Lsb, &[0x01; 16]);
+        let packet = original.encode_with_auth("", &[]);
+
+        let decoded = ClientHello::decode(&packet).unwrap();
+        assert_eq!(decoded.major, 11);
+        assert_eq!(decoded.minor, 0);
+        assert!(decoded.auth_name.is_empty());
+        assert!(decoded.auth_data.is_empty());
+        assert_eq!(packet.len(), HEADER_LEN);
     }
 
     #[test]

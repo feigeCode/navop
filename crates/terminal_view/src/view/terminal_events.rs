@@ -35,11 +35,15 @@ impl TerminalView {
 
         match event {
             TerminalModelEvent::Wakeup => {
+                self.sync_recording_ticker(cx);
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
                 cx.emit(TabContentEvent::ContentChanged);
                 cx.notify();
+            }
+            TerminalModelEvent::HostKeyVerificationRequired => {
+                self.show_host_key_verification_dialog(window, cx);
             }
             TerminalModelEvent::CommandHistoryChanged => {
                 self.sidebar.update(cx, |sidebar, cx| {
@@ -150,10 +154,19 @@ impl TerminalView {
         match connection_state {
             ConnectionState::Connected if !has_mfa_request => {
                 self.focus_terminal_after_connect = false;
+                if self.reconnect_success_pending {
+                    self.reconnect_success_pending = false;
+                    window.push_notification(
+                        Notification::success(t!("SshSession.reconnected_new_shell").to_string())
+                            .autohide(true),
+                        cx,
+                    );
+                }
                 self.focus_terminal(window, cx);
             }
             ConnectionState::Disconnected { .. } => {
                 self.focus_terminal_after_connect = false;
+                self.reconnect_success_pending = false;
             }
             _ => {}
         }

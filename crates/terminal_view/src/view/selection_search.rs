@@ -21,6 +21,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         self.clear_history_prompt();
         self.terminal.update(cx, |terminal, cx| {
             terminal.clear_screen(cx);
@@ -61,6 +64,7 @@ impl TerminalView {
             return;
         }
 
+        let accepts_live_input = self.accepts_live_terminal_input(cx);
         let had_block_selection = self.block_selection.take().is_some();
         self.mouse_state.block_selecting = false;
 
@@ -72,7 +76,7 @@ impl TerminalView {
         if in_vi_mode {
             if has_selection {
                 term_lock.selection = None;
-            } else {
+            } else if accepts_live_input {
                 term_lock.toggle_vi_mode();
             }
             drop(term_lock);

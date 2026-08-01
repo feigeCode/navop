@@ -487,6 +487,22 @@ Transfer:
     en: "There are %{count} file operation(s) in progress (upload/download/delete)."
     zh-CN: "有 %{count} 个文件操作正在进行中（上传/下载/删除）。"
     zh-HK: "有 %{count} 個文件操作正在進行中（上傳/下載/刪除）。"
+  close_strategy_prompt:
+    en: Choose how the active file operations should be handled before closing.
+    zh-CN: 请选择关闭前如何处理正在进行的文件操作。
+    zh-HK: 請選擇關閉前如何處理正在進行的檔案操作。
+  wait_and_close:
+    en: Wait and Close
+    zh-CN: 等待完成后关闭
+    zh-HK: 等待完成後關閉
+  continue_in_background:
+    en: Continue in Background
+    zh-CN: 转到后台继续
+    zh-HK: 轉到背景繼續
+  cancel_and_close:
+    en: Cancel Transfers and Close
+    zh-CN: 取消传输并关闭
+    zh-HK: 取消傳輸並關閉
   confirm_close_warning:
     en: "Closing now will cancel all operations. Are you sure you want to close?"
     zh-CN: "现在关闭将取消所有操作。确定要关闭吗？"

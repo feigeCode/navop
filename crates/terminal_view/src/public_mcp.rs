@@ -26,6 +26,7 @@ use terminal::{
 use uuid::Uuid;
 
 const DEFAULT_OUTPUT_TIMEOUT_MS: u64 = 60_000;
+const MAX_TERMINAL_EXEC_RESPONSE_BYTES: usize = 128 * 1024;
 
 pub struct GlobalPublicMcpRegistry(pub PublicMcpRegistry);
 
@@ -52,11 +53,12 @@ pub struct TerminalPublicMcpRegistration {
     terminal_control_registered: AtomicBool,
 }
 
-fn terminal_session_id(
-    kind: TerminalConnectionKind,
+fn live_terminal_session_id(
+    kind: Option<TerminalConnectionKind>,
     connection_id: Option<i64>,
     nonce: Uuid,
 ) -> Option<String> {
+    let kind = kind?;
     match kind {
         TerminalConnectionKind::Local => Some(format!("local-terminal-{nonce}")),
         TerminalConnectionKind::Ssh => connection_id.map(|id| format!("ssh-terminal-{id}-{nonce}")),
@@ -187,9 +189,12 @@ impl TerminalPublicMcpRegistration {
 }
 
 pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublicMcpRegistration> {
-    let connection_kind = terminal.connection_kind();
     let connection_id = terminal.connection_id();
-    let session_id = terminal_session_id(connection_kind, connection_id, Uuid::new_v4())?;
+    let session_id = live_terminal_session_id(
+        terminal.live_connection_kind(),
+        connection_id,
+        Uuid::new_v4(),
+    )?;
     let state = Arc::new(Mutex::new(snapshot_for_terminal(
         session_id.clone(),
         terminal,
@@ -395,20 +400,45 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
                     );
                 }
             }
+            let (output, response_truncated) =
+                bounded_utf8_tail(core_result.output, MAX_TERMINAL_EXEC_RESPONSE_BYTES);
+            let response_bytes = output.len();
+            let command_id = (core_result.completion == CoreTerminalExecCompletion::TimedOut
+                || response_truncated)
+                .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
+                .flatten();
             Ok(TerminalExecResult {
                 target: request.target,
                 command: request.command,
                 submitted: request.submit,
                 completion: map_exec_completion(core_result.completion),
                 exit_code: core_result.exit_code,
-                output: core_result.output,
+                output,
+                truncated: core_result.truncated,
+                captured_bytes: core_result.captured_bytes,
+                discarded_bytes: core_result.discarded_bytes,
+                response_truncated,
+                response_bytes,
                 duration_ms: core_result.duration_ms,
-                command_id: (core_result.completion == CoreTerminalExecCompletion::TimedOut)
-                    .then(|| tracked.as_ref().map(|(id, _)| id.clone()))
-                    .flatten(),
+                command_id,
             })
         })
     }
+}
+
+fn bounded_utf8_tail(output: String, max_bytes: usize) -> (String, bool) {
+    if output.len() <= max_bytes {
+        return (output, false);
+    }
+    if max_bytes == 0 {
+        return (String::new(), true);
+    }
+
+    let mut start = output.len() - max_bytes;
+    while !output.is_char_boundary(start) {
+        start += 1;
+    }
+    (output[start..].to_string(), true)
 }
 
 fn apply_terminal_progress(entry: &CommandEntry, progress: TerminalExecProgress) {
@@ -527,8 +557,9 @@ mod tests {
 
     #[test]
     fn local_terminal_registration_does_not_require_a_saved_connection_id() {
-        let session_id = terminal_session_id(TerminalConnectionKind::Local, None, Uuid::nil())
-            .expect("local terminal should be exposed to AI tools");
+        let session_id =
+            live_terminal_session_id(Some(TerminalConnectionKind::Local), None, Uuid::nil())
+                .expect("local terminal should be exposed to AI tools");
 
         assert_eq!(
             "local-terminal-00000000-0000-0000-0000-000000000000",
@@ -539,8 +570,15 @@ mod tests {
     #[test]
     fn serial_terminal_is_not_registered_as_an_ai_terminal_session() {
         assert!(
-            terminal_session_id(TerminalConnectionKind::Serial, Some(42), Uuid::nil()).is_none()
+            live_terminal_session_id(Some(TerminalConnectionKind::Serial), Some(42), Uuid::nil())
+                .is_none()
         );
+    }
+
+    #[test]
+    fn recording_playback_without_a_live_connection_has_no_public_mcp_session_id() {
+        assert!(live_terminal_session_id(None, None, Uuid::nil()).is_none());
+        assert!(live_terminal_session_id(None, Some(42), Uuid::nil()).is_none());
     }
 
     #[test]
@@ -655,6 +693,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 },
             )))),
@@ -698,6 +739,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::ShellIntegrationExit,
                     exit_code: Some(0),
                     output: "ssh.service loaded active running".to_string(),
+                    truncated: true,
+                    captured_bytes: 1024 * 1024,
+                    discarded_bytes: 17,
                     duration_ms: 42,
                 },
             )))),
@@ -725,7 +769,76 @@ mod tests {
         );
         assert_eq!(Some(0), result.exit_code);
         assert_eq!("ssh.service loaded active running", result.output);
+        assert!(result.truncated);
+        assert_eq!(1024 * 1024, result.captured_bytes);
+        assert_eq!(17, result.discarded_bytes);
+        assert!(!result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
         assert_eq!(42, result.duration_ms);
+    }
+
+    #[tokio::test]
+    async fn terminal_exec_caps_immediate_output_and_keeps_full_result_in_command_store() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let command_store = RemoteCommandStore::default();
+        let full_output = "中".repeat(MAX_TERMINAL_EXEC_RESPONSE_BYTES / 3 + 32);
+        let captured_bytes = full_output.len();
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            exec: Arc::new(Mutex::new(Some(fake_exec_handle(
+                requests,
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::ShellIntegrationExit,
+                    exit_code: Some(0),
+                    output: full_output.clone(),
+                    truncated: false,
+                    captured_bytes,
+                    discarded_bytes: 0,
+                    duration_ms: 42,
+                },
+            )))),
+            command_store: command_store.clone(),
+        };
+
+        let result = handle
+            .exec_in_terminal(
+                TerminalExecRequest {
+                    target: "terminal-1".to_string(),
+                    command: "large-output".to_string(),
+                    submit: true,
+                    wait_for_output: true,
+                    ready_timeout_ms: 0,
+                    timeout_ms: Some(1_000),
+                },
+                TerminalExecCancellation::new(),
+            )
+            .await
+            .expect("large terminal output should return a bounded response");
+
+        assert!(result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
+        assert!(result.response_bytes <= MAX_TERMINAL_EXEC_RESPONSE_BYTES);
+        assert!(full_output.ends_with(&result.output));
+        assert!(!result.truncated);
+        assert_eq!(captured_bytes, result.captured_bytes);
+
+        let command_id = result
+            .command_id
+            .expect("truncated immediate response should return a command id");
+        assert_eq!(
+            RemoteCommandStatus::Exited,
+            command_store.poll_by_id(&command_id).unwrap().status
+        );
+        let stored = command_store
+            .output(&public_mcp::remote_ops::RemoteCommandOutputRequest {
+                command_id,
+                stdout_offset: 0,
+                stderr_offset: 0,
+                limit_bytes: Some(captured_bytes + 1),
+            })
+            .unwrap();
+        assert_eq!(full_output, stored.stdout);
+        assert!(!stored.truncated);
     }
 
     #[tokio::test]
@@ -740,6 +853,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::TimedOut,
                     exit_code: None,
                     output: "partial output".to_string(),
+                    truncated: false,
+                    captured_bytes: 14,
+                    discarded_bytes: 0,
                     duration_ms: 60_000,
                 },
             )))),
@@ -762,6 +878,8 @@ mod tests {
             .expect("timed out terminal exec should detach");
 
         let command_id = result.command_id.expect("timeout should return command id");
+        assert!(!result.response_truncated);
+        assert_eq!(result.output.len(), result.response_bytes);
         assert_eq!(
             RemoteCommandStatus::Running,
             command_store.poll_by_id(&command_id).unwrap().status
@@ -837,6 +955,9 @@ mod tests {
                     completion: CoreTerminalExecCompletion::SubmittedOnly,
                     exit_code: None,
                     output: String::new(),
+                    truncated: false,
+                    captured_bytes: 0,
+                    discarded_bytes: 0,
                     duration_ms: 0,
                 },
             )),

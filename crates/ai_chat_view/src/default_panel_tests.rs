@@ -162,6 +162,7 @@ fn test_runtime() -> Arc<Runtime> {
 fn stored_connection_for_event(id: i64) -> StoredConnection {
     StoredConnection {
         id: Some(id),
+        credential_revision: None,
         name: format!("conn-{id}"),
         connection_type: ConnectionType::SshSftp,
         params: "{}".to_string(),

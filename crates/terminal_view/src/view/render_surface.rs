@@ -4,10 +4,43 @@ struct TerminalViewportState {
     font_family: SharedString,
     connection_state: ConnectionState,
     can_reconnect: bool,
+    has_pending_host_key_verification: bool,
+    has_ssh_mfa_request: bool,
     has_selection: bool,
     selection_text: Option<String>,
+    accepts_live_input: bool,
     right_click_paste: bool,
     show_scrollbar: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConnectionStatusPresentation {
+    Banner,
+    Dialog,
+}
+
+pub(super) fn connection_status_presentation(
+    connection_state: &ConnectionState,
+    has_pending_host_key_verification: bool,
+    has_ssh_mfa_request: bool,
+) -> Option<ConnectionStatusPresentation> {
+    if has_pending_host_key_verification || matches!(connection_state, ConnectionState::Connected) {
+        return None;
+    }
+    if has_ssh_mfa_request {
+        Some(ConnectionStatusPresentation::Dialog)
+    } else {
+        Some(ConnectionStatusPresentation::Banner)
+    }
+}
+
+#[cfg(test)]
+pub(super) fn should_show_connection_overlay(
+    connection_state: &ConnectionState,
+    has_pending_host_key_verification: bool,
+) -> bool {
+    connection_status_presentation(connection_state, has_pending_host_key_verification, false)
+        .is_some()
 }
 
 impl TerminalView {
@@ -39,6 +72,7 @@ impl TerminalView {
         cx: &App,
     ) -> TerminalViewportState {
         let block_selection_text = self.block_selection_text(cx);
+        let accepts_live_input = self.accepts_live_terminal_input(cx);
         let terminal = self.terminal.read(cx);
         let connection_state = terminal.connection_state().clone();
         let can_reconnect = terminal.can_reconnect();
@@ -51,10 +85,14 @@ impl TerminalView {
             font_family,
             connection_state,
             can_reconnect,
+            has_pending_host_key_verification: terminal.host_key_verification_request().is_some(),
+            has_ssh_mfa_request: terminal.ssh_mfa_request().is_some(),
             has_selection,
             selection_text,
-            right_click_paste: self.right_click_paste,
-            show_scrollbar: !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0,
+            accepts_live_input,
+            right_click_paste: self.right_click_paste && accepts_live_input,
+            show_scrollbar: (!accepts_live_input || !terminal_mode.contains(TermMode::ALT_SCREEN))
+                && history_size > 0,
         }
     }
 
@@ -64,9 +102,10 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus_handle = self.focus_handle.clone();
-        let disconnected = matches!(
+        let connection_status = connection_status_presentation(
             &state.connection_state,
-            ConnectionState::Disconnected { .. } | ConnectionState::Connecting
+            state.has_pending_host_key_verification,
+            state.has_ssh_mfa_request,
         );
         div()
             .track_focus(&focus_handle)
@@ -101,9 +140,14 @@ impl TerminalView {
             .when_some(self.render_addon_tooltip(), |this, tooltip| {
                 this.child(tooltip)
             })
-            .when(disconnected, |this| {
-                this.child(self.render_connection_overlay(state.can_reconnect, cx))
-            })
+            .when(
+                connection_status == Some(ConnectionStatusPresentation::Banner),
+                |this| this.child(self.render_connection_banner(state.can_reconnect, cx)),
+            )
+            .when(
+                connection_status == Some(ConnectionStatusPresentation::Dialog),
+                |this| this.child(self.render_connection_dialog(cx)),
+            )
             .into_any_element()
     }
 
@@ -172,12 +216,14 @@ impl TerminalView {
         }
         let has_selection = state.has_selection;
         let selection_text = state.selection_text.clone();
+        let accepts_live_input = state.accepts_live_input;
         terminal_surface
             .context_menu(move |menu, window, cx| {
                 Self::build_context_menu(
                     menu,
                     has_selection,
                     selection_text.clone(),
+                    accepts_live_input,
                     &view,
                     &sidebar,
                     window,

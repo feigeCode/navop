@@ -2,22 +2,34 @@ use super::*;
 
 impl TerminalView {
     pub(super) fn new_with_terminal(
-        terminal: Entity<Terminal>,
-        connection_id: Option<i64>,
-        stored_connection: Option<StoredConnection>,
-        sync_path_enabled: bool,
-        local_working_dir: Option<PathBuf>,
-        tab_index: Option<usize>,
-        duplicate_source: TerminalDuplicateSource,
+        init: TerminalViewInit,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let TerminalViewInit {
+            terminal,
+            connection_id,
+            stored_connection,
+            sync_path_enabled,
+            local_working_dir,
+            tab_index,
+            duplicate_source,
+            recording_playback_name,
+        } = init;
         let blink_manager = cx.new(|_| BlinkCursor::new());
+        let recording_playback_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(1.0)
+                .step(0.001)
+                .default_value(0.0)
+        });
 
         // 获取初始颜色
         let colors = terminal.read(cx).term().lock().colors().clone();
         let connection_kind = terminal.read(cx).connection_kind();
-        let is_local_terminal = connection_kind == TerminalConnectionKind::Local;
+        let live_connection_kind = terminal.read(cx).live_connection_kind();
+        let is_local_terminal = live_connection_kind == Some(TerminalConnectionKind::Local);
 
         // 终端主题需要在创建侧边栏之前解析，以便所有终端子面板使用一致配色。
         let initial_settings = current_settings(cx);
@@ -26,12 +38,22 @@ impl TerminalView {
         let default_font_family: SharedString = default_monospace_font().into();
         let default_font_fallbacks = default_font_fallbacks();
         let default_line_height_scale = DEFAULT_LINE_HEIGHT_SCALE;
-        let ssh_config = terminal.read(cx).ssh_config().cloned();
-        let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
-        let history_scope = terminal_history_scope(connection_kind, connection_id);
-        let public_mcp_registration = {
+        let (ssh_config, ssh_session_manager) = if live_ssh_feature_supported(live_connection_kind)
+        {
+            let terminal = terminal.read(cx);
+            (
+                terminal.ssh_config().cloned(),
+                terminal.ssh_session_manager().cloned(),
+            )
+        } else {
+            (None, None)
+        };
+        let history_scope = terminal_history_scope(live_connection_kind, connection_id);
+        let public_mcp_registration = if live_connection_kind.is_some() {
             let terminal = terminal.read(cx);
             crate::public_mcp::register_terminal(terminal, cx)
+        } else {
+            None
         };
         let terminal_ai_resource = public_mcp_registration
             .as_ref()
@@ -98,6 +120,11 @@ impl TerminalView {
         let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
         let command_bar_subscription =
             cx.subscribe_in(&command_bar, window, Self::handle_command_bar_event);
+        let recording_playback_slider_subscription = cx.subscribe_in(
+            &recording_playback_slider,
+            window,
+            Self::handle_recording_playback_slider_event,
+        );
         let workspace_editor_subscription = workspace_editor
             .as_ref()
             .map(|editor| cx.subscribe_in(editor, window, Self::handle_workspace_editor_event));
@@ -109,6 +136,10 @@ impl TerminalView {
         });
 
         let focus_handle = cx.focus_handle();
+        let terminal_performance_metrics = terminal.read(cx).performance_metrics();
+        let performance_metrics = terminal_performance_metrics
+            .is_enabled()
+            .then_some(terminal_performance_metrics);
 
         // 焦点获得/失去订阅
         let focus_subscription = cx.on_focus(&focus_handle, window, |this, _window, cx| {
@@ -127,6 +158,7 @@ impl TerminalView {
         subscriptions.push(sidebar_subscription);
         subscriptions.push(terminal_subscription);
         subscriptions.push(command_bar_subscription);
+        subscriptions.push(recording_playback_slider_subscription);
         if let Some(subscription) = workspace_editor_subscription {
             subscriptions.push(subscription);
         }
@@ -156,6 +188,7 @@ impl TerminalView {
         let mut this = Self {
             terminal,
             duplicate_source,
+            recording_playback_name,
             local_working_dir: if is_local_terminal {
                 local_working_dir
             } else {
@@ -186,17 +219,26 @@ impl TerminalView {
             mouse_position: None,
             render_cache: RenderCache::new(DEFAULT_ROWS, DEFAULT_COLS, colors),
             focus_handle,
+            performance_metrics,
             terminal_bounds: Bounds::default(),
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
             shell_prompt_input_active: false,
             local_command_running: false,
             suggestion_debounce: None,
+            recording_path_prompt_pending: false,
+            recording_control_error: None,
+            recording_ticker: None,
+            recording_playback_slider,
+            recording_playback_slider_dragging: false,
+            recording_playback_control_error: None,
+            recording_playback_ticker: None,
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
             ssh_mfa_inputs: Vec::new(),
             focus_terminal_after_connect: false,
+            reconnect_success_pending: false,
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,
@@ -219,72 +261,7 @@ impl TerminalView {
         };
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_broadcast_input(cx);
+        this.start_performance_diagnostics(connection_id, connection_kind, cx);
         this
-    }
-
-    pub(super) fn register_broadcast_input(&mut self, cx: &mut Context<Self>) {
-        if self.broadcast_client_id.is_some() {
-            return;
-        }
-
-        let label = {
-            let terminal = self.terminal.read(cx);
-            if terminal.connection_kind() != TerminalConnectionKind::Ssh {
-                return;
-            }
-            let base = terminal
-                .connection_name()
-                .filter(|name| !name.is_empty())
-                .or_else(|| (!terminal.title().is_empty()).then(|| terminal.title()))
-                .unwrap_or("SSH Terminal");
-            self.tab_index
-                .map(|index| format!("{base}({index})"))
-                .unwrap_or_else(|| base.to_string())
-        };
-
-        init_broadcast_input_registry(cx);
-        let view = cx.entity().downgrade();
-        let Some(registry) = broadcast_input_registry(cx) else {
-            return;
-        };
-        let client_id = registry.update(cx, |registry, cx| registry.register(label, view, cx));
-        self.broadcast_client_id = Some(client_id);
-    }
-
-    pub(super) fn unregister_broadcast_input(&mut self, cx: &mut Context<Self>) {
-        let Some(client_id) = self.broadcast_client_id.take() else {
-            return;
-        };
-        if let Some(registry) = broadcast_input_registry(cx) {
-            registry.update(cx, |registry, cx| registry.unregister(client_id, cx));
-        }
-    }
-
-    pub(super) fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
-        let Some(client_id) = self.broadcast_client_id else {
-            return;
-        };
-        let Some(registry) = broadcast_input_registry(cx) else {
-            return;
-        };
-        let deliveries = registry.read(cx).deliveries_from(client_id, data);
-        for (view, data) in deliveries {
-            let _ = view.update(cx, |view, cx| {
-                view.write_broadcast_input(data, cx);
-            });
-        }
-    }
-
-    pub(super) fn refresh_public_mcp_session(&self, cx: &mut Context<Self>) {
-        let Some(registration) = &self.public_mcp_registration else {
-            return;
-        };
-        registration.refresh(self.terminal.read(cx));
-    }
-
-    pub(super) fn unregister_public_mcp_session(&mut self, cx: &mut Context<Self>) {
-        if let Some(registration) = self.public_mcp_registration.take() {
-            registration.unregister(cx);
-        }
     }
 }

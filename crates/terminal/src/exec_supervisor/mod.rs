@@ -5,20 +5,23 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
+mod capture_buffer;
 mod model;
 mod operation;
+use capture_buffer::BoundedCaptureBuffer;
 pub use model::TerminalExecError;
 pub(crate) use model::{ExecEffect, ExecPhase, ShellCommandReadiness, TerminalInputSource};
 use operation::output_with_completion;
 
 const CLEAR_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
+pub(super) const TERMINAL_EXEC_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
 struct ActiveExec {
     id: u64,
     request: TerminalExecRequest,
     phase: ExecPhase,
     started_at: Instant,
-    raw: Vec<u8>,
+    raw: BoundedCaptureBuffer,
     command_started: bool,
     detached: bool,
     timed_out: bool,
@@ -107,7 +110,7 @@ impl ExecSupervisor {
 
     pub(crate) fn on_input(&mut self, source: TerminalInputSource, data: &[u8]) -> Vec<ExecEffect> {
         let pre_submit_phase = self.active.as_ref().map(|active| active.phase);
-        if source == TerminalInputSource::User
+        if source.affects_interactive_input_state()
             && matches!(
                 pre_submit_phase,
                 Some(ExecPhase::WaitingForReady | ExecPhase::ClearingInput)
@@ -121,7 +124,9 @@ impl ExecSupervisor {
         }
         if matches!(
             source,
-            TerminalInputSource::User | TerminalInputSource::InitCommand
+            TerminalInputSource::User
+                | TerminalInputSource::ExternalInput
+                | TerminalInputSource::InitCommand
         ) && matches!(self.readiness, ShellCommandReadiness::Ready { .. })
         {
             if data.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
@@ -257,10 +262,15 @@ fn publish_progress(
         output: output.output,
         completion,
         exit_code,
+        truncated: output.truncated,
+        captured_bytes: output.captured_bytes,
+        discarded_bytes: output.discarded_bytes,
         duration_ms: output.duration_ms,
         is_final,
     });
 }
 
+#[cfg(test)]
+mod capture_buffer_tests;
 #[cfg(test)]
 mod tests;

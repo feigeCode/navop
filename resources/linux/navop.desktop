@@ -7,5 +7,5 @@ Type=Application
 Categories=Development;Utility;Database;
 Terminal=false
 StartupWMClass=navop
-MimeType=application/vnd.sqlite3;application/x-sqlite3;application/x-duckdb;application/vnd.duckdb;text/markdown;
+MimeType=application/vnd.sqlite3;application/x-sqlite3;application/x-duckdb;application/vnd.duckdb;text/markdown;application/x-asciicast;
 Keywords=database;ssh;sftp;terminal;redis;mongodb;postgresql;mysql;

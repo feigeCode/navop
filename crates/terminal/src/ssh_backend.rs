@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use ssh::{
     ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
@@ -20,13 +19,16 @@ use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInpu
 use crate::osc::extract_osc_events;
 use crate::osc::{OscEvent, OscStreamParser};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
+use crate::recording::RecordingTap;
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
+use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
 use crate::{
     TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
     TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
-    TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalInputMetricSource,
+    TerminalPerformanceMetrics, TerminalSize,
 };
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
@@ -76,7 +78,7 @@ trait SshSessionAccess: Send + Sync {
     type Client: SshClient;
 
     async fn client(&self) -> anyhow::Result<Arc<tokio::sync::Mutex<Self::Client>>>;
-    async fn disconnect(&self) -> anyhow::Result<()>;
+    async fn invalidate_client(&self, client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool;
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup>;
     async fn set_shell_integration(
         &self,
@@ -93,8 +95,8 @@ impl SshSessionAccess for SshSessionManager {
         SshSessionManager::client(self).await
     }
 
-    async fn disconnect(&self) -> anyhow::Result<()> {
-        SshSessionManager::disconnect(self).await
+    async fn invalidate_client(&self, client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool {
+        SshSessionManager::invalidate_client(self, client).await
     }
 
     async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -271,7 +273,10 @@ fn format_setup_failure_context(script: &str, stdout: &[u8], stderr: &[u8]) -> S
 }
 
 enum SshCommand {
-    Write(Vec<u8>),
+    Write {
+        source: TerminalInputSource,
+        data: Vec<u8>,
+    },
     InterruptForeground {
         request: TerminalControlRequest,
         cancellation: CancellationToken,
@@ -296,6 +301,7 @@ enum SshCommand {
 pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
     exec_ids: Arc<AtomicU64>,
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
 }
 
 type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
@@ -358,6 +364,21 @@ async fn send_terminal_data<C: SshChannel + ?Sized>(channel: &mut C, data: &[u8]
     tokio::time::timeout(Duration::from_secs(30), channel.send_data(data))
         .await
         .is_ok_and(|result| result.is_ok())
+}
+
+async fn send_terminal_input<C: SshChannel + ?Sized>(
+    channel: &mut C,
+    source: TerminalInputSource,
+    data: &[u8],
+    recording_tap: Option<&RecordingTap>,
+) -> bool {
+    let sent = send_terminal_data(channel, data).await;
+    if sent && source.is_recordable_user_input() {
+        if let Some(tap) = recording_tap {
+            let _ = tap.record_input(data);
+        }
+    }
+    sent
 }
 
 async fn apply_exec_effects<C: SshChannel + ?Sized>(
@@ -454,7 +475,7 @@ impl SshBackend {
             Self::uninstall_shell_integration_for_client(&mut *guard).await
         };
         if result.is_ok() {
-            session_manager.invalidate().await;
+            session_manager.invalidate_client(&client).await;
         }
         result.map_err(add_connect_error_context)
     }
@@ -466,10 +487,36 @@ impl SshBackend {
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,
         event_tx: UnboundedSender<TerminalEvent>,
-        notify_tx: UnboundedSender<()>,
         on_disconnect: Option<UnboundedSender<()>>,
         init_commands: Option<String>,
         disable_shell_integration: bool,
+    ) -> anyhow::Result<Self> {
+        Self::connect_with_recording(
+            session_manager,
+            pty_config,
+            connection_id,
+            term,
+            event_proxy,
+            event_tx,
+            on_disconnect,
+            init_commands,
+            disable_shell_integration,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn connect_with_recording(
+        session_manager: Arc<SshSessionManager>,
+        pty_config: PtyConfig,
+        connection_id: Option<i64>,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        event_tx: UnboundedSender<TerminalEvent>,
+        on_disconnect: Option<UnboundedSender<()>>,
+        init_commands: Option<String>,
+        disable_shell_integration: bool,
+        recording_tap: Option<RecordingTap>,
     ) -> anyhow::Result<Self> {
         let (client, mut channel, shell_integration_active) = Self::establish_channel(
             &session_manager,
@@ -479,8 +526,10 @@ impl SshBackend {
         )
         .await
         .map_err(add_connect_error_context)?;
-        // 关联变量，避免 clippy 警告未使用。
-        let _keep_client = client;
+        // Keep the exact transport generation with the actor so any late
+        // failure report cannot invalidate a replacement published by another
+        // shared consumer.
+        let transport_client = client;
 
         // 有 Shell Integration 时等待 OSC 133;B；裸终端在收到第一段远端数据后即可发送。
         let pending_init = init_commands;
@@ -492,10 +541,19 @@ impl SshBackend {
         // 创建 PtyWrite 回写通道
         let (pty_write_tx, mut pty_write_rx) = unbounded_channel::<Vec<u8>>();
         event_proxy.set_ssh_write_back(pty_write_tx);
+        let performance_metrics = event_proxy.performance_metrics();
+        let task_metrics = performance_metrics.clone();
+        let parser_ingress = SshParserIngress::spawn_with_recording(
+            term,
+            event_proxy.clone(),
+            task_metrics.clone(),
+            recording_tap.clone(),
+        );
 
         tokio::spawn(async move {
             let mut shutdown = false;
-            let mut processor: Processor<StdSyncHandler> = Processor::new();
+            let mut graceful_ingress_close = false;
+            let mut pending_ingress = None;
             let mut exec_supervisor = ExecSupervisor::new();
             let mut osc_parser = OscStreamParser::default();
             let mut exec_results = HashMap::new();
@@ -503,114 +561,152 @@ impl SshBackend {
             let mut init_sent = false;
 
             loop {
-                tokio::select! {
-                    biased;
-                    Some(cmd) = command_rx.recv() => {
-                        match cmd {
-                            SshCommand::Write(data) => {
-                                let effects = exec_supervisor.on_input(TerminalInputSource::User, &data);
-                                if !apply_exec_effects(
-                                    effects,
+                match next_ssh_actor_input(
+                    &mut channel,
+                    &mut command_rx,
+                    &mut pty_write_rx,
+                    &mut pending_ingress,
+                )
+                .await
+                {
+                    SshActorInput::Command(cmd) => match cmd {
+                        SshCommand::Write { source, data } => {
+                            let effects = exec_supervisor.on_input(source, &data);
+                            if !apply_exec_effects(
+                                effects,
+                                &mut channel,
+                                &task_command_tx,
+                                &mut exec_results,
+                            )
+                            .await
+                                || !send_terminal_input(
                                     &mut channel,
-                                    &task_command_tx,
-                                    &mut exec_results,
-                                ).await || !send_terminal_data(&mut channel, &data).await {
-                                    break;
-                                }
-                            }
-                            SshCommand::InterruptForeground {
-                                request,
-                                cancellation,
-                                result,
-                            } => {
-                                if cancellation.is_cancelled() {
-                                    let _ = result.send(Err(TerminalControlError::Cancelled));
-                                    continue;
-                                }
-                                let readiness = match request.action {
-                                    TerminalControlAction::Interrupt => {
-                                        exec_supervisor.interrupt_foreground()
-                                    }
-                                };
-                                match readiness {
-                                    Ok(readiness_before) => {
-                                        if send_terminal_data(&mut channel, &[0x03]).await {
-                                            let _ = result.send(Ok(TerminalControlOutput {
-                                                action: request.action,
-                                                sent: true,
-                                                readiness_before,
-                                            }));
-                                        } else {
-                                            let _ = result.send(Err(TerminalControlError::Disconnected));
-                                            break;
-                                        }
-                                    }
-                                    Err(error) => {
-                                        let _ = result.send(Err(error));
-                                    }
-                                }
-                            }
-                            SshCommand::StartExec { id, request, result } => {
-                                exec_results.insert(id, result);
-                                let effects = exec_supervisor.start(id, request);
-                                if !apply_exec_effects(
-                                    effects,
-                                    &mut channel,
-                                    &task_command_tx,
-                                    &mut exec_results,
-                                ).await {
-                                    break;
-                                }
-                            }
-                            SshCommand::CancelExec { id } => {
-                                exec_results.remove(&id);
-                                let effects = exec_supervisor.cancel(id);
-                                if !apply_exec_effects(
-                                    effects,
-                                    &mut channel,
-                                    &task_command_tx,
-                                    &mut exec_results,
-                                ).await {
-                                    break;
-                                }
-                            }
-                            SshCommand::ExecTimeout { id, phase } => {
-                                let effects = exec_supervisor.timeout(id, phase);
-                                if !apply_exec_effects(
-                                    effects,
-                                    &mut channel,
-                                    &task_command_tx,
-                                    &mut exec_results,
-                                ).await {
-                                    break;
-                                }
-                            }
-                            SshCommand::Resize(size) => {
-                                let _ = channel.resize_pty(size.cols as u32, size.rows as u32).await;
-                            }
-                            SshCommand::Shutdown => {
-                                shutdown = true;
-                                let _ = channel.close().await;
+                                    source,
+                                    &data,
+                                    recording_tap.as_ref(),
+                                )
+                                .await
+                            {
                                 break;
                             }
                         }
-                    }
-                    Some(data) = pty_write_rx.recv() => {
-                        let _ = exec_supervisor.on_input(
-                            TerminalInputSource::TerminalResponse,
-                            &data,
-                        );
-                        let send_result = tokio::time::timeout(
-                            Duration::from_secs(30),
-                            channel.send_data(&data)
-                        ).await;
+                        SshCommand::InterruptForeground {
+                            request,
+                            cancellation,
+                            result,
+                        } => {
+                            if cancellation.is_cancelled() {
+                                let _ = result.send(Err(TerminalControlError::Cancelled));
+                                continue;
+                            }
+                            let readiness = match request.action {
+                                TerminalControlAction::Interrupt => {
+                                    exec_supervisor.interrupt_foreground()
+                                }
+                            };
+                            match readiness {
+                                Ok(readiness_before) => {
+                                    if send_terminal_data(&mut channel, &[0x03]).await {
+                                        let _ = result.send(Ok(TerminalControlOutput {
+                                            action: request.action,
+                                            sent: true,
+                                            readiness_before,
+                                        }));
+                                    } else {
+                                        let _ =
+                                            result.send(Err(TerminalControlError::Disconnected));
+                                        break;
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = result.send(Err(error));
+                                }
+                            }
+                        }
+                        SshCommand::StartExec {
+                            id,
+                            request,
+                            result,
+                        } => {
+                            exec_results.insert(id, result);
+                            let effects = exec_supervisor.start(id, request);
+                            if !apply_exec_effects(
+                                effects,
+                                &mut channel,
+                                &task_command_tx,
+                                &mut exec_results,
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                        }
+                        SshCommand::CancelExec { id } => {
+                            exec_results.remove(&id);
+                            let effects = exec_supervisor.cancel(id);
+                            if !apply_exec_effects(
+                                effects,
+                                &mut channel,
+                                &task_command_tx,
+                                &mut exec_results,
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                        }
+                        SshCommand::ExecTimeout { id, phase } => {
+                            let effects = exec_supervisor.timeout(id, phase);
+                            if !apply_exec_effects(
+                                effects,
+                                &mut channel,
+                                &task_command_tx,
+                                &mut exec_results,
+                            )
+                            .await
+                            {
+                                break;
+                            }
+                        }
+                        SshCommand::Resize(size) => {
+                            let _ = channel.resize_pty(size.cols as u32, size.rows as u32).await;
+                        }
+                        SshCommand::Shutdown => {
+                            shutdown = true;
+                            parser_ingress.abort();
+                            let _ = channel.close().await;
+                            break;
+                        }
+                    },
+                    SshActorInput::TerminalResponse(data) => {
+                        let _ =
+                            exec_supervisor.on_input(TerminalInputSource::TerminalResponse, &data);
+                        let send_result =
+                            tokio::time::timeout(Duration::from_secs(30), channel.send_data(&data))
+                                .await;
                         if send_result.is_err() || send_result.is_ok_and(|r| r.is_err()) {
                             break;
                         }
                     }
-                    event = channel.recv() => {
+                    SshActorInput::Ingress(Ok(())) => {}
+                    SshActorInput::Ingress(Err(error)) => {
+                        tracing::warn!(
+                            error = %error,
+                            "SSH terminal ingress rejected or closed"
+                        );
+                        break;
+                    }
+                    SshActorInput::Channel(event) => {
                         match event {
-                            Some(ChannelEvent::Data(data)) | Some(ChannelEvent::ExtendedData { data, .. }) => {
+                            Some(ChannelEvent::Data(data))
+                            | Some(ChannelEvent::ExtendedData { data, .. }) => {
+                                // A zero-length SSH event carries no terminal
+                                // bytes and must not be turned into a queue
+                                // error that disconnects an otherwise valid
+                                // session.
+                                if data.is_empty() {
+                                    continue;
+                                }
                                 // 解析所有 OSC 事件
                                 let osc_events = osc_parser.push(&data);
                                 let effects = exec_supervisor.on_terminal_chunk(&data, &osc_events);
@@ -623,13 +719,17 @@ impl SshBackend {
                                     &mut channel,
                                     &task_command_tx,
                                     &mut exec_results,
-                                ).await {
+                                )
+                                .await
+                                {
                                     break;
                                 }
                                 for osc_event in &osc_events {
                                     match osc_event {
                                         OscEvent::WorkingDirChanged(path) => {
-                                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
+                                            let _ = event_tx.send(
+                                                TerminalEvent::WorkingDirChanged(path.clone()),
+                                            );
                                         }
                                         OscEvent::PromptStart => {
                                             let _ = event_tx.send(TerminalEvent::PromptStart);
@@ -647,14 +747,14 @@ impl SshBackend {
                                         }
                                         OscEvent::CommandFinished { exit_code } => {
                                             // 133;D: 命令执行完毕
-                                            let _ = event_tx.send(
-                                                TerminalEvent::CommandFinished { exit_code: *exit_code }
-                                            );
+                                            let _ = event_tx.send(TerminalEvent::CommandFinished {
+                                                exit_code: *exit_code,
+                                            });
                                         }
                                         OscEvent::CommandRecorded(command) => {
-                                            let _ = event_tx.send(
-                                                TerminalEvent::CommandRecorded(command.clone())
-                                            );
+                                            let _ = event_tx.send(TerminalEvent::CommandRecorded(
+                                                command.clone(),
+                                            ));
                                         }
                                     }
                                 }
@@ -680,17 +780,18 @@ impl SshBackend {
                                     }
                                 }
 
-                                processor.advance(&mut *term.lock(), &data);
-                                let _ = notify_tx.send(());
+                                pending_ingress = Some(parser_ingress.pending(data));
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
+                                graceful_ingress_close = true;
                                 let effects = exec_supervisor.disconnect();
                                 let _ = apply_exec_effects(
                                     effects,
                                     &mut channel,
                                     &task_command_tx,
                                     &mut exec_results,
-                                ).await;
+                                )
+                                .await;
                                 break;
                             }
                             _ => {}
@@ -699,12 +800,21 @@ impl SshBackend {
                 }
             }
 
+            if !graceful_ingress_close {
+                parser_ingress.abort();
+            }
+            // The pending future owns a sender clone. It must be dropped before
+            // waiting for the parser worker, otherwise a graceful worker drain
+            // can wait forever for the queue to close.
+            drop(pending_ingress.take());
+            let _ = parser_ingress.finish().await;
+
             let effects = exec_supervisor.disconnect();
             let _ = apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
                 .await;
 
-            if !shutdown {
-                let _ = session_manager.invalidate().await;
+            if !shutdown && session_manager.invalidate_client(&transport_client).await {
+                task_metrics.record_ssh_invalidation();
             }
             if let Some(tx) = on_disconnect {
                 let _ = tx.send(());
@@ -714,10 +824,12 @@ impl SshBackend {
         Ok(Self {
             command_tx,
             exec_ids,
+            performance_metrics,
         })
     }
 
-    /// 获取一个 interactive channel，封装了"channel open 失败时断开旧 session 并重试一次"的重连逻辑。
+    /// 获取一个 interactive channel，封装了"channel open 失败时失效当前 transport generation
+    /// 并重试一次"的重连逻辑。
     /// 同时把首次 setup 成功的 `ShellIntegrationSetup` 写回 manager，供其他 terminal 复用。
     async fn establish_channel(
         session_manager: &Arc<SshSessionManager>,
@@ -785,13 +897,12 @@ impl SshBackend {
                         error = %err,
                         "SSH session channel 被拒绝，重建连接并降级为单个裸交互 channel"
                     );
-                    if let Err(disconnect_error) = session_manager.disconnect().await {
-                        tracing::warn!(
-                            target: "terminal.ssh.connect",
-                            error = %disconnect_error,
-                            "释放被拒绝 channel 所在的旧 SSH session 失败，继续尝试重连"
-                        );
-                    }
+                    let invalidated = session_manager.invalidate_client(&client).await;
+                    tracing::debug!(
+                        target: "terminal.ssh.connect",
+                        invalidated,
+                        "已报告被拒绝 channel 所属的 SSH transport generation"
+                    );
                     attempt += 1;
                     plain_channel_only = true;
                     continue;
@@ -1078,6 +1189,42 @@ mod tests {
     use tokio::time::sleep;
     use tokio_util::sync::CancellationToken;
 
+    #[test]
+    fn ssh_backend_records_direct_and_handle_input_without_double_counting() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
+        let backend = SshBackend {
+            command_tx,
+            exec_ids: Arc::new(AtomicU64::new(1)),
+            performance_metrics: metrics.clone(),
+        };
+
+        TerminalBackend::write(&backend, b"direct".to_vec());
+        TerminalBackend::input_handle(&backend)
+            .expect("SSH input handle")
+            .write(b"handle".to_vec());
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SshCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            }) if data == b"direct"
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SshCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data,
+            }) if data == b"handle"
+        ));
+        assert!(command_rx.try_recv().is_err());
+        assert_eq!(
+            (b"direct".len() + b"handle".len()) as u64,
+            metrics.snapshot().user_input_bytes
+        );
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ChannelOp {
         Exec,
@@ -1094,6 +1241,7 @@ mod tests {
         events: VecDeque<ChannelEvent>,
         exec_consumes_session: bool,
         recv_delay: Option<Duration>,
+        send_data_error: bool,
     }
 
     struct MockChannel {
@@ -1118,6 +1266,7 @@ mod tests {
                 events: events.into_iter().collect(),
                 exec_consumes_session,
                 recv_delay,
+                send_data_error: false,
             }));
             (
                 Self {
@@ -1166,12 +1315,13 @@ mod tests {
         }
 
         async fn send_data(&mut self, data: &[u8]) -> Result<()> {
-            self.state
-                .lock()
-                .expect("mock channel state should lock")
-                .ops
-                .push(ChannelOp::SendData(data.to_vec()));
-            Ok(())
+            let mut state = self.state.lock().expect("mock channel state should lock");
+            state.ops.push(ChannelOp::SendData(data.to_vec()));
+            if state.send_data_error {
+                Err(anyhow!("mock send failure"))
+            } else {
+                Ok(())
+            }
         }
 
         async fn resize_pty(&mut self, _width: u32, _height: u32) -> Result<()> {
@@ -1265,7 +1415,7 @@ mod tests {
 
     struct MockSessionManager {
         clients: tokio::sync::Mutex<VecDeque<Arc<tokio::sync::Mutex<MockClient>>>>,
-        disconnects: AtomicU64,
+        invalidations: AtomicU64,
     }
 
     impl MockSessionManager {
@@ -1277,12 +1427,12 @@ mod tests {
                         .map(|client| Arc::new(tokio::sync::Mutex::new(client)))
                         .collect(),
                 ),
-                disconnects: AtomicU64::new(0),
+                invalidations: AtomicU64::new(0),
             }
         }
 
-        fn disconnect_count(&self) -> u64 {
-            self.disconnects.load(std::sync::atomic::Ordering::SeqCst)
+        fn invalidation_count(&self) -> u64 {
+            self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -1298,10 +1448,10 @@ mod tests {
                 .ok_or_else(|| anyhow!("no more mock clients"))
         }
 
-        async fn disconnect(&self) -> Result<()> {
-            self.disconnects
+        async fn invalidate_client(&self, _client: &Arc<tokio::sync::Mutex<Self::Client>>) -> bool {
+            self.invalidations
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+            true
         }
 
         async fn cached_shell_integration(&self) -> Option<ShellIntegrationSetup> {
@@ -1322,6 +1472,56 @@ mod tests {
             .expect("mock channel state should lock")
             .ops
             .clone()
+    }
+
+    #[tokio::test]
+    async fn ssh_input_recording_captures_only_successfully_sent_user_bytes() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Ssh,
+            true,
+        );
+        let tap = recording.tap();
+        let (mut channel, state) = MockChannel::new([], false);
+
+        assert!(
+            send_terminal_input(
+                &mut channel,
+                TerminalInputSource::User,
+                b"user input",
+                Some(&tap),
+            )
+            .await
+        );
+        assert!(
+            send_terminal_input(
+                &mut channel,
+                TerminalInputSource::ExternalInput,
+                b"external input",
+                Some(&tap),
+            )
+            .await
+        );
+        state
+            .lock()
+            .expect("mock channel state should lock")
+            .send_data_error = true;
+        assert!(
+            !send_terminal_input(
+                &mut channel,
+                TerminalInputSource::User,
+                b"failed input",
+                Some(&tap),
+            )
+            .await
+        );
+
+        drop(tap);
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
+        ));
     }
 
     #[tokio::test]
@@ -1630,9 +1830,9 @@ mod tests {
             "单通道降级后不能继续等待 OSC Shell Integration 信号"
         );
         assert_eq!(
-            manager.disconnect_count(),
+            manager.invalidation_count(),
             1,
-            "首次失败后应主动断开旧 session，立即释放交换机 VTY"
+            "首次失败后只应失效发生错误的 transport generation"
         );
         assert_eq!(
             recorded_ops(&setup_state),
@@ -1676,7 +1876,7 @@ mod tests {
             shell_integration_active,
             "安装成功后应继续等待 OSC 133;B 再发送初始化脚本"
         );
-        assert_eq!(manager.disconnect_count(), 0);
+        assert_eq!(manager.invalidation_count(), 0);
     }
 
     #[tokio::test]
@@ -2296,6 +2496,9 @@ mod tests {
             completion: TerminalExecCompletion::ShellIntegrationExit,
             exit_code: Some(0),
             output: "/tmp".to_string(),
+            truncated: false,
+            captured_bytes: 4,
+            discarded_bytes: 0,
             duration_ms: 4,
         };
         match command_rx.recv().await {
@@ -2373,14 +2576,25 @@ mod tests {
 
 impl TerminalBackend for SshBackend {
     fn write(&self, data: Vec<u8>) {
-        let _ = self.command_tx.send(SshCommand::Write(data));
+        self.performance_metrics
+            .record_input(TerminalInputMetricSource::User, data.len());
+        let _ = self.command_tx.send(SshCommand::Write {
+            source: TerminalInputSource::User,
+            data,
+        });
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
         let tx = self.command_tx.clone();
-        Some(TerminalInputHandle::new(move |data| {
-            let _ = tx.send(SshCommand::Write(data));
-        }))
+        Some(TerminalInputHandle::with_metrics(
+            self.performance_metrics.clone(),
+            move |data| {
+                let _ = tx.send(SshCommand::Write {
+                    source: TerminalInputSource::ExternalInput,
+                    data,
+                });
+            },
+        ))
     }
 
     fn exec_handle(&self) -> Option<TerminalExecHandle> {

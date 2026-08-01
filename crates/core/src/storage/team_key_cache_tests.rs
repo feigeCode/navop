@@ -135,6 +135,10 @@ fn seed_pre_scope_database(connection: &Connection) {
                 group_name TEXT,
                 group_color TEXT
              );
+             CREATE TABLE connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+             );
              CREATE TABLE workspaces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,

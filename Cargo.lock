@@ -6867,6 +6867,7 @@ dependencies = [
  "sftp_view",
  "sha2 0.10.9",
  "smol",
+ "ssh",
  "tar",
  "tempfile",
  "terminal",
@@ -11810,11 +11811,17 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dirs 6.0.0",
+ "hmac 0.12.1",
  "rand 0.10.1",
  "russh",
  "rust-i18n",
+ "serde",
+ "serde_json",
+ "sha1 0.10.6",
+ "tempfile",
  "tokio",
  "tokio-socks",
+ "tokio-util",
  "tracing",
  "x11_forwarding",
 ]
@@ -12432,6 +12439,7 @@ dependencies = [
  "plist",
  "polling",
  "serde",
+ "serde_json",
  "serialport",
  "shell-words",
  "ssh",
@@ -12439,6 +12447,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

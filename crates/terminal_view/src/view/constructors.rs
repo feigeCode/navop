@@ -22,13 +22,16 @@ impl TerminalView {
             terminal
         });
         let view = Self::new_with_terminal(
-            terminal,
-            None,
-            None,
-            true,
-            local_working_dir,
-            tab_index,
-            duplicate_source,
+            TerminalViewInit {
+                terminal,
+                connection_id: None,
+                stored_connection: None,
+                sync_path_enabled: true,
+                local_working_dir,
+                tab_index,
+                duplicate_source: Some(duplicate_source),
+                recording_playback_name: None,
+            },
             window,
             cx,
         );
@@ -69,13 +72,41 @@ impl TerminalView {
         let terminal =
             cx.new(|cx| Terminal::new_ssh(conn, cx, working_dir, sync_path_with_terminal));
         Self::new_with_terminal(
-            terminal,
-            connection_id,
-            Some(stored_conn),
-            sync_path_with_terminal,
-            None,
-            tab_index,
-            duplicate_source,
+            TerminalViewInit {
+                terminal,
+                connection_id,
+                stored_connection: Some(stored_conn),
+                sync_path_enabled: sync_path_with_terminal,
+                local_working_dir: None,
+                tab_index,
+                duplicate_source: Some(duplicate_source),
+                recording_playback_name: None,
+            },
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_recording_playback(
+        config: RecordingPlaybackViewConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (playback, display_name) = config.into_parts();
+        let display_name = recording_playback_display_name(display_name.as_ref());
+        let terminal = cx.new(|cx| Terminal::new_recording_playback(playback, cx));
+
+        Self::new_with_terminal(
+            TerminalViewInit {
+                terminal,
+                connection_id: None,
+                stored_connection: None,
+                sync_path_enabled: false,
+                local_working_dir: None,
+                tab_index: None,
+                duplicate_source: None,
+                recording_playback_name: Some(display_name),
+            },
             window,
             cx,
         )
@@ -96,13 +127,16 @@ impl TerminalView {
         let terminal = cx.new(|cx| Terminal::new_serial(conn, cx));
         // 串口不传 stored_connection，避免创建文件管理器面板
         Self::new_with_terminal(
-            terminal,
-            connection_id,
-            None,
-            true,
-            None,
-            tab_index,
-            duplicate_source,
+            TerminalViewInit {
+                terminal,
+                connection_id,
+                stored_connection: None,
+                sync_path_enabled: true,
+                local_working_dir: None,
+                tab_index,
+                duplicate_source: Some(duplicate_source),
+                recording_playback_name: None,
+            },
             window,
             cx,
         )

@@ -20,6 +20,8 @@ use one_core::settings::default_grid_font_fallback_families;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Instant;
+use terminal::TerminalPerformanceMetrics;
 use terminal::pty_backend::GpuiEventProxy;
 
 /// 预缓存的字体变体，避免每帧重复创建 Font 对象
@@ -1186,6 +1188,8 @@ pub struct TerminalElement<'a> {
     cursor_visible: bool,
     /// 预计算的 cell_width，由 view.rs 传入，确保与 resize 使用相同的值
     cell_width: Pixels,
+    performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
+    focus_handle: FocusHandle,
 }
 
 impl<'a> TerminalElement<'a> {
@@ -1197,6 +1201,8 @@ impl<'a> TerminalElement<'a> {
         line_height_scale: f32,
         cursor_visible: bool,
         cell_width: Pixels,
+        performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
+        focus_handle: FocusHandle,
     ) -> Self {
         Self {
             cache,
@@ -1206,6 +1212,8 @@ impl<'a> TerminalElement<'a> {
             line_height_scale,
             cursor_visible,
             cell_width,
+            performance_metrics,
+            focus_handle,
         }
     }
 }
@@ -1226,6 +1234,8 @@ impl<'a> IntoElement for TerminalElement<'a> {
             line_height_scale: self.line_height_scale,
             cursor_visible: self.cursor_visible,
             cell_width: self.cell_width,
+            performance_metrics: self.performance_metrics,
+            focus_handle: self.focus_handle,
         }
     }
 }
@@ -1245,6 +1255,8 @@ pub struct TerminalElementImpl {
     cursor_visible: bool,
     /// 预计算的 cell_width，确保与 resize 使用相同的值
     cell_width: Pixels,
+    performance_metrics: Option<Arc<TerminalPerformanceMetrics>>,
+    focus_handle: FocusHandle,
 }
 
 pub struct TerminalLayout {
@@ -1372,8 +1384,12 @@ impl Element for TerminalElementImpl {
 
         let intersection = content_mask.intersect(&terminal_bounds);
         if intersection.size.height <= px(0.) || intersection.size.width <= px(0.) {
+            if let Some(metrics) = &self.performance_metrics {
+                metrics.set_view_visible(false);
+            }
             return; // 完全不可见，跳过渲染
         }
+        let render_started = self.performance_metrics.as_ref().map(|_| Instant::now());
 
         // 背景覆盖整个 content_mask 可见区域，而非仅 terminal_bounds
         // terminal_bounds 基于缓存尺寸 (num_cols * cell_width, num_lines * cell_height)，
@@ -1558,6 +1574,13 @@ impl Element for TerminalElementImpl {
                     }
                 }
             }
+        }
+
+        if let (Some(metrics), Some(render_started)) = (&self.performance_metrics, render_started) {
+            metrics.record_render(
+                render_started.elapsed(),
+                self.focus_handle.is_focused(window),
+            );
         }
     }
 }

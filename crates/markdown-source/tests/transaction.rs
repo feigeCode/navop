@@ -90,3 +90,115 @@ fn undo_and_redo_restore_source_selections() {
         history.redo().unwrap().unwrap()
     );
 }
+
+fn insertion(
+    document: &SourceMarkdownDocument,
+    offset: usize,
+    value: &str,
+    origin: SourceEditOrigin,
+) -> SourceTransaction {
+    SourceTransaction {
+        edits: vec![SourceEdit::new(offset..offset, value, document.revision)],
+        origin,
+        allowed_ranges: vec![offset..offset],
+        selection_before: markdown_source::SourceSelection {
+            anchor: offset,
+            head: offset,
+        },
+        selection_after: markdown_source::SourceSelection {
+            anchor: offset + value.len(),
+            head: offset + value.len(),
+        },
+    }
+}
+
+#[test]
+fn continuous_typing_is_undone_and_redone_as_one_step() {
+    let document = SourceMarkdownDocument::parse("").unwrap();
+    let mut history = SourceHistory::new(document);
+    history
+        .apply(&insertion(
+            history.document(),
+            0,
+            "你",
+            SourceEditOrigin::RichTextTyping,
+        ))
+        .unwrap();
+    history
+        .apply(&insertion(
+            history.document(),
+            "你".len(),
+            "好",
+            SourceEditOrigin::RichTextTyping,
+        ))
+        .unwrap();
+    history
+        .apply(&insertion(
+            history.document(),
+            "你好".len(),
+            "🙂",
+            SourceEditOrigin::RichTextTyping,
+        ))
+        .unwrap();
+
+    assert_eq!("你好🙂", history.document().source);
+    assert!(history.undo().unwrap().is_some());
+    assert_eq!("", history.document().source);
+    assert!(history.undo().unwrap().is_none());
+    assert!(history.redo().unwrap().is_some());
+    assert_eq!("你好🙂", history.document().source);
+}
+
+#[test]
+fn paste_is_a_typing_history_barrier() {
+    let document = SourceMarkdownDocument::parse("").unwrap();
+    let mut history = SourceHistory::new(document);
+    history
+        .apply(&insertion(
+            history.document(),
+            0,
+            "a",
+            SourceEditOrigin::RichTextTyping,
+        ))
+        .unwrap();
+    history
+        .apply(&insertion(
+            history.document(),
+            1,
+            "pasted",
+            SourceEditOrigin::Paste,
+        ))
+        .unwrap();
+
+    history.undo().unwrap();
+    assert_eq!("a", history.document().source);
+    history.undo().unwrap();
+    assert_eq!("", history.document().source);
+}
+
+#[test]
+fn selection_discontinuity_prevents_typing_coalescing() {
+    let document = SourceMarkdownDocument::parse("ab").unwrap();
+    let mut history = SourceHistory::new(document);
+    let first = SourceTransaction {
+        edits: vec![SourceEdit::new(1..1, "x", history.document().revision)],
+        origin: SourceEditOrigin::RichTextTyping,
+        allowed_ranges: vec![1..1],
+        selection_before: markdown_source::SourceSelection { anchor: 1, head: 1 },
+        selection_after: markdown_source::SourceSelection { anchor: 2, head: 2 },
+    };
+    history.apply(&first).unwrap();
+    let second = SourceTransaction {
+        edits: vec![SourceEdit::new(0..0, "y", history.document().revision)],
+        origin: SourceEditOrigin::RichTextTyping,
+        allowed_ranges: vec![0..0],
+        selection_before: markdown_source::SourceSelection { anchor: 0, head: 0 },
+        selection_after: markdown_source::SourceSelection { anchor: 1, head: 1 },
+    };
+    history.apply(&second).unwrap();
+
+    history.undo().unwrap();
+    assert_eq!("axb", history.document().source);
+    history.undo().unwrap();
+    assert_eq!("ab", history.document().source);
+}

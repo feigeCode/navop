@@ -70,6 +70,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260721000001",
         include_str!("../../migrations/20260721000001_workspace_hierarchy.sql"),
     ),
+    (
+        "20260727000001",
+        include_str!("../../migrations/20260727000001_connection_credential_revision.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -114,4 +118,54 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MIGRATIONS, run_migrations};
+    use rusqlite::{Connection, params};
+
+    #[test]
+    fn credential_revision_migration_backfills_existing_connections() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            );
+            INSERT INTO connections (name) VALUES ('existing');",
+        )
+        .expect("create pre-migration schema");
+
+        for (version, _) in &MIGRATIONS[..MIGRATIONS.len() - 1] {
+            conn.execute(
+                "INSERT INTO _migrations (version, applied_at) VALUES (?1, ?2)",
+                params![version, 1i64],
+            )
+            .expect("mark preceding migration as applied");
+        }
+
+        run_migrations(&conn).expect("run credential revision migration");
+
+        let revision: i64 = conn
+            .query_row(
+                "SELECT credential_revision FROM connections WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read backfilled revision");
+        assert_eq!(1, revision);
+        assert!(
+            conn.execute(
+                "UPDATE connections SET credential_revision = 0 WHERE id = 1",
+                [],
+            )
+            .is_err(),
+            "the positive revision invariant must be enforced by SQLite"
+        );
+    }
 }

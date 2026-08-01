@@ -61,6 +61,18 @@ Notes:
     en: Saved
     zh-CN: 已保存
     zh-HK: 已儲存
+  markdown_search_tooltip:
+    en: Find and replace (Cmd/Ctrl+F)
+    zh-CN: 查找与替换（Cmd/Ctrl+F）
+    zh-HK: 尋找與取代（Cmd/Ctrl+F）
+  markdown_outline_tooltip:
+    en: Document outline (Cmd/Ctrl+Shift+O)
+    zh-CN: 文档大纲（Cmd/Ctrl+Shift+O）
+    zh-HK: 文件大綱（Cmd/Ctrl+Shift+O）
+  markdown_statistics:
+    en: "%{words} words · %{characters} characters · %{lines} lines"
+    zh-CN: "%{words} 词 · %{characters} 字符 · %{lines} 行"
+    zh-HK: "%{words} 詞 · %{characters} 字元 · %{lines} 行"
   markdown_adjustment_required:
     en: Confirm formatting changes before editing (%{count} notice(s))
     zh-CN: 切换编辑前需要确认格式调整（%{count} 项提示）

@@ -1,5 +1,15 @@
 use super::*;
 
+pub(super) fn reconnect_follow_up_state(
+    reconnect_started: bool,
+    connection_kind: TerminalConnectionKind,
+) -> (bool, bool) {
+    (
+        reconnect_started,
+        reconnect_started && connection_kind == TerminalConnectionKind::Ssh,
+    )
+}
+
 impl TerminalView {
     pub fn sync_sidebar_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let theme = self.current_theme.clone();
@@ -134,17 +144,22 @@ impl TerminalView {
     }
 
     pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let reconnect_source =
-            resolve_ssh_reconnect_source(&self.duplicate_source, |connection_id| {
-                let storage = cx
-                    .try_global::<GlobalStorageState>()
-                    .ok_or_else(|| anyhow::anyhow!("Global storage is unavailable"))?;
-                let repository = storage
-                    .storage
-                    .get::<ConnectionRepository>()
-                    .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                repository.get(connection_id)
-            });
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
+        let Some(duplicate_source) = self.duplicate_source.as_ref() else {
+            return;
+        };
+        let reconnect_source = resolve_ssh_reconnect_source(duplicate_source, |connection_id| {
+            let storage = cx
+                .try_global::<GlobalStorageState>()
+                .ok_or_else(|| anyhow::anyhow!("Global storage is unavailable"))?;
+            let repository = storage
+                .storage
+                .get::<ConnectionRepository>()
+                .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+            repository.get(connection_id)
+        });
         let reconnect_source = match reconnect_source {
             Ok(source) => source,
             Err(error) => {
@@ -178,11 +193,11 @@ impl TerminalView {
                 );
                 return;
             }
-            self.duplicate_source = TerminalDuplicateSource::Ssh {
+            self.duplicate_source = Some(TerminalDuplicateSource::Ssh {
                 connection: source.connection,
                 working_dir: source.working_dir,
                 sync_path_with_terminal: source.sync_path_with_terminal,
-            };
+            });
         }
 
         let working_dir = self
@@ -190,10 +205,17 @@ impl TerminalView {
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
-        self.focus_terminal_after_connect = true;
-        self.terminal.update(cx, |terminal, cx| {
-            terminal.reconnect(cx);
-        });
+        let connection_kind = self.terminal.read(cx).connection_kind();
+        let reconnect_started = self
+            .terminal
+            .update(cx, |terminal, cx| terminal.reconnect(cx));
+        (
+            self.focus_terminal_after_connect,
+            self.reconnect_success_pending,
+        ) = reconnect_follow_up_state(reconnect_started, connection_kind);
+        if !reconnect_started {
+            return;
+        }
 
         cx.spawn(async move |this, cx| {
             loop {

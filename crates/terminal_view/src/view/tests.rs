@@ -1,10 +1,17 @@
+use super::preferences::reconnect_follow_up_state;
+use super::recording_footer::{format_recording_elapsed, recording_output_path};
+use super::render_surface::{
+    ConnectionStatusPresentation, connection_status_presentation, should_show_connection_overlay,
+};
+use super::tab_content::recording_playback_tab_title;
 use super::{
     TERMINAL_RESET_FONT_SIZE, TERMINAL_TOOLS_SIDEBAR_DEFAULT_WIDTH, TerminalDuplicateSource,
     UnbracketedPasteHazard, WrappedLineSegment, block_selection_text_from_rows,
     clipboard_image_from_item, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
     has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
-    history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
-    multiline_non_empty_line_count, remote_clipboard_image_path, resolve_ssh_reconnect_source,
+    history_prompt_dropdown_origin, history_prompt_overlay_bounds, live_ssh_feature_supported,
+    live_terminal_input_supported, mouse_button_code, multiline_non_empty_line_count,
+    recording_playback_display_name, remote_clipboard_image_path, resolve_ssh_reconnect_source,
     sgr_mouse_button_report, sgr_mouse_mode_enabled, sgr_mouse_wheel_report,
     should_confirm_local_terminal_close, should_defer_inline_history_prompt_input_to_text_system,
     should_defer_sgr_left_press, should_direct_paste_on_right_click,
@@ -26,8 +33,9 @@ use gpui::{
 use one_core::storage::models::{SerialParams, SshAuthMethod, SshParams, StoredConnection};
 use std::cell::Cell as StdCell;
 use terminal::LocalConfig;
-use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
+use terminal::terminal::{ConnectionState, TerminalConnectionKind, TerminalModelEvent};
 
+mod capabilities;
 mod core;
 mod history_availability;
 mod history_interaction;

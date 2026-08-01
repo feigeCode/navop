@@ -1,4 +1,4 @@
-use super::command_bar_model::CommandSuggestion;
+use super::command_bar_model::{CommandHistoryNavigation, CommandSuggestion};
 use crate::theme::TerminalColors;
 use gpui::{
     App, Context, Entity, EventEmitter, FocusHandle, Focusable, ScrollHandle, Subscription, Window,
@@ -15,6 +15,7 @@ mod quick_interaction;
 mod quick_render;
 mod quick_render_list;
 mod quick_render_sidebar;
+mod recording_render;
 mod render;
 mod suggestion_render;
 
@@ -23,6 +24,10 @@ pub(super) enum TerminalCommandBarEvent {
     Submit(String),
     InputToPty(String),
     FocusTerminal,
+    StartRecording,
+    PauseRecording,
+    ResumeRecording,
+    StopRecording,
 }
 
 pub(super) struct TerminalCommandBarConfig {
@@ -49,14 +54,19 @@ pub(super) struct TerminalCommandBar {
     quick_commands: Vec<QuickCommand>,
     suggestions: Vec<CommandSuggestion>,
     selected_suggestion: Option<usize>,
+    history_navigation: Option<CommandHistoryNavigation>,
+    history_input_value: Option<String>,
     quick_query: String,
     quick_group_filter: QuickGroupFilter,
     selected_quick_command: Option<usize>,
     quick_commands_open: bool,
+    recording_controls_open: bool,
     collapsed: bool,
     input_height: f32,
     autocomplete_enabled: bool,
     colors: TerminalColors,
+    recording_path_prompt_pending: bool,
+    recording_control_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 

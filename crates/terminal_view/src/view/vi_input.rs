@@ -4,6 +4,10 @@ impl TerminalView {
     pub(super) fn handle_vi_key_event(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         use alacritty_terminal::vi_mode::ViMotion;
 
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
+
         let key = &event.keystroke.key;
         let shift = event.keystroke.modifiers.shift;
         let ctrl = event.keystroke.modifiers.control;
@@ -117,6 +121,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         let in_vi_mode = self.terminal.update(cx, |terminal, _| {
             terminal.toggle_vi_mode();
             terminal.mode().contains(TermMode::VI)

@@ -233,7 +233,7 @@ fn command_output_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.command.output",
         title: "Read remote command output",
-        description: "Read buffered stdout and stderr incrementally from a background SSH command or a foreground command that detached after timeout. Use stdout_offset and stderr_offset from the previous response to page through output without rereading old bytes.",
+        description: "Read buffered stdout and stderr incrementally from a background SSH command or a foreground command that detached after timeout. Offsets are absolute stream positions: reuse next_stdout_offset and next_stderr_offset from the previous response. If old output was evicted, truncated is true and *_start_offset / *_discarded_bytes identify the retained range used to resynchronize.",
         schema: output_schema_value,
         read_only: true,
         open_world: false,

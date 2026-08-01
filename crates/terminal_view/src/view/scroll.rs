@@ -11,6 +11,7 @@ impl TerminalView {
         let delta_lines = delta_pixels.y / self.line_height;
         self.scroll_lines_accumulated += delta_lines;
 
+        let accepts_live_input = self.accepts_live_terminal_input(cx);
         let mode = self.terminal.read(cx).mode();
         let lines = take_whole_scroll_lines(&mut self.scroll_lines_accumulated);
         tracing::debug!(
@@ -25,7 +26,7 @@ impl TerminalView {
             self.dismiss_history_prompt();
         }
 
-        if mode.contains(TermMode::ALT_SCREEN) {
+        if accepts_live_input && mode.contains(TermMode::ALT_SCREEN) {
             if sgr_mouse_mode_enabled(mode) {
                 let point = self.pixel_to_point(event.position, self.terminal_bounds, cx);
                 if let Some(report) =
@@ -55,7 +56,7 @@ impl TerminalView {
         if lines != 0 {
             let term = self.terminal.read(cx).term().clone();
 
-            if mode.contains(TermMode::VI) {
+            if accepts_live_input && mode.contains(TermMode::VI) {
                 let mut term = term.lock();
                 // 沿用 Alacritty `ViModeCursor::scroll` 的符号语义，直接传入离散后的行数
                 let vi_cursor = term.vi_mode_cursor.scroll(&term, lines);
@@ -128,6 +129,9 @@ impl TerminalView {
         pressed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.accepts_live_terminal_input(cx) {
+            return false;
+        }
         if button == MouseButton::Left
             && (modifiers.shift || (!pressed && self.mouse_state.selecting))
         {
@@ -148,6 +152,9 @@ impl TerminalView {
         pressed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.accepts_live_terminal_input(cx) {
+            return false;
+        }
         let Some(base) = mouse_button_code(button) else {
             return false;
         };

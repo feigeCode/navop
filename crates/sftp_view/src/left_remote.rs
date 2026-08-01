@@ -1,6 +1,6 @@
 use crate::endpoint::{LeftEndpointValue, load_connection};
 use crate::left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
-use crate::{FileItem, SftpView, format_permissions};
+use crate::{FileItem, SftpView, disconnect_sftp_client, format_permissions};
 use gpui::{AsyncApp, Context, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
@@ -17,6 +17,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         match value {
             LeftEndpointValue::Local => self.switch_left_to_local(cx),
             LeftEndpointValue::Remote(id) => self.switch_left_to_remote(id, window, cx),
@@ -34,6 +37,9 @@ impl SftpView {
     }
 
     fn switch_left_to_remote(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         if self.left_remote_id() == Some(id) {
             return;
         }
@@ -64,6 +70,9 @@ impl SftpView {
     }
 
     fn connect_left_remote(&mut self, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_ref() else {
             return;
         };
@@ -81,27 +90,38 @@ impl SftpView {
         cx.spawn(
             async move |this: WeakEntity<Self>, cx: &mut AsyncApp| match task.await {
                 Ok(Ok((client, path))) => {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.left_remote_id() != connection_id {
-                            return;
+                    let client = Arc::new(Mutex::new(client));
+                    let installed = this.update(cx, |this, cx| {
+                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                            return false;
                         }
                         let endpoint = this.left_remote.as_mut().expect("checked above");
-                        endpoint.client = Some(Arc::new(Mutex::new(client)));
+                        endpoint.client = Some(client.clone());
                         endpoint.state = LeftRemoteConnectionState::Connected;
                         endpoint.current_path = path.clone();
                         endpoint.history = vec![path];
                         endpoint.history_index = 0;
                         this.set_left_connection_active(true, cx);
                         this.refresh_left_remote_dir(cx);
+                        true
                     });
+                    if !installed.unwrap_or(false) {
+                        Tokio::spawn(cx, disconnect_sftp_client(client)).detach();
+                    }
                 }
                 Ok(Err(error)) => {
                     let _ = this.update(cx, |this, cx| {
+                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                            return;
+                        }
                         this.set_left_connection_error(error.to_string(), cx);
                     });
                 }
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
+                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                            return;
+                        }
                         this.set_left_connection_error(error.to_string(), cx);
                     });
                 }
@@ -111,6 +131,9 @@ impl SftpView {
     }
 
     pub(crate) fn refresh_left_remote_dir(&mut self, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_mut() else {
             return;
         };
@@ -131,7 +154,7 @@ impl SftpView {
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.left_remote_id() != connection_id {
+                if this.close_state.is_closing() || this.left_remote_id() != connection_id {
                     return;
                 }
                 let endpoint = this.left_remote.as_mut().expect("checked above");
@@ -161,6 +184,9 @@ impl SftpView {
     }
 
     pub(crate) fn open_left_remote_terminal(&self, path: Option<String>, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_ref() else {
             return;
         };
@@ -176,7 +202,7 @@ impl SftpView {
         is_dir: bool,
         cx: &mut Context<Self>,
     ) {
-        if !is_dir {
+        if self.close_state.is_closing() || !is_dir {
             return;
         }
         let Some(endpoint) = self.left_remote.as_ref() else {
@@ -191,6 +217,9 @@ impl SftpView {
     }
 
     pub(crate) fn navigate_left_remote_to(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_mut() else {
             return;
         };
@@ -219,6 +248,9 @@ impl SftpView {
     }
 
     pub(crate) fn go_back_left_remote(&mut self, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_mut() else {
             return;
         };
@@ -231,6 +263,9 @@ impl SftpView {
     }
 
     pub(crate) fn go_forward_left_remote(&mut self, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(endpoint) = self.left_remote.as_mut() else {
             return;
         };
@@ -251,17 +286,24 @@ impl SftpView {
     }
 
     pub(crate) fn disconnect_left_remote(&mut self, cx: &mut Context<Self>) {
-        let Some(mut endpoint) = self.left_remote.take() else {
-            return;
-        };
-        self.set_left_connection_active_for(endpoint.connection.id, false, cx);
-        if let Some(client) = endpoint.client.take() {
-            Tokio::spawn(cx, async move {
-                let mut client = client.lock().await;
-                let _ = client.disconnect().await;
-            })
-            .detach();
+        if let Some(client) = self.take_left_remote_client(cx) {
+            Tokio::spawn(cx, disconnect_sftp_client(client)).detach();
         }
+    }
+
+    /// Remove the left endpoint and return its client to the caller.
+    ///
+    /// Close handling needs to decide whether disconnecting an endpoint should
+    /// be awaited (the wait strategy) or detached (cancel/background).  Keep
+    /// the ownership transfer synchronous here so that no disconnect task can
+    /// be started before the close decision has been committed.
+    pub(crate) fn take_left_remote_client(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<Mutex<RusshSftpClient>>> {
+        let mut endpoint = self.left_remote.take()?;
+        self.set_left_connection_active_for(endpoint.connection.id, false, cx);
+        endpoint.client.take()
     }
 
     fn set_left_connection_active(&self, active: bool, cx: &mut Context<Self>) {

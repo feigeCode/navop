@@ -9,7 +9,10 @@ use one_core::storage::{
 };
 use serde_json::{Value, json};
 use sftp::{RusshSftpClient, SftpClient};
-use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
+use ssh::{
+    HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
+    SshConnectConfig,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -250,6 +253,7 @@ fn ssh_config_from_params(params: &SshParams) -> SshConnectConfig {
         jump_server: params.jump_server.as_ref().map(jump_config),
         proxy: params.proxy.as_ref().map(proxy_config),
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
     }
 }

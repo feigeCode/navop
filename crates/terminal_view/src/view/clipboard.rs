@@ -43,10 +43,16 @@ impl TerminalView {
     }
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         if let Some(clipboard) = cx.read_from_clipboard() {
-            let (connection_kind, mode) = {
+            let (live_connection_kind, mode) = {
                 let terminal = self.terminal.read(cx);
-                (terminal.connection_kind(), terminal.mode())
+                (terminal.live_connection_kind(), terminal.mode())
+            };
+            let Some(connection_kind) = live_connection_kind else {
+                return;
             };
             let should_upload_image = should_upload_clipboard_image_to_remote_cli(
                 self.paste_image_upload,
@@ -107,6 +113,9 @@ impl TerminalView {
     /// 2. 保持文本的完整性，让用户可以检查后再执行
     /// 3. 避免意外执行危险命令
     pub(super) fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         let text = normalize_paste_line_endings(text);
         let text = text.as_ref();
         let mode = self.terminal.read(cx).mode();
@@ -159,6 +168,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_live_terminal_input(cx) {
+            return;
+        }
         let text = normalize_paste_line_endings(text);
         let text = text.as_ref();
         // 仅在应用请求 bracketed paste 模式时才包装，避免把控制序列

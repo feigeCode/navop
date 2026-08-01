@@ -78,6 +78,22 @@
                 <string>md</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Terminal Recording</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.asciinema.cast</string>
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>cast</string>
+            </array>
+        </dict>
     </array>
     <key>UTImportedTypeDeclarations</key>
     <array>
@@ -118,6 +134,19 @@
                 <array><string>md</string></array>
                 <key>public.mime-type</key>
                 <string>text/markdown</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.asciinema.cast</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>cast</string></array>
+                <key>public.mime-type</key>
+                <string>application/x-asciicast</string>
             </dict>
         </dict>
     </array>

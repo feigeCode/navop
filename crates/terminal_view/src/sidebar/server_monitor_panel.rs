@@ -1098,12 +1098,12 @@ impl ServerMonitorPanel {
             .child(render_process_column(
                 t!("ServerMonitor.by_cpu").to_string(),
                 process.top_cpu.clone(),
-                cx,
+                &self.colors,
             ))
             .child(render_process_column(
                 t!("ServerMonitor.by_memory").to_string(),
                 process.top_memory.clone(),
-                cx,
+                &self.colors,
             ))
             .into_any_element()
     }
@@ -1167,8 +1167,13 @@ impl MemorySegment {
 fn render_process_column(
     title: String,
     entries: Vec<ProcessEntry>,
-    cx: &mut Context<ServerMonitorPanel>,
+    colors: &TerminalColors,
 ) -> AnyElement {
+    let foreground = colors.foreground;
+    let muted = colors.muted;
+    let muted_foreground = colors.muted_foreground;
+    let accent = colors.accent;
+
     v_flex()
         .flex_1()
         .min_w(px(0.0))
@@ -1186,22 +1191,22 @@ fn render_process_column(
                 .w_full()
                 .min_w(px(0.0))
                 .rounded_md()
-                .bg(cx.theme().secondary)
+                .bg(muted)
+                .text_color(foreground)
                 .p_2()
                 .gap_0p5()
                 .cursor_pointer()
-                .hover(|style| style.bg(cx.theme().list_active))
+                .hover(|style| style.bg(accent.opacity(0.16)))
                 .tooltip(move |window, cx| Tooltip::new(tooltip_command.clone()).build(window, cx))
                 .child(
                     h_flex()
                         .justify_between()
                         .child(div().text_xs().child(format!("#{}", entry.pid)))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("{:.1}% · {}", entry.cpu, format_kib(entry.memory))),
-                        ),
+                        .child(div().text_xs().text_color(muted_foreground).child(format!(
+                            "{:.1}% · {}",
+                            entry.cpu,
+                            format_kib(entry.memory)
+                        ))),
                 )
                 .child(
                     div()

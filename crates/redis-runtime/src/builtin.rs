@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis_client::{AsyncCommands, Client, RedisResult};
 use rust_i18n::t;
-use ssh::{LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward};
+use ssh::{
+    HostKeyVerifier, LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -275,6 +277,7 @@ impl RedisConnectionImpl {
             jump_server: None,
             proxy: None,
             keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
         };
 

@@ -161,6 +161,7 @@ fn screenshot_safe_feature_replaces_all_home_connection_info() {
     for (connection_type, expected_name, expected_info) in cases {
         let connection = StoredConnection {
             id: Some(1),
+            credential_revision: None,
             name: "Sensitive connection name".to_string(),
             connection_type,
             params: r#"{"host":"production.internal","username":"administrator"}"#.to_string(),

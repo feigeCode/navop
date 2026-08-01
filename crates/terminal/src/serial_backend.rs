@@ -1,31 +1,79 @@
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use one_core::storage::models::SerialParams;
 
-use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
-use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
+use crate::exec_supervisor::TerminalInputSource;
+use crate::pty_backend::GpuiEventProxy;
+use crate::recording::RecordingTap;
+use crate::serial_ingress::{SerialParserIngress, run_serial_reader};
+use crate::{
+    TerminalBackend, TerminalInputHandle, TerminalInputMetricSource, TerminalPerformanceMetrics,
+    TerminalSize,
+};
 
 enum SerialCommand {
-    Write(Vec<u8>),
+    Write {
+        source: TerminalInputSource,
+        data: Vec<u8>,
+    },
     Shutdown,
 }
 
 pub struct SerialBackend {
     command_tx: UnboundedSender<SerialCommand>,
+    shutdown: CancellationToken,
+    parser_ingress: Option<SerialParserIngress>,
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
 }
 
 impl SerialBackend {
     pub fn connect(
         params: SerialParams,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_tx: UnboundedSender<TerminalEvent>,
+        event_proxy: GpuiEventProxy,
         on_disconnect: Option<UnboundedSender<()>>,
+    ) -> anyhow::Result<Self> {
+        let performance_metrics = event_proxy.performance_metrics();
+        Self::connect_with_metrics(
+            params,
+            term,
+            event_proxy,
+            on_disconnect,
+            performance_metrics,
+        )
+    }
+
+    pub fn connect_with_metrics(
+        params: SerialParams,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        on_disconnect: Option<UnboundedSender<()>>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+    ) -> anyhow::Result<Self> {
+        Self::connect_with_metrics_and_recording(
+            params,
+            term,
+            event_proxy,
+            on_disconnect,
+            performance_metrics,
+            None,
+        )
+    }
+
+    pub(crate) fn connect_with_metrics_and_recording(
+        params: SerialParams,
+        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+        event_proxy: GpuiEventProxy,
+        on_disconnect: Option<UnboundedSender<()>>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+        recording_tap: Option<RecordingTap>,
     ) -> anyhow::Result<Self> {
         let data_bits = match params.data_bits {
             5 => serialport::DataBits::Five,
@@ -66,75 +114,83 @@ impl SerialBackend {
         // 克隆一份用于写入
         let write_port = port.try_clone()?;
 
-        let (command_tx, mut command_rx) = unbounded_channel::<SerialCommand>();
+        let (command_tx, command_rx) = unbounded_channel::<SerialCommand>();
+        let shutdown = CancellationToken::new();
+        let parser_ingress = SerialParserIngress::spawn_with_recording(
+            term,
+            event_proxy,
+            performance_metrics.clone(),
+            on_disconnect,
+            recording_tap.clone(),
+        )?;
 
-        // 读取线程：从串口读取数据并写入 alacritty Term
-        let read_event_tx = event_tx.clone();
-        std::thread::Builder::new()
+        // 读取线程只负责串口 I/O 和有界入队；同步解析由 serial-parser 线程完成。
+        let read_shutdown = shutdown.clone();
+        let ingress_producer = parser_ingress.producer();
+        let read_task = std::thread::Builder::new()
             .name("serial-read".into())
             .spawn(move || {
                 let mut port = port;
-                let mut processor: Processor<StdSyncHandler> = Processor::new();
-                let mut buf = [0u8; 4096];
-
-                loop {
-                    match port.read(&mut buf) {
-                        Ok(n) if n > 0 => {
-                            processor.advance(&mut *term.lock(), &buf[..n]);
-                            let _ = read_event_tx.send(TerminalEvent::Wakeup);
-                        }
-                        Ok(_) => {}
-                        Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                            // 超时是正常的，继续读取
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            // 非阻塞模式下无数据可读
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
-                        Err(_) => {
-                            // 读取错误，串口可能已断开
-                            break;
-                        }
-                    }
-                }
-                if let Some(tx) = on_disconnect {
-                    let _ = tx.send(());
-                }
-            })?;
+                let _ = run_serial_reader(port.as_mut(), &ingress_producer, &read_shutdown);
+            });
+        if let Err(error) = read_task {
+            shutdown.cancel();
+            parser_ingress.abort();
+            return Err(error.into());
+        }
 
         // 写入线程：从 command channel 接收命令并写入串口
-        std::thread::Builder::new()
+        let write_task = std::thread::Builder::new()
             .name("serial-write".into())
-            .spawn(move || {
-                let mut port = write_port;
-                while let Some(cmd) = command_rx.blocking_recv() {
-                    match cmd {
-                        SerialCommand::Write(data) => {
-                            if port.write_all(&data).is_err() {
-                                break;
-                            }
-                        }
-                        SerialCommand::Shutdown => {
-                            break;
-                        }
-                    }
-                }
-            })?;
+            .spawn(move || run_serial_writer(write_port, command_rx, recording_tap));
+        if let Err(error) = write_task {
+            shutdown.cancel();
+            parser_ingress.abort();
+            let _ = command_tx.send(SerialCommand::Shutdown);
+            return Err(error.into());
+        }
 
-        Ok(Self { command_tx })
+        Ok(Self {
+            command_tx,
+            shutdown,
+            parser_ingress: Some(parser_ingress),
+            performance_metrics,
+        })
+    }
+
+    fn stop(&self) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
+        self.shutdown.cancel();
+        if let Some(parser_ingress) = &self.parser_ingress {
+            parser_ingress.abort();
+        }
+        let _ = self.command_tx.send(SerialCommand::Shutdown);
     }
 }
 
 impl TerminalBackend for SerialBackend {
     fn write(&self, data: Vec<u8>) {
-        let _ = self.command_tx.send(SerialCommand::Write(data));
+        self.performance_metrics
+            .record_input(TerminalInputMetricSource::User, data.len());
+        let _ = self.command_tx.send(SerialCommand::Write {
+            source: TerminalInputSource::User,
+            data,
+        });
     }
 
     fn input_handle(&self) -> Option<TerminalInputHandle> {
         let tx = self.command_tx.clone();
-        Some(TerminalInputHandle::new(move |data| {
-            let _ = tx.send(SerialCommand::Write(data));
-        }))
+        Some(TerminalInputHandle::with_metrics(
+            self.performance_metrics.clone(),
+            move |data| {
+                let _ = tx.send(SerialCommand::Write {
+                    source: TerminalInputSource::ExternalInput,
+                    data,
+                });
+            },
+        ))
     }
 
     fn resize(&self, _size: TerminalSize) {
@@ -142,7 +198,35 @@ impl TerminalBackend for SerialBackend {
     }
 
     fn shutdown(&self) {
-        let _ = self.command_tx.send(SerialCommand::Shutdown);
+        self.stop();
+    }
+}
+
+impl Drop for SerialBackend {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn run_serial_writer(
+    mut port: impl Write,
+    mut command_rx: UnboundedReceiver<SerialCommand>,
+    recording_tap: Option<RecordingTap>,
+) {
+    while let Some(command) = command_rx.blocking_recv() {
+        match command {
+            SerialCommand::Write { source, data } => {
+                if port.write_all(&data).is_err() {
+                    break;
+                }
+                if source.is_recordable_user_input() {
+                    if let Some(tap) = &recording_tap {
+                        let _ = tap.record_input(&data);
+                    }
+                }
+            }
+            SerialCommand::Shutdown => break,
+        }
     }
 }
 
@@ -150,8 +234,12 @@ impl TerminalBackend for SerialBackend {
 mod tests {
     use super::*;
     use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use std::io::{Read, Write};
     use std::process::Command;
+
+    use crate::TerminalEvent;
+    use crate::serial_ingress::advance_serial_term;
 
     /// 实现 Dimensions trait 用于测试
     struct TestDimensions;
@@ -169,14 +257,15 @@ mod tests {
 
     fn create_test_term(
         event_tx: UnboundedSender<TerminalEvent>,
-    ) -> Arc<FairMutex<Term<GpuiEventProxy>>> {
+    ) -> (Arc<FairMutex<Term<GpuiEventProxy>>>, GpuiEventProxy) {
         let config = alacritty_terminal::term::Config::default();
         let event_proxy = GpuiEventProxy::new(event_tx);
-        Arc::new(FairMutex::new(Term::new(
+        let term = Arc::new(FairMutex::new(Term::new(
             config,
             &TestDimensions,
-            event_proxy,
-        )))
+            event_proxy.clone(),
+        )));
+        (term, event_proxy)
     }
 
     fn create_virtual_serial_pair() -> Option<(std::process::Child, String, String)> {
@@ -214,14 +303,134 @@ mod tests {
     }
 
     #[test]
+    fn advance_serial_term_records_parser_and_lock_metrics_once() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, _event_proxy) = create_test_term(event_tx);
+        let metrics = TerminalPerformanceMetrics::enabled();
+        let mut processor = Processor::<StdSyncHandler>::new();
+        let data = b"serial output\r\n";
+
+        advance_serial_term(&term, &mut processor, data, &metrics, None);
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(data.len() as u64, snapshot.ingress_bytes);
+        assert_eq!(1, snapshot.parser_chunks);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_bytes);
+        assert_eq!(data.len() as u64, snapshot.parser_chunk_max_bytes);
+        assert_eq!(1, snapshot.term_lock_samples);
+        assert_eq!(snapshot.term_lock_wait_ns, snapshot.term_lock_wait_max_ns);
+        assert_eq!(snapshot.term_lock_hold_ns, snapshot.term_lock_hold_max_ns);
+    }
+
+    #[test]
+    fn serial_backend_records_direct_and_handle_input_without_double_counting() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
+        let backend = SerialBackend {
+            command_tx,
+            shutdown: CancellationToken::new(),
+            parser_ingress: None,
+            performance_metrics: metrics.clone(),
+        };
+
+        TerminalBackend::write(&backend, b"direct".to_vec());
+        TerminalBackend::input_handle(&backend)
+            .expect("serial input handle")
+            .write(b"handle".to_vec());
+
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data,
+            }) if data == b"direct"
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(SerialCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data,
+            }) if data == b"handle"
+        ));
+        assert!(command_rx.try_recv().is_err());
+        assert_eq!(
+            (b"direct".len() + b"handle".len()) as u64,
+            metrics.snapshot().user_input_bytes
+        );
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("mock serial write failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn serial_input_recording_captures_only_successfully_written_user_bytes() {
+        let recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Serial,
+            true,
+        );
+        let (command_tx, command_rx) = unbounded_channel();
+        command_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data: b"user input".to_vec(),
+            })
+            .expect("queue user input");
+        command_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::ExternalInput,
+                data: b"external input".to_vec(),
+            })
+            .expect("queue external input");
+        command_tx
+            .send(SerialCommand::Shutdown)
+            .expect("queue writer shutdown");
+
+        run_serial_writer(Vec::new(), command_rx, Some(recording.tap()));
+
+        let parsed = recording.finish();
+        assert_eq!(1, parsed.events.len());
+        assert!(matches!(
+            &parsed.events[0].kind,
+            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
+        ));
+
+        let failed_recording = crate::recording::test_support::TestRecording::start(
+            crate::recording::RecordingBackend::Serial,
+            true,
+        );
+        let (failed_tx, failed_rx) = unbounded_channel();
+        failed_tx
+            .send(SerialCommand::Write {
+                source: TerminalInputSource::User,
+                data: b"failed input".to_vec(),
+            })
+            .expect("queue failed input");
+        run_serial_writer(FailingWriter, failed_rx, Some(failed_recording.tap()));
+
+        assert!(
+            failed_recording.finish().events.is_empty(),
+            "a failed serial write must not be recorded"
+        );
+    }
+
+    #[test]
     fn test_open_nonexistent_port_fails() {
         let params = SerialParams {
             port_name: "/dev/nonexistent_serial_test_999".to_string(),
             ..Default::default()
         };
         let (event_tx, _event_rx) = unbounded_channel::<TerminalEvent>();
-        let term = create_test_term(event_tx.clone());
-        let result = SerialBackend::connect(params, term, event_tx, None);
+        let (term, event_proxy) = create_test_term(event_tx);
+        let result = SerialBackend::connect(params, term, event_proxy, None);
         assert!(result.is_err(), "打开不存在的串口应返回错误");
         let err = result.err().unwrap();
         println!("[PASS] 打开不存在的端口返回错误: {}", err);
@@ -238,14 +447,14 @@ mod tests {
         };
 
         let (event_tx, _event_rx) = unbounded_channel::<TerminalEvent>();
-        let term = create_test_term(event_tx.clone());
+        let (term, event_proxy) = create_test_term(event_tx);
 
         let params = SerialParams {
             port_name: port_a.clone(),
             baud_rate: 115200,
             ..Default::default()
         };
-        match SerialBackend::connect(params, term, event_tx, None) {
+        match SerialBackend::connect(params, term, event_proxy, None) {
             Ok(backend) => {
                 // 打开对端读取
                 let mut peer = serialport::new(&port_b, 115200)
@@ -300,14 +509,14 @@ mod tests {
         };
 
         let (event_tx, mut event_rx) = unbounded_channel::<TerminalEvent>();
-        let term = create_test_term(event_tx.clone());
+        let (term, event_proxy) = create_test_term(event_tx);
 
         let params = SerialParams {
             port_name: port_a.clone(),
             baud_rate: 115200,
             ..Default::default()
         };
-        match SerialBackend::connect(params, term.clone(), event_tx, None) {
+        match SerialBackend::connect(params, term.clone(), event_proxy, None) {
             Ok(backend) => {
                 let mut writer = serialport::new(&port_b, 115200)
                     .timeout(Duration::from_secs(2))

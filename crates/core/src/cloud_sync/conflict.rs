@@ -325,6 +325,7 @@ mod tests {
         let resolver = ConflictResolver::default();
         let conn = StoredConnection {
             id: Some(1),
+            credential_revision: Some(1),
             name: "Test Connection".to_string(),
             connection_type: crate::storage::ConnectionType::Database,
             workspace_id: None,

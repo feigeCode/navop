@@ -47,6 +47,7 @@ impl TerminalCommandBar {
         }
         self.load_quick_commands(cx);
         self.quick_commands_open = true;
+        self.recording_controls_open = false;
         self.suggestions.clear();
         self.selected_suggestion = None;
         self.clear_inline_completion(cx);

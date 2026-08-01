@@ -1068,6 +1068,15 @@ impl SyncableItem for Workspace {
 pub struct StoredConnection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
+    /// Local, non-secret generation for authentication/session identity.
+    ///
+    /// The repository assigns this value and advances it on full connection
+    /// record rewrites. It is intentionally excluded from cloud/export
+    /// serialization because it is meaningful only together with the local
+    /// database record ID. Unsaved or imported in-memory records therefore
+    /// carry `None` until inserted.
+    #[serde(skip)]
+    pub credential_revision: Option<i64>,
     pub name: String,
     pub connection_type: ConnectionType,
     pub params: String,
@@ -1250,6 +1259,7 @@ impl StoredConnection {
         let name = default_database_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::Database,
             params: serde_json::to_string(&params).expect("DbConnectionConfig 序列化不应失败"),
@@ -1276,6 +1286,7 @@ impl StoredConnection {
         let name = default_ssh_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::SshSftp,
             params: serde_json::to_string(&params).expect("SshParams 序列化不应失败"),
@@ -1302,6 +1313,7 @@ impl StoredConnection {
         let name = default_remote_desktop_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: params.protocol.connection_type(),
             params: serde_json::to_string(&params).expect("RemoteDesktopParams 序列化不应失败"),
@@ -1324,6 +1336,7 @@ impl StoredConnection {
         let name = default_redis_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::Redis,
             params: serde_json::to_string(&params).expect("RedisParams 序列化不应失败"),
@@ -1346,6 +1359,7 @@ impl StoredConnection {
         let name = default_mongodb_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::MongoDB,
             params: serde_json::to_string(&params).expect("MongoDBParams 序列化不应失败"),
@@ -1384,6 +1398,7 @@ impl StoredConnection {
         let name = default_serial_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::Serial,
             params: serde_json::to_string(&params).expect("SerialParams 序列化不应失败"),
@@ -1410,6 +1425,7 @@ impl StoredConnection {
         let name = default_port_forwarding_name(name, &params);
         Self {
             id: None,
+            credential_revision: None,
             name,
             connection_type: ConnectionType::PortForwarding,
             params: serde_json::to_string(&params).expect("PortForwardingParams 序列化不应失败"),
@@ -1511,6 +1527,20 @@ mod tests {
         );
         connection.id = Some(id);
         connection
+    }
+
+    #[test]
+    fn stored_connection_credential_revision_is_local_only() {
+        let mut connection = ssh_connection_with_id(42, SshAuthMethod::Agent);
+        connection.credential_revision = Some(7);
+
+        let serialized = serde_json::to_string(&connection).expect("serialize connection");
+        assert!(!serialized.contains("credential_revision"));
+
+        let restored: StoredConnection =
+            serde_json::from_str(&serialized).expect("deserialize connection");
+        assert_eq!(Some(42), restored.id);
+        assert_eq!(None, restored.credential_revision);
     }
 
     fn database_config_with_ssh_ref(ssh_connection_id: i64) -> DbConnectionConfig {

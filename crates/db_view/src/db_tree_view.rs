@@ -3085,6 +3085,7 @@ mod tests {
     fn build_connection(id: i64, selected_databases: Option<Vec<&str>>) -> StoredConnection {
         StoredConnection {
             id: Some(id),
+            credential_revision: None,
             name: "conn".to_string(),
             connection_type: ConnectionType::Database,
             params: "{}".to_string(),

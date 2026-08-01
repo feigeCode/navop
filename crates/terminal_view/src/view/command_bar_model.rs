@@ -23,6 +23,42 @@ pub(super) enum SelectionDirection {
     Next,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CommandHistoryNavigation {
+    entries: Vec<String>,
+    selected: Option<usize>,
+    draft: String,
+}
+
+impl CommandHistoryNavigation {
+    pub(super) fn new(entries: Vec<String>, draft: String) -> Self {
+        Self {
+            entries,
+            selected: None,
+            draft,
+        }
+    }
+
+    pub(super) fn previous(&mut self) -> Option<&str> {
+        let last = self.entries.len().checked_sub(1)?;
+        self.selected = Some(self.selected.map_or(0, |index| (index + 1).min(last)));
+        self.selected
+            .and_then(|index| self.entries.get(index))
+            .map(String::as_str)
+    }
+
+    pub(super) fn next(&mut self) -> Option<&str> {
+        let selected = self.selected?;
+        if selected == 0 {
+            self.selected = None;
+            Some(self.draft.as_str())
+        } else {
+            self.selected = Some(selected - 1);
+            self.entries.get(selected - 1).map(String::as_str)
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct QuickCommandGroup {
     pub name: Option<String>,
@@ -120,26 +156,6 @@ pub(super) fn group_quick_commands(
         }
     }
     groups
-}
-
-pub(super) fn next_selection(
-    item_count: usize,
-    current: Option<usize>,
-    direction: SelectionDirection,
-) -> Option<usize> {
-    if item_count == 0 {
-        return None;
-    }
-    match direction {
-        SelectionDirection::Next => Some(current.map_or(0, |index| (index + 1) % item_count)),
-        SelectionDirection::Previous => Some(current.map_or(item_count - 1, |index| {
-            if index == 0 {
-                item_count - 1
-            } else {
-                index - 1
-            }
-        })),
-    }
 }
 
 pub(super) fn bounded_selection(

@@ -24,23 +24,40 @@ pub(crate) struct TerminalWorkspaceSidebarSnapshot {
 impl TerminalView {
     pub(crate) fn with_workspace_pane(mut self) -> Self {
         self.render_mode = TerminalRenderMode::WorkspacePane;
+        self.set_performance_pane_active(false);
         self
     }
 
-    pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> TerminalDuplicateSource {
+    pub(crate) fn set_performance_tab_active(&self, active: bool) {
+        if let Some(metrics) = &self.performance_metrics {
+            metrics.set_tab_active(active);
+        }
+    }
+
+    pub(crate) fn set_performance_pane_active(&self, active: bool) {
+        if let Some(metrics) = &self.performance_metrics {
+            metrics.set_pane_active(active);
+        }
+    }
+
+    pub(crate) fn duplicate_source_snapshot(&self, cx: &App) -> Option<TerminalDuplicateSource> {
+        let source = self.duplicate_source.clone()?;
         let current_working_dir = self
             .terminal
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
-        terminal_duplicate_source_with_cwd(
-            self.duplicate_source.clone(),
+        Some(terminal_duplicate_source_with_cwd(
+            source,
             current_working_dir.as_deref(),
-        )
+        ))
     }
 
-    pub(crate) fn duplicate_supported(&self) -> bool {
-        terminal_tab_duplicate_supported(&self.duplicate_source)
+    pub(crate) fn duplicate_supported(&self, cx: &App) -> bool {
+        terminal_tab_duplicate_supported(
+            self.duplicate_source.as_ref(),
+            self.terminal.read(cx).live_connection_kind(),
+        )
     }
 
     pub(crate) fn new_from_duplicate_source(
@@ -80,7 +97,7 @@ impl TerminalView {
         }
         let terminal = self.terminal.read(cx);
         should_confirm_local_terminal_close(
-            terminal.connection_kind(),
+            terminal.live_connection_kind(),
             self.local_command_running,
             terminal.mode(),
             terminal.child_exited(),

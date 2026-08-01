@@ -431,9 +431,17 @@ SSH:
     zh-CN: X11 转发
     zh-HK: X11 轉發
   x11_forwarding_desc:
-    en: Forward remote X11 graphical applications to the local X server (e.g. XQuartz on macOS). Applies to new terminal sessions.
-    zh-CN: 将远端 X11 图形应用转发到本机 X server（如 macOS 上的 XQuartz）显示。对新开的终端会话生效。
-    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server（如 macOS 上的 XQuartz）顯示。對新開的終端工作階段生效。
+    en: Forward remote X11 graphical applications to the local X server. macOS requires XQuartz to be installed and running. Applies to new terminal sessions.
+    zh-CN: 将远端 X11 图形应用转发到本机 X server。macOS 需要安装并启动 XQuartz。对新开的终端会话生效。
+    zh-HK: 將遠端 X11 圖形應用轉發到本機 X server。macOS 需要安裝並啟動 XQuartz。對新開的終端工作階段生效。
+  xquartz_not_installed:
+    en: XQuartz was not detected. Install and start XQuartz before using X11 forwarding on macOS, then reconnect the SSH session.
+    zh-CN: 未检测到 XQuartz。请先安装并启动 XQuartz，再重新建立 SSH 连接以使用 X11 转发。
+    zh-HK: 未偵測到 XQuartz。請先安裝並啟動 XQuartz，再重新建立 SSH 連線以使用 X11 轉發。
+  xquartz_unavailable:
+    en: X11 forwarding is unavailable because XQuartz is not installed, not running, or its DISPLAY authorization is not ready. Install or start XQuartz, then reconnect the SSH session.
+    zh-CN: X11 转发不可用：XQuartz 可能未安装、未运行，或 DISPLAY 授权尚未就绪。请安装或启动 XQuartz，然后重新建立 SSH 连接。
+    zh-HK: X11 轉發無法使用：XQuartz 可能未安裝、未執行，或 DISPLAY 授權尚未就緒。請安裝或啟動 XQuartz，然後重新建立 SSH 連線。
   remote_shell_integration:
     en: Remote Shell Integration
     zh-CN: 远端 Shell 集成
@@ -1484,10 +1492,66 @@ SshSession:
     en: The SSH session has been disconnected.
     zh-CN: SSH 会话已断开连接。
     zh-HK: SSH 工作階段已斷開連接。
+  connecting_preserves_terminal:
+    en: Establishing the terminal connection. Existing terminal output remains visible.
+    zh-CN: 正在建立终端连接，当前终端内容会保持可见。
+    zh-HK: 正在建立終端連線，目前終端內容會保持可見。
+  reconnecting_preserves_terminal:
+    en: Opening a new remote shell. Existing terminal output will remain visible.
+    zh-CN: 正在打开新的远端 Shell，当前终端内容会继续保留。
+    zh-HK: 正在開啟新的遠端 Shell，目前終端內容會繼續保留。
+  disconnected_preserves_terminal:
+    en: Terminal output is preserved. Reconnect to open a new remote shell and continue below it.
+    zh-CN: 终端内容已保留；重新连接后会打开新的远端 Shell，并在现有内容后继续显示。
+    zh-HK: 終端內容已保留；重新連線後會開啟新的遠端 Shell，並在現有內容後繼續顯示。
+  authentication_required:
+    en: SSH Authentication Required
+    zh-CN: 需要完成 SSH 身份验证
+    zh-HK: 需要完成 SSH 身分驗證
+  reconnected_new_shell:
+    en: Reconnected. A new remote shell was opened below the preserved terminal output.
+    zh-CN: 已重新连接并打开新的远端 Shell，之前的终端内容已保留。
+    zh-HK: 已重新連線並開啟新的遠端 Shell，之前的終端內容已保留。
   reconnect:
     en: Reconnect
     zh-CN: 重新连接
     zh-HK: 重新連接
+  host_key_title:
+    en: Verify SSH Host Key
+    zh-CN: 验证 SSH 主机指纹
+    zh-HK: 驗證 SSH 主機指紋
+  host_key_message:
+    en: This server is not yet trusted. Verify the fingerprint before continuing.
+    zh-CN: 尚未信任此服务器。继续前请核对主机指纹。
+    zh-HK: 尚未信任此伺服器。繼續前請核對主機指紋。
+  host_key_identity:
+    en: Server
+    zh-CN: 服务器
+    zh-HK: 伺服器
+  host_key_algorithm:
+    en: Algorithm
+    zh-CN: 算法
+    zh-HK: 演算法
+  host_key_fingerprint:
+    en: SHA-256 Fingerprint
+    zh-CN: SHA-256 指纹
+    zh-HK: SHA-256 指紋
+  host_key_accept_save:
+    en: Accept and Save
+    zh-CN: 接受并保存
+    zh-HK: 接受並儲存
+  host_key_accept_once:
+    en: Accept Once
+    zh-CN: 仅本次接受
+    zh-HK: 僅本次接受
+  host_key_reject:
+    en: Reject
+    zh-CN: 拒绝
+    zh-HK: 拒絕
+  host_key_rejected:
+    en: SSH host key was rejected.
+    zh-CN: 已拒绝 SSH 主机指纹。
+    zh-HK: 已拒絕 SSH 主機指紋。
 
 # 文件管理器
 FileManager:
@@ -1859,3 +1923,143 @@ Conflict:
     en: "%{name} and %{count} other files"
     zh-CN: "%{name} 等 %{count} 个文件"
     zh-HK: "%{name} 等 %{count} 個文件"
+
+TerminalRecording:
+  control:
+    en: Recording
+    zh-CN: 录制
+    zh-HK: 錄製
+  ready:
+    en: Ready
+    zh-CN: 准备录制
+    zh-HK: 準備錄製
+  recording:
+    en: Recording
+    zh-CN: 录制中
+    zh-HK: 錄製中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  stopping:
+    en: Stopping
+    zh-CN: 正在停止
+    zh-HK: 正在停止
+  stopped:
+    en: Stopped
+    zh-CN: 已停止
+    zh-HK: 已停止
+  failed:
+    en: Failed
+    zh-CN: 录制失败
+    zh-HK: 錄製失敗
+  output_only:
+    en: Output only · Input not recorded
+    zh-CN: 仅录制输出 · 不记录输入
+    zh-HK: 僅錄製輸出 · 不記錄輸入
+  input_included:
+    en: Input recording enabled
+    zh-CN: 已启用输入录制
+    zh-HK: 已啟用輸入錄製
+  start:
+    en: Start
+    zh-CN: 开始
+    zh-HK: 開始
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  stop:
+    en: Stop
+    zh-CN: 停止
+    zh-HK: 停止
+  select_directory:
+    en: Select a folder for the terminal recording
+    zh-CN: 选择终端录制文件保存目录
+    zh-HK: 選擇終端錄製檔案儲存目錄
+  selecting_directory:
+    en: Selecting folder…
+    zh-CN: 正在选择目录…
+    zh-HK: 正在選擇目錄…
+  select_directory_failed:
+    en: Failed to select recording folder
+    zh-CN: 选择录制目录失败
+    zh-HK: 選擇錄製目錄失敗
+
+TerminalRecordingPlayback:
+  title:
+    en: Recording Playback
+    zh-CN: 终端录制回放
+    zh-HK: 終端錄製回放
+  tab_title:
+    en: "Playback · %{name}"
+    zh-CN: "回放 · %{name}"
+    zh-HK: "回放 · %{name}"
+  read_only:
+    en: Read-only
+    zh-CN: 只读
+    zh-HK: 唯讀
+  playing:
+    en: Playing
+    zh-CN: 播放中
+    zh-HK: 播放中
+  paused:
+    en: Paused
+    zh-CN: 已暂停
+    zh-HK: 已暫停
+  finished:
+    en: Finished
+    zh-CN: 已结束
+    zh-HK: 已結束
+  pause:
+    en: Pause
+    zh-CN: 暂停
+    zh-HK: 暫停
+  resume:
+    en: Resume
+    zh-CN: 继续
+    zh-HK: 繼續
+  replay:
+    en: Replay
+    zh-CN: 重新播放
+    zh-HK: 重新播放
+  partial_recovery:
+    en: "Partial recovery · %{bytes} trailing bytes discarded"
+    zh-CN: "部分恢复 · 已丢弃尾部 %{bytes} 字节"
+    zh-HK: "部分恢復 · 已丟棄尾部 %{bytes} 位元組"
+  discarded_bytes:
+    en: "%{bytes} bytes discarded"
+    zh-CN: "已丢弃 %{bytes} 字节"
+    zh-HK: "已丟棄 %{bytes} 位元組"
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  search_placeholder:
+    en: Search this recording
+    zh-CN: 搜索当前录制
+    zh-HK: 搜尋目前錄製
+  search_index_truncated:
+    en: "Search index truncated at %{events} events / %{bytes} bytes"
+    zh-CN: "搜索索引已在 %{events} 个事件 / %{bytes} 字节处截断"
+    zh-HK: "搜尋索引已在 %{events} 個事件 / %{bytes} 位元組處截斷"
+  output_match:
+    en: Output
+    zh-CN: 输出
+    zh-HK: 輸出
+  input_display_only:
+    en: Input · display only
+    zh-CN: 输入 · 仅展示
+    zh-HK: 輸入 · 僅展示
+  marker_display_only:
+    en: Marker · display only
+    zh-CN: 标记 · 仅展示
+    zh-HK: 標記 · 僅展示
+  unavailable:
+    en: Playback controls are unavailable
+    zh-CN: 回放控制当前不可用
+    zh-HK: 回放控制目前不可用

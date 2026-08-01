@@ -33,7 +33,8 @@ impl TerminalView {
         }
 
         let line_text = self.get_addon_line_text(screen_line, column, cx);
-        let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+        let is_local =
+            self.terminal.read(cx).live_connection_kind() == Some(TerminalConnectionKind::Local);
         let hover_changed = {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(
@@ -133,26 +134,28 @@ impl TerminalView {
             return;
         }
         if let Some(pending) = self.mouse_state.pending_sgr_left_press.take() {
-            self.terminal.update(cx, |terminal, _| {
-                terminal.clear_selection();
-            });
-            if sgr_mouse_mode_enabled(self.terminal.read(cx).mode()) {
-                self.write_sgr_mouse_button_report(
-                    MouseButton::Left,
-                    pending.position,
-                    pending.modifiers,
-                    true,
-                    cx,
-                );
-                self.write_sgr_mouse_button_report(
-                    MouseButton::Left,
-                    event.position,
-                    event.modifiers,
-                    false,
-                    cx,
-                );
+            if self.accepts_live_terminal_input(cx) {
+                self.terminal.update(cx, |terminal, _| {
+                    terminal.clear_selection();
+                });
+                if sgr_mouse_mode_enabled(self.terminal.read(cx).mode()) {
+                    self.write_sgr_mouse_button_report(
+                        MouseButton::Left,
+                        pending.position,
+                        pending.modifiers,
+                        true,
+                        cx,
+                    );
+                    self.write_sgr_mouse_button_report(
+                        MouseButton::Left,
+                        event.position,
+                        event.modifiers,
+                        false,
+                        cx,
+                    );
+                }
+                return;
             }
-            return;
         }
         // SGR 鼠标模式下：先回报释放，然后跳过 selection 收尾
         if self.try_report_sgr_mouse_button(
@@ -172,7 +175,8 @@ impl TerminalView {
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
         let line_text = self.get_addon_line_text(screen_line, column, cx);
-        let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+        let is_local =
+            self.terminal.read(cx).live_connection_kind() == Some(TerminalConnectionKind::Local);
         {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(

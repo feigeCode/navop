@@ -94,6 +94,9 @@ fn number(text: &str) -> X11Result<u16> {
 fn endpoint_for(host_part: &str, display: u16) -> X11Result<ServerEndpoint> {
     // 本机 Unix 域：空主机、unix、任意以 /unix 结尾的形式。
     if host_part.is_empty() || host_part == "unix" || host_part.ends_with("/unix") {
+        #[cfg(target_os = "windows")]
+        return windows_local_endpoint(display);
+        #[cfg(not(target_os = "windows"))]
         return Ok(ServerEndpoint::Unix(PathBuf::from(format!(
             "/tmp/.X11-unix/X{display}"
         ))));
@@ -120,6 +123,17 @@ fn endpoint_for(host_part: &str, display: u16) -> X11Result<ServerEndpoint> {
     Ok(ServerEndpoint::Inet { host, port })
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_local_endpoint(display: u16) -> X11Result<ServerEndpoint> {
+    let port = 6000u16
+        .checked_add(display)
+        .ok_or(X11Error::DisplayPortOverflow(display))?;
+    Ok(ServerEndpoint::Inet {
+        host: "127.0.0.1".into(),
+        port,
+    })
+}
+
 fn is_inet_scheme(text: &str) -> bool {
     matches!(text, "tcp" | "inet" | "inet6")
 }
@@ -134,6 +148,7 @@ fn strip_ipv6_brackets(host: &str) -> &str {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn bare_colon_display_uses_default_unix_dir() {
         let addr = DisplayAddress::parse(" :0 ").unwrap();
@@ -146,6 +161,7 @@ mod tests {
         assert!(addr.serves_local_host());
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn unix_variants_all_map_to_unix_dir() {
         for text in ["unix:2.1", "localhost/unix:3", ":11"] {
@@ -177,6 +193,40 @@ mod tests {
                 port: 6010
             }
         );
+        assert!(addr.serves_local_host());
+    }
+
+    #[test]
+    fn windows_bare_display_maps_to_loopback_tcp() {
+        assert_eq!(
+            windows_local_endpoint(0).unwrap(),
+            ServerEndpoint::Inet {
+                host: "127.0.0.1".into(),
+                port: 6000
+            }
+        );
+        assert_eq!(
+            windows_local_endpoint(12).unwrap(),
+            ServerEndpoint::Inet {
+                host: "127.0.0.1".into(),
+                port: 6012
+            }
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_local_display_parses_as_loopback_tcp() {
+        let addr = DisplayAddress::parse(":0").unwrap();
+        assert_eq!(
+            addr.endpoint,
+            ServerEndpoint::Inet {
+                host: "127.0.0.1".into(),
+                port: 6000
+            }
+        );
+        assert_eq!(addr.display_id(), "0");
+        assert_eq!(addr.screen(), 0);
         assert!(addr.serves_local_host());
     }
 

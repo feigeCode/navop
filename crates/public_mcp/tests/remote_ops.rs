@@ -6,8 +6,8 @@ use public_mcp::registry::{
     TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
-    RemoteCommandMode, RemoteCommandStatus, RemoteExecRequest, RemoteExecResult,
-    RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
+    RemoteCommandMode, RemoteCommandOutputResult, RemoteCommandStatus, RemoteExecRequest,
+    RemoteExecResult, RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
     SessionDiagnosticsResult,
 };
 use public_mcp::tools::{PublicMcpToolRegistry, remote_ops_tool_registry};
@@ -348,4 +348,24 @@ fn command_lifecycle_via_registry() {
         .unwrap();
     assert_eq!(RemoteCommandStatus::Cancelled, done.status);
     assert_eq!(Some(130), done.exit_code);
+}
+
+#[test]
+fn command_output_result_defaults_absolute_offset_metadata_for_legacy_json() {
+    let result: RemoteCommandOutputResult = serde_json::from_value(json!({
+        "command_id": "cmd_legacy",
+        "stdout": "hello",
+        "stderr": "",
+        "next_stdout_offset": 5,
+        "next_stderr_offset": 0,
+        "truncated": false
+    }))
+    .expect("legacy command output result should deserialize");
+
+    assert_eq!(0, result.stdout_start_offset);
+    assert_eq!(0, result.stderr_start_offset);
+    assert_eq!(0, result.stdout_discarded_bytes);
+    assert_eq!(0, result.stderr_discarded_bytes);
+    assert_eq!(5, result.next_stdout_offset);
+    assert_eq!(0, result.next_stderr_offset);
 }

@@ -446,6 +446,7 @@ impl CloudSyncService {
         Ok((
             StoredConnection {
                 id: None,
+                credential_revision: None,
                 name: plain_data.name,
                 connection_type,
                 workspace_id: None, // 由调用者根据 workspace_cloud_id 解析
@@ -577,6 +578,7 @@ mod tests {
 
         let conn = StoredConnection {
             id: Some(1),
+            credential_revision: Some(1),
             name: "db".to_string(),
             connection_type: ConnectionType::Database,
             params: r#"{"host":"localhost","port":5432}"#.to_string(),

@@ -13,10 +13,18 @@ use dashmap::DashMap;
 use crate::bridge::{self, CookieExchange};
 use crate::{ForwardRequest, MagicCookie, ServerEndpoint};
 
+/// 本机 X server 要求的认证方式。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum LocalAuth {
+    Cookie(MagicCookie),
+    #[cfg(any(target_os = "windows", test))]
+    None,
+}
+
 /// 一次签发留下的授权记录。
 struct Grant {
-    /// 本机真实 cookie（仅保存在本机内存）。
-    local: MagicCookie,
+    /// 本机认证信息（仅保存在本机内存）。
+    local: LocalAuth,
     /// 对应 SSH single-connection 语义：首个回连用掉即作废。
     single_use: bool,
 }
@@ -28,7 +36,7 @@ struct State {
 }
 
 impl CookieExchange for Arc<State> {
-    fn exchange(&self, presented: &MagicCookie) -> Option<MagicCookie> {
+    fn exchange(&self, presented: &MagicCookie) -> Option<LocalAuth> {
         let key = presented.bytes();
         if self.grants.get(key).is_some_and(|g| g.single_use) {
             return self.grants.remove(key).map(|(_, g)| g.local);
@@ -41,7 +49,7 @@ impl CookieExchange for Arc<State> {
 #[derive(Clone)]
 pub struct X11Proxy {
     screen: u32,
-    local: MagicCookie,
+    local: LocalAuth,
     state: Arc<State>,
 }
 
@@ -56,6 +64,15 @@ impl fmt::Debug for X11Proxy {
 
 impl X11Proxy {
     pub(crate) fn new(endpoint: ServerEndpoint, screen: u32, local: MagicCookie) -> Self {
+        Self::with_auth(endpoint, screen, LocalAuth::Cookie(local))
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn new_without_auth(endpoint: ServerEndpoint, screen: u32) -> Self {
+        Self::with_auth(endpoint, screen, LocalAuth::None)
+    }
+
+    fn with_auth(endpoint: ServerEndpoint, screen: u32, local: LocalAuth) -> Self {
         Self {
             screen,
             local,
@@ -143,11 +160,10 @@ mod tests {
 
         assert_eq!(request.auth_name(), "MIT-MAGIC-COOKIE-1");
         assert_eq!(request.cookie_hex().len(), 32);
-        assert_ne!(
-            request.cookie_hex(),
-            proxy.local.hex(),
-            "签发给远端的不能是本机真实 cookie"
-        );
+        let LocalAuth::Cookie(local) = &proxy.local else {
+            panic!("test proxy should use cookie authentication");
+        };
+        assert_ne!(request.cookie_hex(), local.hex());
 
         let fake = MagicCookie::from_hex(request.cookie_hex()).unwrap();
         let exchanged = proxy.state.exchange(&fake).unwrap();

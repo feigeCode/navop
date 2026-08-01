@@ -104,6 +104,54 @@ enum PanelSide {
     Remote,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseState {
+    Open,
+    AwaitingDecision,
+    Closing,
+}
+
+impl CloseState {
+    fn begin_confirmation(&mut self) -> bool {
+        if !matches!(self, Self::Open) {
+            return false;
+        }
+        *self = Self::AwaitingDecision;
+        true
+    }
+
+    fn abort_confirmation(&mut self) {
+        if matches!(self, Self::AwaitingDecision) {
+            *self = Self::Open;
+        }
+    }
+
+    fn begin_close(&mut self) -> bool {
+        if matches!(self, Self::Closing) {
+            return false;
+        }
+        *self = Self::Closing;
+        true
+    }
+
+    fn is_closing(self) -> bool {
+        matches!(self, Self::Closing)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseTransferStrategy {
+    Wait,
+    CancelTransfers,
+    Background,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseChoice {
+    Abort,
+    Close(CloseTransferStrategy),
+}
+
 #[derive(Clone, PartialEq)]
 struct FavoritePathEdit {
     side: PanelSide,
@@ -111,20 +159,39 @@ struct FavoritePathEdit {
 }
 
 const MAX_CONCURRENT_TRANSFERS: usize = 2;
+const SFTP_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.0;
 const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
 
 struct TransferClientPool {
     config: SshConnectConfig,
     max_size: usize,
+    retired: AtomicBool,
+    state: Mutex<TransferClientPoolState<Arc<Mutex<RusshSftpClient>>>>,
+}
+
+struct TransferClientPoolState<Client> {
     total_created: usize,
-    available: Vec<Arc<Mutex<RusshSftpClient>>>,
+    available: Vec<Client>,
+}
+
+enum BoundedDisconnectOutcome {
+    Disconnected,
+    Failed(anyhow::Error),
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferAdmission {
+    Open,
+    Frozen,
 }
 
 struct TransferQueue {
     tasks: Vec<TransferTask>,
     pending: VecDeque<usize>,
     max_concurrent: usize,
+    admission: TransferAdmission,
 }
 
 struct SharedProgress {
@@ -242,9 +309,59 @@ impl TransferClientPool {
         Self {
             config,
             max_size,
+            retired: AtomicBool::new(false),
+            state: Mutex::new(TransferClientPoolState::default()),
+        }
+    }
+
+    fn retire(&self) {
+        self.retired.store(true, Ordering::Release);
+    }
+
+    fn is_retired(&self) -> bool {
+        self.retired.load(Ordering::Acquire)
+    }
+}
+
+impl<Client> Default for TransferClientPoolState<Client> {
+    fn default() -> Self {
+        Self {
             total_created: 0,
             available: Vec::new(),
         }
+    }
+}
+
+impl<Client> TransferClientPoolState<Client> {
+    fn take_available(&mut self) -> Option<Client> {
+        self.available.pop()
+    }
+
+    fn reserve_new(&mut self, max_size: usize) -> bool {
+        if self.total_created >= max_size {
+            return false;
+        }
+        self.total_created += 1;
+        true
+    }
+
+    fn discard_one(&mut self) {
+        self.total_created = self.total_created.saturating_sub(1);
+    }
+
+    fn return_client(&mut self, client: Client, retired: bool) -> Option<Client> {
+        if retired {
+            self.discard_one();
+            Some(client)
+        } else {
+            self.available.push(client);
+            None
+        }
+    }
+
+    fn drain_available(&mut self) -> Vec<Client> {
+        self.total_created = self.total_created.saturating_sub(self.available.len());
+        std::mem::take(&mut self.available)
     }
 }
 
@@ -254,6 +371,7 @@ impl TransferQueue {
             tasks: Vec::new(),
             pending: VecDeque::new(),
             max_concurrent,
+            admission: TransferAdmission::Open,
         }
     }
 
@@ -270,9 +388,37 @@ impl TransferQueue {
         })
     }
 
-    fn enqueue(&mut self, task: TransferTask) {
+    fn enqueue(&mut self, task: TransferTask) -> bool {
+        if matches!(self.admission, TransferAdmission::Frozen) {
+            return false;
+        }
         self.pending.push_back(task.id);
         self.tasks.push(task);
+        true
+    }
+
+    fn freeze_admission(&mut self) {
+        self.admission = TransferAdmission::Frozen;
+    }
+
+    fn cancel_all(&mut self) {
+        self.pending.clear();
+        for task in &mut self.tasks {
+            match task.state {
+                TransferTaskState::Pending => {
+                    task.state = TransferTaskState::Cancelled;
+                    task.error = None;
+                }
+                TransferTaskState::Running => {
+                    task.shared_progress
+                        .cancelled
+                        .store(true, Ordering::Relaxed);
+                }
+                TransferTaskState::Completed
+                | TransferTaskState::Failed
+                | TransferTaskState::Cancelled => {}
+            }
+        }
     }
 
     fn next_startable(&mut self) -> Vec<TransferTask> {
@@ -312,38 +458,108 @@ impl TransferQueue {
 }
 
 async fn acquire_transfer_client(
-    pool: Arc<Mutex<TransferClientPool>>,
+    pool: Arc<TransferClientPool>,
 ) -> anyhow::Result<Arc<Mutex<RusshSftpClient>>> {
+    if pool.is_retired() {
+        return Err(anyhow::anyhow!("Transfer client pool retired"));
+    }
+
     let config = {
-        let mut pool_guard = pool.lock().await;
-        if let Some(client) = pool_guard.available.pop() {
+        let mut state = pool.state.lock().await;
+        if pool.is_retired() {
+            return Err(anyhow::anyhow!("Transfer client pool retired"));
+        }
+        if let Some(client) = state.take_available() {
             return Ok(client);
         }
 
-        if pool_guard.total_created >= pool_guard.max_size {
+        if !state.reserve_new(pool.max_size) {
             return Err(anyhow::anyhow!("Transfer client pool exhausted"));
         }
 
-        pool_guard.total_created += 1;
-        pool_guard.config.clone()
+        pool.config.clone()
     };
 
     match RusshSftpClient::connect(config).await {
-        Ok(client) => Ok(Arc::new(Mutex::new(client))),
+        Ok(client) => {
+            let client = Arc::new(Mutex::new(client));
+            let disconnect = {
+                let mut state = pool.state.lock().await;
+                if pool.is_retired() {
+                    state.discard_one();
+                    true
+                } else {
+                    false
+                }
+            };
+            if disconnect {
+                disconnect_sftp_client(client).await;
+                Err(anyhow::anyhow!("Transfer client pool retired"))
+            } else {
+                Ok(client)
+            }
+        }
         Err(error) => {
-            let mut pool_guard = pool.lock().await;
-            pool_guard.total_created = pool_guard.total_created.saturating_sub(1);
+            let mut state = pool.state.lock().await;
+            state.discard_one();
             Err(error)
         }
     }
 }
 
 async fn release_transfer_client(
-    pool: Arc<Mutex<TransferClientPool>>,
+    pool: Arc<TransferClientPool>,
     client: Arc<Mutex<RusshSftpClient>>,
 ) {
-    let mut pool_guard = pool.lock().await;
-    pool_guard.available.push(client);
+    let disconnect = {
+        let mut state = pool.state.lock().await;
+        state.return_client(client, pool.is_retired())
+    };
+    if let Some(client) = disconnect {
+        disconnect_sftp_client(client).await;
+    }
+}
+
+async fn bounded_disconnect<F>(timeout: Duration, disconnect: F) -> BoundedDisconnectOutcome
+where
+    F: std::future::Future<Output = anyhow::Result<()>>,
+{
+    match tokio::time::timeout(timeout, disconnect).await {
+        Ok(Ok(())) => BoundedDisconnectOutcome::Disconnected,
+        Ok(Err(error)) => BoundedDisconnectOutcome::Failed(error),
+        Err(_) => BoundedDisconnectOutcome::TimedOut,
+    }
+}
+
+pub(crate) async fn disconnect_sftp_client(client: Arc<Mutex<RusshSftpClient>>) {
+    let disconnect = async move {
+        let mut client = client.lock().await;
+        client.disconnect().await
+    };
+    match bounded_disconnect(SFTP_DISCONNECT_TIMEOUT, disconnect).await {
+        BoundedDisconnectOutcome::Disconnected => {}
+        BoundedDisconnectOutcome::Failed(error) => {
+            tracing::error!("Failed to disconnect SFTP client: {}", error);
+        }
+        BoundedDisconnectOutcome::TimedOut => {
+            tracing::warn!(
+                timeout_ms = SFTP_DISCONNECT_TIMEOUT.as_millis(),
+                "Timed out disconnecting SFTP client"
+            );
+        }
+    }
+}
+
+async fn disconnect_transfer_pool(pool: Arc<TransferClientPool>) {
+    pool.retire();
+    let clients = {
+        let mut state = pool.state.lock().await;
+        state.drain_available()
+    };
+
+    for client in clients {
+        disconnect_sftp_client(client).await;
+    }
 }
 
 fn format_permissions(mode: u32, is_dir: bool) -> String {
@@ -588,6 +804,24 @@ fn should_apply_remote_listing(current_path: &str, listed_path: &str) -> bool {
     current_path == listed_path
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ConnectionGeneration(u64);
+
+impl ConnectionGeneration {
+    fn advance(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(1).max(1);
+        self.0
+    }
+
+    fn current(self) -> u64 {
+        self.0
+    }
+
+    fn is_current(self, generation: u64) -> bool {
+        generation != 0 && self.0 == generation
+    }
+}
+
 fn should_apply_local_listing(
     current_path: &std::path::Path,
     listed_path: &std::path::Path,
@@ -687,8 +921,11 @@ fn rename_conflicting_transfers(
 
 pub struct SftpView {
     connection_state: ConnectionState,
+    close_state: CloseState,
     sftp_config: SshConnectConfig,
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 当前主 SFTP 连接尝试的代次；迟到的异步结果不能覆盖更新的连接。
+    connection_generation: ConnectionGeneration,
 
     /// 原始连接信息，用于打开 SSH 终端
     stored_connection: StoredConnection,
@@ -718,7 +955,7 @@ pub struct SftpView {
 
     transfer_queue: TransferQueue,
     next_task_id: usize,
-    transfer_client_pool: Arc<Mutex<TransferClientPool>>,
+    transfer_client_pool: Arc<TransferClientPool>,
     active_extract: Option<ActiveExtract>,
 
     focus_handle: FocusHandle,
@@ -897,15 +1134,17 @@ impl SftpView {
             },
         ));
 
-        let transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
+        let transfer_client_pool = Arc::new(TransferClientPool::new(
             config.clone(),
             MAX_CONCURRENT_TRANSFERS,
-        )));
+        ));
 
         let mut view = Self {
             connection_state: ConnectionState::Disconnected { error: None },
+            close_state: CloseState::Open,
             sftp_config: config,
             sftp_client: None,
+            connection_generation: ConnectionGeneration::default(),
             stored_connection: conn.clone(),
             local_current_path: local_current_path.clone(),
             remote_current_path: ".".to_string(),
@@ -951,7 +1190,19 @@ impl SftpView {
         view
     }
 
+    fn next_connection_generation(&mut self) -> u64 {
+        self.connection_generation.advance()
+    }
+
+    fn is_current_connection_generation(&self, generation: u64) -> bool {
+        self.connection_generation.is_current(generation)
+    }
+
     fn connect(&mut self, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
+        let generation = self.next_connection_generation();
         self.connection_state = ConnectionState::Connecting;
         let config = self.sftp_config.clone();
 
@@ -973,29 +1224,45 @@ impl SftpView {
                 tracing::info!("SFTP connection established successfully");
                 let client = Arc::new(Mutex::new(client));
 
-                let _ = this.update(cx, |this, cx| {
-                    this.sftp_client = Some(client);
-                    this.connection_state = ConnectionState::Connected;
-                    this.set_connection_active(true, cx);
+                let installed = this
+                    .update(cx, |this, cx| {
+                        if this.close_state.is_closing()
+                            || !this.is_current_connection_generation(generation)
+                        {
+                            return false;
+                        }
+                        this.sftp_client = Some(client.clone());
+                        this.connection_state = ConnectionState::Connected;
+                        this.set_connection_active(true, cx);
 
-                    // 如果成功获取了真实路径，更新远程路径和历史记录
-                    if let Some(path) = real_path {
-                        tracing::info!("Remote working directory: {}", path);
-                        this.remote_current_path = path.clone();
-                        this.remote_history = vec![path];
-                        this.remote_history_index = 0;
-                    }
+                        // 如果成功获取了真实路径，更新远程路径和历史记录
+                        if let Some(path) = real_path {
+                            tracing::info!("Remote working directory: {}", path);
+                            this.remote_current_path = path.clone();
+                            this.remote_history = vec![path];
+                            this.remote_history_index = 0;
+                        }
 
-                    cx.notify();
-                });
-                let _ = this.update(cx, |this, cx| {
-                    this.refresh_remote_dir(cx);
-                });
+                        this.refresh_remote_dir(cx);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+
+                if !installed {
+                    let task = Tokio::spawn(cx, disconnect_sftp_client(client));
+                    let _ = task.await;
+                }
             }
             Ok(Err(e)) => {
                 let error_msg = format!("{}", e);
                 tracing::error!("SFTP connection failed: {}", error_msg);
                 let _ = this.update(cx, |this, cx| {
+                    if this.close_state.is_closing()
+                        || !this.is_current_connection_generation(generation)
+                    {
+                        return;
+                    }
                     this.connection_state = ConnectionState::Disconnected {
                         error: Some(error_msg),
                     };
@@ -1007,6 +1274,11 @@ impl SftpView {
                 let error_msg = format!("Task error: {}", e);
                 tracing::error!("SFTP connection task error: {}", error_msg);
                 let _ = this.update(cx, |this, cx| {
+                    if this.close_state.is_closing()
+                        || !this.is_current_connection_generation(generation)
+                    {
+                        return;
+                    }
                     this.connection_state = ConnectionState::Disconnected {
                         error: Some(error_msg),
                     };
@@ -1032,11 +1304,24 @@ impl SftpView {
     }
 
     fn reconnect(&mut self, cx: &mut Context<Self>) {
-        self.sftp_client = None;
-        self.transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
-            self.sftp_config.clone(),
-            MAX_CONCURRENT_TRANSFERS,
-        )));
+        if self.close_state.is_closing() {
+            return;
+        }
+        let old_client = self.sftp_client.take();
+        self.set_connection_active(false, cx);
+        if let Some(old_client) = old_client {
+            Tokio::spawn(cx, disconnect_sftp_client(old_client)).detach();
+        }
+        self.remote_loading = false;
+        let retired_pool = std::mem::replace(
+            &mut self.transfer_client_pool,
+            Arc::new(TransferClientPool::new(
+                self.sftp_config.clone(),
+                MAX_CONCURRENT_TRANSFERS,
+            )),
+        );
+        retired_pool.retire();
+        Tokio::spawn(cx, disconnect_transfer_pool(retired_pool)).detach();
         self.connect(cx);
     }
 
@@ -1049,6 +1334,9 @@ impl SftpView {
     }
 
     fn refresh_local_dir_inner(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let mut entries = Vec::new();
 
         tracing::info!("Refreshing local directory: {:?}", self.local_current_path);
@@ -1100,12 +1388,16 @@ impl SftpView {
     }
 
     fn refresh_remote_dir_inner(&mut self, _window: Option<&mut Window>, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(client) = self.sftp_client.clone() else {
             tracing::warn!("Cannot refresh remote dir: client not connected");
             return;
         };
 
         let path = self.remote_current_path.clone();
+        let generation = self.connection_generation.current();
         tracing::info!("Refreshing remote directory: {}", path);
         let remote_panel = self.remote_panel.clone();
 
@@ -1137,7 +1429,10 @@ impl SftpView {
                         })
                         .collect();
                     let _ = view.update(cx, |this, cx| {
-                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                        if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
+                            && should_apply_remote_listing(&this.remote_current_path, &listed_path)
+                        {
                             let _ = remote_panel.update(cx, |panel, cx| {
                                 panel.set_items(items, cx);
                             });
@@ -1146,22 +1441,33 @@ impl SftpView {
                 }
                 Ok(Err(e)) => {
                     let _ = view.update(cx, |this, _cx| {
-                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                        if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
+                            && should_apply_remote_listing(&this.remote_current_path, &listed_path)
+                        {
                             tracing::error!("Failed to list remote directory: {}", e);
                         }
                     });
                 }
                 Err(e) => {
                     let _ = view.update(cx, |this, _cx| {
-                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                        if !this.close_state.is_closing()
+                            && this.is_current_connection_generation(generation)
+                            && should_apply_remote_listing(&this.remote_current_path, &listed_path)
+                        {
                             tracing::error!("Task error: {}", e);
                         }
                     });
                 }
             }
             let _ = view.update(cx, |this, cx| {
-                this.remote_loading = false;
-                cx.notify();
+                if !this.close_state.is_closing()
+                    && this.is_current_connection_generation(generation)
+                    && should_apply_remote_listing(&this.remote_current_path, &listed_path)
+                {
+                    this.remote_loading = false;
+                    cx.notify();
+                }
             });
         })
         .detach();
@@ -2038,6 +2344,9 @@ impl SftpView {
     }
 
     fn upload_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(client) = self.sftp_client.clone() else {
             return;
         };
@@ -2067,7 +2376,10 @@ impl SftpView {
                     Ok(Err(e)) => {
                         tracing::error!("Failed to list remote directory: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -2075,7 +2387,10 @@ impl SftpView {
                     Err(e) => {
                         tracing::error!("Task error: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -2083,6 +2398,9 @@ impl SftpView {
                 };
 
                 let _ = view.update_in(cx, |this, window, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     let mut pending_transfers: Vec<PendingTransfer> = Vec::new();
                     let mut has_conflict = false;
 
@@ -2138,7 +2456,7 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if paths.is_empty() {
+        if self.close_state.is_closing() || paths.is_empty() {
             return;
         }
 
@@ -2161,7 +2479,10 @@ impl SftpView {
                     Ok(Err(e)) => {
                         tracing::error!("Failed to list remote directory: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -2169,7 +2490,10 @@ impl SftpView {
                     Err(e) => {
                         tracing::error!("Task error: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -2177,6 +2501,9 @@ impl SftpView {
                 };
 
                 let _ = view.update_in(cx, |this, window, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     let mut pending_transfers: Vec<PendingTransfer> = Vec::new();
                     let mut has_conflict = false;
 
@@ -2229,6 +2556,9 @@ impl SftpView {
     }
 
     fn paste_upload_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
                 Notification::warning(
@@ -2285,6 +2615,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let view = cx.entity().clone();
         let conflict_count = conflict_names.len();
         let conflict_list = if conflict_count <= 3 {
@@ -2348,6 +2681,9 @@ impl SftpView {
                                         .collect();
                                     if !transfers.is_empty() {
                                         view.update(cx, |this, cx| {
+                                            if this.close_state.is_closing() {
+                                                return;
+                                            }
                                             if is_upload {
                                                 this.execute_uploads(transfers, cx);
                                             } else {
@@ -2373,6 +2709,9 @@ impl SftpView {
                                         existing.clone(),
                                     );
                                     view.update(cx, |this, cx| {
+                                        if this.close_state.is_closing() {
+                                            return;
+                                        }
                                         if is_upload {
                                             this.execute_uploads(transfers, cx);
                                         } else {
@@ -2406,6 +2745,9 @@ impl SftpView {
                                             .collect();
                                         if !transfers.is_empty() {
                                             view.update(cx, |this, cx| {
+                                                if this.close_state.is_closing() {
+                                                    return;
+                                                }
                                                 this.execute_uploads(transfers, cx);
                                             });
                                         }
@@ -2425,6 +2767,9 @@ impl SftpView {
                                 move |_, window, cx| {
                                     window.close_dialog(cx);
                                     view.update(cx, |this, cx| {
+                                        if this.close_state.is_closing() {
+                                            return;
+                                        }
                                         if is_upload {
                                             this.execute_uploads(transfers.clone(), cx);
                                         } else {
@@ -2647,6 +2992,9 @@ impl SftpView {
             }
 
             let _ = this.update(cx, |this, cx| {
+                if this.close_state.is_closing() {
+                    return;
+                }
                 if !should_apply_remote_listing(&this.remote_current_path, &remote_dir_for_result) {
                     return;
                 }
@@ -2828,6 +3176,9 @@ impl SftpView {
                     .collect();
                 let local_dir_for_result = local_dir.clone();
                 let _ = this.update(cx, |this, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     if !should_apply_local_listing(&this.local_current_path, &local_dir_for_result)
                     {
                         return;
@@ -2888,7 +3239,7 @@ impl SftpView {
             let succeeded = result.is_ok();
             let _ = this.update(cx, |this, cx| {
                 this.update_task_state_from_result(task_id, result, cx);
-                if succeeded {
+                if succeeded && !this.close_state.is_closing() {
                     match target_side {
                         PaneSide::Left => this.refresh_left_remote_dir(cx),
                         PaneSide::Right => this.refresh_remote_dir(cx),
@@ -2963,6 +3314,7 @@ impl SftpView {
             };
 
             let _ = view.update(cx, |this, cx| {
+                let is_closing = this.close_state.is_closing();
                 match delete_result {
                     Ok(errors) => {
                         if let Some(task) = this
@@ -2978,7 +3330,7 @@ impl SftpView {
                             };
                         }
 
-                        if !errors.is_empty() {
+                        if !errors.is_empty() && !is_closing {
                             let error_msg = if errors.len() == 1 {
                                 t!("Error.delete_failed", error = errors[0]).to_string()
                             } else {
@@ -2992,7 +3344,9 @@ impl SftpView {
                     }
                 }
 
-                this.refresh_local_dir(cx);
+                if !is_closing {
+                    this.refresh_local_dir(cx);
+                }
                 this.schedule_transfers(cx);
                 cx.notify();
             });
@@ -3114,6 +3468,7 @@ impl SftpView {
             };
 
             let _ = view.update(cx, |this, cx| {
+                let is_closing = this.close_state.is_closing();
                 let mut should_refresh = true;
                 match delete_result {
                     Ok(delete_errors) => {
@@ -3130,7 +3485,7 @@ impl SftpView {
                             };
                         }
 
-                        if !delete_errors.is_empty() {
+                        if !delete_errors.is_empty() && !is_closing {
                             let error_msg = if delete_errors.len() == 1 {
                                 t!("Error.delete_failed", error = delete_errors[0]).to_string()
                             } else {
@@ -3147,7 +3502,7 @@ impl SftpView {
                     }
                 }
 
-                if should_refresh {
+                if should_refresh && !is_closing {
                     this.refresh_remote_dir(cx);
                 }
                 this.schedule_transfers(cx);
@@ -3191,7 +3546,9 @@ impl SftpView {
             }
         }
 
-        if let Some(operation) = refresh_operation {
+        if let Some(operation) = refresh_operation
+            && !self.close_state.is_closing()
+        {
             self.refresh_panel_for_operation(&operation, cx);
         }
     }
@@ -3201,6 +3558,9 @@ impl SftpView {
         operation: &TransferOperation,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         match operation {
             TransferOperation::Upload { .. } | TransferOperation::DeleteRemote { .. } => {
                 self.refresh_remote_dir(cx);
@@ -3220,6 +3580,7 @@ impl SftpView {
     }
 
     fn execute_uploads(&mut self, transfers: Vec<PendingTransfer>, cx: &mut Context<Self>) {
+        let mut enqueued_any = false;
         for transfer in transfers {
             let task_id = self.next_task_id;
             self.next_task_id += 1;
@@ -3246,7 +3607,7 @@ impl SftpView {
                 ".".to_string()
             };
 
-            self.transfer_queue.enqueue(TransferTask {
+            enqueued_any |= self.transfer_queue.enqueue(TransferTask {
                 id: task_id,
                 operation: TransferOperation::Upload {
                     local_path: transfer.local_path,
@@ -3260,7 +3621,9 @@ impl SftpView {
             });
         }
 
-        self.schedule_transfers(cx);
+        if enqueued_any {
+            self.schedule_transfers(cx);
+        }
     }
 
     fn start_progress_refresh(&mut self, cx: &mut Context<Self>) {
@@ -3330,26 +3693,13 @@ impl SftpView {
     }
 
     fn cancel_all_transfers(&mut self) {
-        self.transfer_queue.pending.clear();
-        for task in &mut self.transfer_queue.tasks {
-            match task.state {
-                TransferTaskState::Pending => {
-                    task.state = TransferTaskState::Cancelled;
-                    task.error = None;
-                }
-                TransferTaskState::Running => {
-                    task.shared_progress
-                        .cancelled
-                        .store(true, Ordering::Relaxed);
-                }
-                TransferTaskState::Completed
-                | TransferTaskState::Failed
-                | TransferTaskState::Cancelled => {}
-            }
-        }
+        self.transfer_queue.cancel_all();
     }
 
     fn push_notification(&self, notification: Notification, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         if let Some(window) = cx.active_window() {
             if let Err(error) = window.update(cx, |_, window, cx| {
                 window.push_notification(notification, cx);
@@ -3431,6 +3781,7 @@ impl SftpView {
     fn execute_downloads(&mut self, transfers: Vec<PendingTransfer>, cx: &mut Context<Self>) {
         tracing::info!("execute_downloads: {} transfers", transfers.len());
 
+        let mut enqueued_any = false;
         for transfer in transfers {
             tracing::info!(
                 "execute_downloads: starting download for {:?}",
@@ -3456,7 +3807,7 @@ impl SftpView {
                 .map(|path| path.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
 
-            self.transfer_queue.enqueue(TransferTask {
+            enqueued_any |= self.transfer_queue.enqueue(TransferTask {
                 id: task_id,
                 operation: TransferOperation::Download {
                     remote_path: transfer.remote_path,
@@ -3470,7 +3821,9 @@ impl SftpView {
             });
         }
 
-        self.schedule_transfers(cx);
+        if enqueued_any {
+            self.schedule_transfers(cx);
+        }
     }
 
     fn delete_local_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3581,7 +3934,7 @@ impl SftpView {
         let task_id = self.next_task_id;
         self.next_task_id += 1;
 
-        self.transfer_queue.enqueue(TransferTask {
+        if !self.transfer_queue.enqueue(TransferTask {
             id: task_id,
             operation: TransferOperation::DeleteLocal {
                 entries,
@@ -3590,7 +3943,10 @@ impl SftpView {
             state: TransferTaskState::Pending,
             shared_progress,
             error: None,
-        });
+        }) {
+            tracing::debug!("Ignoring local delete after transfer admission was frozen");
+            return;
+        }
 
         self.schedule_transfers(cx);
     }
@@ -3707,7 +4063,7 @@ impl SftpView {
         let task_id = self.next_task_id;
         self.next_task_id += 1;
 
-        self.transfer_queue.enqueue(TransferTask {
+        if !self.transfer_queue.enqueue(TransferTask {
             id: task_id,
             operation: TransferOperation::DeleteRemote {
                 entries,
@@ -3716,7 +4072,10 @@ impl SftpView {
             state: TransferTaskState::Pending,
             shared_progress,
             error: None,
-        });
+        }) {
+            tracing::debug!("Ignoring remote delete after transfer admission was frozen");
+            return;
+        }
 
         self.schedule_transfers(cx);
     }
@@ -3727,6 +4086,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Placeholder.filename")));
         let view = cx.entity().downgrade();
@@ -3761,75 +4123,92 @@ impl SftpView {
                         return false;
                     }
 
-                    let _ = view_clone.update(cx, |this, cx| match side {
-                        PanelSide::Local => {
-                            let path = this.local_current_path.join(&folder_name);
-                            if let Err(e) = std::fs::create_dir(&path) {
-                                tracing::error!(
-                                    "Failed to create folder {}: {}",
-                                    path.display(),
-                                    e
-                                );
-                                window.push_notification(
-                                    Notification::error(t!(
-                                        "Error.create_folder_failed",
-                                        error = e
-                                    )),
-                                    cx,
-                                );
-                            } else {
-                                window.close_dialog(cx);
-                            }
-                            this.refresh_local_dir(cx);
+                    let _ = view_clone.update(cx, |this, cx| {
+                        if this.close_state.is_closing() {
+                            return;
                         }
-                        PanelSide::Remote => {
-                            let Some(client) = this.sftp_client.clone() else {
-                                return;
-                            };
+                        match side {
+                            PanelSide::Local => {
+                                let path = this.local_current_path.join(&folder_name);
+                                if let Err(e) = std::fs::create_dir(&path) {
+                                    tracing::error!(
+                                        "Failed to create folder {}: {}",
+                                        path.display(),
+                                        e
+                                    );
+                                    window.push_notification(
+                                        Notification::error(t!(
+                                            "Error.create_folder_failed",
+                                            error = e
+                                        )),
+                                        cx,
+                                    );
+                                } else {
+                                    window.close_dialog(cx);
+                                }
+                                this.refresh_local_dir(cx);
+                            }
+                            PanelSide::Remote => {
+                                let Some(client) = this.sftp_client.clone() else {
+                                    return;
+                                };
 
-                            let remote_path =
-                                join_remote_path(&this.remote_current_path, &folder_name);
+                                let remote_path =
+                                    join_remote_path(&this.remote_current_path, &folder_name);
 
-                            let task = Tokio::spawn(cx, async move {
-                                let mut client = client.lock().await;
-                                client.mkdir(&remote_path).await
-                            });
+                                let task = Tokio::spawn(cx, async move {
+                                    let mut client = client.lock().await;
+                                    client.mkdir(&remote_path).await
+                                });
 
-                            let view = cx.entity().clone();
-                            window
-                                .spawn(cx, async move |cx| match task.await {
-                                    Ok(Ok(_)) => {
-                                        let _ = view.update_in(cx, |this, window, cx| {
-                                            window.close_dialog(cx);
-                                            this.refresh_remote_dir(cx);
-                                        });
-                                    }
-                                    Ok(Err(e)) => {
-                                        tracing::error!("Failed to create remote folder: {}", e);
-                                        let _ = view.update_in(cx, |_this, window, cx| {
-                                            window.push_notification(
-                                                Notification::error(t!(
-                                                    "Error.create_folder_failed",
-                                                    error = e
-                                                )),
-                                                cx,
+                                let view = cx.entity().clone();
+                                window
+                                    .spawn(cx, async move |cx| match task.await {
+                                        Ok(Ok(_)) => {
+                                            let _ = view.update_in(cx, |this, window, cx| {
+                                                if this.close_state.is_closing() {
+                                                    return;
+                                                }
+                                                window.close_dialog(cx);
+                                                this.refresh_remote_dir(cx);
+                                            });
+                                        }
+                                        Ok(Err(e)) => {
+                                            tracing::error!(
+                                                "Failed to create remote folder: {}",
+                                                e
                                             );
-                                        });
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Task error: {}", e);
-                                        let _ = view.update_in(cx, |_this, window, cx| {
-                                            window.push_notification(
-                                                Notification::error(t!(
-                                                    "Error.create_folder_failed",
-                                                    error = e
-                                                )),
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                })
-                                .detach();
+                                            let _ = view.update_in(cx, |this, window, cx| {
+                                                if this.close_state.is_closing() {
+                                                    return;
+                                                }
+                                                window.push_notification(
+                                                    Notification::error(t!(
+                                                        "Error.create_folder_failed",
+                                                        error = e
+                                                    )),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Task error: {}", e);
+                                            let _ = view.update_in(cx, |this, window, cx| {
+                                                if this.close_state.is_closing() {
+                                                    return;
+                                                }
+                                                window.push_notification(
+                                                    Notification::error(t!(
+                                                        "Error.create_folder_failed",
+                                                        error = e
+                                                    )),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                            }
                         }
                     });
                     false
@@ -3980,6 +4359,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let Some(client) = self.sftp_client.clone() else {
             return;
         };
@@ -4004,7 +4386,10 @@ impl SftpView {
                     Ok(Err(e)) => {
                         tracing::error!("Failed to list remote directory: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -4012,7 +4397,10 @@ impl SftpView {
                     Err(e) => {
                         tracing::error!("Task error: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -4020,6 +4408,9 @@ impl SftpView {
                 };
 
                 let _ = view.update_in(cx, |this, window, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     let mut pending_transfers: Vec<PendingTransfer> = Vec::new();
                     let mut has_conflict = false;
 
@@ -4123,6 +4514,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let (source_config, target_config, target_dir) = match (dragged.source, target_side) {
             (DragSource::RemoteLeft, PaneSide::Right) => {
                 let Some(left) = self.left_remote.as_ref() else {
@@ -4189,7 +4583,10 @@ impl SftpView {
                 let entries = match list_task.await {
                     Ok(Ok(entries)) => entries,
                     Ok(Err(error)) => {
-                        let _ = view.update_in(cx, |_, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(
                                 Notification::error(
                                     t!("Error.read_dir_failed", error = error).to_string(),
@@ -4200,7 +4597,10 @@ impl SftpView {
                         return;
                     }
                     Err(error) => {
-                        let _ = view.update_in(cx, |_, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(
                                 Notification::error(
                                     t!("Error.read_dir_failed", error = error).to_string(),
@@ -4224,6 +4624,9 @@ impl SftpView {
                     })
                     .count();
                 let _ = view.update_in(cx, |this, window, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     if conflicts == 0 {
                         this.enqueue_server_copy_now(pending, cx);
                     } else {
@@ -4236,6 +4639,9 @@ impl SftpView {
     }
 
     fn enqueue_server_copy_now(&mut self, pending: PendingServerCopy, cx: &mut Context<Self>) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let PendingServerCopy {
             source_config,
             target_config,
@@ -4259,7 +4665,7 @@ impl SftpView {
         });
         let task_id = self.next_task_id;
         self.next_task_id += 1;
-        self.transfer_queue.enqueue(TransferTask {
+        if !self.transfer_queue.enqueue(TransferTask {
             id: task_id,
             operation: TransferOperation::ServerCopy(Box::new(ServerCopyOperation {
                 source_config,
@@ -4270,7 +4676,10 @@ impl SftpView {
             state: TransferTaskState::Pending,
             shared_progress: progress,
             error: None,
-        });
+        }) {
+            tracing::debug!("Ignoring server copy after transfer admission was frozen");
+            return;
+        }
         self.schedule_transfers(cx);
     }
 
@@ -4280,6 +4689,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         let conflicts = pending
             .items
             .iter()
@@ -4349,6 +4761,9 @@ impl SftpView {
                                         })
                                     });
                                     let _ = view_skip.update(cx, |this, cx| {
+                                        if this.close_state.is_closing() {
+                                            return;
+                                        }
                                         this.enqueue_server_copy_now(pending, cx);
                                     });
                                 }
@@ -4378,6 +4793,9 @@ impl SftpView {
                                         }
                                     }
                                     let _ = view_keep.update(cx, |this, cx| {
+                                        if this.close_state.is_closing() {
+                                            return;
+                                        }
                                         this.enqueue_server_copy_now(pending, cx);
                                     });
                                 }
@@ -4401,6 +4819,9 @@ impl SftpView {
                                                 )
                                         });
                                         let _ = view_merge.update(cx, |this, cx| {
+                                            if this.close_state.is_closing() {
+                                                return;
+                                            }
                                             this.enqueue_server_copy_now(pending, cx);
                                         });
                                     }
@@ -4417,6 +4838,9 @@ impl SftpView {
                                 move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let _ = view_overwrite.update(cx, |this, cx| {
+                                        if this.close_state.is_closing() {
+                                            return;
+                                        }
                                         this.enqueue_server_copy_now(pending.clone(), cx);
                                     });
                                 }
@@ -4436,6 +4860,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         tracing::info!("handle_remote_files_drop_to_local: {} items", dragged.len());
 
         if self.sftp_client.is_none() {
@@ -4506,6 +4933,9 @@ impl SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_state.is_closing() {
+            return;
+        }
         if dragged.source != DragSource::LocalLeft {
             return;
         }
@@ -4550,7 +4980,10 @@ impl SftpView {
                     Ok(Err(e)) => {
                         tracing::error!("Failed to list remote directory: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -4558,7 +4991,10 @@ impl SftpView {
                     Err(e) => {
                         tracing::error!("Task error: {}", e);
                         let error_msg = t!("Error.read_dir_failed", error = e).to_string();
-                        let _ = view.update_in(cx, |_this, window, cx| {
+                        let _ = view.update_in(cx, |this, window, cx| {
+                            if this.close_state.is_closing() {
+                                return;
+                            }
                             window.push_notification(Notification::error(error_msg.clone()), cx);
                         });
                         return;
@@ -4566,6 +5002,9 @@ impl SftpView {
                 };
 
                 let _ = view.update_in(cx, |this, window, cx| {
+                    if this.close_state.is_closing() {
+                        return;
+                    }
                     let mut pending_transfers: Vec<PendingTransfer> = Vec::new();
                     let mut has_conflict = false;
 
@@ -5668,6 +6107,203 @@ impl SftpView {
 impl EventEmitter<TabContentEvent> for SftpView {}
 impl EventEmitter<SftpViewEvent> for SftpView {}
 
+type CloseChoiceSender = Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<CloseChoice>>>>;
+
+fn send_close_choice(sender: &CloseChoiceSender, choice: CloseChoice) {
+    if let Ok(mut guard) = sender.lock()
+        && let Some(sender) = guard.take()
+    {
+        let _ = sender.send(choice);
+    }
+}
+
+enum CloseButtonStyle {
+    Ghost,
+    Primary,
+    Danger,
+}
+
+struct CloseButtonSpec {
+    id: &'static str,
+    label: String,
+    choice: CloseChoice,
+    style: CloseButtonStyle,
+}
+
+fn close_choice_button(spec: CloseButtonSpec, sender: CloseChoiceSender) -> AnyElement {
+    let button = Button::new(spec.id)
+        .label(spec.label)
+        .on_click(move |_, window, cx| {
+            window.close_dialog(cx);
+            send_close_choice(&sender, spec.choice);
+        });
+    let button = match spec.style {
+        CloseButtonStyle::Ghost => button.ghost(),
+        CloseButtonStyle::Primary => button.primary(),
+        CloseButtonStyle::Danger => button.danger(),
+    };
+    button.into_any_element()
+}
+
+fn open_close_strategy_dialog(
+    task_count: usize,
+    window: &mut Window,
+    cx: &mut Context<SftpView>,
+    sender: CloseChoiceSender,
+) {
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let keyboard_cancel_sender = sender.clone();
+        let keyboard_wait_sender = sender.clone();
+        let footer_cancel_sender = sender.clone();
+        let footer_wait_sender = sender.clone();
+        let background_sender = sender.clone();
+        let cancel_transfers_sender = sender.clone();
+
+        dialog
+            .title(t!("Dialog.confirm_close").to_string())
+            .w(px(720.))
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(t!("Transfer.has_active_tasks", count = task_count).to_string())
+                    .child(t!("Transfer.close_strategy_prompt").to_string()),
+            )
+            .on_cancel(move |_, _, _| {
+                send_close_choice(&keyboard_cancel_sender, CloseChoice::Abort);
+                true
+            })
+            .on_ok(move |_, _, _| {
+                send_close_choice(
+                    &keyboard_wait_sender,
+                    CloseChoice::Close(CloseTransferStrategy::Wait),
+                );
+                true
+            })
+            .footer(move |_, _, _window, _cx| {
+                vec![
+                    close_choice_button(
+                        CloseButtonSpec {
+                            id: "sftp-close-cancel",
+                            label: t!("Common.cancel").to_string(),
+                            choice: CloseChoice::Abort,
+                            style: CloseButtonStyle::Ghost,
+                        },
+                        footer_cancel_sender.clone(),
+                    ),
+                    close_choice_button(
+                        CloseButtonSpec {
+                            id: "sftp-close-wait",
+                            label: t!("Transfer.wait_and_close").to_string(),
+                            choice: CloseChoice::Close(CloseTransferStrategy::Wait),
+                            style: CloseButtonStyle::Primary,
+                        },
+                        footer_wait_sender.clone(),
+                    ),
+                    close_choice_button(
+                        CloseButtonSpec {
+                            id: "sftp-close-background",
+                            label: t!("Transfer.continue_in_background").to_string(),
+                            choice: CloseChoice::Close(CloseTransferStrategy::Background),
+                            style: CloseButtonStyle::Ghost,
+                        },
+                        background_sender.clone(),
+                    ),
+                    close_choice_button(
+                        CloseButtonSpec {
+                            id: "sftp-close-cancel-transfers",
+                            label: t!("Transfer.cancel_and_close").to_string(),
+                            choice: CloseChoice::Close(CloseTransferStrategy::CancelTransfers),
+                            style: CloseButtonStyle::Danger,
+                        },
+                        cancel_transfers_sender.clone(),
+                    ),
+                ]
+            })
+            .overlay_closable(false)
+            .close_button(false)
+    });
+}
+
+async fn wait_for_active_transfers(view: Entity<SftpView>, cx: &mut AsyncApp) {
+    loop {
+        let active = view.update(cx, |this, cx| {
+            this.schedule_transfers(cx);
+            this.transfer_queue.has_active()
+        });
+        if !active {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+    }
+}
+
+async fn disconnect_view_clients(
+    view: Entity<SftpView>,
+    cx: &mut AsyncApp,
+    disconnect_pool: bool,
+    await_clients: bool,
+) {
+    let (clients, pool) = view.update(cx, |this, cx| {
+        let mut clients = Vec::with_capacity(2);
+        if let Some(client) = this.sftp_client.take() {
+            clients.push(client);
+        }
+        if let Some(client) = this.take_left_remote_client(cx) {
+            clients.push(client);
+        }
+        this.set_connection_active(false, cx);
+        cx.notify();
+        (clients, this.transfer_client_pool.clone())
+    });
+
+    for client in clients {
+        let task = Tokio::spawn(cx, disconnect_sftp_client(client));
+        if await_clients {
+            let _ = task.await;
+        } else {
+            task.detach();
+        }
+    }
+    if disconnect_pool {
+        let task = Tokio::spawn(cx, disconnect_transfer_pool(pool));
+        let _ = task.await;
+    }
+}
+
+impl SftpView {
+    fn start_background_transfer_cleanup(&mut self, cx: &mut Context<Self>) {
+        let view = cx.entity();
+        cx.spawn(async move |_this, cx| {
+            wait_for_active_transfers(view.clone(), cx).await;
+            disconnect_view_clients(view, cx, true, true).await;
+        })
+        .detach();
+    }
+
+    fn commit_close_choice(
+        &mut self,
+        strategy: CloseTransferStrategy,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.close_state.begin_close() {
+            return false;
+        }
+        self.transfer_queue.freeze_admission();
+        if matches!(strategy, CloseTransferStrategy::CancelTransfers) {
+            self.cancel_all_transfers();
+        } else {
+            self.schedule_transfers(cx);
+        }
+        if !matches!(strategy, CloseTransferStrategy::Wait) {
+            self.start_background_transfer_cleanup(cx);
+        }
+        cx.notify();
+        true
+    }
+}
+
 impl TabContent for SftpView {
     fn content_key(&self) -> &'static str {
         "SFTP"
@@ -5696,114 +6332,57 @@ impl TabContent for SftpView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Task<bool> {
-        // 检查是否有正在进行的传输任务
-        let active_tasks = self.transfer_queue.active_tasks();
+        let active_count = self.transfer_queue.active_tasks().len();
+        if active_count > 0 {
+            if !self.close_state.begin_confirmation() {
+                return gpui::Task::ready(false);
+            }
 
-        if !active_tasks.is_empty() {
-            // 有正在进行的任务，弹出确认对话框
-            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
-            let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let sender = Arc::new(std::sync::Mutex::new(Some(tx)));
+            open_close_strategy_dialog(active_count, window, cx, sender);
 
-            let task_count = active_tasks.len();
-            let tx_ok = tx.clone();
-            let tx_cancel = tx;
+            let view = cx.entity();
+            return cx.spawn(
+                async move |_this, cx| match rx.await.unwrap_or(CloseChoice::Abort) {
+                    CloseChoice::Abort => {
+                        let _ = view.update(cx, |this, _cx| {
+                            this.close_state.abort_confirmation();
+                        });
+                        false
+                    }
+                    CloseChoice::Close(strategy) => {
+                        let committed =
+                            view.update(cx, |this, cx| this.commit_close_choice(strategy, cx));
+                        if !committed {
+                            return false;
+                        }
 
-            window.open_dialog(cx, move |dialog, _window, _cx| {
-                let tx_ok = tx_ok.clone();
-                let tx_cancel = tx_cancel.clone();
-                dialog
-                    .title(t!("Dialog.confirm_close").to_string())
-                    .w(px(400.))
-                    .child(
-                        v_flex()
-                            .gap_2()
-                            .child(t!("Transfer.has_active_tasks", count = task_count).to_string())
-                            .child(t!("Transfer.confirm_close_warning").to_string()),
-                    )
-                    .confirm()
-                    .button_props(
-                        DialogButtonProps::default()
-                            .ok_text(t!("Common.close").to_string())
-                            .cancel_text(t!("Common.cancel").to_string()),
-                    )
-                    .on_ok(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        if let Ok(mut guard) = tx_ok.lock() {
-                            if let Some(sender) = guard.take() {
-                                let _ = sender.send(true);
-                            }
+                        if matches!(strategy, CloseTransferStrategy::Wait) {
+                            wait_for_active_transfers(view.clone(), cx).await;
+                            disconnect_view_clients(view, cx, true, true).await;
+                        } else {
+                            // Cancel/background must not make tab closure wait
+                            // for an in-flight listing to release the client
+                            // mutex. The disconnect task owns the handle after
+                            // the close decision has been committed.
+                            disconnect_view_clients(view, cx, false, false).await;
                         }
                         true
-                    })
-                    .on_cancel(move |_, window, cx| {
-                        window.close_dialog(cx);
-                        if let Ok(mut guard) = tx_cancel.lock() {
-                            if let Some(sender) = guard.take() {
-                                let _ = sender.send(false);
-                            }
-                        }
-                        true
-                    })
-                    .overlay_closable(false)
-                    .close_button(false)
-            });
-
-            let client = self.sftp_client.take();
-            // 预先创建断开连接的 tokio task（但还不执行）
-            let disconnect_task = client.clone().map(|c| {
-                Tokio::spawn(cx, async move {
-                    let mut guard = c.lock().await;
-                    if let Err(e) = guard.disconnect().await {
-                        tracing::error!("关闭 SFTP 连接失败: {}", e);
                     }
-                })
-            });
-
-            return cx.spawn(async move |this, cx| {
-                let confirmed = rx.await.unwrap_or(false);
-                if confirmed {
-                    let _ = this.update(cx, |this, cx| {
-                        this.cancel_all_transfers();
-                        this.disconnect_left_remote(cx);
-                        cx.notify();
-                    });
-                    // 用户确认关闭，断开连接
-                    if let Some(task) = disconnect_task {
-                        let _ = task.await;
-                    }
-                    let _ = this.update(cx, |this, cx| {
-                        this.set_connection_active(false, cx);
-                    });
-                    true
-                } else {
-                    // 用户取消，恢复 client
-                    let _ = this.update(cx, |this, _cx| {
-                        this.sftp_client = client;
-                    });
-                    false
-                }
-            });
+                },
+            );
         }
 
-        // 没有活跃任务，直接关闭
-        self.disconnect_left_remote(cx);
-        if let Some(client) = self.sftp_client.take() {
-            let task = Tokio::spawn(cx, async move {
-                let mut guard = client.lock().await;
-                if let Err(e) = guard.disconnect().await {
-                    tracing::error!("关闭 SFTP 连接失败: {}", e);
-                }
-            });
-            return cx.spawn(async move |this, cx| {
-                let _ = task.await;
-                let _ = this.update(cx, |this, cx| {
-                    this.set_connection_active(false, cx);
-                });
-                true
-            });
+        if !self.close_state.begin_close() {
+            return gpui::Task::ready(false);
         }
-        self.set_connection_active(false, cx);
-        gpui::Task::ready(true)
+        self.transfer_queue.freeze_admission();
+        let view = cx.entity();
+        cx.spawn(async move |_this, cx| {
+            disconnect_view_clients(view, cx, true, true).await;
+            true
+        })
     }
 }
 
@@ -5842,15 +6421,205 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_valid_entry_name, join_remote_path, should_apply_local_listing,
+        BoundedDisconnectOutcome, CloseState, ConnectionGeneration, SharedProgress,
+        TransferAdmission, TransferClientPool, TransferClientPoolState, TransferOperation,
+        TransferQueue, TransferTask, TransferTaskState, acquire_transfer_client,
+        bounded_disconnect, is_valid_entry_name, join_remote_path, should_apply_local_listing,
         should_apply_remote_listing,
     };
-    use std::path::Path;
+    use ssh::{HostKeyVerifier, SshAuth, SshConnectConfig};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
+
+    fn transfer_task(id: usize) -> TransferTask {
+        TransferTask {
+            id,
+            operation: TransferOperation::DeleteLocal {
+                entries: Vec::new(),
+                local_dir: PathBuf::from("."),
+            },
+            state: TransferTaskState::Pending,
+            shared_progress: Arc::new(SharedProgress {
+                transferred: AtomicU64::new(0),
+                total: AtomicU64::new(0),
+                speed: AtomicU64::new(0),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                scanning: AtomicBool::new(false),
+                current_file: std::sync::RwLock::new(None),
+                current_file_transferred: AtomicU64::new(0),
+                current_file_total: AtomicU64::new(0),
+            }),
+            error: None,
+        }
+    }
+
+    fn transfer_pool_config() -> SshConnectConfig {
+        SshConnectConfig {
+            host: "should-not-dial.invalid".to_string(),
+            port: 22,
+            username: "tester".to_string(),
+            auth: SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
+        }
+    }
+
+    #[test]
+    fn close_confirmation_can_be_aborted_without_committing_close() {
+        let mut state = CloseState::Open;
+
+        assert!(state.begin_confirmation());
+        assert!(matches!(state, CloseState::AwaitingDecision));
+
+        state.abort_confirmation();
+        assert!(matches!(state, CloseState::Open));
+    }
+
+    #[test]
+    fn committed_close_cannot_be_confirmed_or_started_again() {
+        let mut state = CloseState::Open;
+
+        assert!(state.begin_confirmation());
+        assert!(state.begin_close());
+        assert!(matches!(state, CloseState::Closing));
+        assert!(!state.begin_confirmation());
+        assert!(!state.begin_close());
+    }
+
+    #[test]
+    fn transfer_admission_freeze_rejects_late_tasks_but_keeps_existing_work() {
+        let mut queue = TransferQueue::new(1);
+
+        assert!(queue.enqueue(transfer_task(0)));
+        queue.freeze_admission();
+
+        assert!(matches!(queue.admission, TransferAdmission::Frozen));
+        assert!(!queue.enqueue(transfer_task(1)));
+        assert_eq!(1, queue.tasks.len());
+
+        let startable = queue.next_startable();
+        assert_eq!(1, startable.len());
+        assert_eq!(0, startable[0].id);
+        assert!(matches!(queue.tasks[0].state, TransferTaskState::Running));
+    }
+
+    #[test]
+    fn cancel_all_cancels_pending_tasks_and_signals_running_tasks() {
+        let mut queue = TransferQueue::new(1);
+        let running = transfer_task(0);
+        let running_cancelled = running.shared_progress.cancelled.clone();
+
+        assert!(queue.enqueue(running));
+        assert!(queue.enqueue(transfer_task(1)));
+        assert_eq!(1, queue.next_startable().len());
+
+        queue.cancel_all();
+
+        assert!(queue.pending.is_empty());
+        assert!(running_cancelled.load(Ordering::Relaxed));
+        assert!(matches!(queue.tasks[0].state, TransferTaskState::Running));
+        assert!(matches!(queue.tasks[1].state, TransferTaskState::Cancelled));
+    }
 
     #[test]
     fn only_apply_remote_listing_for_active_path() {
         assert!(should_apply_remote_listing("/srv/app", "/srv/app"));
         assert!(!should_apply_remote_listing("/srv/other", "/srv/app"));
+    }
+
+    #[test]
+    fn connection_generation_rejects_stale_and_reserved_values() {
+        let mut generation = ConnectionGeneration::default();
+
+        assert!(!generation.is_current(0));
+
+        let first = generation.advance();
+        assert_eq!(1, first);
+        assert!(generation.is_current(first));
+
+        let second = generation.advance();
+        assert_eq!(2, second);
+        assert!(!generation.is_current(first));
+        assert!(generation.is_current(second));
+    }
+
+    #[test]
+    fn connection_generation_wraps_without_reusing_zero() {
+        let mut generation = ConnectionGeneration(u64::MAX);
+
+        let wrapped = generation.advance();
+
+        assert_eq!(1, wrapped);
+        assert!(generation.is_current(wrapped));
+        assert!(!generation.is_current(0));
+    }
+
+    #[test]
+    fn retired_transfer_pool_drains_idle_and_disconnects_late_returns() {
+        let mut state = TransferClientPoolState::default();
+
+        assert!(state.reserve_new(2));
+        assert!(state.reserve_new(2));
+        assert!(!state.reserve_new(2));
+        assert_eq!(2, state.total_created);
+
+        assert_eq!(None, state.return_client(10, false));
+        assert_eq!(vec![10], state.drain_available());
+        assert_eq!(1, state.total_created);
+
+        assert_eq!(Some(20), state.return_client(20, true));
+        assert!(state.available.is_empty());
+        assert_eq!(0, state.total_created);
+    }
+
+    #[tokio::test]
+    async fn retired_transfer_pool_rejects_acquire_before_dial() {
+        let pool = Arc::new(TransferClientPool::new(transfer_pool_config(), 1));
+        pool.retire();
+
+        let error = match acquire_transfer_client(pool).await {
+            Ok(_) => panic!("retired pool must reject new acquisitions"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("pool retired"));
+    }
+
+    #[tokio::test]
+    async fn bounded_disconnect_reports_completion_and_failure() {
+        assert!(matches!(
+            bounded_disconnect(Duration::from_secs(1), async { Ok(()) }).await,
+            BoundedDisconnectOutcome::Disconnected
+        ));
+
+        let failed = bounded_disconnect(Duration::from_secs(1), async {
+            Err(anyhow::anyhow!("disconnect failed"))
+        })
+        .await;
+        assert!(matches!(
+            failed,
+            BoundedDisconnectOutcome::Failed(error)
+                if error.to_string() == "disconnect failed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn bounded_disconnect_times_out_a_stalled_shutdown() {
+        let outcome = bounded_disconnect(
+            Duration::from_millis(20),
+            std::future::pending::<anyhow::Result<()>>(),
+        )
+        .await;
+
+        assert!(matches!(outcome, BoundedDisconnectOutcome::TimedOut));
     }
 
     #[test]

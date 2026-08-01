@@ -8,8 +8,8 @@ impl TerminalView {
     ) -> impl IntoElement {
         // Prepare addons before rendering
         {
-            let is_local =
-                self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
+            let is_local = self.terminal.read(cx).live_connection_kind()
+                == Some(TerminalConnectionKind::Local);
             let term = self.terminal.read(cx).term().lock();
             let display_offset = term.grid().display_offset();
             let visible_lines = 0..term.screen_lines();
@@ -53,6 +53,8 @@ impl TerminalView {
             self.line_height_scale,
             cursor_visible,
             self.cell_width, // 传入预计算的 cell_width，确保与 resize 一致
+            self.performance_metrics.clone(),
+            self.focus_handle.clone(),
         )
         .into_element()
     }
@@ -62,6 +64,7 @@ impl TerminalView {
         menu: PopupMenu,
         has_selection: bool,
         selection_text: Option<String>,
+        accepts_live_input: bool,
         view: &Entity<Self>,
         sidebar: &Entity<TerminalSidebar>,
         _window: &mut Window,
@@ -100,6 +103,7 @@ impl TerminalView {
                     shortcut = paste_shortcut
                 ))
                 .action(Box::new(Paste))
+                .disabled(!accepts_live_input)
                 .on_click(move |_, window, cx| {
                     let _ = view_paste.update(cx, |this, cx| {
                         this.paste(&Paste, window, cx);
@@ -114,6 +118,7 @@ impl TerminalView {
                 ))
                 .icon(IconName::Delete)
                 .action(Box::new(ClearScreen))
+                .disabled(!accepts_live_input)
                 .on_click(move |_, window, cx| {
                     let _ = view_clear_screen.update(cx, |this, cx| {
                         this.clear_screen(&ClearScreen, window, cx);

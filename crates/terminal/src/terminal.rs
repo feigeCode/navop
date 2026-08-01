@@ -32,10 +32,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::interval;
+use uuid::Uuid;
 
 #[cfg(any(test, target_os = "windows"))]
 use std::env;
@@ -46,21 +47,30 @@ use std::path::Path;
 
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
-    collect_history_search_results, collect_history_suggestions_with_cwd,
+    collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
     normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
+use crate::recording::{
+    RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingMetadata, RecordingPlayback,
+    RecordingPlaybackError, RecordingPlaybackSearchIndexStatus, RecordingPlaybackSearchResults,
+    RecordingPlaybackState, RecordingPlaybackTransition, RecordingRuntime, RecordingRuntimeConfig,
+    RecordingRuntimeError, RecordingSnapshot, RecordingStartRequest, RecordingTap,
+    RecordingTransition, TerminalPlaybackRuntime,
+};
 #[cfg(not(target_os = "windows"))]
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
-    TerminalExecHandle, TerminalInputHandle, TerminalSize,
+    TerminalExecHandle, TerminalInputHandle, TerminalPerformanceMetrics,
+    TerminalPerformanceSnapshot, TerminalPerformanceWindow, TerminalSize,
 };
 use ssh::{
-    ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
-    KeyboardInteractiveTarget, SshChannel, SshSessionManager,
+    ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
+    KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
+    SshChannel, SshSessionManager,
 };
 pub use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
@@ -71,6 +81,8 @@ pub use ssh::{
 pub enum TerminalModelEvent {
     /// 终端内容已更新，需要重新渲染
     Wakeup,
+    /// SSH 服务端主机指纹需要用户确认
+    HostKeyVerificationRequired,
     /// SSH keyboard-interactive/MFA 请求状态变化
     SshMfaChanged,
     /// shell 开始渲染新的 prompt（OSC 133;A）
@@ -101,12 +113,35 @@ pub enum ConnectionState {
     Disconnected { error: Option<String> },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostKeyVerificationRequest {
+    pub identity: HostKeyIdentity,
+    pub presented: HostKeyDetails,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKeyVerificationDecision {
+    AcceptAndSave,
+    AcceptOnce,
+    Reject,
+}
+
 /// 终端连接类型
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TerminalConnectionKind {
     Local,
     Ssh,
     Serial,
+}
+
+/// Capability mode for a terminal surface.
+///
+/// A recording may describe output originally produced by SSH, but replaying
+/// that output must never recreate the source session's live capabilities.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TerminalSessionMode {
+    Live,
+    RecordingPlayback,
 }
 
 const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
@@ -463,6 +498,7 @@ fn resolve_ssh_connection(
             password: proxy.password,
         }),
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
     };
     ssh_config.keyboard_interactive_responder = Some(Arc::new(responder.clone()));
@@ -894,8 +930,20 @@ async fn load_ssh_history(manager: Arc<SshSessionManager>) -> anyhow::Result<Vec
 pub struct Terminal {
     /// alacritty 终端状态
     term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    /// Whether this surface owns a live connection or renders an untrusted,
+    /// read-only recording.
+    session_mode: TerminalSessionMode,
+    /// 当前终端实例的共享性能指标。
+    performance_metrics: Arc<TerminalPerformanceMetrics>,
     /// PTY/SSH 后端
     backend: Option<Box<dyn TerminalBackend>>,
+    /// 与终端实例同生命周期的录制运行时；重连只会克隆新的 tap，不会替换时间线。
+    recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+    /// Playback owns a separate fail-closed parser and grid. Live terminals
+    /// never populate this field.
+    playback_runtime: Option<TerminalPlaybackRuntime>,
+    /// 只用于录制文件关联的随机逻辑会话 ID；不包含连接名称、地址或凭据。
+    recording_session_id: String,
 
     /// 终端标题
     title: String,
@@ -919,6 +967,8 @@ pub struct Terminal {
     ssh_session_manager: Option<Arc<SshSessionManager>>,
     /// SSH keyboard-interactive/MFA 输入响应器
     ssh_mfa_responder: Option<TerminalMfaResponder>,
+    /// 等待用户确认的未知 SSH 主机指纹
+    pending_host_key_verification: Option<HostKeyVerificationRequest>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
     /// 事件发送器（用于 SSH 重连）
@@ -1135,11 +1185,62 @@ fn normalize_history_matches(
     normalized
 }
 
+fn is_reconnect_generation(generation: u64) -> bool {
+    generation > 1
+}
+
+struct PendingPlaybackEventLoop {
+    event_rx: UnboundedReceiver<TerminalEvent>,
+    wakeup_pending: Arc<AtomicBool>,
+}
+
 impl Terminal {
+    fn new_recording_session_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
+    fn create_recording_runtime(
+        event_tx: UnboundedSender<TerminalEvent>,
+    ) -> std::result::Result<RecordingRuntime, RecordingRuntimeError> {
+        RecordingRuntime::with_observer(RecordingRuntimeConfig::default(), move |_| {
+            // Recording control transitions and asynchronous failures must
+            // invalidate the pane, but they must never block the recording
+            // worker when the terminal has already gone away.
+            let _ = event_tx.send(TerminalEvent::Wakeup);
+        })
+    }
+
+    fn recording_tap(&self) -> Option<RecordingTap> {
+        if self.is_read_only() {
+            return None;
+        }
+        self.recording_runtime
+            .as_ref()
+            .ok()
+            .map(RecordingRuntime::tap)
+    }
+
+    fn record_connection_generation_marker(&self, generation: u64) {
+        if let Some(tap) = self.recording_tap() {
+            let _ = tap.record_marker(&format!("connection_generation:{generation}"));
+        }
+    }
+
+    fn recording_runtime(&self) -> std::result::Result<&RecordingRuntime, RecordingRuntimeError> {
+        if self.is_read_only() {
+            return Err(RecordingRuntimeError::ReadOnlyPlayback);
+        }
+        self.recording_runtime
+            .as_ref()
+            .map_err(RecordingRuntimeError::clone)
+    }
+
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_session_id = Self::new_recording_session_id();
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1150,7 +1251,12 @@ impl Terminal {
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: None,
+            recording_runtime,
+            playback_runtime: None,
+            recording_session_id,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1162,6 +1268,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -1198,8 +1305,10 @@ impl Terminal {
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1234,15 +1343,26 @@ impl Terminal {
             #[cfg(target_os = "windows")]
             escape_args: true,
         };
-        let local_backend = LocalPtyBackend::new(term.clone(), event_proxy.clone(), pty_options)?;
+        let local_backend = LocalPtyBackend::new_with_recording(
+            term.clone(),
+            event_proxy.clone(),
+            pty_options,
+            recording_tap,
+        )?;
 
         Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
         let history_repository = Self::history_repository(cx);
+        let recording_session_id = Self::new_recording_session_id();
 
         Ok(Self {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: Some(Box::new(local_backend)),
+            recording_runtime,
+            playback_runtime: None,
+            recording_session_id,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1254,6 +1374,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -1272,6 +1393,9 @@ impl Terminal {
     }
 
     pub fn clear_screen(&mut self, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         let mut term = self.term.lock();
         term.grid_mut().reset::<Color>();
         term.selection = None;
@@ -1290,6 +1414,8 @@ impl Terminal {
         sync_path_with_terminal: bool,
     ) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let resolved = resolve_ssh_connection(
             SshConnectionUpdate {
                 connection: conn,
@@ -1306,7 +1432,7 @@ impl Terminal {
         let rows = config.pty_config.height as usize;
 
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) =
+        let (term, event_proxy, _colors, performance_metrics) =
             Self::create_term(cols, rows, scrollback_lines, event_tx.clone());
         let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
@@ -1322,16 +1448,23 @@ impl Terminal {
             resolved.connection_id,
             Some(disconnect_tx),
             resolved.init_commands.clone(),
+            recording_tap,
             connection_generation,
             cx,
         );
         Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
         let history_repository = Self::history_repository(cx);
         let history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
+        let recording_session_id = Self::new_recording_session_id();
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: None,
+            recording_runtime,
+            playback_runtime: None,
+            recording_session_id,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1343,6 +1476,7 @@ impl Terminal {
             ssh_config: Some(config),
             ssh_session_manager: Some(ssh_session_manager),
             ssh_mfa_responder: Some(resolved.responder),
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -1367,8 +1501,10 @@ impl Terminal {
             .expect("StoredConnection 应包含有效的 SerialParams");
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
-        let (term, event_proxy, _colors) = Self::create_term(
+        let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
             DEFAULT_ROWS,
             scrollback_lines,
@@ -1382,15 +1518,23 @@ impl Terminal {
         Self::spawn_serial_connect(
             serial_params.clone(),
             term.clone(),
-            event_tx.clone(),
+            event_proxy.clone(),
+            performance_metrics.clone(),
             Some(disconnect_tx),
+            recording_tap,
             connection_generation,
             cx,
         );
+        let recording_session_id = Self::new_recording_session_id();
 
         Self {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: None,
+            recording_runtime,
+            playback_runtime: None,
+            recording_session_id,
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -1402,9 +1546,10 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: Some(serial_params),
             event_tx: Some(event_tx),
-            event_proxy: None,
+            event_proxy: Some(event_proxy),
             connection_id: conn.id,
             connection_name: Some(conn.name),
             init_commands: None,
@@ -1419,13 +1564,96 @@ impl Terminal {
         }
     }
 
+    /// Creates a terminal surface that renders an untrusted recording without
+    /// recreating any live PTY, SSH, serial, input, exec, or control capability.
+    pub fn new_recording_playback(playback: RecordingPlayback, cx: &mut Context<Self>) -> Self {
+        let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
+        let (terminal, event_loop) = Self::build_recording_playback(playback, scrollback_lines);
+        Self::spawn_event_loop(event_loop.event_rx, event_loop.wakeup_pending, cx);
+        terminal
+    }
+
+    /// Builds the capability-free playback model independently from its GPUI
+    /// event-loop attachment. Keeping this step synchronous makes the security
+    /// boundary unit-testable without starting a real Tokio worker inside
+    /// GPUI's deterministic test scheduler.
+    fn build_recording_playback(
+        playback: RecordingPlayback,
+        scrollback_lines: usize,
+    ) -> (Self, PendingPlaybackEventLoop) {
+        let source_backend = playback.recording().header.navop.backend;
+        let connection_kind = match source_backend {
+            RecordingBackend::Local => TerminalConnectionKind::Local,
+            RecordingBackend::Ssh => TerminalConnectionKind::Ssh,
+            RecordingBackend::Serial => TerminalConnectionKind::Serial,
+        };
+        let scrollback_lines = AppSettings::normalize_terminal_scrollback_lines(scrollback_lines);
+        let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let performance_metrics = Arc::new(TerminalPerformanceMetrics::default());
+        let playback_runtime = TerminalPlaybackRuntime::new(
+            playback,
+            scrollback_lines,
+            event_tx.clone(),
+            performance_metrics.clone(),
+        );
+        let initial_size = playback_runtime.initial_size();
+        let term = playback_runtime.term().clone();
+        let wakeup_pending = playback_runtime.wakeup_pending_handle();
+
+        (
+            Self {
+                term,
+                session_mode: TerminalSessionMode::RecordingPlayback,
+                performance_metrics,
+                backend: None,
+                recording_runtime: Err(RecordingRuntimeError::ReadOnlyPlayback),
+                playback_runtime: Some(playback_runtime),
+                recording_session_id: Self::new_recording_session_id(),
+                title: String::new(),
+                current_working_dir: None,
+                child_exited: None,
+                // Connected suppresses the live reconnect overlay. Capability
+                // checks still fail closed through `session_mode`.
+                connection_state: ConnectionState::Connected,
+                cols: usize::from(initial_size.cols),
+                rows: usize::from(initial_size.rows),
+                pixel_width: 0,
+                pixel_height: 0,
+                ssh_config: None,
+                ssh_session_manager: None,
+                ssh_mfa_responder: None,
+                pending_host_key_verification: None,
+                serial_params: None,
+                event_tx: Some(event_tx),
+                event_proxy: None,
+                connection_id: None,
+                connection_name: None,
+                init_commands: None,
+                session_history: VecDeque::new(),
+                persisted_history: Vec::new(),
+                history_repository: None,
+                history_scope: None,
+                command_record_gate: CommandRecordGate::default(),
+                connection_generation: 0,
+                // This is source-format metadata for display only. It does not
+                // confer live capabilities; use `live_connection_kind`.
+                connection_kind,
+                scrollback_lines,
+            },
+            PendingPlaybackEventLoop {
+                event_rx,
+                wakeup_pending,
+            },
+        )
+    }
+
     fn history_repository(cx: &mut Context<Self>) -> Option<Arc<TerminalCommandHistoryRepository>> {
         cx.try_global::<GlobalStorageState>()
             .and_then(|state| state.storage.get::<TerminalCommandHistoryRepository>())
     }
 
     fn next_connection_generation(&mut self) -> u64 {
-        self.connection_generation = self.connection_generation.wrapping_add(1).max(1);
+        self.connection_generation = self.connection_generation.saturating_add(1).max(1);
         self.connection_generation
     }
 
@@ -1442,19 +1670,46 @@ impl Terminal {
         Arc<FairMutex<Term<GpuiEventProxy>>>,
         GpuiEventProxy,
         alacritty_terminal::term::color::Colors,
+        Arc<TerminalPerformanceMetrics>,
+    ) {
+        Self::create_term_with_metrics(
+            cols,
+            rows,
+            scrollback_lines,
+            event_tx,
+            Arc::new(TerminalPerformanceMetrics::for_runtime()),
+        )
+    }
+
+    fn create_term_with_metrics(
+        cols: usize,
+        rows: usize,
+        scrollback_lines: usize,
+        event_tx: UnboundedSender<TerminalEvent>,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
+    ) -> (
+        Arc<FairMutex<Term<GpuiEventProxy>>>,
+        GpuiEventProxy,
+        alacritty_terminal::term::color::Colors,
+        Arc<TerminalPerformanceMetrics>,
     ) {
         let term_config = TermConfig {
             scrolling_history: scrollback_lines,
             ..Default::default()
         };
-        let event_proxy = GpuiEventProxy::new(event_tx);
+        let event_proxy = GpuiEventProxy::with_metrics(event_tx, performance_metrics.clone());
         let term = Term::new(
             term_config,
             &TermDimensions { cols, rows },
             event_proxy.clone(),
         );
         let colors = term.colors().clone();
-        (Arc::new(FairMutex::new(term)), event_proxy, colors)
+        (
+            Arc::new(FairMutex::new(term)),
+            event_proxy,
+            colors,
+            performance_metrics,
+        )
     }
 
     pub fn set_scrollback_lines(&mut self, lines: usize) {
@@ -1464,10 +1719,14 @@ impl Terminal {
         }
 
         self.scrollback_lines = lines;
-        self.term.lock().set_options(TermConfig {
-            scrolling_history: lines,
-            ..Default::default()
-        });
+        if let Some(playback_runtime) = self.playback_runtime.as_mut() {
+            playback_runtime.set_scrollback_lines(lines);
+        } else {
+            self.term.lock().set_options(TermConfig {
+                scrolling_history: lines,
+                ..Default::default()
+            });
+        }
     }
 
     pub fn scrollback_lines(&self) -> usize {
@@ -1595,21 +1854,11 @@ impl Terminal {
         connection_id: Option<i64>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
         init_commands: Option<String>,
+        recording_tap: Option<RecordingTap>,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
-        // 创建 SSH 后端需要的通知通道（UnboundedSender<()>）
-        let (notify_tx, mut notify_rx) = unbounded_channel::<()>();
-
         let task = Tokio::spawn(cx, async move {
-            // 转发 SSH 通知到事件通道（必须在 tokio runtime 内部）
-            let event_tx_clone = event_tx.clone();
-            tokio::spawn(async move {
-                while notify_rx.recv().await.is_some() {
-                    let _ = event_tx_clone.send(TerminalEvent::Wakeup);
-                }
-            });
-
             let disconnect_tx = on_disconnect.map(|tx| {
                 let (sender, mut receiver) = unbounded_channel::<()>();
                 tokio::spawn(async move {
@@ -1619,17 +1868,17 @@ impl Terminal {
                 });
                 sender
             });
-            SshBackend::connect(
+            SshBackend::connect_with_recording(
                 session_manager,
                 config.pty_config,
                 connection_id,
                 term,
                 event_proxy,
                 event_tx,
-                notify_tx,
                 disconnect_tx,
                 init_commands,
                 config.disable_shell_integration,
+                recording_tap,
             )
             .await
         });
@@ -1658,7 +1907,10 @@ impl Terminal {
 
         match result {
             Ok(Ok(backend)) => {
+                self.pending_host_key_verification = None;
                 self.connection_state = ConnectionState::Connected;
+                self.performance_metrics
+                    .record_ssh_connect(is_reconnect_generation(generation));
                 self.set_connection_active(true, cx);
                 // 连接后重新调整终端大小
                 self.term.lock().resize(TermDimensions {
@@ -1685,15 +1937,23 @@ impl Terminal {
                 if let Some(responder) = &self.ssh_mfa_responder {
                     responder.cancel();
                 }
-                self.connection_state = ConnectionState::Disconnected {
-                    error: Some(format_connection_error(&e)),
-                };
+                if let Some(request) = host_key_verification_request(&e) {
+                    self.pending_host_key_verification = Some(request);
+                    self.connection_state = ConnectionState::Disconnected { error: None };
+                    cx.emit(TerminalModelEvent::HostKeyVerificationRequired);
+                } else {
+                    self.pending_host_key_verification = None;
+                    self.connection_state = ConnectionState::Disconnected {
+                        error: Some(format_connection_error(&e)),
+                    };
+                }
                 self.set_connection_active(false, cx);
             }
             Err(e) => {
                 if let Some(responder) = &self.ssh_mfa_responder {
                     responder.cancel();
                 }
+                self.pending_host_key_verification = None;
                 self.connection_state = ConnectionState::Disconnected {
                     error: Some(e.to_string()),
                 };
@@ -1706,8 +1966,10 @@ impl Terminal {
     fn spawn_serial_connect(
         params: SerialParams,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_tx: UnboundedSender<TerminalEvent>,
+        event_proxy: GpuiEventProxy,
+        performance_metrics: Arc<TerminalPerformanceMetrics>,
         on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
+        recording_tap: Option<RecordingTap>,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
@@ -1722,7 +1984,14 @@ impl Terminal {
             sender
         });
 
-        let result = SerialBackend::connect(params, term, event_tx, disconnect_tx);
+        let result = SerialBackend::connect_with_metrics_and_recording(
+            params,
+            term,
+            event_proxy,
+            disconnect_tx,
+            performance_metrics,
+            recording_tap,
+        );
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let _ = this.update(cx, |this, cx| {
@@ -1963,6 +2232,10 @@ impl Terminal {
         merge_history_matches(db_matches, fallback, limit)
     }
 
+    pub fn recent_history(&self, limit: usize) -> Vec<String> {
+        collect_recent_history(&self.session_history, &self.persisted_history, limit)
+    }
+
     pub fn history_search_results(&self, query: &str, limit: usize) -> Vec<String> {
         let history_user = self.history_record_user();
         let db_matches = self
@@ -1993,6 +2266,9 @@ impl Terminal {
     }
 
     pub fn record_command(&mut self, command: &str, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         self.record_successful_history_entry(command, 0, cx);
     }
 
@@ -2006,6 +2282,11 @@ impl Terminal {
     }
 
     pub fn apply_ssh_connection_update(&mut self, update: SshConnectionUpdate) -> Result<()> {
+        if self.is_read_only() {
+            return Err(anyhow!(
+                "recording playback sessions cannot update SSH connections"
+            ));
+        }
         let event_tx = self
             .event_tx
             .clone()
@@ -2046,13 +2327,280 @@ impl Terminal {
         self.connection_kind
     }
 
+    pub fn session_mode(&self) -> TerminalSessionMode {
+        self.session_mode
+    }
+
+    pub fn is_recording_playback(&self) -> bool {
+        self.session_mode == TerminalSessionMode::RecordingPlayback
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.is_recording_playback()
+    }
+
+    /// Returns a connection kind only when the surface owns live connection
+    /// capabilities. Recording metadata must not be treated as a live SSH or
+    /// serial session by Public MCP or other integrations.
+    pub fn live_connection_kind(&self) -> Option<TerminalConnectionKind> {
+        (!self.is_read_only()).then_some(self.connection_kind)
+    }
+
+    fn playback_runtime(
+        &self,
+    ) -> std::result::Result<&TerminalPlaybackRuntime, RecordingPlaybackError> {
+        if !self.is_recording_playback() {
+            return Err(RecordingPlaybackError::NotPlaybackSession);
+        }
+        self.playback_runtime
+            .as_ref()
+            .ok_or(RecordingPlaybackError::NotPlaybackSession)
+    }
+
+    fn playback_runtime_mut(
+        &mut self,
+    ) -> std::result::Result<&mut TerminalPlaybackRuntime, RecordingPlaybackError> {
+        if !self.is_recording_playback() {
+            return Err(RecordingPlaybackError::NotPlaybackSession);
+        }
+        self.playback_runtime
+            .as_mut()
+            .ok_or(RecordingPlaybackError::NotPlaybackSession)
+    }
+
+    fn sync_playback_dimensions(&mut self) {
+        let term = self.term.lock();
+        self.cols = term.columns();
+        self.rows = term.screen_lines();
+    }
+
+    pub fn recording_playback_state(&self) -> Option<RecordingPlaybackState> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().state())
+    }
+
+    pub fn recording_playback_elapsed(&self) -> Option<Duration> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().elapsed())
+    }
+
+    pub fn recording_playback_duration(&self) -> Option<Duration> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().duration())
+    }
+
+    pub fn recording_playback_speed(&self) -> Option<f64> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().speed())
+    }
+
+    pub fn recording_playback_completeness(&self) -> Option<&RecordingCompleteness> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().completeness())
+    }
+
+    pub fn recording_playback_search_index_status(
+        &self,
+    ) -> Option<RecordingPlaybackSearchIndexStatus> {
+        self.playback_runtime()
+            .ok()
+            .map(|runtime| runtime.timeline().search_index_status())
+    }
+
+    pub fn resume_recording_playback(
+        &mut self,
+    ) -> std::result::Result<RecordingPlaybackTransition, RecordingPlaybackError> {
+        Ok(self.playback_runtime_mut()?.resume())
+    }
+
+    pub fn pause_recording_playback(
+        &mut self,
+    ) -> std::result::Result<RecordingPlaybackTransition, RecordingPlaybackError> {
+        Ok(self.playback_runtime_mut()?.pause())
+    }
+
+    pub fn set_recording_playback_speed(
+        &mut self,
+        speed: f64,
+    ) -> std::result::Result<RecordingPlaybackTransition, RecordingPlaybackError> {
+        self.playback_runtime_mut()?.set_speed(speed)
+    }
+
+    pub fn advance_recording_playback(
+        &mut self,
+        elapsed: Duration,
+    ) -> std::result::Result<(), RecordingPlaybackError> {
+        self.playback_runtime_mut()?.advance(elapsed);
+        self.sync_playback_dimensions();
+        Ok(())
+    }
+
+    pub fn seek_recording_playback(
+        &mut self,
+        target: Duration,
+    ) -> std::result::Result<(), RecordingPlaybackError> {
+        self.playback_runtime_mut()?.seek(target);
+        self.sync_playback_dimensions();
+        Ok(())
+    }
+
+    pub fn search_recording_playback(
+        &self,
+        query: &str,
+        requested_results: usize,
+    ) -> std::result::Result<RecordingPlaybackSearchResults, RecordingPlaybackError> {
+        self.playback_runtime()?
+            .timeline()
+            .search(query, requested_results)
+    }
+
+    /// 获取当前终端实例共享的性能指标。
+    pub fn performance_metrics(&self) -> Arc<TerminalPerformanceMetrics> {
+        self.performance_metrics.clone()
+    }
+
+    /// 获取当前终端性能指标的 best-effort 快照。
+    pub fn performance_snapshot(&self) -> TerminalPerformanceSnapshot {
+        self.performance_metrics.snapshot()
+    }
+
+    /// 计算相对前一个快照的窗口指标。
+    pub fn performance_window(
+        &self,
+        previous: &TerminalPerformanceSnapshot,
+        elapsed: Duration,
+    ) -> TerminalPerformanceWindow {
+        self.performance_snapshot().delta_since(previous, elapsed)
+    }
+
+    /// Returns the current recording state, including initialization or
+    /// asynchronous persistence failures.
+    pub fn recording_snapshot(
+        &self,
+    ) -> std::result::Result<RecordingSnapshot, RecordingRuntimeError> {
+        Ok(self.recording_runtime()?.snapshot())
+    }
+
+    /// Builds the privacy-preserving request used by the pane recording UI.
+    ///
+    /// This path intentionally records terminal output, resize events and
+    /// lifecycle markers only. Input capture requires a separate, explicit
+    /// disclosure flow and must not be enabled by mutating UI defaults.
+    pub fn build_output_recording_start_request(
+        &self,
+        final_path: PathBuf,
+    ) -> std::result::Result<RecordingStartRequest, RecordingRuntimeError> {
+        // Surface a runtime initialization failure before generating metadata
+        // or touching the requested destination.
+        self.recording_runtime()?;
+
+        let rows = u16::try_from(self.rows).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(format!(
+                "terminal row count does not fit recording format: {}",
+                self.rows
+            ))
+        })?;
+        let cols = u16::try_from(self.cols).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(format!(
+                "terminal column count does not fit recording format: {}",
+                self.cols
+            ))
+        })?;
+        if rows == 0 || cols == 0 {
+            return Err(RecordingRuntimeError::InvalidConfig(
+                "terminal dimensions must be non-zero".to_string(),
+            ));
+        }
+
+        let started_at = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig("system clock predates the Unix epoch".to_string())
+        })?;
+        let started_at_unix_ms = u64::try_from(started_at.as_millis()).map_err(|_| {
+            RecordingRuntimeError::InvalidConfig(
+                "recording start timestamp exceeds the supported range".to_string(),
+            )
+        })?;
+        let backend = match self.connection_kind {
+            TerminalConnectionKind::Local => RecordingBackend::Local,
+            TerminalConnectionKind::Ssh => RecordingBackend::Ssh,
+            TerminalConnectionKind::Serial => RecordingBackend::Serial,
+        };
+
+        Ok(RecordingStartRequest {
+            final_path,
+            metadata: RecordingMetadata {
+                recording_id: Uuid::new_v4().to_string(),
+                session_id: self.recording_session_id.clone(),
+                backend,
+                application_version: option_env!("NAVOP_APPLICATION_VERSION")
+                    .unwrap_or(env!("CARGO_PKG_VERSION"))
+                    .to_string(),
+                started_at_unix_ms,
+                capture_input: false,
+            },
+            initial_size: TerminalSize {
+                rows,
+                cols,
+                pixel_width: self.pixel_width,
+                pixel_height: self.pixel_height,
+            },
+            recording: RecordingConfig::default(),
+        })
+    }
+
+    /// Starts an output-only recording using metadata generated by the active
+    /// terminal. Repeated calls after a completed stop create a fresh file and
+    /// recording ID while retaining the pane's logical session ID.
+    pub fn start_output_recording(
+        &self,
+        final_path: PathBuf,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        let request = self.build_output_recording_start_request(final_path)?;
+        self.start_recording(request)
+    }
+
+    /// Starts a recording on this terminal's stable runtime. Reconnects reuse
+    /// the same runtime and therefore cannot silently replace the timeline.
+    pub fn start_recording(
+        &self,
+        request: RecordingStartRequest,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.start(request)
+    }
+
+    pub fn pause_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.pause()
+    }
+
+    pub fn resume_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.resume()
+    }
+
+    pub fn stop_recording(
+        &self,
+    ) -> std::result::Result<RecordingTransition, RecordingRuntimeError> {
+        self.recording_runtime()?.stop()
+    }
+
     /// 是否可以重连
     pub fn can_reconnect(&self) -> bool {
-        self.ssh_config.is_some() || self.serial_params.is_some()
+        !self.is_read_only() && (self.ssh_config.is_some() || self.serial_params.is_some())
     }
 
     /// 写入数据到终端
     pub fn write(&self, data: &[u8]) {
+        if self.is_read_only() {
+            return;
+        }
         if let Some(ref backend) = self.backend {
             backend.write(data.to_vec());
         }
@@ -2060,22 +2608,33 @@ impl Terminal {
 
     /// 写入来自外部集成的输入，例如 Public MCP。
     pub fn write_external_input(&self, data: &[u8]) {
-        self.write(data);
+        if let Some(handle) = self.external_input_handle() {
+            handle.write(data.to_vec());
+        }
     }
 
     pub fn external_input_handle(&self) -> Option<TerminalInputHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.input_handle())
     }
 
     pub fn external_exec_handle(&self) -> Option<TerminalExecHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.exec_handle())
     }
 
     pub fn external_control_handle(&self) -> Option<TerminalControlHandle> {
+        if self.is_read_only() {
+            return None;
+        }
         self.backend
             .as_ref()
             .and_then(|backend| backend.control_handle())
@@ -2083,6 +2642,14 @@ impl Terminal {
 
     /// 调整终端大小
     pub fn resize(&mut self, cols: usize, rows: usize, pixel_width: u16, pixel_height: u16) {
+        if self.is_recording_playback() {
+            // The recording header and Resize events are authoritative for the
+            // playback grid. Canvas layout may update only cached pixel size.
+            self.pixel_width = pixel_width;
+            self.pixel_height = pixel_height;
+            return;
+        }
+
         if self.cols == cols && self.rows == rows {
             // 单元格行列数未变,但仍记录最新像素尺寸,供 nudge_resize 复用
             self.pixel_width = pixel_width;
@@ -2115,12 +2682,16 @@ impl Terminal {
         self.term.lock().resize(TermDimensions { cols, rows });
 
         if let Some(ref backend) = self.backend {
-            backend.resize(TerminalSize {
+            let size = TerminalSize {
                 rows: rows as u16,
                 cols: cols as u16,
                 pixel_width,
                 pixel_height,
-            });
+            };
+            backend.resize(size);
+            if let Some(tap) = self.recording_tap() {
+                let _ = tap.record_resize(size);
+            }
         }
     }
 
@@ -2130,6 +2701,9 @@ impl Terminal {
     /// 让 TUI 应用(opencode/lazygit/vim 等)重新查询尺寸并刷新整屏画面,
     /// 避免出现底部残留旧画面的问题。
     pub fn nudge_resize(&self) {
+        if self.is_recording_playback() {
+            return;
+        }
         let Some(ref backend) = self.backend else {
             tracing::warn!(target: "terminal_residue", "nudge_resize skipped: no backend");
             return;
@@ -2151,16 +2725,19 @@ impl Terminal {
     }
 
     /// 重新连接 SSH 或串口
-    pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+    pub fn reconnect(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_read_only() {
+            return false;
+        }
         if let Some(config) = self.ssh_config.clone() {
             let Some(session_manager) = self.ssh_session_manager.clone() else {
-                return;
+                return false;
             };
             let Some(event_tx) = self.event_tx.clone() else {
-                return;
+                return false;
             };
             let Some(event_proxy) = self.event_proxy.clone() else {
-                return;
+                return false;
             };
 
             self.connection_state = ConnectionState::Connecting;
@@ -2168,15 +2745,17 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.reset_terminal_surface();
+            self.prepare_surface_for_reconnect();
 
             let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
             if let Some(responder) = &self.ssh_mfa_responder {
                 responder.cancel();
             }
             let term = self.term.clone();
             let connection_id = self.connection_id;
             let init_commands = self.init_commands.clone();
+            let recording_tap = self.recording_tap();
             let entity = cx.entity().downgrade();
             cx.spawn(async move |_, cx| {
                 let _ = session_manager.disconnect().await;
@@ -2196,6 +2775,7 @@ impl Terminal {
                         connection_id,
                         Some(disconnect_tx),
                         init_commands.clone(),
+                        recording_tap.clone(),
                         generation,
                         cx,
                     );
@@ -2204,8 +2784,8 @@ impl Terminal {
             })
             .detach();
         } else if let Some(params) = self.serial_params.clone() {
-            let Some(event_tx) = self.event_tx.clone() else {
-                return;
+            let Some(event_proxy) = self.event_proxy.clone() else {
+                return false;
             };
 
             self.connection_state = ConnectionState::Connecting;
@@ -2213,52 +2793,80 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
-            self.reset_terminal_surface();
+            self.prepare_surface_for_reconnect();
             let generation = self.next_connection_generation();
+            self.record_connection_generation_marker(generation);
+            let recording_tap = self.recording_tap();
 
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
             Self::spawn_disconnect_handler(disconnect_rx, generation, cx);
             Self::spawn_serial_connect(
                 params,
                 self.term.clone(),
-                event_tx,
+                event_proxy,
+                self.performance_metrics.clone(),
                 Some(disconnect_tx),
+                recording_tap,
                 generation,
                 cx,
             );
         } else {
-            return;
+            return false;
         }
 
         cx.emit(TerminalModelEvent::Wakeup);
+        true
     }
 
-    fn reset_terminal_surface(&mut self) {
-        let Some(event_tx) = self.event_tx.clone() else {
+    fn prepare_surface_for_reconnect(&mut self) {
+        // Keep the existing alacritty grid and scrollback. The replacement
+        // backend appends its output to the same terminal surface.
+        self.child_exited = None;
+        self.current_working_dir = None;
+    }
+
+    pub fn host_key_verification_request(&self) -> Option<HostKeyVerificationRequest> {
+        self.pending_host_key_verification.clone()
+    }
+
+    pub fn respond_to_host_key_verification(
+        &mut self,
+        decision: HostKeyVerificationDecision,
+        rejection_message: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self.pending_host_key_verification.take() else {
             return;
         };
 
-        let event_proxy = self
-            .event_proxy
-            .clone()
-            .unwrap_or_else(|| GpuiEventProxy::new(event_tx.clone()));
-        let term_config = TermConfig {
-            scrolling_history: self.scrollback_lines,
-            ..Default::default()
-        };
-        let new_term = Term::new(
-            term_config,
-            &TermDimensions {
-                cols: self.cols,
-                rows: self.rows,
-            },
-            event_proxy,
-        );
+        if decision == HostKeyVerificationDecision::Reject {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
+        }
 
-        *self.term.lock() = new_term;
-        self.title.clear();
-        self.current_working_dir = None;
-        self.child_exited = None;
+        let Some(config) = self.ssh_config.as_mut() else {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
+        };
+
+        config.ssh_config.host_key_verifier = config
+            .ssh_config
+            .host_key_verifier
+            .clone()
+            .with_confirmed_key(
+                request.identity,
+                request.presented,
+                decision == HostKeyVerificationDecision::AcceptAndSave,
+            );
+        self.ssh_session_manager =
+            Some(Arc::new(SshSessionManager::new(config.ssh_config.clone())));
+        self.reconnect(cx);
     }
 
     /// 更新 SSH 终端的路径同步设置。
@@ -2274,6 +2882,11 @@ impl Terminal {
     pub fn shutdown(&self) {
         if let Some(ref backend) = self.backend {
             backend.shutdown();
+        }
+        if let Ok(recording_runtime) = &self.recording_runtime {
+            if let Err(error) = recording_runtime.shutdown() {
+                tracing::warn!(%error, "failed to shut down terminal recording runtime");
+            }
         }
     }
 
@@ -2364,6 +2977,23 @@ fn format_connection_error(err: &anyhow::Error) -> String {
     format!("{err:#}")
 }
 
+fn host_key_verification_request(error: &anyhow::Error) -> Option<HostKeyVerificationRequest> {
+    error
+        .downcast_ref::<HostKeyRejection>()
+        .and_then(|rejection| match rejection {
+            HostKeyRejection::Unknown {
+                identity,
+                presented,
+            } => Some(HostKeyVerificationRequest {
+                identity: identity.clone(),
+                presented: presented.clone(),
+            }),
+            HostKeyRejection::Changed { .. }
+            | HostKeyRejection::Revoked { .. }
+            | HostKeyRejection::StoreUnavailable { .. } => None,
+        })
+}
+
 impl EventEmitter<TerminalModelEvent> for Terminal {}
 
 #[cfg(test)]
@@ -2372,34 +3002,860 @@ mod tests {
     use super::with_local_terminal_default_env;
     use super::{
         CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, build_cd_command,
-        build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
-        compose_ssh_init_commands, format_connection_error,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalSessionMode,
+        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
+        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, format_connection_error,
+        host_key_verification_request, is_reconnect_generation,
         keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
         resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
     };
-    use crate::TerminalEvent;
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
         parse_shell_history, push_history_entry,
     };
+    use crate::recording::{
+        ASCIICAST_VERSION, NAVOP_EVENT_STREAM, NAVOP_RECORDING_FORMAT_VERSION, ParsedRecording,
+        RecordingBackend, RecordingCompleteness, RecordingConfig, RecordingEvent,
+        RecordingEventKind, RecordingFileLimits, RecordingHeader, RecordingHeaderMetadata,
+        RecordingMetadata, RecordingPlayback, RecordingPlaybackError, RecordingPlaybackLimits,
+        RecordingPlaybackSearchKind, RecordingPlaybackState, RecordingPlaybackTransition,
+        RecordingRuntime, RecordingRuntimeConfig, RecordingRuntimeError, RecordingStartRequest,
+        RecordingState, RecordingTapOutcome, RecordingTransition, read_recording,
+    };
+    use crate::{
+        TerminalBackend, TerminalControlHandle, TerminalEvent, TerminalExecHandle,
+        TerminalInputHandle, TerminalPerformanceMetrics, TerminalSize,
+    };
+    use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
-    use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth};
+    use ssh::{
+        HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute,
+        KeyboardInteractiveRequest, KeyboardInteractiveResponder, SshAuth,
+    };
     use std::collections::VecDeque;
     use std::fs;
+    use std::path::PathBuf;
     #[cfg(not(target_os = "windows"))]
     use std::process::Command;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
     use tokio::sync::mpsc::unbounded_channel;
+
+    struct ResizeProbe {
+        sizes: Arc<Mutex<Vec<TerminalSize>>>,
+    }
+
+    impl TerminalBackend for ResizeProbe {
+        fn write(&self, _data: Vec<u8>) {}
+
+        fn resize(&self, size: TerminalSize) {
+            self.sizes
+                .lock()
+                .expect("resize probe should lock")
+                .push(size);
+        }
+
+        fn shutdown(&self) {}
+    }
+
+    struct InputRouteProbe {
+        direct_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        external_writes: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl TerminalBackend for InputRouteProbe {
+        fn write(&self, data: Vec<u8>) {
+            self.direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .push(data);
+        }
+
+        fn resize(&self, _size: TerminalSize) {}
+
+        fn shutdown(&self) {}
+
+        fn input_handle(&self) -> Option<TerminalInputHandle> {
+            let external_writes = self.external_writes.clone();
+            Some(TerminalInputHandle::new(move |data| {
+                external_writes
+                    .lock()
+                    .expect("external input probe should lock")
+                    .push(data);
+            }))
+        }
+
+        fn exec_handle(&self) -> Option<TerminalExecHandle> {
+            Some(TerminalExecHandle::new(|_, _| {
+                Box::pin(async { unreachable!("read-only test must not invoke exec") })
+            }))
+        }
+
+        fn control_handle(&self) -> Option<TerminalControlHandle> {
+            Some(TerminalControlHandle::new(|_, _| {
+                Box::pin(async { unreachable!("read-only test must not invoke control") })
+            }))
+        }
+    }
+
+    fn test_terminal_with_recording_runtime(
+        recording_runtime: std::result::Result<RecordingRuntime, RecordingRuntimeError>,
+    ) -> Terminal {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors, performance_metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
+
+        Terminal {
+            term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
+            backend: None,
+            recording_runtime,
+            playback_runtime: None,
+            recording_session_id: "terminal-runtime-test-session".to_string(),
+            title: String::new(),
+            current_working_dir: None,
+            child_exited: None,
+            connection_state: ConnectionState::Connected,
+            cols: 80,
+            rows: 24,
+            pixel_width: 640,
+            pixel_height: 480,
+            ssh_config: None,
+            ssh_session_manager: None,
+            ssh_mfa_responder: None,
+            pending_host_key_verification: None,
+            serial_params: None,
+            event_tx: Some(event_tx),
+            event_proxy: Some(event_proxy),
+            connection_id: Some(1),
+            connection_name: Some("test SSH".to_string()),
+            init_commands: None,
+            session_history: VecDeque::new(),
+            persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
+            connection_generation: 1,
+            connection_kind: TerminalConnectionKind::Ssh,
+            scrollback_lines: 10_000,
+        }
+    }
+
+    fn test_recording_start_request(final_path: PathBuf) -> RecordingStartRequest {
+        RecordingStartRequest {
+            final_path,
+            metadata: RecordingMetadata {
+                recording_id: "terminal-runtime-test-recording".to_string(),
+                session_id: "terminal-runtime-test-session".to_string(),
+                backend: RecordingBackend::Ssh,
+                application_version: "0.1.0-test".to_string(),
+                started_at_unix_ms: 1_700_000_000_123,
+                capture_input: false,
+            },
+            initial_size: TerminalSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 640,
+                pixel_height: 480,
+            },
+            recording: RecordingConfig::default(),
+        }
+    }
+
+    fn test_parsed_playback_recording(
+        backend: RecordingBackend,
+        completeness: RecordingCompleteness,
+    ) -> ParsedRecording {
+        ParsedRecording {
+            header: RecordingHeader {
+                version: ASCIICAST_VERSION,
+                width: 80,
+                height: 24,
+                timestamp: 1_700_000_000,
+                navop: RecordingHeaderMetadata {
+                    format_version: NAVOP_RECORDING_FORMAT_VERSION,
+                    recording_id: "terminal-playback-test-recording".to_string(),
+                    session_id: "terminal-playback-test-session".to_string(),
+                    backend,
+                    application_version: "0.1.0-test".to_string(),
+                    started_at_unix_ms: 1_700_000_000_123,
+                    capture_input: true,
+                    event_stream: NAVOP_EVENT_STREAM.to_string(),
+                },
+            },
+            events: vec![
+                RecordingEvent {
+                    elapsed: Duration::ZERO,
+                    kind: RecordingEventKind::Output(b"one".to_vec()),
+                },
+                RecordingEvent {
+                    elapsed: Duration::from_millis(1),
+                    kind: RecordingEventKind::Resize(TerminalSize {
+                        rows: 40,
+                        cols: 100,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    }),
+                },
+                RecordingEvent {
+                    elapsed: Duration::from_millis(2),
+                    kind: RecordingEventKind::Output(b"\r\ntwo".to_vec()),
+                },
+                RecordingEvent {
+                    elapsed: Duration::from_millis(3),
+                    kind: RecordingEventKind::Input(b"typed-command".to_vec()),
+                },
+                RecordingEvent {
+                    elapsed: Duration::from_millis(4),
+                    kind: RecordingEventKind::Marker("checkpoint".to_string()),
+                },
+            ],
+            completeness,
+        }
+    }
 
     #[test]
     fn shell_escape_arg_handles_single_quote() {
         let escaped = shell_escape_arg("a'b");
         assert_eq!(escaped, "'a'\"'\"'b'");
+    }
+
+    #[test]
+    fn reconnect_generation_only_counts_attempts_after_the_first() {
+        assert!(!is_reconnect_generation(0));
+        assert!(!is_reconnect_generation(1));
+        assert!(is_reconnect_generation(2));
+        assert!(is_reconnect_generation(u64::MAX));
+    }
+
+    #[test]
+    fn terminal_recording_runtime_survives_reconnect_generation_change() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let final_path = directory.path().join("session.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        assert_eq!(
+            RecordingState::Idle,
+            terminal
+                .recording_snapshot()
+                .expect("read initial recording state")
+                .state
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_recording(test_recording_start_request(final_path.clone()))
+                .expect("start terminal recording")
+        );
+
+        let first_tap = terminal.recording_tap().expect("first backend tap");
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            first_tap.record_output(b"before reconnect\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .pause_recording()
+                .expect("pause terminal recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Inactive,
+            first_tap.record_output(b"paused output")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .resume_recording()
+                .expect("resume terminal recording")
+        );
+        let generation = terminal.next_connection_generation();
+        assert_eq!(2, generation);
+        terminal.record_connection_generation_marker(generation);
+
+        assert_eq!(
+            RecordingState::Recording,
+            terminal
+                .recording_snapshot()
+                .expect("recording state survives surface reset")
+                .state
+        );
+        let replacement_tap = terminal.recording_tap().expect("replacement backend tap");
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            replacement_tap.record_output(b"after reconnect\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal.stop_recording().expect("stop terminal recording")
+        );
+
+        let recording = read_recording(&final_path, RecordingFileLimits::default())
+            .expect("read completed recording");
+        let events = recording
+            .events
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            vec![
+                RecordingEventKind::Output(b"before reconnect\r\n".to_vec()),
+                RecordingEventKind::Marker("connection_generation:2".to_string()),
+                RecordingEventKind::Output(b"after reconnect\r\n".to_vec()),
+            ],
+            events
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn output_recording_request_uses_safe_metadata_and_stable_session_identity() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        let first = terminal
+            .build_output_recording_start_request(PathBuf::from("first.cast"))
+            .expect("build first output recording request");
+        let second = terminal
+            .build_output_recording_start_request(PathBuf::from("second.cast"))
+            .expect("build second output recording request");
+
+        assert!(!first.metadata.recording_id.is_empty());
+        assert_ne!(
+            first.metadata.recording_id, second.metadata.recording_id,
+            "each recording file must receive a fresh identity"
+        );
+        assert_eq!(
+            "terminal-runtime-test-session", first.metadata.session_id,
+            "metadata must use the pane's privacy-preserving logical session ID"
+        );
+        assert_eq!(first.metadata.session_id, second.metadata.session_id);
+        assert_eq!(RecordingBackend::Ssh, first.metadata.backend);
+        assert!(!first.metadata.capture_input);
+        assert!(!first.recording.capture_input);
+        assert_eq!(
+            TerminalSize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 640,
+                pixel_height: 480,
+            },
+            first.initial_size
+        );
+        assert!(first.metadata.started_at_unix_ms > 0);
+        assert!(!first.metadata.application_version.is_empty());
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn output_recording_can_restart_with_a_new_file_in_the_same_session() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let first_path = directory.path().join("first.cast");
+        let second_path = directory.path().join("second.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let tap = terminal.recording_tap().expect("backend recording tap");
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_output_recording(first_path.clone())
+                .expect("start first output recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            tap.record_output(b"first recording\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .stop_recording()
+                .expect("stop first output recording")
+        );
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_output_recording(second_path.clone())
+                .expect("start second output recording")
+        );
+        assert_eq!(
+            RecordingTapOutcome::Accepted,
+            tap.record_output(b"second recording\r\n")
+        );
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .stop_recording()
+                .expect("stop second output recording")
+        );
+
+        let first = read_recording(&first_path, RecordingFileLimits::default())
+            .expect("read first recording");
+        let second = read_recording(&second_path, RecordingFileLimits::default())
+            .expect("read second recording");
+        assert_ne!(
+            first.header.navop.recording_id, second.header.navop.recording_id,
+            "each completed recording must have its own recording ID"
+        );
+        assert_eq!(
+            first.header.navop.session_id, second.header.navop.session_id,
+            "successive recordings from one pane must remain associated"
+        );
+        assert_eq!(
+            vec![RecordingEventKind::Output(b"first recording\r\n".to_vec())],
+            first
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![RecordingEventKind::Output(b"second recording\r\n".to_vec())],
+            second
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_resize_records_only_cell_changes_delivered_to_a_backend() {
+        let directory = tempfile::tempdir().expect("create recording directory");
+        let final_path = directory.path().join("resize.cast");
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(ResizeProbe {
+            sizes: sizes.clone(),
+        }));
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal
+                .start_recording(test_recording_start_request(final_path.clone()))
+                .expect("start terminal recording")
+        );
+
+        let recorded_size = TerminalSize {
+            rows: 40,
+            cols: 100,
+            pixel_width: 1_000,
+            pixel_height: 800,
+        };
+        terminal.resize(100, 40, 1_000, 800);
+
+        // Pixel-only changes are cached for the next backend nudge, but do not
+        // resize the grid or create another recording event.
+        terminal.resize(100, 40, 1_200, 900);
+        terminal.nudge_resize();
+
+        // A grid change that cannot be delivered to an active backend is not
+        // represented as if the remote/local session had accepted it.
+        terminal.backend = None;
+        terminal.resize(120, 50, 1_440, 1_000);
+
+        assert_eq!(
+            RecordingTransition::Changed,
+            terminal.stop_recording().expect("stop terminal recording")
+        );
+        assert_eq!(
+            vec![
+                recorded_size,
+                TerminalSize {
+                    rows: 40,
+                    cols: 100,
+                    pixel_width: 1_200,
+                    pixel_height: 900,
+                },
+            ],
+            *sizes.lock().expect("resize probe should lock")
+        );
+
+        let recording = read_recording(&final_path, RecordingFileLimits::default())
+            .expect("read completed recording");
+        assert_eq!(
+            vec![RecordingEventKind::Resize(TerminalSize {
+                rows: recorded_size.rows,
+                cols: recorded_size.cols,
+                // Asciicast v2 resize events carry cell dimensions only.
+                pixel_width: 0,
+                pixel_height: 0,
+            })],
+            recording
+                .events
+                .into_iter()
+                .map(|event| event.kind)
+                .collect::<Vec<_>>()
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_external_input_uses_the_backend_external_input_route() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let direct_writes = Arc::new(Mutex::new(Vec::new()));
+        let external_writes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(InputRouteProbe {
+            direct_writes: direct_writes.clone(),
+            external_writes: external_writes.clone(),
+        }));
+
+        terminal.write_external_input(b"public mcp input");
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert_eq!(
+            vec![b"public mcp input".to_vec()],
+            *external_writes
+                .lock()
+                .expect("external input probe should lock")
+        );
+
+        terminal.write(b"human input");
+        assert_eq!(
+            vec![b"human input".to_vec()],
+            *direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn connection_generation_saturates_instead_of_wrapping() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        terminal.connection_generation = u64::MAX;
+
+        assert_eq!(u64::MAX, terminal.next_connection_generation());
+
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn recording_playback_mode_revokes_live_terminal_capabilities() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let direct_writes = Arc::new(Mutex::new(Vec::new()));
+        let external_writes = Arc::new(Mutex::new(Vec::new()));
+        terminal.backend = Some(Box::new(InputRouteProbe {
+            direct_writes: direct_writes.clone(),
+            external_writes: external_writes.clone(),
+        }));
+        terminal.session_mode = TerminalSessionMode::RecordingPlayback;
+
+        assert_eq!(
+            TerminalSessionMode::RecordingPlayback,
+            terminal.session_mode()
+        );
+        assert!(terminal.is_recording_playback());
+        assert!(terminal.is_read_only());
+        assert_eq!(None, terminal.live_connection_kind());
+        assert!(!terminal.can_reconnect());
+        assert!(terminal.recording_tap().is_none());
+
+        terminal.write(b"human input");
+        terminal.write_external_input(b"public mcp input");
+        assert!(
+            direct_writes
+                .lock()
+                .expect("direct input probe should lock")
+                .is_empty()
+        );
+        assert!(
+            external_writes
+                .lock()
+                .expect("external input probe should lock")
+                .is_empty()
+        );
+        assert!(terminal.external_input_handle().is_none());
+        assert!(terminal.external_exec_handle().is_none());
+        assert!(terminal.external_control_handle().is_none());
+
+        let expected = RecordingRuntimeError::ReadOnlyPlayback;
+        assert_eq!(Err(expected.clone()), terminal.recording_snapshot());
+        assert_eq!(
+            Some(expected.clone()),
+            terminal
+                .build_output_recording_start_request(PathBuf::from("unused-output.cast"))
+                .err()
+        );
+        assert_eq!(Err(expected.clone()), terminal.pause_recording());
+        assert_eq!(Err(expected.clone()), terminal.resume_recording());
+        assert_eq!(Err(expected.clone()), terminal.stop_recording());
+        assert_eq!(
+            Err(expected),
+            terminal.start_recording(test_recording_start_request(PathBuf::from("unused.cast")))
+        );
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn recording_playback_constructor_integrates_read_only_surface_and_controls() {
+        let completeness = RecordingCompleteness::Partial {
+            discarded_bytes: 42,
+        };
+        let playback = RecordingPlayback::from_parsed(
+            test_parsed_playback_recording(RecordingBackend::Ssh, completeness.clone()),
+            RecordingPlaybackLimits::default(),
+        )
+        .expect("validate recording playback");
+        let (mut terminal, _event_loop) = Terminal::build_recording_playback(playback, 100_000);
+
+        assert_eq!(
+            TerminalSessionMode::RecordingPlayback,
+            terminal.session_mode()
+        );
+        assert!(terminal.is_read_only());
+        assert_eq!(TerminalConnectionKind::Ssh, terminal.connection_kind());
+        assert_eq!(None, terminal.live_connection_kind());
+        assert_eq!(&ConnectionState::Connected, terminal.connection_state());
+        assert!(terminal.backend.is_none());
+        assert!(terminal.ssh_config().is_none());
+        assert!(terminal.ssh_session_manager().is_none());
+        assert!(terminal.external_input_handle().is_none());
+        assert!(terminal.external_exec_handle().is_none());
+        assert!(terminal.external_control_handle().is_none());
+        assert!(!terminal.can_reconnect());
+        assert_eq!(None, terminal.connection_id());
+        assert_eq!(None, terminal.connection_name());
+        assert_eq!(80, terminal.cols());
+        assert_eq!(24, terminal.rows());
+        assert_eq!(
+            Some(RecordingPlaybackState::Paused),
+            terminal.recording_playback_state()
+        );
+        assert_eq!(Some(Duration::ZERO), terminal.recording_playback_elapsed());
+        assert_eq!(
+            Some(Duration::from_millis(4)),
+            terminal.recording_playback_duration()
+        );
+        assert_eq!(Some(1.0), terminal.recording_playback_speed());
+        assert_eq!(
+            Some(&completeness),
+            terminal.recording_playback_completeness()
+        );
+        assert!(
+            !terminal
+                .recording_playback_search_index_status()
+                .expect("playback search index status")
+                .truncated
+        );
+        assert_eq!(
+            Err(RecordingRuntimeError::ReadOnlyPlayback),
+            terminal.recording_snapshot()
+        );
+
+        assert_eq!(
+            RecordingPlaybackTransition::Changed,
+            terminal
+                .set_recording_playback_speed(2.0)
+                .expect("set playback speed")
+        );
+        assert_eq!(
+            RecordingPlaybackTransition::Changed,
+            terminal
+                .resume_recording_playback()
+                .expect("resume playback")
+        );
+        terminal
+            .advance_recording_playback(Duration::from_millis(1))
+            .expect("advance playback");
+
+        assert_eq!(
+            Some(RecordingPlaybackState::Playing),
+            terminal.recording_playback_state()
+        );
+        assert_eq!(
+            Some(Duration::from_millis(2)),
+            terminal.recording_playback_elapsed()
+        );
+        assert_eq!(Some(2.0), terminal.recording_playback_speed());
+        assert_eq!(100, terminal.cols());
+        assert_eq!(40, terminal.rows());
+        let text = terminal.visible_text();
+        assert!(text.contains("one"));
+        assert!(text.contains("two"));
+
+        // Viewport layout must not overwrite dimensions sourced from the
+        // recording's Resize event.
+        terminal.resize(200, 60, 1_600, 900);
+        assert_eq!(100, terminal.cols());
+        assert_eq!(40, terminal.rows());
+
+        assert!(matches!(
+            terminal.set_recording_playback_speed(5.0),
+            Err(RecordingPlaybackError::InvalidSpeed(_))
+        ));
+        terminal
+            .seek_recording_playback(Duration::ZERO)
+            .expect("seek playback to start");
+        assert_eq!(
+            RecordingPlaybackTransition::Changed,
+            terminal.pause_recording_playback().expect("pause playback")
+        );
+        terminal.set_scrollback_lines(2_000);
+
+        assert_eq!(80, terminal.cols());
+        assert_eq!(24, terminal.rows());
+        assert_eq!(2_000, terminal.scrollback_lines());
+        assert_eq!(
+            Some(RecordingPlaybackState::Paused),
+            terminal.recording_playback_state()
+        );
+        assert_eq!(Some(Duration::ZERO), terminal.recording_playback_elapsed());
+        let text = terminal.visible_text();
+        assert!(text.contains("one"));
+        assert!(!text.contains("two"));
+
+        let input_results = terminal
+            .search_recording_playback("typed-command", 10)
+            .expect("search display-only input");
+        assert_eq!(1, input_results.matches.len());
+        assert_eq!(
+            RecordingPlaybackSearchKind::InputDisplayOnly,
+            input_results.matches[0].kind
+        );
+        assert!(!input_results.index_status.truncated);
+
+        let marker_results = terminal
+            .search_recording_playback("checkpoint", 10)
+            .expect("search display-only marker");
+        assert_eq!(1, marker_results.matches.len());
+        assert_eq!(
+            RecordingPlaybackSearchKind::MarkerDisplayOnly,
+            marker_results.matches[0].kind
+        );
+    }
+
+    #[test]
+    fn recording_playback_source_kind_never_restores_live_capabilities() {
+        for (backend, expected_kind) in [
+            (RecordingBackend::Local, TerminalConnectionKind::Local),
+            (RecordingBackend::Ssh, TerminalConnectionKind::Ssh),
+            (RecordingBackend::Serial, TerminalConnectionKind::Serial),
+        ] {
+            let playback = RecordingPlayback::from_parsed(
+                test_parsed_playback_recording(backend, RecordingCompleteness::Complete),
+                RecordingPlaybackLimits::default(),
+            )
+            .expect("validate recording playback");
+            let (terminal, _event_loop) = Terminal::build_recording_playback(playback, 10_000);
+
+            assert_eq!(expected_kind, terminal.connection_kind());
+            assert_eq!(None, terminal.live_connection_kind());
+            assert!(terminal.backend.is_none());
+            assert!(terminal.ssh_config.is_none());
+            assert!(terminal.ssh_session_manager.is_none());
+            assert!(terminal.serial_params.is_none());
+            assert!(terminal.event_proxy.is_none());
+            assert_eq!(None, terminal.connection_id());
+            assert_eq!(None, terminal.connection_name());
+            assert!(terminal.history_repository.is_none());
+            assert!(terminal.history_scope.is_none());
+            assert_eq!(0, terminal.connection_generation);
+            assert!(!terminal.can_reconnect());
+            assert!(terminal.external_input_handle().is_none());
+            assert!(terminal.external_exec_handle().is_none());
+            assert!(terminal.external_control_handle().is_none());
+        }
+    }
+
+    #[test]
+    fn live_terminal_rejects_recording_playback_operations() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+
+        assert_eq!(None, terminal.recording_playback_state());
+        assert!(matches!(
+            terminal.resume_recording_playback(),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.pause_recording_playback(),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.set_recording_playback_speed(2.0),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.advance_recording_playback(Duration::from_millis(1)),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.seek_recording_playback(Duration::ZERO),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+        assert!(matches!(
+            terminal.search_recording_playback("query", 10),
+            Err(RecordingPlaybackError::NotPlaybackSession)
+        ));
+
+        terminal.shutdown();
+        terminal.shutdown();
+    }
+
+    #[test]
+    fn terminal_recording_api_preserves_initialization_error() {
+        let expected = RecordingRuntimeError::InvalidConfig(
+            "recording worker could not be initialized".to_string(),
+        );
+        let terminal = test_terminal_with_recording_runtime(Err(expected.clone()));
+        let request = test_recording_start_request(PathBuf::from("unused.cast"));
+
+        assert_eq!(Err(expected.clone()), terminal.recording_snapshot());
+        assert_eq!(
+            Some(expected.clone()),
+            terminal
+                .build_output_recording_start_request(PathBuf::from("unused-output.cast"))
+                .err()
+        );
+        assert_eq!(
+            Err(expected.clone()),
+            terminal.start_output_recording(PathBuf::from("unused-output.cast"))
+        );
+        assert_eq!(Err(expected.clone()), terminal.start_recording(request));
+        assert_eq!(Err(expected.clone()), terminal.pause_recording());
+        assert_eq!(Err(expected.clone()), terminal.resume_recording());
+        assert_eq!(Err(expected.clone()), terminal.stop_recording());
+
+        terminal.shutdown();
+        terminal.shutdown();
     }
 
     #[test]
@@ -3000,12 +4456,81 @@ mod tests {
     }
 
     #[test]
-    fn reset_terminal_surface_clears_buffer_and_stale_connection_metadata() {
+    fn unknown_host_key_error_becomes_verification_request() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:test".to_string(),
+        };
+        let error = anyhow::Error::new(HostKeyRejection::Unknown {
+            identity: identity.clone(),
+            presented: presented.clone(),
+        })
+        .context("SSH connect failed");
+
+        let request =
+            host_key_verification_request(&error).expect("unknown key should require confirmation");
+
+        assert_eq!(request.identity, identity);
+        assert_eq!(request.presented, presented);
+    }
+
+    #[test]
+    fn changed_host_key_error_never_becomes_verification_request() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:new".to_string(),
+        };
+        let error = anyhow::Error::new(HostKeyRejection::Changed {
+            identity,
+            presented,
+            expected: vec![HostKeyDetails {
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:old".to_string(),
+            }],
+        });
+
+        assert!(host_key_verification_request(&error).is_none());
+    }
+
+    #[test]
+    fn create_term_shares_performance_metrics_with_event_proxy() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
+        let (_term, event_proxy, _colors, metrics) =
+            Terminal::create_term_with_metrics(80, 24, 10_000, event_tx, metrics);
+
+        assert!(Arc::ptr_eq(&metrics, &event_proxy.performance_metrics()));
+
+        event_proxy.send_event(AlacTermEvent::Wakeup);
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(1, snapshot.wakeup_requests);
+        assert_eq!(1, snapshot.wakeup_queued);
+    }
+
+    #[test]
+    fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let (term, _event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
+            80,
+            24,
+            10_000,
+            event_tx.clone(),
+            Arc::new(TerminalPerformanceMetrics::enabled()),
+        );
+        let shared_metrics = performance_metrics.clone();
+        let original_term = term.clone();
         let mut terminal = Terminal {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: None,
+            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            playback_runtime: None,
+            recording_session_id: "surface-reset-test-session".to_string(),
             title: "old title".to_string(),
             current_working_dir: Some("/tmp/project".to_string()),
             child_exited: Some(255),
@@ -3017,9 +4542,10 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
-            event_proxy: Some(event_proxy),
+            event_proxy: None,
             connection_id: Some(1),
             connection_name: Some("SSH".to_string()),
             init_commands: None,
@@ -3037,15 +4563,30 @@ mod tests {
         processor.advance(&mut *terminal.term.lock(), b"hello");
 
         assert_eq!(terminal.term.lock().grid()[Line(0)][Column(0)].c, 'h');
+        let previous = terminal.performance_snapshot();
+        terminal
+            .performance_metrics()
+            .record_render(std::time::Duration::from_millis(4), true);
+        let window = terminal.performance_window(&previous, std::time::Duration::from_secs(2));
+        assert_eq!(1, window.render_samples);
+        assert_eq!(4_000_000.0, window.average_render_ns);
 
-        terminal.reset_terminal_surface();
+        terminal.prepare_surface_for_reconnect();
+        assert!(Arc::ptr_eq(
+            &shared_metrics,
+            &terminal.performance_metrics()
+        ));
+        assert!(Arc::ptr_eq(&original_term, &terminal.term));
 
+        processor.advance(&mut *terminal.term.lock(), b" world");
         let term = terminal.term.lock();
-        assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'h');
+        assert_eq!(term.grid()[Line(0)][Column(5)].c, ' ');
+        assert_eq!(term.grid()[Line(0)][Column(6)].c, 'w');
         assert_eq!(term.columns(), 80);
         assert_eq!(term.screen_lines(), 24);
         drop(term);
-        assert_eq!(terminal.title(), "");
+        assert_eq!(terminal.title(), "old title");
         assert_eq!(terminal.current_working_dir(), None);
         assert_eq!(terminal.child_exited(), None);
     }
@@ -3053,7 +4594,8 @@ mod tests {
     #[test]
     fn recent_text_reads_tail_from_scrollback_without_viewport_offset() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, _event_proxy, _colors) = Terminal::create_term(20, 3, 10_000, event_tx);
+        let (term, _event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(20, 3, 10_000, event_tx);
         let mut processor: Processor<StdSyncHandler> = Processor::new();
         processor.advance(&mut *term.lock(), b"one\r\ntwo\r\nthree\r\nfour");
 
@@ -3066,12 +4608,18 @@ mod tests {
     }
 
     #[test]
-    fn terminal_scrollback_limit_can_be_updated_and_survives_surface_reset() {
+    fn terminal_scrollback_limit_can_be_updated_without_replacing_surface() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let (term, event_proxy, _colors, performance_metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
         let mut terminal = Terminal {
             term,
+            session_mode: TerminalSessionMode::Live,
+            performance_metrics,
             backend: None,
+            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            playback_runtime: None,
+            recording_session_id: "scrollback-test-session".to_string(),
             title: String::new(),
             current_working_dir: None,
             child_exited: None,
@@ -3083,6 +4631,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            pending_host_key_verification: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -3100,10 +4649,6 @@ mod tests {
         };
 
         terminal.set_scrollback_lines(250_000);
-        assert_eq!(250_000, terminal.scrollback_lines());
-
-        terminal.reset_terminal_surface();
-
         assert_eq!(250_000, terminal.scrollback_lines());
     }
 }

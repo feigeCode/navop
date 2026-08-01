@@ -9,11 +9,12 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputState},
+    notification::Notification,
     radio::Radio,
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
@@ -30,8 +31,9 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 use ssh::{
-    ChannelEvent, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth,
-    SshChannel, SshClient, SshConnectConfig, SshSessionManager,
+    ChannelEvent, HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyVerifier,
+    JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshChannel,
+    SshClient, SshConnectConfig, SshSessionManager,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -229,6 +231,62 @@ fn build_connection_test_signature(params: &SshParams) -> String {
     let mut hasher = DefaultHasher::new();
     format!("{:?}", params).hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConnectionTestHostKeyRequest {
+    identity: HostKeyIdentity,
+    presented: HostKeyDetails,
+}
+
+fn connection_test_host_key_request(error: &anyhow::Error) -> Option<ConnectionTestHostKeyRequest> {
+    error.chain().find_map(|cause| {
+        let HostKeyRejection::Unknown {
+            identity,
+            presented,
+        } = cause.downcast_ref::<HostKeyRejection>()?
+        else {
+            return None;
+        };
+        Some(ConnectionTestHostKeyRequest {
+            identity: identity.clone(),
+            presented: presented.clone(),
+        })
+    })
+}
+
+fn xquartz_installation_warning_required(
+    is_macos: bool,
+    enabling_x11: bool,
+    xquartz_installed: bool,
+) -> bool {
+    is_macos && enabling_x11 && !xquartz_installed
+}
+
+fn connection_test_needs_xquartz_warning(
+    is_macos: bool,
+    x11_requested: bool,
+    x11_available: bool,
+) -> bool {
+    is_macos && x11_requested && !x11_available
+}
+
+fn xquartz_is_installed() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        const XQUARTZ_PATHS: [&str; 2] = [
+            "/Applications/Utilities/XQuartz.app",
+            "/opt/X11/bin/Xquartz",
+        ];
+        XQUARTZ_PATHS
+            .iter()
+            .any(|path| std::path::Path::new(path).exists())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 fn format_connection_error(error: &anyhow::Error, host: &str) -> String {
@@ -1013,6 +1071,7 @@ impl SshFormWindow {
             jump_server,
             proxy,
             keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
         }
     }
@@ -1092,8 +1151,22 @@ impl SshFormWindow {
         cx.notify();
 
         let signature = build_connection_test_signature(&params);
+        self.start_connection_test(params, signature, HostKeyVerifier::default(), window, cx);
+    }
+
+    fn start_connection_test(
+        &mut self,
+        params: SshParams,
+        signature: String,
+        host_key_verifier: HostKeyVerifier,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.is_testing = true;
         let target_host = params.host.clone();
         let mut config = self.build_ssh_connect_config(&params);
+        config.host_key_verifier = host_key_verifier.clone();
+        let x11_requested = config.x11_forwarding;
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
         if let Some(jump_server) = &config.jump_server {
@@ -1113,8 +1186,9 @@ impl SshFormWindow {
             let spawn_result = Tokio::spawn_result(cx, async move {
                 let mut client = RusshClient::connect(config).await?;
                 let os_id = detect_remote_os_id(&mut client).await;
+                let x11_available = client.x11_forwarding().is_some();
                 client.disconnect().await?;
-                Ok::<Option<String>, anyhow::Error>(os_id)
+                Ok::<(Option<String>, bool), anyhow::Error>((os_id, x11_available))
             })
             .await;
 
@@ -1122,13 +1196,43 @@ impl SshFormWindow {
                 Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
                 _ => None,
             };
-            let test_result: Result<Option<String>, String> = match spawn_result {
-                Ok(task) => Ok(task),
-                Err(error) => Err(format_connection_error(&error, &target_host)),
+            let host_key_request = match &spawn_result {
+                Err(error) => connection_test_host_key_request(error),
+                Ok(_) => None,
             };
+            let (test_result, x11_unavailable): (Result<Option<String>, String>, bool) =
+                match spawn_result {
+                    Ok((os_id, x11_available)) => (
+                        Ok(os_id),
+                        connection_test_needs_xquartz_warning(
+                            cfg!(target_os = "macos"),
+                            x11_requested,
+                            x11_available,
+                        ),
+                    ),
+                    Err(error) => (Err(format_connection_error(&error, &target_host)), false),
+                };
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
+                if x11_unavailable {
+                    window.push_notification(
+                        Notification::warning(t!("SSH.xquartz_unavailable")),
+                        cx,
+                    );
+                }
                 let _ = this.update(cx, |this, cx| {
+                    if let Some(request) = host_key_request {
+                        this.show_connection_test_host_key_dialog(
+                            params,
+                            signature,
+                            host_key_verifier,
+                            request,
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+
                     this.is_testing = false;
                     if let Some(request) = jump_mfa_request {
                         this.apply_jump_mfa_request(request, signature.clone(), window, cx);
@@ -1147,6 +1251,169 @@ impl SshFormWindow {
             });
         })
         .detach();
+    }
+
+    fn show_connection_test_host_key_dialog(
+        &mut self,
+        params: SshParams,
+        signature: String,
+        host_key_verifier: HostKeyVerifier,
+        request: ConnectionTestHostKeyRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let form = cx.entity().downgrade();
+        let identity = request.identity.to_string();
+        let algorithm = request.presented.algorithm.clone();
+        let fingerprint = request.presented.fingerprint.clone();
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let reject_form = form.clone();
+            let accept_once_form = form.clone();
+            let accept_save_form = form.clone();
+
+            let reject_message = t!("SshSession.host_key_rejected").to_string();
+            let accept_once_params = params.clone();
+            let accept_once_signature = signature.clone();
+            let accept_once_identity = request.identity.clone();
+            let accept_once_details = request.presented.clone();
+            let accept_once_verifier = host_key_verifier.clone();
+            let accept_save_params = params.clone();
+            let accept_save_signature = signature.clone();
+            let accept_save_identity = request.identity.clone();
+            let accept_save_details = request.presented.clone();
+            let accept_save_verifier = host_key_verifier.clone();
+
+            dialog
+                .title(t!("SshSession.host_key_title").to_string())
+                .w(px(520.))
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(t!("SshSession.host_key_message").to_string())
+                        .child(
+                            v_flex()
+                                .gap_2()
+                                .p_3()
+                                .rounded_md()
+                                .bg(cx.theme().secondary)
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(150.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    t!("SshSession.host_key_identity").to_string(),
+                                                ),
+                                        )
+                                        .child(identity.clone()),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(150.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    t!("SshSession.host_key_algorithm").to_string(),
+                                                ),
+                                        )
+                                        .child(algorithm.clone()),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .w(px(150.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    t!("SshSession.host_key_fingerprint")
+                                                        .to_string(),
+                                                ),
+                                        )
+                                        .child(div().text_xs().child(fingerprint.clone())),
+                                ),
+                        ),
+                )
+                .footer(move |_, _, _window, _cx| {
+                    let reject_form = reject_form.clone();
+                    let accept_once_form = accept_once_form.clone();
+                    let accept_save_form = accept_save_form.clone();
+                    let reject_message = reject_message.clone();
+                    let accept_once_params = accept_once_params.clone();
+                    let accept_once_signature = accept_once_signature.clone();
+                    let accept_once_identity = accept_once_identity.clone();
+                    let accept_once_details = accept_once_details.clone();
+                    let accept_once_verifier = accept_once_verifier.clone();
+                    let accept_save_params = accept_save_params.clone();
+                    let accept_save_signature = accept_save_signature.clone();
+                    let accept_save_identity = accept_save_identity.clone();
+                    let accept_save_details = accept_save_details.clone();
+                    let accept_save_verifier = accept_save_verifier.clone();
+
+                    vec![
+                        Button::new("ssh-test-host-key-reject")
+                            .label(t!("SshSession.host_key_reject").to_string())
+                            .danger()
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let reject_message = reject_message.clone();
+                                let _ = reject_form.update(cx, |this, cx| {
+                                    this.is_testing = false;
+                                    this.last_tested_signature = None;
+                                    this.test_result = Some(Err(reject_message));
+                                    cx.notify();
+                                });
+                            })
+                            .into_any_element(),
+                        Button::new("ssh-test-host-key-accept-once")
+                            .label(t!("SshSession.host_key_accept_once").to_string())
+                            .ghost()
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let verifier = accept_once_verifier.clone().with_confirmed_key(
+                                    accept_once_identity.clone(),
+                                    accept_once_details.clone(),
+                                    false,
+                                );
+                                let params = accept_once_params.clone();
+                                let signature = accept_once_signature.clone();
+                                let _ = accept_once_form.update(cx, |this, cx| {
+                                    this.start_connection_test(
+                                        params, signature, verifier, window, cx,
+                                    );
+                                });
+                            })
+                            .into_any_element(),
+                        Button::new("ssh-test-host-key-accept-save")
+                            .label(t!("SshSession.host_key_accept_save").to_string())
+                            .primary()
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let verifier = accept_save_verifier.clone().with_confirmed_key(
+                                    accept_save_identity.clone(),
+                                    accept_save_details.clone(),
+                                    true,
+                                );
+                                let params = accept_save_params.clone();
+                                let signature = accept_save_signature.clone();
+                                let _ = accept_save_form.update(cx, |this, cx| {
+                                    this.start_connection_test(
+                                        params, signature, verifier, window, cx,
+                                    );
+                                });
+                            })
+                            .into_any_element(),
+                    ]
+                })
+                .overlay_closable(false)
+                .close_button(false)
+                .keyboard(false)
+        });
     }
 
     fn on_uninstall_shell_integration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1651,8 +1918,21 @@ impl SshFormWindow {
                             div().flex_shrink_0().child(
                                 Checkbox::new("x11-forwarding")
                                     .checked(self.x11_forwarding)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.x11_forwarding = !this.x11_forwarding;
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let enabling_x11 = !this.x11_forwarding;
+                                        this.x11_forwarding = enabling_x11;
+                                        if xquartz_installation_warning_required(
+                                            cfg!(target_os = "macos"),
+                                            enabling_x11,
+                                            xquartz_is_installed(),
+                                        ) {
+                                            window.push_notification(
+                                                Notification::warning(t!(
+                                                    "SSH.xquartz_not_installed"
+                                                )),
+                                                cx,
+                                            );
+                                        }
                                         cx.notify();
                                     })),
                             ),
@@ -2185,13 +2465,15 @@ impl Render for SshFormWindow {
 mod tests {
     use super::{
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
+        connection_test_host_key_request, connection_test_needs_xquartz_warning,
         format_connection_error, format_connection_error_for_platform, parse_os_release_id,
-        validate_save_state,
+        validate_save_state, xquartz_installation_warning_required,
     };
     use anyhow::Context as _;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
     use rust_i18n::t;
+    use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
     use std::sync::Arc;
 
     fn sample_params() -> SshParams {
@@ -2308,6 +2590,22 @@ mod tests {
     }
 
     #[test]
+    fn macos_x11_enable_warns_when_xquartz_is_not_installed() {
+        assert!(xquartz_installation_warning_required(true, true, false));
+        assert!(!xquartz_installation_warning_required(true, false, false));
+        assert!(!xquartz_installation_warning_required(true, true, true));
+        assert!(!xquartz_installation_warning_required(false, true, false));
+    }
+
+    #[test]
+    fn macos_connection_test_warns_when_requested_x11_is_unavailable() {
+        assert!(connection_test_needs_xquartz_warning(true, true, false));
+        assert!(!connection_test_needs_xquartz_warning(true, true, true));
+        assert!(!connection_test_needs_xquartz_warning(true, false, false));
+        assert!(!connection_test_needs_xquartz_warning(false, true, false));
+    }
+
+    #[test]
     fn connection_test_error_keeps_context_chain() {
         let error = Err::<(), _>(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -2319,6 +2617,44 @@ mod tests {
 
         assert!(message.contains("SSH connection failed"));
         assert!(message.contains("denied"));
+    }
+
+    #[test]
+    fn connection_test_unknown_host_key_requests_confirmation_through_context() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:test".to_string(),
+        };
+        let error = anyhow::Error::new(HostKeyRejection::Unknown {
+            identity: identity.clone(),
+            presented: presented.clone(),
+        })
+        .context("SSH connection failed");
+
+        let request = connection_test_host_key_request(&error)
+            .expect("an unknown host key should open the confirmation dialog");
+
+        assert_eq!(request.identity, identity);
+        assert_eq!(request.presented, presented);
+    }
+
+    #[test]
+    fn connection_test_changed_host_key_cannot_be_confirmed() {
+        let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
+        let error = anyhow::Error::new(HostKeyRejection::Changed {
+            identity,
+            presented: HostKeyDetails {
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:new".to_string(),
+            },
+            expected: vec![HostKeyDetails {
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:old".to_string(),
+            }],
+        });
+
+        assert!(connection_test_host_key_request(&error).is_none());
     }
 
     #[test]

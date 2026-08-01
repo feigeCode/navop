@@ -3,8 +3,10 @@ use super::*;
 impl TerminalView {
     pub(super) fn history_prompt_enabled(&self, cx: &App) -> bool {
         let terminal = self.terminal.read(cx);
+        let Some(connection_kind) = terminal.live_connection_kind() else {
+            return false;
+        };
         let mode = terminal.mode();
-        let connection_kind = terminal.connection_kind();
         history_prompt_available(
             self.autocomplete_enabled,
             connection_kind,
@@ -57,7 +59,7 @@ impl TerminalView {
         }
 
         let terminal = self.terminal.read(cx);
-        if terminal.connection_kind() != TerminalConnectionKind::Ssh {
+        if !live_ssh_feature_supported(terminal.live_connection_kind()) {
             return None;
         }
 
@@ -72,6 +74,9 @@ impl TerminalView {
         query: CdCompletionQuery,
         cx: &mut Context<Self>,
     ) {
+        if !self.is_live_ssh_terminal(cx) {
+            return;
+        }
         if let Some(directory_names) = self.cd_completion_cache.get(&query.parent_dir) {
             let matches = build_cd_completion_suggestions(&query, directory_names);
             self.history_prompt.set_matches(matches);

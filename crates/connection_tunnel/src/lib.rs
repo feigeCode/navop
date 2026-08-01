@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use ssh::{LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward};
+use ssh::{
+    HostKeyVerifier, LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward,
+};
 use thiserror::Error;
 use tokio::time::timeout;
 
@@ -206,6 +208,7 @@ async fn resolve_ssh_target(
         jump_server: None,
         proxy: proxy.map(ProxyTunnelConfig::to_ssh_proxy).transpose()?,
         keyboard_interactive_responder: None,
+        host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
     };
 
