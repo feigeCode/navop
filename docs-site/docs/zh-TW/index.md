@@ -1,15 +1,14 @@
 # Navop 使用說明
 
-Navop 將資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、Notes、AI 和團隊同步放在同一個原生工作區。
+Navop 是 AI 時代的開發和運維工作台，將資料庫、Redis、MongoDB、SSH、SFTP、終端、遠端桌面、Notes、AI 和團隊同步放在同一個原生工作區。
 
-## 目前版本：v0.9.3
+## 目前版本：v0.10.0
 
-[下載 Navop v0.9.3](https://github.com/feigeCode/navop/releases/tag/v0.9.3)
+[下載 Navop v0.10.0](https://github.com/feigeCode/navop/releases/tag/v0.10.0)
 
-- 按兩下首頁連線卡片或常駐連線側邊欄中的連線列，即可直接開啟連線。
-- 改善連線側邊欄的互動、層級和樣式，並移除 macOS 上多餘的標題分隔線。
-- 調整資料庫、Redis、MongoDB 與終端工具側邊欄，修正樹狀區域縮放和面板拖曳跳動。
-- 修正 macOS 下 RDP 視窗標題列問題，並改善 Intel Mac 對舊版 XQuartz 的相容性。
+- 新增 SSH 遠端/反向連接埠轉送（`ssh -R`），支援固定遠端連接埠和連接埠 `0` 自動分配。
+- AI Chat 統一執行模式現在會持久化儲存，重新開啟應用後仍保留上次選擇。
+- 最佳化 RDP 遠端游標移動，修正資料庫表格重新命名與 PostgreSQL 主鍵修改等問題。
 
 ## 從這裡開始
 

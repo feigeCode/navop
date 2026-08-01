@@ -1,15 +1,14 @@
 # Navop Usage Guide
 
-Navop brings databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
+Navop is the dev and ops workspace for the AI era, bringing databases, Redis, MongoDB, SSH, SFTP, terminals, remote desktops, Notes, AI, and team sync into one native workspace.
 
-## Current release: v0.9.3
+## Current release: v0.10.0
 
-[Download Navop v0.9.3](https://github.com/feigeCode/navop/releases/tag/v0.9.3)
+[Download Navop v0.10.0](https://github.com/feigeCode/navop/releases/tag/v0.10.0)
 
-- Double-click a home card or persistent-sidebar row to open a connection directly.
-- Refined connection-sidebar interaction, hierarchy, and styling, including removal of an unnecessary macOS title divider.
-- Improved database, Redis, MongoDB, and terminal sidebars while fixing tree resizing and panel-drag jumps.
-- Fixed macOS RDP title-bar behavior and improved compatibility with older XQuartz releases on Intel Macs.
+- Added SSH remote/reverse port forwarding (`ssh -R`) with fixed remote ports and automatic allocation via port `0`.
+- The unified execution mode in AI Chat is now persisted, preserving the selected mode after restarting the app.
+- Smoothed RDP remote cursor movement and fixed database table rename and PostgreSQL primary-key editing issues.
 
 ## Start here
 

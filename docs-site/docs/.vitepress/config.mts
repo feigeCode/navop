@@ -137,7 +137,7 @@ function localeTheme(options: LocaleOptions): DefaultTheme.LocaleConfig<DefaultT
 
 export default defineConfig({
   title: "Navop",
-  description: "Navop 数据库、SSH、SFTP、终端、Notes、远程桌面与 AI 工作台使用说明。",
+  description: "Navop — AI 时代的开发和运维工作台。数据库、SSH、SFTP、终端、Notes、远程桌面、AI Agent 与团队同步使用说明。",
   cleanUrls: true,
   lastUpdated: true,
   lang: "zh-CN",
@@ -171,7 +171,7 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: "https://github.com/feigeCode/navop" }],
     search: { provider: "local" },
     footer: {
-      message: "Navop · Native workspace for data and remote operations",
+      message: "Navop · AI 时代的开发和运维工作台",
       copyright: "Copyright © Navop"
     }
   }
