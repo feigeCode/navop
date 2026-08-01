@@ -580,23 +580,106 @@ impl PostgresDbConnection {
         false
     }
 
-    fn connection_error_context(code: Option<&str>) -> String {
-        match code {
-            Some(code) => format!("failed to connect: SQLSTATE {code}"),
-            None => "failed to connect".to_string(),
+    fn format_server_error_message(
+        message: &str,
+        code: &str,
+        detail: Option<&str>,
+        hint: Option<&str>,
+        where_: Option<&str>,
+        schema: Option<&str>,
+        table: Option<&str>,
+        column: Option<&str>,
+        datatype: Option<&str>,
+        constraint: Option<&str>,
+    ) -> String {
+        let mut formatted = format!("{message} (SQLSTATE {code})");
+
+        if let Some(detail) = detail.filter(|value| !value.is_empty()) {
+            formatted.push_str(&format!("\nDetail: {detail}"));
+        }
+        if let Some(hint) = hint.filter(|value| !value.is_empty()) {
+            formatted.push_str(&format!("\nHint: {hint}"));
+        }
+        if let Some(where_) = where_.filter(|value| !value.is_empty()) {
+            formatted.push_str(&format!("\nWhere: {where_}"));
+        }
+
+        let context = [
+            ("schema", schema),
+            ("table", table),
+            ("column", column),
+            ("datatype", datatype),
+            ("constraint", constraint),
+        ]
+        .into_iter()
+        .filter_map(|(label, value)| {
+            value
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("{label}: {value}"))
+        })
+        .collect::<Vec<_>>();
+        if !context.is_empty() {
+            formatted.push_str(&format!("\nContext: {}", context.join(", ")));
+        }
+
+        formatted
+    }
+
+    fn postgres_error_message(error: &tokio_postgres::Error) -> String {
+        let Some(db_error) = error.as_db_error() else {
+            return error.to_string();
+        };
+
+        Self::format_server_error_message(
+            db_error.message(),
+            db_error.code().code(),
+            db_error.detail(),
+            db_error.hint(),
+            db_error.where_(),
+            db_error.schema(),
+            db_error.table(),
+            db_error.column(),
+            db_error.datatype(),
+            db_error.constraint(),
+        )
+    }
+
+    fn postgres_connection_error(context: &str, error: tokio_postgres::Error) -> DbError {
+        let message = format!("{context}: {}", Self::postgres_error_message(&error));
+        DbError::Connection {
+            message,
+            source: Some(Box::new(error)),
+        }
+    }
+
+    fn postgres_query_error(context: &str, error: tokio_postgres::Error) -> DbError {
+        let message = format!("{context}: {}", Self::postgres_error_message(&error));
+        DbError::Query {
+            message,
+            source: Some(Box::new(error)),
+        }
+    }
+
+    fn postgres_transaction_error(context: &str, error: tokio_postgres::Error) -> DbError {
+        let message = format!("{context}: {}", Self::postgres_error_message(&error));
+        DbError::Transaction {
+            message,
+            source: Some(Box::new(error)),
         }
     }
 
     fn connection_error(error: tokio_postgres::Error) -> DbError {
-        let context = Self::connection_error_context(error.code().map(|code| code.code()));
-        DbError::connection_with_source(context, error)
+        Self::postgres_connection_error("failed to connect", error)
     }
 
     async fn connect_without_tls(pg_config: &Config) -> Result<Client, tokio_postgres::Error> {
         let (client, connection) = pg_config.connect(NoTls).await?;
         tokio::spawn(async move {
             if let Err(error) = connection.await {
-                error!("[PostgreSQL] Connection error: {}", error);
+                error!(
+                    "[PostgreSQL] Connection error: {}",
+                    Self::postgres_error_message(&error)
+                );
             }
         });
         Ok(client)
@@ -609,7 +692,10 @@ impl PostgresDbConnection {
         let (client, connection) = pg_config.connect(tls_connector).await?;
         tokio::spawn(async move {
             if let Err(error) = connection.await {
-                error!("[PostgreSQL] Connection error: {}", error);
+                error!(
+                    "[PostgreSQL] Connection error: {}",
+                    Self::postgres_error_message(&error)
+                );
             }
         });
         Ok(client)
@@ -681,7 +767,10 @@ impl DbConnection for PostgresDbConnection {
                 let client = Self::connect_without_tls(&pg_config)
                     .await
                     .map_err(|error| {
-                        error!("[PostgreSQL] Connection failed: {}", error);
+                        error!(
+                            "[PostgreSQL] Connection failed: {}",
+                            Self::postgres_error_message(&error)
+                        );
                         Self::connection_error(error)
                     })?;
                 info!(
@@ -707,21 +796,22 @@ impl DbConnection for PostgresDbConnection {
                         client
                     }
                     Err(error) if Self::should_retry_without_tls(&error) => {
+                        let error_message = Self::postgres_error_message(&error);
                         warn!(
                             "[PostgreSQL] TLS connect failed in prefer mode, retrying without TLS: {}",
-                            error
+                            error_message
                         );
                         info!(
                             "[PostgreSQL][Timing] connect_with_tls_failed={}ms ssl_mode=Prefer reason={}",
                             tls_connect_started.elapsed().as_millis(),
-                            error
+                            error_message
                         );
                         let retry_started = Instant::now();
                         let client = Self::connect_without_tls(&pg_config).await.map_err(
                             |retry_error| {
                                 error!(
                                     "[PostgreSQL] Non-TLS retry after TLS failure also failed: {}",
-                                    retry_error
+                                    Self::postgres_error_message(&retry_error)
                                 );
                                 Self::connection_error(retry_error)
                             },
@@ -733,7 +823,10 @@ impl DbConnection for PostgresDbConnection {
                         client
                     }
                     Err(error) => {
-                        error!("[PostgreSQL] Connection failed: {}", error);
+                        error!(
+                            "[PostgreSQL] Connection failed: {}",
+                            Self::postgres_error_message(&error)
+                        );
                         return Err(Self::connection_error(error));
                     }
                 }
@@ -750,7 +843,10 @@ impl DbConnection for PostgresDbConnection {
                 let client = Self::connect_with_tls(&pg_config, tls_connector)
                     .await
                     .map_err(|error| {
-                        error!("[PostgreSQL] Connection failed: {}", error);
+                        error!(
+                            "[PostgreSQL] Connection failed: {}",
+                            Self::postgres_error_message(&error)
+                        );
                         Self::connection_error(error)
                     })?;
                 info!(
@@ -811,8 +907,11 @@ impl DbConnection for PostgresDbConnection {
         if options.transactional {
             debug!("[PostgreSQL] Starting transaction...");
             let tx = client.transaction().await.map_err(|e| {
-                error!("[PostgreSQL] Failed to begin transaction: {}", e);
-                DbError::transaction_with_source("failed to begin transaction", e)
+                error!(
+                    "[PostgreSQL] Failed to begin transaction: {}",
+                    Self::postgres_error_message(&e)
+                );
+                Self::postgres_transaction_error("failed to begin transaction", e)
             })?;
 
             for (idx, sql) in statements.iter().enumerate() {
@@ -860,11 +959,12 @@ impl DbConnection for PostgresDbConnection {
                                 Err(e) => {
                                     error!(
                                         "[PostgreSQL] TX execute failed: {}, SQL: {}",
-                                        e, sql_preview
+                                        Self::postgres_error_message(&e),
+                                        sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
                                         sql: sql_to_execute.to_string(),
-                                        message: e.to_string(),
+                                        message: Self::postgres_error_message(&e),
                                     })
                                 }
                             }
@@ -887,11 +987,12 @@ impl DbConnection for PostgresDbConnection {
                                 Err(e) => {
                                     error!(
                                         "[PostgreSQL] TX query failed: {}, SQL: {}",
-                                        e, sql_preview
+                                        Self::postgres_error_message(&e),
+                                        sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
                                         sql: sql_to_execute.to_string(),
-                                        message: e.to_string(),
+                                        message: Self::postgres_error_message(&e),
                                     })
                                 }
                             }
@@ -900,11 +1001,12 @@ impl DbConnection for PostgresDbConnection {
                     Err(e) => {
                         error!(
                             "[PostgreSQL] TX prepare failed: {}, SQL: {}",
-                            e, sql_preview
+                            Self::postgres_error_message(&e),
+                            sql_preview
                         );
                         SqlResult::Error(SqlErrorInfo {
                             sql: sql_to_execute.to_string(),
-                            message: e.to_string(),
+                            message: Self::postgres_error_message(&e),
                         })
                     }
                 };
@@ -926,15 +1028,21 @@ impl DbConnection for PostgresDbConnection {
             if has_error {
                 debug!("[PostgreSQL] Rolling back transaction...");
                 tx.rollback().await.map_err(|e| {
-                    error!("[PostgreSQL] Failed to rollback: {}", e);
-                    DbError::transaction_with_source("failed to rollback", e)
+                    error!(
+                        "[PostgreSQL] Failed to rollback: {}",
+                        Self::postgres_error_message(&e)
+                    );
+                    Self::postgres_transaction_error("failed to rollback", e)
                 })?;
                 debug!("[PostgreSQL] Transaction rolled back");
             } else {
                 debug!("[PostgreSQL] Committing transaction...");
                 tx.commit().await.map_err(|e| {
-                    error!("[PostgreSQL] Failed to commit: {}", e);
-                    DbError::transaction_with_source("failed to commit", e)
+                    error!(
+                        "[PostgreSQL] Failed to commit: {}",
+                        Self::postgres_error_message(&e)
+                    );
+                    Self::postgres_transaction_error("failed to commit", e)
                 })?;
                 debug!("[PostgreSQL] Transaction committed");
             }
@@ -970,11 +1078,12 @@ impl DbConnection for PostgresDbConnection {
                         Err(e) => {
                             error!(
                                 "[PostgreSQL] Failed to change search path: {}, SQL: {}",
-                                e, sql_preview
+                                Self::postgres_error_message(&e),
+                                sql_preview
                             );
                             results.push(SqlResult::Error(SqlErrorInfo {
                                 sql: sql.to_string(),
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             }));
 
                             if options.stop_on_error {
@@ -1026,11 +1135,12 @@ impl DbConnection for PostgresDbConnection {
                                 Err(e) => {
                                     error!(
                                         "[PostgreSQL] Execute failed: {}, SQL: {}",
-                                        e, sql_preview
+                                        Self::postgres_error_message(&e),
+                                        sql_preview
                                     );
                                     results.push(SqlResult::Error(SqlErrorInfo {
                                         sql: sql_to_execute.to_string(),
-                                        message: e.to_string(),
+                                        message: Self::postgres_error_message(&e),
                                     }));
 
                                     if options.stop_on_error {
@@ -1061,11 +1171,12 @@ impl DbConnection for PostgresDbConnection {
                                 Err(e) => {
                                     error!(
                                         "[PostgreSQL] Query failed: {}, SQL: {}",
-                                        e, sql_preview
+                                        Self::postgres_error_message(&e),
+                                        sql_preview
                                     );
                                     results.push(SqlResult::Error(SqlErrorInfo {
                                         sql: sql_to_execute.to_string(),
-                                        message: e.to_string(),
+                                        message: Self::postgres_error_message(&e),
                                     }));
 
                                     if options.stop_on_error {
@@ -1080,10 +1191,14 @@ impl DbConnection for PostgresDbConnection {
                         }
                     }
                     Err(e) => {
-                        error!("[PostgreSQL] Prepare failed: {}, SQL: {}", e, sql_preview);
+                        error!(
+                            "[PostgreSQL] Prepare failed: {}, SQL: {}",
+                            Self::postgres_error_message(&e),
+                            sql_preview
+                        );
                         results.push(SqlResult::Error(SqlErrorInfo {
                             sql: sql_to_execute.to_string(),
-                            message: e.to_string(),
+                            message: Self::postgres_error_message(&e),
                         }));
 
                         if options.stop_on_error {
@@ -1138,10 +1253,14 @@ impl DbConnection for PostgresDbConnection {
                             ))
                         }
                         Err(e) => {
-                            error!("[PostgreSQL] Execute failed: {}, SQL: {}", e, sql_preview);
+                            error!(
+                                "[PostgreSQL] Execute failed: {}, SQL: {}",
+                                Self::postgres_error_message(&e),
+                                sql_preview
+                            );
                             Ok(SqlResult::Error(SqlErrorInfo {
                                 sql: query_string,
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             }))
                         }
                     }
@@ -1162,20 +1281,28 @@ impl DbConnection for PostgresDbConnection {
                             ))
                         }
                         Err(e) => {
-                            error!("[PostgreSQL] Query failed: {}, SQL: {}", e, sql_preview);
+                            error!(
+                                "[PostgreSQL] Query failed: {}, SQL: {}",
+                                Self::postgres_error_message(&e),
+                                sql_preview
+                            );
                             Ok(SqlResult::Error(SqlErrorInfo {
                                 sql: query_string,
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             }))
                         }
                     }
                 }
             }
             Err(e) => {
-                error!("[PostgreSQL] Prepare failed: {}, SQL: {}", e, sql_preview);
+                error!(
+                    "[PostgreSQL] Prepare failed: {}, SQL: {}",
+                    Self::postgres_error_message(&e),
+                    sql_preview
+                );
                 Ok(SqlResult::Error(SqlErrorInfo {
                     sql: query_string,
-                    message: e.to_string(),
+                    message: Self::postgres_error_message(&e),
                 }))
             }
         }
@@ -1190,8 +1317,11 @@ impl DbConnection for PostgresDbConnection {
             .query_one("SELECT current_database()", &[])
             .await
             .map_err(|e| {
-                error!("[PostgreSQL] Failed to get current database: {}", e);
-                DbError::query_with_source("failed to get current database", e)
+                error!(
+                    "[PostgreSQL] Failed to get current database: {}",
+                    Self::postgres_error_message(&e)
+                );
+                Self::postgres_query_error("failed to get current database", e)
             })?;
 
         let db = row.try_get::<_, Option<String>>(0).ok().flatten();
@@ -1216,8 +1346,12 @@ impl DbConnection for PostgresDbConnection {
         let sql = format!("SET search_path TO \"{}\"", schema.replace("\"", "\"\""));
         debug!("[PostgreSQL] Executing: {}", sql);
         client.execute(&sql, &[]).await.map_err(|e| {
-            error!("[PostgreSQL] Failed to switch schema: {}, SQL: {}", e, sql);
-            DbError::query_with_source("failed to switch schema", e)
+            error!(
+                "[PostgreSQL] Failed to switch schema: {}, SQL: {}",
+                Self::postgres_error_message(&e),
+                sql
+            );
+            Self::postgres_query_error("failed to switch schema", e)
         })?;
 
         info!("[PostgreSQL] Switched to schema: {}", schema);
@@ -1252,8 +1386,11 @@ impl DbConnection for PostgresDbConnection {
             if options.transactional {
                 debug!("[PostgreSQL] Starting transaction for streaming...");
                 let tx = client.transaction().await.map_err(|e| {
-                    error!("[PostgreSQL] Failed to begin transaction: {}", e);
-                    DbError::transaction_with_source("failed to begin transaction", e)
+                    error!(
+                        "[PostgreSQL] Failed to begin transaction: {}",
+                        Self::postgres_error_message(&e)
+                    );
+                    Self::postgres_transaction_error("failed to begin transaction", e)
                 })?;
 
                 while let Some(stmt_result) = parser.next() {
@@ -1308,11 +1445,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming TX execute failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1330,11 +1468,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming TX query failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1343,11 +1482,12 @@ impl DbConnection for PostgresDbConnection {
                         Err(e) => {
                             error!(
                                 "[PostgreSQL] Streaming TX prepare failed: {}, SQL: {}",
-                                e, sql_preview
+                                Self::postgres_error_message(&e),
+                                sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
                                 sql: sql_to_execute.to_string(),
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             })
                         }
                     };
@@ -1370,9 +1510,27 @@ impl DbConnection for PostgresDbConnection {
                 }
 
                 if has_error {
-                    let _ = tx.rollback().await;
+                    tx.rollback().await.map_err(|e| {
+                        error!(
+                            "[PostgreSQL] Failed to rollback streaming transaction: {}",
+                            Self::postgres_error_message(&e)
+                        );
+                        Self::postgres_transaction_error(
+                            "failed to rollback streaming transaction",
+                            e,
+                        )
+                    })?;
                 } else {
-                    let _ = tx.commit().await;
+                    tx.commit().await.map_err(|e| {
+                        error!(
+                            "[PostgreSQL] Failed to commit streaming transaction: {}",
+                            Self::postgres_error_message(&e)
+                        );
+                        Self::postgres_transaction_error(
+                            "failed to commit streaming transaction",
+                            e,
+                        )
+                    })?;
                 }
             } else {
                 while let Some(stmt_result) = parser.next() {
@@ -1429,11 +1587,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming execute failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1451,11 +1610,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming query failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1464,11 +1624,12 @@ impl DbConnection for PostgresDbConnection {
                         Err(e) => {
                             error!(
                                 "[PostgreSQL] Streaming prepare failed: {}, SQL: {}",
-                                e, sql_preview
+                                Self::postgres_error_message(&e),
+                                sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
                                 sql: sql_to_execute.to_string(),
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             })
                         }
                     };
@@ -1499,8 +1660,11 @@ impl DbConnection for PostgresDbConnection {
             if options.transactional {
                 debug!("[PostgreSQL] Starting transaction for streaming...");
                 let tx = client.transaction().await.map_err(|e| {
-                    error!("[PostgreSQL] Failed to begin transaction: {}", e);
-                    DbError::transaction_with_source("failed to begin transaction", e)
+                    error!(
+                        "[PostgreSQL] Failed to begin transaction: {}",
+                        Self::postgres_error_message(&e)
+                    );
+                    Self::postgres_transaction_error("failed to begin transaction", e)
                 })?;
 
                 let mut has_error = false;
@@ -1537,11 +1701,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming TX execute failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1559,11 +1724,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming TX query failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1572,11 +1738,12 @@ impl DbConnection for PostgresDbConnection {
                         Err(e) => {
                             error!(
                                 "[PostgreSQL] Streaming TX prepare failed: {}, SQL: {}",
-                                e, sql_preview
+                                Self::postgres_error_message(&e),
+                                sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
                                 sql: sql_to_execute.to_string(),
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             })
                         }
                     };
@@ -1597,9 +1764,27 @@ impl DbConnection for PostgresDbConnection {
                 }
 
                 if has_error {
-                    let _ = tx.rollback().await;
+                    tx.rollback().await.map_err(|e| {
+                        error!(
+                            "[PostgreSQL] Failed to rollback streaming transaction: {}",
+                            Self::postgres_error_message(&e)
+                        );
+                        Self::postgres_transaction_error(
+                            "failed to rollback streaming transaction",
+                            e,
+                        )
+                    })?;
                 } else {
-                    let _ = tx.commit().await;
+                    tx.commit().await.map_err(|e| {
+                        error!(
+                            "[PostgreSQL] Failed to commit streaming transaction: {}",
+                            Self::postgres_error_message(&e)
+                        );
+                        Self::postgres_transaction_error(
+                            "failed to commit streaming transaction",
+                            e,
+                        )
+                    })?;
                 }
             } else {
                 for (index, sql) in statements.into_iter().enumerate() {
@@ -1634,11 +1819,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming execute failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1656,11 +1842,12 @@ impl DbConnection for PostgresDbConnection {
                                     Err(e) => {
                                         error!(
                                             "[PostgreSQL] Streaming query failed: {}, SQL: {}",
-                                            e, sql_preview
+                                            Self::postgres_error_message(&e),
+                                            sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
                                             sql: sql_to_execute.to_string(),
-                                            message: e.to_string(),
+                                            message: Self::postgres_error_message(&e),
                                         })
                                     }
                                 }
@@ -1669,11 +1856,12 @@ impl DbConnection for PostgresDbConnection {
                         Err(e) => {
                             error!(
                                 "[PostgreSQL] Streaming prepare failed: {}, SQL: {}",
-                                e, sql_preview
+                                Self::postgres_error_message(&e),
+                                sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
                                 sql: sql_to_execute.to_string(),
-                                message: e.to_string(),
+                                message: Self::postgres_error_message(&e),
                             })
                         }
                     };
@@ -1878,14 +2066,50 @@ mod tests {
     }
 
     #[test]
-    fn connection_error_context_includes_postgres_sqlstate() {
-        assert_eq!(
-            "failed to connect: SQLSTATE 28P01",
-            PostgresDbConnection::connection_error_context(Some("28P01"))
+    fn server_error_message_includes_postgres_diagnostics() {
+        let message = PostgresDbConnection::format_server_error_message(
+            "column \"id\" of relation \"test_no_pk\" contains null values",
+            "23502",
+            Some("Failing row contains (null, alice)."),
+            Some("Backfill the column before adding the primary key."),
+            Some("SQL statement \"ALTER TABLE test_no_pk ADD PRIMARY KEY (id)\""),
+            Some("public"),
+            Some("test_no_pk"),
+            Some("id"),
+            Some("integer"),
+            Some("test_no_pk_pkey"),
         );
+
         assert_eq!(
-            "failed to connect",
-            PostgresDbConnection::connection_error_context(None)
+            concat!(
+                "column \"id\" of relation \"test_no_pk\" contains null values ",
+                "(SQLSTATE 23502)\n",
+                "Detail: Failing row contains (null, alice).\n",
+                "Hint: Backfill the column before adding the primary key.\n",
+                "Where: SQL statement \"ALTER TABLE test_no_pk ADD PRIMARY KEY (id)\"\n",
+                "Context: schema: public, table: test_no_pk, column: id, datatype: integer, ",
+                "constraint: test_no_pk_pkey"
+            ),
+            message
+        );
+    }
+
+    #[test]
+    fn server_error_message_omits_missing_diagnostics() {
+        assert_eq!(
+            "could not create unique index (SQLSTATE 23505)",
+            PostgresDbConnection::format_server_error_message(
+                "could not create unique index",
+                "23505",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         );
     }
 }
