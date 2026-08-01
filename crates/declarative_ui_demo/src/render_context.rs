@@ -15,6 +15,8 @@ use crate::{
     input_cache::{InputCache, InputEnvironment, InputRequest},
     parse_classes,
     slider_cache::{SliderCache, SliderEnvironment, SliderRequest},
+    table_cache::{TableCache, TableEnvironment, TableRequest},
+    tree_cache::{TreeCache, TreeEnvironment, TreeRequest},
 };
 
 pub(crate) type ActionDispatcher = Rc<dyn Fn(ActionEvent, &mut App)>;
@@ -24,6 +26,8 @@ pub(crate) struct RenderEnvironment<'a> {
     pub(crate) registry: &'a ComponentRegistry,
     pub(crate) input_cache: &'a mut InputCache,
     pub(crate) slider_cache: &'a mut SliderCache,
+    pub(crate) tree_cache: &'a mut TreeCache,
+    pub(crate) table_cache: &'a mut TableCache,
     pub(crate) runtime: Entity<Runtime>,
     pub(crate) dispatcher: ActionDispatcher,
     pub(crate) diagnostics: &'a mut Diagnostics,
@@ -36,6 +40,8 @@ pub struct RenderContext<'a> {
     registry: &'a ComponentRegistry,
     input_cache: &'a mut InputCache,
     slider_cache: &'a mut SliderCache,
+    tree_cache: &'a mut TreeCache,
+    table_cache: &'a mut TableCache,
     runtime: Entity<Runtime>,
     dispatcher: ActionDispatcher,
     diagnostics: &'a mut Diagnostics,
@@ -50,6 +56,8 @@ impl<'a> RenderContext<'a> {
             registry: environment.registry,
             input_cache: environment.input_cache,
             slider_cache: environment.slider_cache,
+            tree_cache: environment.tree_cache,
+            table_cache: environment.table_cache,
             runtime: environment.runtime,
             dispatcher: environment.dispatcher,
             diagnostics: environment.diagnostics,
@@ -91,6 +99,15 @@ impl<'a> RenderContext<'a> {
         self.runtime.clone()
     }
 
+    /// Read a Runtime state value by key during render.
+    ///
+    /// Returns the string value if the key exists, or `None` if it is not set.
+    /// Components use this to read JSON arrays bound via `data-items` and other
+    /// data-driven attributes.
+    pub fn get_state(&self, key: &str) -> Option<String> {
+        self.runtime.read(self.cx).get(key).map(str::to_owned)
+    }
+
     pub(crate) fn state_dispatcher(&self) -> StateDispatcher {
         let runtime = self.runtime.clone();
         Rc::new(move |key, value, cx| {
@@ -121,6 +138,26 @@ impl<'a> RenderContext<'a> {
             cx: self.cx,
         };
         self.slider_cache.resolve(request, environment)
+    }
+
+    pub(crate) fn render_tree(&mut self, request: TreeRequest) -> gpui_component::tree::Tree {
+        let environment = TreeEnvironment {
+            state_dispatcher: self.state_dispatcher(),
+            action_dispatcher: self.dispatcher.clone(),
+            cx: self.cx,
+        };
+        self.tree_cache.render_tree(request, environment)
+    }
+
+    pub(crate) fn render_table(
+        &mut self,
+        request: TableRequest,
+    ) -> gpui_component::table::DataTable<crate::table_cache::JsonTableDelegate> {
+        let environment = TableEnvironment {
+            window: self.window,
+            cx: self.cx,
+        };
+        self.table_cache.render_table(request, environment)
     }
 
     pub(crate) fn scroll_handle(&mut self, props: &ComponentProps) -> ScrollHandle {

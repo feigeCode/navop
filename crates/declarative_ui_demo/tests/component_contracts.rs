@@ -75,6 +75,9 @@ fn registry_contains_defaults_and_accepts_custom_components() {
         "resizable",
         "resizable-panel",
         "scroll",
+        "tree",
+        "tree-node",
+        "data-list",
     ] {
         assert!(registry.contains(tag), "missing default component: {tag}");
     }

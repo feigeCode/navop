@@ -144,6 +144,15 @@ fn component_bindings_target_native_attributes_without_destroying_labels() {
                 <span>Summary</span>
                 <collapsible-content>Details</collapsible-content>
             </collapsible>
+            <tree id="file-tree" bind="selected_file">
+                <tree-node label="src" expanded>
+                    <tree-node label="main.rs"></tree-node>
+                    <tree-node label="lib.rs"></tree-node>
+                </tree-node>
+                <tree-node label="Cargo.toml"></tree-node>
+            </tree>
+            <data-list id="rows" bind="selected_row" data-count="100">
+            </data-list>
             <span bind="status">stale fallback</span>
         </div>
         "#,
@@ -162,6 +171,8 @@ fn component_bindings_target_native_attributes_without_destroying_labels() {
     state.set("volume", "35");
     state.set("open_sections", "[0,1]");
     state.set("details_open", "true");
+    state.set("selected_file", "lib.rs");
+    state.set("selected_row", "row-42");
     state.set("status", "ready");
 
     let resolution = resolve_bindings_checked(&template, &state);
@@ -191,7 +202,20 @@ fn component_bindings_target_native_attributes_without_destroying_labels() {
     );
     assert_eq!(Some("true"), element_attr(&children[11], "open"));
     assert_eq!("SummaryDetails", children[11].text_content());
-    assert_eq!("ready", children[12].text_content());
+    assert_eq!(Some("lib.rs"), element_attr(&children[12], "selected-id"));
+    // Tree nodes use the `label` attribute, not text children, so
+    // text_content() is intentionally empty. Verify that the structural
+    // children survive the binding resolution instead.
+    let tree_children = &children[12].element().expect("tree element").children;
+    let tree_node_labels: Vec<&str> = tree_children
+        .iter()
+        .filter_map(|c| c.element())
+        .filter(|e| e.tag.eq_ignore_ascii_case("tree-node"))
+        .map(|e| e.attr("label").unwrap_or(""))
+        .collect();
+    assert_eq!(vec!["src", "Cargo.toml"], tree_node_labels);
+    assert_eq!(Some("row-42"), element_attr(&children[13], "selected-id"));
+    assert_eq!("ready", children[14].text_content());
 }
 
 fn element_attr<'a>(node: &'a VNode, name: &str) -> Option<&'a str> {

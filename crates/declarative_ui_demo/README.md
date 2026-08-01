@@ -51,6 +51,11 @@ GPUI Element / stateful Entity
   resize state 的 `ResizablePanelGroup` / `ResizablePanel`；
 - 原生 `ScrollHandle` + `Scrollbar` 容器，要求显式 stable `id`，支持轴向、显示模式
   和有限正像素 viewport 尺寸校验；
+- 原生虚拟化 `Tree`，通过 `<tree>` + 嵌套 `<tree-node>` 描述层级结构，内部使用
+  `uniform_list` 只渲染可见行；缓存 `Entity<TreeState>` 并支持 `selected-id`
+  字符串 binding 和 Action 写回；
+- 原生虚拟化 `<data-list>`，按 `data-count`（上限 100 000）生成平铺大数据行，
+  `data-label` 模板支持 `{n}` 占位符，复用 `Tree` 的虚拟化渲染；
 - `Pagination`、`Rating`、`Tabs`、`Stepper` 的数值 attribute binding、点击写回
   和结构化 Action；
 - `SliderEvent::Change` 连续写回 binding，`SliderEvent::Release` 在最终写回后派发
@@ -69,22 +74,27 @@ cargo run -p declarative-ui-demo
 Demo 展示：
 
 - strict 模式编译受限 HTML；
-- 固定 header 与使用 `overflow-y-scroll` 的可滚动内容区，以及带原生 scrollbar
-  overlay 的 `<scroll>` viewport；
+- 复杂的数据库运维控制台布局：品牌 `header` / `img`、状态标签、操作
+  `nav`、语义化 `main` / `section` / `article` 与总结 `footer`；
+- 整页使用带稳定 `ScrollHandle` 和始终可见 scrollbar overlay 的原生
+  `<scroll>` viewport，Audit Log 中再嵌套一个独立的原生滚动区；
 - 两列原生 `Form` / `Field`，以及 username、email、notes 双向文本绑定；
 - `<input type="password" readonly>` 映射的 masked Release token；
-- `<input type="checkbox">`、原生 `Switch`、`<input type="radio">` 的字符串布尔
+- HTML input adapter 与显式原生 `Checkbox` / `Switch` / `Radio` 的字符串布尔
   状态双向绑定；
 - bound `Alert`、`Progress`、`Badge`，以及原生 `Spinner`、`Skeleton`、
-  `Separator`；
-- 由原生 table primitives 组成的完整静态表格，cell 内嵌 `Tag` 和 `Button`；
+  `Separator` 与语义别名 `Divider`；
+- 由原生 table primitives 组成的 123 行大数据量交互表格：运行时生成 120 个租户
+  target，加上 3 个重点 target，包含 `caption`、`thead`、`tbody`、`tfoot`，
+  并在每一行内嵌状态 `Tag` 和 `Inspect` `Button`；
 - 静态声明式列表容器和可交互原生 `ListItem` rows；
 - `Avatar` / `AvatarGroup`、强结构 `DescriptionList`，以及 action-only
   `Breadcrumb`；
 - 原生 `Kbd` 快捷键展示；
-- bound `Pagination`、`Rating`、`<input type="range">`、`Tabs`、`Stepper`；
-  选择变化先写回 state，再让 `selection-changed` handler 读取新值；range adapter
-  使用单值 Slider，在拖动时连续写回，release 时派发 Action；
+- bound `Pagination`、`Rating`、显式 `<slider>`、`<input type="range">`
+  adapter、`Tabs`、`Stepper`；选择变化先写回 state，再让
+  `selection-changed` handler 读取新值；两种 slider 声明都在拖动时连续写回，
+  release 时派发 Action；
 - bound `Accordion`，支持同时展开多项、canonical JSON 写回，并让
   `accordion-changed` handler 读取已经提交的新 binding；
 - 由 Runtime Action 控制 `open` binding 的 `Collapsible`，以及可直接拖动的两栏
@@ -96,9 +106,14 @@ Demo 展示：
   `selection-changed` / `accordion-changed` / `toggle-details` / `navigate` 到 Rust
   handler 的结构化派发；
 - `data-record` / `data-connection` 形成的 Action payload；
+- 可选择节点的原生虚拟化 `Tree`，以及生成 5,000 行并通过
+  `uniform_list` 虚拟渲染的 `DataList`；
 - 通过 registry 注册的自定义 `<sql-editor />`；
 - Action 一次提交多个 state 变化后自动 reconcile；save 会同步更新状态
   Alert、进度和计数 Badge。
+- 单元测试枚举并校验默认 registry 的全部 61 个 tag 都在该页面源模板中实际出现，
+  同时 strict 编译测试保证结构与属性合同持续有效；大数据量测试要求最终页面至少
+  包含 100 个 table row。
 
 定向质量门禁：
 
@@ -356,6 +371,7 @@ handler。
 | `tabs`、`stepper` | `selected-index` attribute | 保留强结构 child |
 | `accordion` | `open-indices` attribute | 保留强结构 `accordion-item` children |
 | `collapsible` | `open` attribute | 保留 summary 与强结构 content child |
+| `tree`、`data-list` | `selected-id` attribute | 保留强结构 `tree-node` children |
 | 其他允许 `bind` 的标签 | 文本 children | 原有 children 被 state 文本替换 |
 
 因此：
@@ -375,10 +391,18 @@ handler。
     <button action="toggle-details">Toggle details</button>
     <collapsible-content>Advanced details</collapsible-content>
 </collapsible>
+<tree id="file-tree" bind="selected_file">
+    <tree-node label="src" expanded>
+        <tree-node label="main.rs"></tree-node>
+        <tree-node label="lib.rs"></tree-node>
+    </tree-node>
+    <tree-node label="Cargo.toml"></tree-node>
+</tree>
+<data-list id="rows" data-count="1000" bind="selected_row"></data-list>
 ```
 
 分别解析为对应的原生 attribute，checkbox label、Badge child 以及 Tabs 的强结构
-children、Accordion items / Collapsible content 不会被清空。目标 attribute
+children、Accordion items / Collapsible content / Tree nodes 不会被清空。目标 attribute
 必须只有一个来源；
 下列组合都是 compile error：
 
@@ -389,7 +413,8 @@ children、Accordion items / Collapsible content 不会被清空。目标 attrib
 - `pagination`：`bind` 与显式 `current-page`；
 - `tabs` / `stepper`：`bind` 与显式 `selected-index`；
 - `accordion`：`bind` 与显式 `open-indices`；
-- `collapsible`：`bind` 与显式 `open`。
+- `collapsible`：`bind` 与显式 `open`；
+- `tree` / `data-list`：`bind` 与显式 `selected-id`。
 
 ### HTML `<input type>` adapter
 
@@ -632,6 +657,8 @@ identity namespace。
 | layout | `collapsible`、`collapsible-content` | 原生 controlled `Collapsible`；普通 child 常显，唯一 content child 由 `open` 控制 |
 | layout | `resizable`、`resizable-panel` | 原生 `ResizablePanelGroup` + `ResizablePanel`；拖动尺寸使用 window-keyed state |
 | layout | `scroll` | 原生 `ScrollHandle` + `Scrollbar`；显式 ID 保持 handle identity，有限 viewport 由数值属性或父布局提供 |
+| virtualized data | `tree`、`tree-node` | 原生虚拟化 `Tree` + 缓存的 `Entity<TreeState>`；嵌套 `tree-node` 描述层级结构，`uniform_list` 内部虚拟化渲染 |
+| virtualized data | `data-list` | 原生虚拟化 `Tree`（flat mode）；按 `data-count` 生成平铺行，`data-label` 模板支持 `{n}` 占位符 |
 
 常用 attribute：
 
@@ -676,6 +703,9 @@ identity namespace。
 | `resizable` | `orientation=horizontal\|vertical`、`size` |
 | `resizable-panel` | `size`、`min-size`、`max-size`、`visible` |
 | `scroll` | 必填 `id`、`axis=vertical\|horizontal\|both`、`scrollbar-show=scrolling\|hover\|always`、`width`、`height` |
+| `tree` | 必填 `id`、`bind`、`selected-id`、`action`、`data-*` |
+| `tree-node` | `label`（或直接文本）、`expanded`、`disabled`、`action`、`data-*` |
+| `data-list` | 必填 `id` + 必填 `data-count`（≤ 100 000）、`bind`、`selected-id`、`action`、`data-label`、`data-*` |
 
 通用 `size` 接受 `xs` / `sm` / `md` / `lg`（也接受对应的
 `xsmall` / `small` / `medium` / `large`）。attribute 的值在 render 时继续进行
@@ -1072,6 +1102,55 @@ Slider 当前刻意只提供可完整描述的单值合同：
 - 这是 GPUI 原生 scrolling model，不模拟浏览器 scrollbar CSS / overscroll，也不
   暴露 imperative 或脚本式 scroll-to API。
 
+### Tree 与 DataList 虚拟化大数据合同
+
+`Tree` 和 `DataList` 是由 Runtime 字符串 state 控制选中项的虚拟化原生组件：
+
+```html
+<tree
+    id="explorer"
+    bind="selected_file"
+    action="tree-node-selected"
+    data-control="tree"
+>
+    <tree-node label="src" expanded>
+        <tree-node label="main.rs"></tree-node>
+        <tree-node label="lib.rs"></tree-node>
+    </tree-node>
+    <tree-node label="Cargo.toml"></tree-node>
+    <tree-node label="README.md" disabled></tree-node>
+</tree>
+
+<data-list
+    id="log-entries"
+    data-count="5000"
+    bind="selected_log"
+    action="data-row-selected"
+    data-label="Log entry {n}"
+>
+</data-list>
+```
+
+- `<tree>` 的非空 `id` 必填，并与所有其他显式 `id` / `key` 共享唯一命名空间。
+  `TreeState` 的 `Entity` cache 从该 stable identity 派生，reorder 兄弟节点不会串
+  state；
+- `<tree>` 只接受直接 `<tree-node>` element children（空白 text 忽略）；其他直接
+  child 是结构错误。`<tree-node>` 可无限嵌套，children 同样只能是 `<tree-node>`；
+- 每个 node 的 `label` attribute 或直接文本提供显示名。未提供 `id` / `key` 时，
+  label 值用作 item ID；`expanded` 和 `disabled` 使用统一的严格布尔解析（bare
+  attribute 等价于 true）；
+- 原生 `Tree` 内部使用 `uniform_list` 虚拟化渲染，只渲染可见 viewport 内的行；
+- `bind` 定向写入 `selected-id` attribute，值是要选中 item 的 ID 字符串。缺失
+  binding 产生 `MissingBinding` warning。点击一个 `ListItem` 时，adapter 把 item
+  ID 写回 Runtime binding，再 dispatch Action；
+- `<data-list>` 同样必填非空 `id` 和正整数 `data-count`。它生成 N 条平铺 `TreeItem`
+  行，每行 ID 为 `row-{n}`（1-based），label 来自 `data-label` 模板（默认
+  `Item {n}`），`{n}` 替换为行号；
+- `data-count` 上限为 100 000；超过会返回 `ComponentRenderFailed`，不会 panic。
+  由于虚拟化渲染，实际 DOM 只渲染可见行，但 `TreeItem` 在 render 时全部构造；
+- `<tree-node>` 在 `<tree>` 之外单独渲染时返回 structural error
+  `ComponentRenderFailed`，与 `accordion-item` / `collapsible-content` 一致。
+
 ### Display / navigation 数值边界
 
 这些限制不仅验证能否 parse 成 `usize`，还避免不可信模板驱动巨大分配或渲染循环：
@@ -1105,16 +1184,17 @@ state；只有用户触发 native callback 时才按 binding 合同写回新值�
 | **已映射** | `Kbd`、单值 `Slider` | 使用公共原生 API；Slider 使用稳定 Entity cache、双向数值 binding 和 release Action |
 | **已映射** | `Accordion` / `AccordionItem` | 使用公共原生 API；controlled open state 使用 canonical JSON binding，Action 在写回后派发 |
 | **已映射** | `Collapsible`、`ResizablePanelGroup` / `ResizablePanel` | 使用公共原生 API；Collapsible 是 controlled primitive，Resizable drag state 按 stable ID 存在 window keyed state |
+| **已映射** | 虚拟化 `Tree` / `TreeState` / `TreeItem` | DSL `<tree>` + `<tree-node>` 映射原生 `Tree`（`uniform_list` 虚拟化）；`<data-list>` 生成平铺大数据行；两者都使用 stable-ID `Entity<TreeState>` cache 和 `selected-id` 字符串 binding |
 | **已映射 / 明确受限** | `ScrollHandle` / `Scrollbar` | DSL `<scroll>` 映射原生 overflow viewport 和 overlay scrollbar；显式 ID 保持 handle state，仅支持轴向、显示模式和 pixel viewport 合同 |
 | **部分映射 / 明确受限** | table primitives 与 `DataTable<D>` | DSL 只映射大小写无关的静态 `Table` / section / row / cell / caption；没有映射 `DataTable<D>`、`TableState<D>` 或 `TableDelegate` |
-| **部分映射 / 明确受限** | `ListItem` 与 `List<D>` | DSL 只映射静态 flex-column list + 原生 selected / secondary-selected / confirmed / disabled / separator 状态；没有映射 delegate、search、row recycling 或 virtual scroll |
+| **部分映射 / 明确受限** | `ListItem` 与 `List<D>` | DSL 只映射静态 flex-column list + 原生 selected / secondary-selected / confirmed / disabled / separator 状态；没有映射 delegate、search 或 `List<D>`（注意 `<data-list>` 的虚拟化使用 `Tree` 而非 `List<D>`） |
 | **部分映射 / 明确受限** | `Divider` | 上游 module 未从公共 crate API 导出；DSL 的 `divider` 是公共 `Separator` alias |
 | **尚未映射，可继续评估** | `Sidebar`、`Setting`、`Text` | 不能因上游存在类型就视为 DSL 已支持；需要逐个定义 schema、结构、state 和错误边界 |
-| **delegate / entity / data 型** | `DataTable<D>`、`List<D>`、`Select<D>`、`Tree`、`Chart`、`Plot` | 不把任意 dataset/delegate/entity 塞入字符串 HTML；应由可信宿主 Rust component 提供有配额的数据和 lifecycle |
+| **delegate / entity / data 型** | `DataTable<D>`、`List<D>`、`Select<D>`、`Chart`、`Plot` | 不把任意 dataset/delegate/entity 塞入字符串 HTML；应由可信宿主 Rust component 提供有配额的数据和 lifecycle（注：`Tree` 已通过 `<tree>` / `<data-list>` 映射为静态声明式结构 + 虚拟化渲染） |
 | **overlay / window / lifecycle 型** | `Dialog`、`Popover`、`Tooltip`、`Menu`、`HoverCard`、`Notification`、`Sheet`、`Dock`，以及 date/time picker | 尚未映射；需要 Window、focus、anchor、dismiss、subscription 和 mount/unmount 协议，不能伪装成普通 child renderer |
 | **capability 型** | `Link` / `href`、Clipboard、`img src`、`avatar src` | `Link` 和 Clipboard 未映射；`img` / `avatar` 目前可把 source 交给原生渲染，但尚未经过网络/文件 capability policy，不适合直接暴露给不可信扩展 |
 
-因此当前实现不声称支持 DataTable、虚拟化 `List<D>`、select/tree delegate、
+因此当前实现不声称支持 DataTable、虚拟化 `List<D>`、select delegate、
 dialog/popover/tooltip/menu overlay lifecycle、link href 导航，或 chart/plot
 delegate/entity。它们需要的是新的运行时合同，不是再注册一个标签名。
 
@@ -1182,10 +1262,10 @@ v1 支持：
 大于 96 的 scale。Modifier 严格保留 class source order；多个 setter 冲突时，后
 应用的 modifier 按 GPUI builder 语义生效。
 
-`overflow-y-scroll` 只设置纵向 overflow 为 scroll，用于 showcase 的固定 header +
-可滚动 main 布局；它不会额外创建原生 `Scrollbar`。需要可见 native thumb 和稳定
-`ScrollHandle` 时使用 `<scroll>`。两者都不模拟浏览器 scrollbar CSS、overscroll
-或滚动脚本 API。
+`overflow-y-scroll` 只设置纵向 overflow 为 scroll，不会额外创建原生
+`Scrollbar`。需要可见 native thumb 和稳定 `ScrollHandle` 时使用 `<scroll>`；
+showcase 的整页 viewport 和嵌套 Audit Log 都采用这一原生组件。两者都不模拟浏览器
+scrollbar CSS、overscroll 或滚动脚本 API。
 
 未知 utility 在 strict 模式产生 error，在 permissive 模式产生 warning。框架不会
 静默假装支持完整 Tailwind。
@@ -1278,10 +1358,12 @@ html5ever 前会安全展开 `<sql-editor />` 一类自定义标签，同时：
 | `builtin_components/controls.rs` | Kbd 与单值 Slider 的 schema、数值校验和原生渲染 |
 | `builtin_components/layout.rs` | controlled Accordion、controlled Collapsible 与 window-keyed native Resizable 布局 |
 | `builtin_components/scroll.rs` | stable-ID 原生 ScrollHandle viewport、Scrollbar overlay 与尺寸/枚举校验 |
+| `builtin_components/tree.rs` | 虚拟化 Tree / DataList 的 schema、tree-node 结构解析和原生渲染 |
+| `tree_cache.rs` | TreeState cache、`tree-node` → `TreeItem` 转换、selection write-back subscription 与 live identity 清理 |
 | `stateful_nodes.rs` | 有状态输入 spec 与 live identity 收集 |
 | `input_cache.rs` | InputState cache、双向 binding subscription |
 | `slider_cache.rs` | SliderState cache、双向 binding、Change / Release subscription 与 live identity 清理 |
-| `render_context.rs` | 递归组件渲染、style、action/input/slider 与 keyed ScrollHandle 服务 |
+| `render_context.rs` | 递归组件渲染、style、action/input/slider/tree 与 keyed ScrollHandle 服务 |
 | `renderer.rs` | Runtime subscription、reconcile、View Render |
 | `main.rs` | standalone 可运行 Demo |
 
@@ -1301,7 +1383,7 @@ standalone v1 不实现：
 - 浏览器 form submission/reset、constraint validation、autocomplete/inputmode，或
   `number` / date-time / file / color 等专用 HTML input 控件；
 - 全部 `gpui-component` 的声明式镜像；
-- `DataTable<D>`、数据驱动或虚拟化 `List<D>`、select/tree delegate；
+- `DataTable<D>`、数据驱动或虚拟化 `List<D>`、select delegate；
 - chart/plot delegate 或 entity 数据模型；
 - dialog、popover、tooltip、menu 等 overlay/window lifecycle；
 - `Link` / `href` 导航或 Clipboard capability；

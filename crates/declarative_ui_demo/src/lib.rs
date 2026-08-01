@@ -33,9 +33,11 @@ mod slider_cache;
 #[cfg(test)]
 mod slider_cache_tests;
 mod stateful_nodes;
+mod table_cache;
 pub mod tailwind;
 mod tailwind_style;
 mod template;
+mod tree_cache;
 pub mod vnode;
 
 pub use binding::{BindingResolution, resolve_bindings, resolve_bindings_checked};

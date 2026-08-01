@@ -8,6 +8,7 @@ mod lists;
 mod navigation;
 mod scroll;
 mod tables;
+mod tree;
 
 use gpui_component::Size;
 
@@ -28,6 +29,7 @@ pub(crate) fn register_default_components(
     navigation::register(registry)?;
     controls::register(registry)?;
     scroll::register(registry)?;
+    tree::register(registry)?;
     Ok(())
 }
 

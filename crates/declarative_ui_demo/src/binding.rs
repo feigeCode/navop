@@ -98,6 +98,7 @@ pub(crate) fn binding_attribute(tag: &str) -> Option<&'static str> {
         "tabs" | "stepper" => Some("selected-index"),
         "accordion" => Some("open-indices"),
         "collapsible" => Some("open"),
+        "tree" | "data-list" => Some("selected-id"),
         _ => None,
     }
 }

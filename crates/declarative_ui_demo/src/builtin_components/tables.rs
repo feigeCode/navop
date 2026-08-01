@@ -11,12 +11,18 @@ use crate::{
     ComponentSchema, RegistryError, RenderContext, VNode,
 };
 
-use super::{parse_positive_usize_attribute, parse_size_attribute};
+use super::{
+    bool_attribute, bool_attribute_or, parse_positive_usize_attribute, parse_size_attribute,
+};
 
 pub(super) fn register(registry: &mut ComponentRegistry) -> Result<(), RegistryError> {
     registry.register_with_schema(
         "table",
-        ComponentSchema::new().attribute("size"),
+        ComponentSchema::new()
+            .attribute("size")
+            .attribute("data-items")
+            .attribute("stripe")
+            .attribute("bordered"),
         TableComponent,
     )?;
     for tag in ["thead", "tbody", "tfoot", "tr", "caption"] {
@@ -38,6 +44,29 @@ struct TableComponent;
 
 impl ComponentRenderer for TableComponent {
     fn render(&self, props: ComponentProps, context: &mut RenderContext<'_>) -> ComponentResult {
+        // Data-driven path: read JSON array from Runtime state.
+        if let Some(state_key) = props.element.attr("data-items") {
+            let json = context.get_state(state_key).ok_or_else(|| {
+                ComponentError::new(format!(
+                    "`data-items=\"{state_key}\"` references an undefined state key"
+                ))
+            })?;
+            let data = crate::table_cache::parse_table(&json)?;
+            let stripe = bool_attribute(&props.element, "stripe")?;
+            // Default bordered = true unless explicitly set to false.
+            let bordered = bool_attribute_or(&props.element, "bordered", true)?;
+            let size = parse_size_attribute(&props.element)?;
+            let request = crate::table_cache::TableRequest {
+                id: props.stable_id(),
+                data,
+                stripe,
+                bordered,
+                size,
+            };
+            let table = context.render_table(request);
+            return Ok(table.into_any_element());
+        }
+
         let mut table = Table::new();
         if let Some(size) = parse_size_attribute(&props.element)? {
             table = table.with_size(size);

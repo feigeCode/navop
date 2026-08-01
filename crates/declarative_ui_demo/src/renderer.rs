@@ -12,6 +12,7 @@ use crate::{
     render_context::{ActionDispatcher, RenderContext, RenderEnvironment},
     resolve_bindings_checked,
     slider_cache::SliderCache,
+    tree_cache::TreeCache,
 };
 
 #[derive(Clone)]
@@ -42,6 +43,8 @@ pub struct DeclarativeView {
     runtime: Entity<Runtime>,
     input_cache: InputCache,
     slider_cache: SliderCache,
+    tree_cache: TreeCache,
+    table_cache: crate::table_cache::TableCache,
     last_patches: Vec<Patch>,
     diagnostics: Diagnostics,
     warnings: Vec<String>,
@@ -65,6 +68,8 @@ impl DeclarativeView {
             runtime: config.runtime,
             input_cache: InputCache::default(),
             slider_cache: SliderCache::default(),
+            tree_cache: TreeCache::default(),
+            table_cache: crate::table_cache::TableCache::default(),
             last_patches: Vec::new(),
             diagnostics,
             warnings: Vec::new(),
@@ -131,6 +136,8 @@ impl DeclarativeView {
         self.rendered = next;
         self.input_cache.retain_live(&self.rendered);
         self.slider_cache.retain_live(&self.rendered);
+        self.tree_cache.retain_live(&self.rendered);
+        self.table_cache.retain_live(&self.rendered);
         self.last_patches = patches;
         Ok(())
     }
@@ -169,6 +176,8 @@ impl Render for DeclarativeView {
             registry: &self.registry,
             input_cache: &mut self.input_cache,
             slider_cache: &mut self.slider_cache,
+            tree_cache: &mut self.tree_cache,
+            table_cache: &mut self.table_cache,
             runtime: self.runtime.clone(),
             dispatcher,
             diagnostics: &mut self.diagnostics,

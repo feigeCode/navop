@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use declarative_ui_demo::{
     CompileOptions, ComponentProps, ComponentRegistry, ComponentRenderer, ComponentResult,
     DeclarativeView, DeclarativeViewConfig, RenderContext, Runtime, StateStore, compile_template,
@@ -16,21 +18,59 @@ const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
 const SQL_EDITOR_GAP_PX: f32 = 8.0;
 const MUTED_TEXT_RGB: u32 = 0xa1_a1_aa;
 const PRIMARY_TEXT_RGB: u32 = 0xf4_f4_f5;
+const GENERATED_FLEET_ROWS: usize = 120;
 
 const DEMO_HTML: &str = r#"
-<div class="flex flex-col h-full min-h-0 overflow-hidden bg-zinc-950 text-zinc-100">
-    <header class="flex flex-col gap-2 p-4 flex-shrink-0 border border-zinc-800">
-        <span class="text-xl font-semibold">Declarative UI Component Showcase</span>
-        <span class="text-sm text-zinc-400">
-            Restricted HTML → VNode → Runtime → native gpui-component
-        </span>
-        <span class="text-sm text-zinc-400">
-            No JavaScript · typed diagnostics · transactional actions · string state
-        </span>
+<scroll
+    id="showcase-page"
+    axis="vertical"
+    scrollbar-show="always"
+    class="size-full bg-zinc-950"
+>
+<div class="flex flex-col w-full bg-zinc-950 text-zinc-100">
+    <header class="flex flex-col gap-4 p-4 flex-shrink-0 border border-zinc-800">
+        <div class="flex items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <img
+                    src="icons/postgresql_color.svg"
+                    class="p-2 bg-zinc-900 rounded-lg border border-zinc-700"
+                />
+                <article class="flex flex-col gap-2">
+                    <span class="text-xl font-semibold">Navop Operations Command Center</span>
+                    <span class="text-sm text-zinc-400">
+                        Restricted HTML → VNode → Runtime → native gpui-component
+                    </span>
+                    <span class="text-sm text-zinc-400">
+                        No JavaScript · typed diagnostics · transactional actions · string state
+                    </span>
+                </article>
+            </div>
+            <div class="flex items-center gap-2">
+                <tag variant="success" outline size="sm">61 built-ins</tag>
+                <tag variant="info" size="sm">Live runtime</tag>
+            </div>
+        </div>
+        <nav class="flex items-center justify-between gap-4">
+            <breadcrumb>
+                <breadcrumb-item action="navigate" data-destination="Overview">
+                    Overview
+                </breadcrumb-item>
+                <breadcrumb-item action="navigate" data-destination="Operations">
+                    Operations
+                </breadcrumb-item>
+                <breadcrumb-item disabled>Component laboratory</breadcrumb-item>
+            </breadcrumb>
+            <div class="flex items-center gap-2">
+                <button action="reset" variant="ghost" size="sm">Reset workspace</button>
+                <button action="save" data-record="profile" variant="primary" size="sm">
+                    Deploy snapshot
+                </button>
+            </div>
+        </nav>
     </header>
 
-    <main class="flex-1 min-h-0 overflow-y-scroll">
-        <div class="flex flex-col gap-4 p-4">
+    <main class="w-full">
+        <section class="flex flex-col gap-4 p-4">
             <alert
                 id="runtime-status"
                 bind="status_message"
@@ -173,7 +213,7 @@ const DEMO_HTML: &str = r#"
                 </div>
             </group-box>
 
-            <group-box title="Static table composed from native table primitives" variant="outline">
+            <group-box title="Large fleet table · 123 declarative rows" variant="outline">
                 <table size="sm" class="w-full border border-zinc-700 rounded-lg overflow-hidden">
                     <thead>
                         <tr>
@@ -232,10 +272,21 @@ const DEMO_HTML: &str = r#"
                                     Inspect
                                 </button>
                             </td>
+                       </tr>
+                        <!-- GENERATED_FLEET_ROWS -->
+                   </tbody>
+                    <tfoot>
+                        <tr>
+                            <th align="left">Summary</th>
+                            <td>FLEET_TARGET_COUNT monitored</td>
+                            <td align="center">Mixed</td>
+                            <td>Realtime</td>
+                            <td align="right">FLEET_TARGET_COUNT actions</td>
                         </tr>
-                    </tbody>
+                    </tfoot>
                     <caption>
-                        Table, sections, rows, heads, cells and caption are strongly structured.
+                        3 highlighted connections plus 120 generated tenant rows exercise scrolling
+                        and native table primitives with a visibly large dataset.
                     </caption>
                 </table>
             </group-box>
@@ -560,18 +611,197 @@ const DEMO_HTML: &str = r#"
                             <span>09:48 Preserved ScrollHandle state after rerender</span>
                         </div>
                     </scroll>
+               </div>
+           </group-box>
+
+            <group-box title="Semantic layout, media, and native toggle controls" variant="outline">
+                <section class="flex flex-col gap-4">
+                    <article class="flex flex-col gap-3 p-4 bg-zinc-900 rounded-lg border border-zinc-800">
+                        <img
+                            src="app.png"
+                            class="w-full rounded-md border border-zinc-700"
+                        />
+                        <div class="flex flex-col gap-2">
+                            <span class="text-base font-semibold">
+                                Standalone container, media, and divider primitives
+                            </span>
+                            <span class="text-sm text-zinc-400">
+                                article, section, nav, footer, img, and divider are plain semantic
+                                containers or rule components rendered through the default registry.
+                            </span>
+                        </div>
+                    </article>
+
+                    <divider label="semantic footer container"></divider>
+
+                    <nav class="flex items-center gap-2">
+                        <breadcrumb>
+                            <breadcrumb-item
+                                action="navigate"
+                                data-destination="Project"
+                            >
+                                Project
+                            </breadcrumb-item>
+                            <breadcrumb-item disabled>Showcase</breadcrumb-item>
+                        </breadcrumb>
+                        <span class="text-sm text-zinc-400">
+                            nav is a neutral container; breadcrumb renders through its own registry entry.
+                        </span>
+                    </nav>
+
+                    <div class="flex flex-col gap-3 p-4 bg-zinc-900 rounded-lg border border-zinc-800">
+                        <span class="text-sm font-semibold">Native checkbox / radio / slider tags</span>
+                        <span class="text-sm text-zinc-400">
+                            These are the canonical registry tags, distinct from the
+                            &lt;input type="checkbox|radio|range"&gt; adapter used elsewhere.
+                        </span>
+                        <checkbox id="audit-log-toggle" bind="audit_log_enabled" size="sm">
+                            Persist audit log entries
+                        </checkbox>
+                        <radio id="deploy-channel-stable" bind="channel_stable" size="sm">
+                            Stable channel
+                        </radio>
+                        <radio id="deploy-channel-beta" bind="channel_beta" size="sm">
+                            Beta channel
+                        </radio>
+                        <div class="flex flex-col gap-2">
+                            <span class="text-sm font-semibold">Native slider tag</span>
+                            <slider
+                                id="native-volume-slider"
+                                bind="volume"
+                                min="0"
+                                max="100"
+                                step="1"
+                                orientation="horizontal"
+                                scale="linear"
+                                action="selection-changed"
+                                data-control="slider"
+                                class="w-full"
+                            />
+                        </div>
+                    </div>
+
+                    <footer class="flex items-center justify-between gap-2 p-2 border border-zinc-800">
+                        <span class="text-sm text-zinc-400">
+                            footer and section participate in the same Tailwind utility set as div.
+                        </span>
+                        <tag variant="info" size="sm">Semantic HTML</tag>
+                    </footer>
+                </section>
+           </group-box>
+
+            <group-box
+                title="Virtualized tree and big-data list"
+                variant="outline"
+            >
+                <div class="flex flex-col gap-4">
+                    <div class="flex flex-col gap-2">
+                        <span class="font-semibold">Bound virtualized tree</span>
+                        <span class="text-sm text-zinc-400">
+                            Native Tree with nested tree-node children. Selection writes the item
+                            id back to the bound state key before the action runs.
+                        </span>
+                        <label
+                            bind="tree_selection_status"
+                            secondary="Last tree selection"
+                        ></label>
+                        <tree
+                            id="showcase-tree"
+                            bind="selected_tree_node"
+                            action="tree-node-selected"
+                            data-control="tree"
+                        >
+                            <tree-node label="src" expanded>
+                                <tree-node label="main.rs"></tree-node>
+                                <tree-node label="lib.rs"></tree-node>
+                            </tree-node>
+                            <tree-node label="tests" expanded>
+                                <tree-node label="tree_contracts.rs"></tree-node>
+                                <tree-node label="binding_contracts.rs"></tree-node>
+                            </tree-node>
+                            <tree-node label="Cargo.toml"></tree-node>
+                            <tree-node label="README.md" disabled></tree-node>
+                        </tree>
+                    </div>
+
+                    <separator label="virtualized data-list with 5 000 rows"></separator>
+                    <div class="flex flex-col gap-2">
+                        <span class="font-semibold">Big-data list (5 000 rows)</span>
+                        <span class="text-sm text-zinc-400">
+                            Data-list generates flat rows on demand and virtualizes rendering
+                            through the native uniform_list backing store.
+                        </span>
+                        <data-list
+                            id="showcase-data-list"
+                            data-count="5000"
+                            bind="selected_data_row"
+                            action="data-row-selected"
+                            data-control="data-list"
+                            data-label="Log entry {n}"
+                        >
+                        </data-list>
+                    </div>
                 </div>
             </group-box>
 
-            <separator label="registry extension point"></separator>
-            <sql-editor
-                id="sql-editor"
+           <separator label="registry extension point"></separator>
+           <sql-editor
+               id="sql-editor"
                 class="p-4 bg-zinc-900 rounded-lg border border-zinc-700"
             />
-        </div>
+        </section>
     </main>
 </div>
+</scroll>
 "#;
+
+fn demo_html() -> String {
+    let engines = ["PostgreSQL", "MySQL", "Redis", "MongoDB"];
+    let environments = ["production", "staging", "analytics", "edge"];
+    let statuses = [
+        ("Healthy", "success"),
+        ("Ready", "info"),
+        ("Lagging", "warning"),
+        ("Degraded", "danger"),
+    ];
+    let mut rows = String::with_capacity(GENERATED_FLEET_ROWS * 640);
+
+    for index in 1..=GENERATED_FLEET_ROWS {
+        let engine = engines[(index - 1) % engines.len()];
+        let environment = environments[(index - 1) % environments.len()];
+        let (status, variant) = statuses[(index - 1) % statuses.len()];
+        let connection = format!("{environment}-{engine}-{index:03}");
+        let updated_minutes = (index * 7) % 60;
+        writeln!(
+            rows,
+            r#"
+                        <tr>
+                            <td>{connection}</td>
+                            <td>{engine}</td>
+                            <td align="center"><tag variant="{variant}" size="sm">{status}</tag></td>
+                            <td>{updated_minutes} minutes ago</td>
+                            <td align="right">
+                                <button
+                                    action="inspect-row"
+                                    data-connection="{connection}"
+                                    variant="ghost"
+                                    size="xs"
+                                >
+                                    Inspect
+                                </button>
+                            </td>
+                        </tr>"#
+        )
+        .expect("writing generated fleet rows to a String cannot fail");
+    }
+
+    DEMO_HTML
+        .replace("<!-- GENERATED_FLEET_ROWS -->", &rows)
+        .replace(
+            "FLEET_TARGET_COUNT",
+            &(GENERATED_FLEET_ROWS + 3).to_string(),
+        )
+}
 
 fn main() {
     let mut registry = ComponentRegistry::with_defaults();
@@ -579,7 +809,8 @@ fn main() {
         eprintln!("failed to register demo component: {error}");
         return;
     }
-    let template = match compile_template(DEMO_HTML, &registry, CompileOptions::strict()) {
+    let source = demo_html();
+    let template = match compile_template(&source, &registry, CompileOptions::strict()) {
         Ok(template) => template,
         Err(error) => {
             eprintln!("failed to compile demo template: {error}");
@@ -633,6 +864,9 @@ fn demo_runtime() -> Runtime {
     state.set("notifications", "true");
     state.set("auto_sync", "true");
     state.set("beta_mode", "false");
+    state.set("audit_log_enabled", "true");
+    state.set("channel_stable", "true");
+    state.set("channel_beta", "false");
     state.set(
         "status_message",
         "Runtime ready. Edit fields, toggle controls, or dispatch an action.",
@@ -651,10 +885,14 @@ fn demo_runtime() -> Runtime {
     state.set("selected_step", "1");
     state.set("open_sections", "[0]");
     state.set("details_open", "true");
+    state.set("selected_tree_node", "lib.rs");
+    state.set("tree_selection_status", "No tree node selected yet.");
+    state.set("selected_data_row", "row-1");
     state.set(
         "navigation_status",
         "Pagination=3 · Rating=4 · Slider=35 · Tab=1 · Step=1",
     );
+
     let mut runtime = Runtime::new(state);
     runtime
         .on("save", |context| {
@@ -696,6 +934,9 @@ fn demo_runtime() -> Runtime {
             context.set("notifications", "true");
             context.set("auto_sync", "true");
             context.set("beta_mode", "false");
+            context.set("audit_log_enabled", "true");
+            context.set("channel_stable", "true");
+            context.set("channel_beta", "false");
             context.set("save_count_value", "0");
             context.set("completion", "38");
             context.set("completion_label", "Profile completeness: 38%");
@@ -706,6 +947,9 @@ fn demo_runtime() -> Runtime {
             context.set("selected_step", "1");
             context.set("open_sections", "[0]");
             context.set("details_open", "true");
+            context.set("selected_tree_node", "lib.rs");
+            context.set("tree_selection_status", "No tree node selected yet.");
+            context.set("selected_data_row", "row-1");
             context.set(
                 "navigation_status",
                 "Pagination=3 · Rating=4 · Slider=35 · Tab=1 · Step=1",
@@ -825,6 +1069,33 @@ fn demo_runtime() -> Runtime {
         })
         .expect("demo action declarations must be unique");
     runtime
+        .on("tree-node-selected", |context| {
+            let node = context
+                .get("selected_tree_node")
+                .unwrap_or_default()
+                .to_owned();
+            context.set(
+                "tree_selection_status",
+                format!("Tree node `{node}` selected."),
+            );
+            context.set(
+                "status_message",
+                format!("Tree selection committed `{node}` before this action."),
+            );
+            Ok(())
+        })
+        .expect("demo action declarations must be unique");
+    runtime
+        .on("data-row-selected", |context| {
+            let row = context
+                .get("selected_data_row")
+                .unwrap_or_default()
+                .to_owned();
+            context.set("status_message", format!("Data-list row `{row}` selected."));
+            Ok(())
+        })
+        .expect("demo action declarations must be unique");
+    runtime
 }
 
 struct SqlEditorComponent;
@@ -847,8 +1118,76 @@ impl ComponentRenderer for SqlEditorComponent {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEMO_HTML, SqlEditorComponent};
-    use declarative_ui_demo::{CompileOptions, ComponentRegistry, compile_template};
+    use std::collections::BTreeSet;
+
+    use super::{SqlEditorComponent, demo_html};
+    use declarative_ui_demo::{
+        CompileOptions, ComponentRegistry, VNode, compile_template, parse_html,
+    };
+
+    const BUILTIN_TAGS: &[&str] = &[
+        "accordion",
+        "accordion-item",
+        "alert",
+        "article",
+        "avatar",
+        "avatar-group",
+        "badge",
+        "breadcrumb",
+        "breadcrumb-item",
+        "button",
+        "caption",
+        "checkbox",
+        "collapsible",
+        "collapsible-content",
+        "data-list",
+        "description-item",
+        "description-list",
+        "div",
+        "divider",
+        "field",
+        "footer",
+        "form",
+        "group-box",
+        "header",
+        "img",
+        "input",
+        "kbd",
+        "label",
+        "list",
+        "list-item",
+        "main",
+        "nav",
+        "pagination",
+        "progress",
+        "radio",
+        "rating",
+        "resizable",
+        "resizable-panel",
+        "scroll",
+        "section",
+        "separator",
+        "skeleton",
+        "slider",
+        "span",
+        "spinner",
+        "stepper",
+        "stepper-item",
+        "switch",
+        "tab",
+        "table",
+        "tabs",
+        "tag",
+        "tbody",
+        "td",
+        "tree",
+        "tree-node",
+        "textarea",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+    ];
 
     #[test]
     fn showcase_template_satisfies_the_strict_dsl_contract() {
@@ -857,7 +1196,80 @@ mod tests {
             .register("sql-editor", SqlEditorComponent)
             .expect("register showcase extension");
 
-        compile_template(DEMO_HTML, &registry, CompileOptions::strict())
+        let source = demo_html();
+        compile_template(&source, &registry, CompileOptions::strict())
             .expect("the shipped showcase must compile in strict mode");
+    }
+
+    #[test]
+    fn showcase_template_uses_every_builtin_component() {
+        let template = parse_html(&demo_html()).expect("the showcase source must parse");
+        let mut actual = BTreeSet::new();
+        collect_tags(&template, &mut actual);
+        let missing = BUILTIN_TAGS
+            .iter()
+            .copied()
+            .filter(|tag| !actual.contains(*tag))
+            .collect::<Vec<_>>();
+
+        assert!(
+            missing.is_empty(),
+            "showcase is missing built-ins: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn showcase_uses_a_native_full_page_scroll_viewport() {
+        let root = parse_html(&demo_html()).expect("the showcase source must parse");
+        let element = root
+            .element()
+            .expect("the showcase root must be an element");
+
+        assert_eq!("scroll", element.tag);
+        assert_eq!(Some("showcase-page"), element.attr("id"));
+        assert_eq!(Some("vertical"), element.attr("axis"));
+        assert_eq!(Some("always"), element.attr("scrollbar-show"));
+    }
+
+    #[test]
+    fn showcase_contains_a_large_fleet_dataset() {
+        let root = parse_html(&demo_html()).expect("the showcase source must parse");
+
+        assert!(
+            count_tags(&root, "tr") >= 100,
+            "the showcase should render at least 100 fleet rows"
+        );
+    }
+
+    fn collect_tags(node: &VNode, tags: &mut BTreeSet<String>) {
+        match node {
+            VNode::Element(element) => {
+                tags.insert(element.tag.clone());
+                for child in &element.children {
+                    collect_tags(child, tags);
+                }
+            }
+            VNode::Fragment(children) => {
+                for child in children {
+                    collect_tags(child, tags);
+                }
+            }
+            VNode::Text(_) => {}
+        }
+    }
+
+    fn count_tags(node: &VNode, tag: &str) -> usize {
+        match node {
+            VNode::Element(element) => {
+                usize::from(element.tag == tag)
+                    + element
+                        .children
+                        .iter()
+                        .map(|child| count_tags(child, tag))
+                        .sum::<usize>()
+            }
+            VNode::Fragment(children) => children.iter().map(|child| count_tags(child, tag)).sum(),
+            VNode::Text(_) => 0,
+        }
     }
 }
