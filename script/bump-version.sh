@@ -53,8 +53,27 @@ function log_error() {
 # Start release process
 log_header "Starting Release Process for v$new_version"
 
-# Step 1: Update crates version
-log_step "1/4" "Updating crates to version ${BOLD}v$new_version${RESET}"
+# Step 1: Validate changelog
+log_step "1/5" "Validating bilingual CHANGELOG.md entry for ${BOLD}v$new_version${RESET}"
+if python3 script/changelog.py validate --tag "v$new_version" --changelog CHANGELOG.md; then
+  log_success "Changelog entry is ready"
+else
+  log_error "Missing or invalid changelog entry; generate it before tagging"
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  log_error "Working tree is not clean"
+  log_info "Generate, review, and commit CHANGELOG.md before running this release script"
+  exit 1
+fi
+if ! git ls-files --error-unmatch CHANGELOG.md script/changelog.py >/dev/null 2>&1; then
+  log_error "CHANGELOG.md and script/changelog.py must be tracked by Git"
+  exit 1
+fi
+echo ""
+
+# Step 2: Update crates version
+log_step "2/5" "Updating crates to version ${BOLD}v$new_version${RESET}"
 if cargo set-version "$new_version"; then
   log_success "Crates version updated successfully"
 else
@@ -63,8 +82,8 @@ else
 fi
 echo ""
 
-# Step 2: Stage changes
-log_step "2/4" "Staging modified files"
+# Step 3: Stage changes
+log_step "3/5" "Staging modified files"
 if git add -u .; then
   log_success "Files staged successfully"
 else
@@ -73,8 +92,8 @@ else
 fi
 echo ""
 
-# Step 3: Create commit and tag
-log_step "3/4" "Creating commit and tag"
+# Step 4: Create commit and tag
+log_step "4/5" "Creating commit and tag"
 if git commit -m "Bump v$new_version"; then
   log_success "Commit created: ${BOLD}Bump v$new_version${RESET}"
 else
@@ -90,8 +109,8 @@ else
 fi
 echo ""
 
-# Step 4: Push to remote
-log_step "4/4" "Pushing tag to remote"
+# Step 5: Push to remote
+log_step "5/5" "Pushing tag to remote"
 log_info "Pushing ${BOLD}v$new_version${RESET} to origin..."
 if git push origin "v$new_version"; then
   log_success "Tag pushed to remote successfully"

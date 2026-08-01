@@ -87,6 +87,37 @@ jobs:
           echo "Release tag: ${{ steps.release.outputs.tag }}"
           echo "R2 public base URL: ${{ steps.r2_config.outputs.base_url }}"
 
+      - name: Check out release tag
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Extract release notes from changelog
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          if [ -f CHANGELOG.md ] && [ -f script/changelog.py ]; then
+            python3 script/changelog.py extract \
+              --tag "$RELEASE_TAG" \
+              --changelog CHANGELOG.md \
+              --output artifacts/release-notes.md
+          else
+            echo "::warning::${RELEASE_TAG} predates the tracked changelog; using its existing GitHub Release body for this legacy R2 synchronization."
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json body \
+              --jq .body > artifacts/release-notes.md
+          fi
+          if [ ! -s artifacts/release-notes.md ]; then
+            echo "::error::Release notes for ${RELEASE_TAG} are empty"
+            exit 1
+          fi
+
       - name: Verify R2 secrets are set
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         env:
@@ -174,6 +205,10 @@ jobs:
           const version = process.env.RELEASE_VERSION;
           const repository = process.env.GITHUB_REPOSITORY;
           if (!repository) throw new Error("GITHUB_REPOSITORY is required");
+          const releaseNotes = fs
+            .readFileSync("artifacts/release-notes.md", "utf8")
+            .trim();
+          if (!releaseNotes) throw new Error("release notes are empty");
           const checksums = new Map(
             fs
               .readFileSync("artifacts/sha256sums.txt", "utf8")
@@ -237,6 +272,7 @@ jobs:
                 schema_version: 1,
                 version,
                 release_page_url: `${baseUrl}/releases/${releaseTag}/`,
+                release_notes: releaseNotes,
                 downloads: objectUrls("releases", appAssets),
                 fallback_downloads: githubReleaseUrls(appAssets),
                 sha256s: objectChecksums(appAssets),

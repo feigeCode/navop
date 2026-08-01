@@ -86,6 +86,25 @@ jobs:
           fi
           echo "Verified Navop application version: $manifest_version"
 
+      - name: Verify changelog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -f CHANGELOG.md ] && [ -f script/changelog.py ]; then
+            python3 script/changelog.py extract \
+              --tag "$RELEASE_TAG" \
+              --changelog CHANGELOG.md \
+              --output /tmp/release-notes.md
+            echo "Verified tagged changelog entry: $RELEASE_TAG"
+          elif gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::warning::${RELEASE_TAG} predates the tracked changelog; preserving its existing GitHub Release body for this legacy repair."
+          else
+            echo "::error::${RELEASE_TAG} does not contain CHANGELOG.md and script/changelog.py. Generate and commit the changelog entry before creating a new release tag."
+            exit 1
+          fi
+
       - name: Resolve platform matrix
         id: matrix
         env:
@@ -495,6 +514,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Extract release notes from changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -f CHANGELOG.md ] && [ -f script/changelog.py ]; then
+            python3 script/changelog.py extract \
+              --tag "$RELEASE_TAG" \
+              --changelog CHANGELOG.md \
+              --output release-notes.md
+          elif gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::warning::${RELEASE_TAG} predates the tracked changelog; using its existing GitHub Release body for this legacy repair."
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json body \
+              --jq .body > release-notes.md
+          else
+            echo "::error::Cannot publish ${RELEASE_TAG}: the tag has no tracked changelog entry and no legacy GitHub Release body."
+            exit 1
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "::error::Release notes for ${RELEASE_TAG} are empty"
+            exit 1
+          fi
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -560,12 +610,17 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Navop $RELEASE_TAG" \
+              --notes-file release-notes.md
+          else
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --title "Navop $RELEASE_TAG" \
-              --generate-notes
+              --notes-file release-notes.md
           fi
 
           shopt -s nullglob
