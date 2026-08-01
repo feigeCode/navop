@@ -307,7 +307,9 @@ impl DbConnection for DuckDbConnection {
             .create_parser(SqlSource::Script(script.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
         let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+            .into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -452,6 +454,7 @@ impl DbConnection for DuckDbConnection {
                         current, result, bytes_read, total_size,
                     );
                     if sender.send(progress).await.is_err() {
+                        has_error = true;
                         break;
                     }
                     if is_error {
@@ -534,7 +537,9 @@ impl DbConnection for DuckDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();

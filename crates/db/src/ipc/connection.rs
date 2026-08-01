@@ -224,19 +224,31 @@ impl ExternalDbConnection {
         // 的 cursor 状态会一直占着资源直到连接关闭。
         let fetch_outcome = self.fetch_all_rows(conn_id, &cursor_id).await;
 
-        // 显式 close cursor;失败不致命(driver 在 disconnect 时也会清理)。
-        if let Err(error) = self
+        // 显式 close cursor。即使 fetch 失败也必须尝试清理；如果 fetch 成功而 close
+        // 失败，则把 driver 返回的原始错误直接交给调用方，不能把关闭失败伪装成查询成功。
+        let close_outcome = self
             .call_value(
                 method::CURSOR_CLOSE,
                 cursor_close_params(conn_id, &cursor_id),
             )
-            .await
-        {
-            warn!(cursor = %cursor_id, error = %error, "cursor/close failed (non-fatal)");
-        }
+            .await;
 
-        // close 之后再传播 fetch 错误,保证错误路径也释放了 cursor。
-        let fetched = fetch_outcome?;
+        // fetch 与 close 同时失败时优先返回主查询的 fetch 错误，并记录清理错误；否则任何
+        // 单独的 close 错误都直接返回。这样既保留主失败的 source，也不会吞掉成功查询后的
+        // driver close 错误。
+        let fetched = match (fetch_outcome, close_outcome) {
+            (Ok(fetched), Ok(_)) => fetched,
+            (Err(fetch_error), Ok(_)) => return Err(fetch_error),
+            (Ok(_), Err(close_error)) => return Err(close_error),
+            (Err(fetch_error), Err(close_error)) => {
+                warn!(
+                    cursor = %cursor_id,
+                    error = %close_error,
+                    "cursor/close also failed after cursor/fetch error"
+                );
+                return Err(fetch_error);
+            }
+        };
 
         Ok(SqlResult::Query(QueryResult {
             sql: sql.to_string(),
@@ -634,7 +646,6 @@ struct ExecBatchOutput {
 #[derive(Debug, Deserialize)]
 struct BatchErrorOutput {
     index: u32,
-    #[allow(dead_code)]
     code: i32,
     message: String,
 }
@@ -716,10 +727,8 @@ fn validate_batch_output(
 fn batch_errors_by_index(errors: Vec<BatchErrorOutput>) -> Result<HashMap<usize, String>, DbError> {
     let mut by_index = HashMap::new();
     for error in errors {
-        if by_index
-            .insert(error.index as usize, error.message.clone())
-            .is_some()
-        {
+        let message = format!("{} (driver error code {})", error.message, error.code);
+        if by_index.insert(error.index as usize, message).is_some() {
             return invalid_exec_batch_response("duplicate exec/batch error index");
         }
     }
@@ -777,20 +786,28 @@ impl DbConnection for ExternalDbConnection {
 
     async fn disconnect(&mut self) -> Result<(), DbError> {
         let client_arc = self.client.lock().await.take();
+        let mut close_error = None;
         if let Some(client_arc) = client_arc {
-            // conn/close;允许失败(driver 端可能已断)。
+            // conn/close 的错误必须返回，但仍要继续 shutdown 子进程，避免清理路径因 `?`
+            // 提前退出并遗留 reader/child。
             // 先把 conn_id take 出来,释放 std Mutex,再 await(避免跨 await 持锁)。
             let conn_id = self.conn_id.lock().expect("conn_id mutex").take();
             if let Some(conn_id) = conn_id {
-                let _: Result<Value, DbError> = client_arc
+                if let Err(error) = client_arc
                     .request_value(method::CONN_CLOSE, conn_only_params(conn_id))
-                    .await;
+                    .await
+                {
+                    close_error = Some(error);
+                }
             }
             // shutdown 子进程:graceful shutdown RPC + abort reader + kill child。
             client_arc.shutdown().await;
         }
         self.tunnel = None;
-        Ok(())
+        match close_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     async fn execute(
@@ -977,7 +994,9 @@ impl DbConnection for ExternalDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -1339,6 +1358,21 @@ mod tests {
     fn sql_error_message_ignores_non_sql_errors() {
         assert!(sql_error_message(&DbError::NotConnected).is_none());
         assert!(sql_error_message(&DbError::connection("network down")).is_none());
+    }
+
+    #[test]
+    fn batch_error_message_preserves_driver_code() {
+        let errors = batch_errors_by_index(vec![BatchErrorOutput {
+            index: 0,
+            code: 23505,
+            message: "duplicate key".into(),
+        }])
+        .expect("batch errors should be valid");
+
+        assert_eq!(
+            errors.get(&0).map(String::as_str),
+            Some("duplicate key (driver error code 23505)")
+        );
     }
 
     #[test]

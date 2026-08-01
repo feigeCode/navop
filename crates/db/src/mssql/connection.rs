@@ -173,15 +173,27 @@ impl MssqlDbConnection {
                             .iter()
                             .map(|c| (c.name().to_string(), format!("{:?}", c.column_type())))
                             .unzip(),
-                        _ => (Vec::new(), Vec::new()),
+                        Ok(None) => (Vec::new(), Vec::new()),
+                        Err(e) => {
+                            error!("[MSSQL] Failed to fetch result columns: {}", e);
+                            return Ok(SqlResult::Error(SqlErrorInfo {
+                                sql: sql_string,
+                                message: e.to_string(),
+                            }));
+                        }
                     };
 
                 if columns.is_empty() {
-                    let rows_affected = stream
-                        .into_results()
-                        .await
-                        .map(|results| results.iter().map(|r| r.len() as u64).sum())
-                        .unwrap_or(0);
+                    let rows_affected = match stream.into_results().await {
+                        Ok(results) => results.iter().map(|r| r.len() as u64).sum(),
+                        Err(e) => {
+                            error!("[MSSQL] Failed to fetch execution result: {}", e);
+                            return Ok(SqlResult::Error(SqlErrorInfo {
+                                sql: sql_string,
+                                message: e.to_string(),
+                            }));
+                        }
+                    };
                     let elapsed_ms = start.elapsed().as_millis();
                     debug!(
                         "[MSSQL] Execute completed: {} rows affected, {}ms",
@@ -338,7 +350,9 @@ impl DbConnection for MssqlDbConnection {
             .create_parser(SqlSource::Script(script.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
         let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+            .into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -456,32 +470,28 @@ impl DbConnection for MssqlDbConnection {
         let mut guard = self.client.lock().await;
         let client = guard.as_mut().ok_or(DbError::NotConnected)?;
 
-        let result = match client.query("SELECT DB_NAME()", &[]).await {
-            Ok(stream) => match stream.into_first_result().await {
-                Ok(rows) => {
-                    if let Some(row) = rows.first() {
-                        let db = row
-                            .try_get::<&str, _>(0)
-                            .ok()
-                            .flatten()
-                            .map(|s| s.to_string());
-                        debug!("[MSSQL] Current database: {:?}", db);
-                        db
-                    } else {
-                        debug!("[MSSQL] No rows returned for current database query");
-                        None
-                    }
-                }
-                Err(e) => {
-                    error!("[MSSQL] Failed to fetch current database result: {}", e);
-                    None
-                }
-            },
-            Err(e) => {
-                error!("[MSSQL] Failed to query current database: {}", e);
+        let stream = client.query("SELECT DB_NAME()", &[]).await.map_err(|e| {
+            error!("[MSSQL] Failed to query current database: {}", e);
+            DbError::query_with_source("failed to query current database", e)
+        })?;
+        let rows = stream.into_first_result().await.map_err(|e| {
+            error!("[MSSQL] Failed to fetch current database result: {}", e);
+            DbError::query_with_source("failed to fetch current database result", e)
+        })?;
+        let result = match rows.first() {
+            Some(row) => row
+                .try_get::<&str, _>(0)
+                .map_err(|e| {
+                    error!("[MSSQL] Failed to decode current database: {}", e);
+                    DbError::query_with_source("failed to decode current database", e)
+                })?
+                .map(str::to_string),
+            None => {
+                debug!("[MSSQL] No rows returned for current database query");
                 None
             }
         };
+        debug!("[MSSQL] Current database: {:?}", result);
         Ok(result)
     }
 
@@ -581,7 +591,9 @@ impl DbConnection for MssqlDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();

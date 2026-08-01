@@ -508,7 +508,9 @@ impl DbConnection for MysqlDbConnection {
             .create_parser(SqlSource::Script(script.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
         let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+            .into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -814,6 +816,7 @@ impl DbConnection for MysqlDbConnection {
                         current, result, bytes_read, total_size,
                     );
                     if sender.send(progress).await.is_err() {
+                        has_error = true;
                         break;
                     }
 
@@ -823,9 +826,21 @@ impl DbConnection for MysqlDbConnection {
                 }
 
                 if has_error {
-                    let _ = tx.rollback().await;
+                    tx.rollback().await.map_err(|e| {
+                        error!("[MySQL] Failed to rollback streaming transaction: {}", e);
+                        DbError::transaction_with_source(
+                            "failed to rollback streaming transaction",
+                            e,
+                        )
+                    })?;
                 } else {
-                    let _ = tx.commit().await;
+                    tx.commit().await.map_err(|e| {
+                        error!("[MySQL] Failed to commit streaming transaction: {}", e);
+                        DbError::transaction_with_source(
+                            "failed to commit streaming transaction",
+                            e,
+                        )
+                    })?;
                 }
             } else {
                 while let Some(stmt_result) = parser.next() {
@@ -894,7 +909,9 @@ impl DbConnection for MysqlDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -977,6 +994,7 @@ impl DbConnection for MysqlDbConnection {
 
                     let progress = StreamingProgress::new(current, total, result);
                     if sender.send(progress).await.is_err() {
+                        has_error = true;
                         break;
                     }
 
@@ -986,9 +1004,21 @@ impl DbConnection for MysqlDbConnection {
                 }
 
                 if has_error {
-                    let _ = tx.rollback().await;
+                    tx.rollback().await.map_err(|e| {
+                        error!("[MySQL] Failed to rollback streaming transaction: {}", e);
+                        DbError::transaction_with_source(
+                            "failed to rollback streaming transaction",
+                            e,
+                        )
+                    })?;
                 } else {
-                    let _ = tx.commit().await;
+                    tx.commit().await.map_err(|e| {
+                        error!("[MySQL] Failed to commit streaming transaction: {}", e);
+                        DbError::transaction_with_source(
+                            "failed to commit streaming transaction",
+                            e,
+                        )
+                    })?;
                 }
             } else {
                 for (index, sql) in statements.into_iter().enumerate() {

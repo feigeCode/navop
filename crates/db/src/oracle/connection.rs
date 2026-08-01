@@ -320,7 +320,16 @@ impl OracleDbConnection {
                                             .collect();
                                         data_rows.push(row_data);
                                     }
-                                    Err(_) => continue,
+                                    Err(e) => {
+                                        error!(
+                                            "[Oracle] Failed to fetch row: {}, SQL: {}",
+                                            e, sql_preview
+                                        );
+                                        return Ok(SqlResult::Error(SqlErrorInfo {
+                                            sql: sql_string,
+                                            message: e.to_string(),
+                                        }));
+                                    }
                                 }
                             }
 
@@ -467,13 +476,16 @@ impl DbConnection for OracleDbConnection {
 
         if let Some(conn) = conn_opt {
             tokio::task::spawn_blocking(move || {
-                let _ = conn.close();
+                conn.close().map_err(|e| {
+                    error!("[Oracle] Disconnect failed: {}", e);
+                    DbError::connection_with_source("failed to disconnect", e)
+                })
             })
             .await
             .map_err(|e| {
                 error!("[Oracle] Disconnect task error: {}", e);
                 DbError::Internal(format!("task error: {}", e))
-            })?;
+            })??;
         }
 
         info!("[Oracle] Disconnected");
@@ -495,7 +507,9 @@ impl DbConnection for OracleDbConnection {
             .create_parser(SqlSource::Script(script.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
         let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+            .into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -621,7 +635,10 @@ impl DbConnection for OracleDbConnection {
                 }
                 Err(e) => {
                     error!("[Oracle] Failed to get current schema: {}", e);
-                    Ok(None)
+                    Err(DbError::query_with_source(
+                        "failed to get current schema",
+                        e,
+                    ))
                 }
             }
         })
@@ -767,7 +784,9 @@ impl DbConnection for OracleDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();

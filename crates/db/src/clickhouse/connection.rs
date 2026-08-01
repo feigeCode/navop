@@ -295,7 +295,9 @@ impl DbConnection for ClickHouseDbConnection {
             .create_parser(SqlSource::Script(script.to_string()))
             .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
         let statements: Vec<String> = parser
-            .filter_map(|r| r.ok())
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+            .into_iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
@@ -363,18 +365,32 @@ impl DbConnection for ClickHouseDbConnection {
                         return Ok(Some(name.clone()));
                     }
                 }
-                Ok(Self::configured_database(&self.config))
+                Err(DbError::query(
+                    "current database query returned no database name",
+                ))
+            }
+            Ok(SqlResult::Error(error_info)) => {
+                error!(
+                    "[ClickHouse] Failed to query current database: {}",
+                    error_info.message
+                );
+                Err(DbError::query(format!(
+                    "failed to query current database: {}",
+                    error_info.message
+                )))
             }
             Ok(other) => {
                 error!(
                     "[ClickHouse] Unexpected result when querying current database: {:?}",
                     other
                 );
-                Ok(Self::configured_database(&self.config))
+                Err(DbError::query(format!(
+                    "unexpected result when querying current database: {other:?}"
+                )))
             }
             Err(e) => {
                 error!("[ClickHouse] Failed to query current database: {}", e);
-                Ok(Self::configured_database(&self.config))
+                Err(e)
             }
         }
     }
@@ -484,7 +500,9 @@ impl DbConnection for ClickHouseDbConnection {
             }
         } else {
             let statements: Vec<String> = parser
-                .filter_map(|r| r.ok())
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err(|e| DbError::query_with_source("failed to parse SQL script", e))?
+                .into_iter()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();

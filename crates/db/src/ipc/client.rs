@@ -20,6 +20,7 @@ use extension_host::error::HostError;
 use extension_host::negotiation::{ExtensionSession, NegotiationConfig};
 use extension_host::process::{SpawnConfig, SpawnTransport, default_socket_name};
 use extension_host::{ProcessRpcSession, ProcessRpcSessionConfig};
+use extension_protocol::error::ProtocolError;
 use one_core::storage::DbConnectionConfig;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -246,18 +247,23 @@ pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
         }
         HostError::Protocol(pe) => {
             use extension_protocol::error::error_codes;
-            let message = pe.message.clone();
             if pe.code == error_codes::METHOD_NOT_FOUND {
-                DbError::NotSupported(message)
+                DbError::NotSupported(pe.message.clone())
             } else if pe.is_connection_error() {
-                DbError::connection(format!("external driver error: {message}"))
+                DbError::Connection {
+                    message: format!("external driver error: {}", protocol_error_message(&pe)),
+                    source: Some(pe),
+                }
             } else if pe.is_sql_error() {
-                DbError::query(format!("external driver sql error: {message}"))
+                DbError::Query {
+                    message: format!("external driver sql error: {}", protocol_error_message(&pe)),
+                    source: Some(pe),
+                }
             } else {
-                DbError::query(format!(
-                    "external driver error (code {}): {message}",
-                    pe.code
-                ))
+                DbError::Query {
+                    message: format!("external driver error: {}", protocol_error_message(&pe)),
+                    source: Some(pe),
+                }
             }
         }
         HostError::Timeout { method, timeout_ms } => DbError::query(format!(
@@ -292,11 +298,55 @@ pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
     }
 }
 
+fn protocol_error_message(error: &ProtocolError) -> String {
+    let mut message = format!("{} (protocol code {})", error.message, error.code);
+    let Some(data) = &error.data else {
+        return message;
+    };
+
+    let mut details = Vec::new();
+    push_detail(&mut details, "SQLSTATE", data.sqlstate.as_deref());
+    if let Some(code) = data.vendor_code {
+        details.push(format!("vendor code: {code}"));
+    }
+    push_detail(&mut details, "database", data.database.as_deref());
+    push_detail(&mut details, "schema", data.schema.as_deref());
+    push_detail(&mut details, "table", data.table.as_deref());
+    push_detail(&mut details, "column", data.column.as_deref());
+    push_detail(&mut details, "constraint", data.constraint.as_deref());
+    if let Some(start) = data.start_offset {
+        match data.end_offset {
+            Some(end) => details.push(format!("offset: {start}..{end}")),
+            None => details.push(format!("offset: {start}")),
+        }
+    } else if let Some(end) = data.end_offset {
+        details.push(format!("end offset: {end}"));
+    }
+    if let Some(retryable) = data.retryable {
+        details.push(format!("retryable: {retryable}"));
+    }
+    if let Some(extra) = &data.extra {
+        details.push(format!("extra: {extra}"));
+    }
+
+    if !details.is_empty() {
+        message.push_str("; ");
+        message.push_str(&details.join(", "));
+    }
+    message
+}
+
+fn push_detail(details: &mut Vec<String>, label: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        details.push(format!("{label}: {value}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ipc::registry::{IpcDriverEntry, IpcDriverTransport};
-    use extension_protocol::error::{ProtocolError, error_codes};
+    use extension_protocol::error::{ErrorData, ProtocolError, error_codes};
 
     fn dummy_manifest(command: &str, working_dir: Option<&str>) -> IpcDriverManifest {
         IpcDriverManifest {
@@ -474,10 +524,36 @@ mod tests {
 
     #[test]
     fn sql_error_maps_to_query_error() {
-        let pe = ProtocolError::new(error_codes::SQL_SYNTAX_ERROR, "bad sql");
+        let pe = ProtocolError::new(error_codes::SQL_SYNTAX_ERROR, "bad sql").with_data(
+            ErrorData::new()
+                .at_offset(7, 12)
+                .at_object(
+                    Some("app".into()),
+                    Some("public".into()),
+                    Some("users".into()),
+                    Some("id".into()),
+                )
+                .with_sqlstate("23505")
+                .with_vendor_code(1062)
+                .retryable(false)
+                .with_extra(serde_json::json!({"detail": "duplicate key"})),
+        );
         let err = host_error_to_db_error(HostError::Protocol(Box::new(pe)));
         match err {
-            DbError::Query { message, .. } => assert!(message.contains("bad sql")),
+            DbError::Query { message, source } => {
+                assert!(message.contains("bad sql"));
+                assert!(message.contains("protocol code -34001"));
+                assert!(message.contains("SQLSTATE: 23505"));
+                assert!(message.contains("vendor code: 1062"));
+                assert!(message.contains("database: app"));
+                assert!(message.contains("schema: public"));
+                assert!(message.contains("table: users"));
+                assert!(message.contains("column: id"));
+                assert!(message.contains("offset: 7..12"));
+                assert!(message.contains("retryable: false"));
+                assert!(message.contains(r#"extra: {"detail":"duplicate key"}"#));
+                assert!(source.is_some());
+            }
             other => panic!("expected Query, got {other:?}"),
         }
     }
