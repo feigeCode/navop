@@ -14,6 +14,7 @@ mod download;
 mod extract;
 mod github_release;
 mod install;
+mod local_source;
 mod network;
 mod util;
 
@@ -23,6 +24,7 @@ use custom_api::{
 use dialog::show_update_dialog;
 use github_release::{fetch_github_release, github_release_to_dialog_info};
 use install::{apply_update_helper, cleanup_stale_update_backups};
+use local_source::{is_local_file_source, resolve_local_reference};
 use network::check_network_connectivity;
 use util::parse_version;
 
@@ -38,6 +40,7 @@ const ACTIVE_UPDATE_SOURCE: UpdateSource = UpdateSource::GitHub;
 const ACTIVE_UPDATE_SOURCE: UpdateSource = UpdateSource::CustomApi;
 #[cfg(feature = "github-updates")]
 const GITHUB_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::GitHub];
+const LOCAL_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::CustomApi];
 #[cfg(not(feature = "github-updates"))]
 const GITHUB_UPDATE_SOURCES: &[UpdateSource] = &[UpdateSource::GitHub];
 #[cfg(not(feature = "github-updates"))]
@@ -71,9 +74,11 @@ enum UpdateCheckOutcome {
 pub(crate) struct UpdateDialogInfo {
     current_version: String,
     latest_version: String,
+    release_notes: Option<String>,
     download_url: Option<String>,
     fallback_download_url: Option<String>,
     expected_sha256: Option<String>,
+    is_local_simulation: bool,
 }
 
 impl UpdateDialogInfo {
@@ -144,6 +149,7 @@ fn run_update_check(window: &mut Window, cx: &mut App, trigger: UpdateCheckTrigg
     let config = UpdateConfig::get();
     let http_client = cx.http_client();
     let current_version = CURRENT_VERSION.to_string();
+    let skipped_version = AppSettings::global(cx).skipped_update_version.clone();
     let update_task = Tokio::spawn(cx, async move {
         perform_update_check(config, http_client, current_version, trigger).await
     });
@@ -161,9 +167,16 @@ fn run_update_check(window: &mut Window, cx: &mut App, trigger: UpdateCheckTrigg
             };
 
             match outcome {
-                UpdateCheckOutcome::ShowDialog(info) => {
+                UpdateCheckOutcome::ShowDialog(info)
+                    if should_show_available_update(
+                        trigger,
+                        &info.latest_version,
+                        skipped_version.as_deref(),
+                    ) =>
+                {
                     show_update_dialog_on_active_window(info, cx)
                 }
+                UpdateCheckOutcome::ShowDialog(_) => {}
                 UpdateCheckOutcome::NotifyNoUpdate => notify_no_update_if_needed(trigger, cx),
                 UpdateCheckOutcome::NotifyFailure(err) => {
                     notify_failure_if_needed(trigger, err, cx)
@@ -205,13 +218,19 @@ async fn perform_update_check(
 }
 
 #[cfg(feature = "github-updates")]
-fn active_update_sources(_config: &UpdateConfig) -> &'static [UpdateSource] {
-    GITHUB_UPDATE_SOURCES
+fn active_update_sources(config: &UpdateConfig) -> &'static [UpdateSource] {
+    if is_local_file_source(&config.update_url) {
+        LOCAL_UPDATE_SOURCES
+    } else {
+        GITHUB_UPDATE_SOURCES
+    }
 }
 
 #[cfg(not(feature = "github-updates"))]
 fn active_update_sources(config: &UpdateConfig) -> &'static [UpdateSource] {
-    if config.is_valid() {
+    if is_local_file_source(&config.update_url) {
+        LOCAL_UPDATE_SOURCES
+    } else if config.is_valid() {
         CUSTOM_API_UPDATE_SOURCES
     } else {
         GITHUB_UPDATE_SOURCES
@@ -224,14 +243,16 @@ async fn fetch_dialog_info_from_source(
     http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
     current_version: &str,
 ) -> Result<Option<UpdateDialogInfo>, String> {
-    // 网络连通性检查：直接探测对应更新源，而非第三方地址
-    let connectivity_url = match source {
-        UpdateSource::GitHub => network::GITHUB_API_HOST,
-        UpdateSource::CustomApi => config.update_url.as_str(),
-    };
-    if let Err(err) = check_network_connectivity(http_client.clone(), connectivity_url).await {
-        tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
-        return Err(err);
+    if source != UpdateSource::CustomApi || !is_local_file_source(&config.update_url) {
+        // 网络连通性检查：直接探测对应更新源，而非第三方地址
+        let connectivity_url = match source {
+            UpdateSource::GitHub => network::GITHUB_API_HOST,
+            UpdateSource::CustomApi => config.update_url.as_str(),
+        };
+        if let Err(err) = check_network_connectivity(http_client.clone(), connectivity_url).await {
+            tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
+            return Err(err);
+        }
     }
 
     match source {
@@ -248,6 +269,28 @@ fn should_run_update_check(
     portable: bool,
 ) -> bool {
     matches!(trigger, UpdateCheckTrigger::Manual) || auto_update_enabled && !portable
+}
+
+fn should_show_available_update(
+    trigger: UpdateCheckTrigger,
+    latest_version: &str,
+    skipped_version: Option<&str>,
+) -> bool {
+    if trigger == UpdateCheckTrigger::Manual {
+        return true;
+    }
+
+    let Some(skipped_version) = skipped_version else {
+        return true;
+    };
+
+    match (
+        parse_version(latest_version),
+        parse_version(skipped_version),
+    ) {
+        (Some(latest), Some(skipped)) => latest != skipped,
+        _ => latest_version.trim() != skipped_version.trim(),
+    }
 }
 
 fn notify_no_update_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp) {
@@ -316,12 +359,19 @@ async fn fetch_custom_dialog_info(
         return Ok(None);
     }
 
+    let download_url = select_download_url(&response, config.download_url.clone())
+        .map(|url| resolve_local_reference(&config.update_url, &url));
+    let fallback_download_url = select_fallback_download_url(&response)
+        .map(|url| resolve_local_reference(&config.update_url, &url));
+
     Ok(Some(UpdateDialogInfo {
         current_version: current_version.to_string(),
         latest_version: response.version.clone(),
-        download_url: select_download_url(&response, config.download_url.clone()),
-        fallback_download_url: select_fallback_download_url(&response),
+        release_notes: response.release_notes.clone(),
+        download_url,
+        fallback_download_url,
         expected_sha256: select_sha256(&response),
+        is_local_simulation: is_local_file_source(&config.update_url),
     }))
 }
 
@@ -426,23 +476,19 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "github-updates"))]
     use std::sync::Arc;
 
     #[cfg(not(feature = "github-updates"))]
     use anyhow::anyhow;
-    #[cfg(not(feature = "github-updates"))]
     use gpui::http_client::HttpClient;
     #[cfg(not(feature = "github-updates"))]
     use one_core::config::update_url_from_public_base;
 
     use super::{
         ACTIVE_UPDATE_SOURCE, UpdateCheckTrigger, UpdateDialogInfo, UpdateSource,
-        should_run_update_check,
+        should_run_update_check, should_show_available_update,
     };
-    #[cfg(not(feature = "github-updates"))]
     use super::{UpdateCheckOutcome, perform_update_check};
-    #[cfg(not(feature = "github-updates"))]
     use crate::update::test_support::FakeHttpClient;
 
     #[test]
@@ -477,6 +523,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn automatic_check_hides_the_skipped_version() {
+        assert!(!should_show_available_update(
+            UpdateCheckTrigger::Automatic,
+            "v1.2.3",
+            Some("1.2.3")
+        ));
+    }
+
+    #[test]
+    fn automatic_check_shows_a_newer_version_than_the_skipped_one() {
+        assert!(should_show_available_update(
+            UpdateCheckTrigger::Automatic,
+            "1.2.4",
+            Some("1.2.3")
+        ));
+    }
+
+    #[test]
+    fn manual_check_can_reopen_the_skipped_version() {
+        assert!(should_show_available_update(
+            UpdateCheckTrigger::Manual,
+            "1.2.3",
+            Some("v1.2.3")
+        ));
+    }
+
     #[cfg(not(feature = "github-updates"))]
     #[test]
     fn default_update_source_uses_r2_custom_api() {
@@ -494,9 +567,11 @@ mod tests {
         let info = UpdateDialogInfo {
             current_version: "0.1.0".to_string(),
             latest_version: "9.9.9".to_string(),
+            release_notes: None,
             download_url: Some("https://onetcli.pdyyds.cn/update.tar.gz".to_string()),
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
+            is_local_simulation: false,
         };
 
         assert_eq!(
@@ -513,15 +588,60 @@ mod tests {
         let info = UpdateDialogInfo {
             current_version: "0.1.0".to_string(),
             latest_version: "9.9.9".to_string(),
+            release_notes: None,
             download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
+            is_local_simulation: false,
         };
 
         assert_eq!(
             vec!["https://github.example.test/update.tar.gz".to_string()],
             info.download_urls()
         );
+    }
+
+    #[tokio::test]
+    async fn local_manifest_skips_network_check_and_enables_safe_simulation() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let package_path = temp_dir.path().join("navop-local-update.tar.gz");
+        let manifest_path = temp_dir.path().join("latest.json");
+        std::fs::write(&package_path, b"local-package").expect("写入本地更新包失败");
+        std::fs::write(
+            &manifest_path,
+            r###"{
+                "version": "99.0.0",
+                "release_notes": "## 本地更新模拟",
+                "download_url": "navop-local-update.tar.gz"
+            }"###,
+        )
+        .expect("写入本地 manifest 失败");
+        let client = Arc::new(FakeHttpClient::new(Vec::new()));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+        let config = one_core::config::UpdateConfig {
+            update_url: manifest_path.to_string_lossy().into_owned(),
+            download_url: None,
+        };
+
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.10.0".to_string(),
+            UpdateCheckTrigger::Manual,
+        )
+        .await;
+
+        let UpdateCheckOutcome::ShowDialog(info) = outcome else {
+            panic!("本地 manifest 应展示更新模拟窗口");
+        };
+        assert_eq!(info.latest_version, "99.0.0");
+        assert_eq!(info.release_notes.as_deref(), Some("## 本地更新模拟"));
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some(package_path.to_string_lossy().as_ref())
+        );
+        assert!(info.is_local_simulation);
+        assert!(client.take_requests().is_empty());
     }
 
     #[cfg(not(feature = "github-updates"))]

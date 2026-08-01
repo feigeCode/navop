@@ -761,6 +761,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub auto_update: bool,
     #[serde(default)]
+    pub skipped_update_version: Option<String>,
+    #[serde(default)]
     pub sync_provider: SyncProvider,
     #[serde(default)]
     pub global_proxy: GlobalProxySettings,
@@ -1098,6 +1100,7 @@ impl Default for AppSettings {
             local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
+            skipped_update_version: None,
             sync_provider: SyncProvider::OnetCloud,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),

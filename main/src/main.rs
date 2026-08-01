@@ -48,6 +48,8 @@ struct AppAssets {
     driver: db::ipc::DriverAssetSource,
 }
 
+pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
+
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
 const MAIN_WINDOW_DISPLAY_RATIO: f32 = 0.9;
@@ -98,6 +100,12 @@ impl AppAssets {
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        if path == NAVOP_ICON_ASSET_PATH {
+            return Ok(Some(std::borrow::Cow::Borrowed(include_bytes!(
+                "../../resources/navop-icon.png"
+            ))));
+        }
+
         match self.driver.load(path) {
             Ok(Some(asset)) => {
                 if path.starts_with("driver://") {

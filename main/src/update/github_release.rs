@@ -35,6 +35,8 @@ pub(crate) struct GithubReleaseAsset {
 #[derive(Debug, Deserialize)]
 pub(crate) struct GithubRelease {
     pub(crate) tag_name: String,
+    #[serde(default)]
+    pub(crate) body: Option<String>,
     pub(crate) assets: Vec<GithubReleaseAsset>,
 }
 
@@ -93,9 +95,11 @@ pub(crate) fn github_release_to_dialog_info(
     Ok(UpdateDialogInfo {
         current_version: current_version.to_string(),
         latest_version: release.tag_name.clone(),
+        release_notes: release.body.clone(),
         download_url: Some(asset.browser_download_url.clone()),
         fallback_download_url: None,
         expected_sha256: None,
+        is_local_simulation: false,
     })
 }
 
@@ -126,6 +130,7 @@ mod tests {
             .expect("GitHub Release 请求应成功");
 
         assert_eq!(release.tag_name, "v1.2.3");
+        assert_eq!(release.body.as_deref(), Some("release notes"));
 
         let requests = client.take_requests();
         assert_eq!(requests.len(), 1);
@@ -138,6 +143,7 @@ mod tests {
     fn github_release_to_dialog_info_uses_matching_asset() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
+            body: Some("## What's New".to_string()),
             assets: vec![
                 GithubReleaseAsset {
                     name: "sha256sums.txt".to_string(),
@@ -154,6 +160,7 @@ mod tests {
 
         assert_eq!(info.latest_version, "v1.2.3");
         assert_eq!(info.current_version, "0.1.0");
+        assert_eq!(info.release_notes.as_deref(), Some("## What's New"));
         assert_eq!(
             info.download_url.as_deref(),
             Some("https://example.com/update")

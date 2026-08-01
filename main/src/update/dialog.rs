@@ -6,32 +6,35 @@ use std::sync::{
 use std::time::Duration;
 
 use super::UpdateDialogInfo;
-use super::download::{build_download_path, download_update_file_from_sources, verify_sha256};
+use super::download::{
+    DOWNLOAD_CANCELLED_ERROR, build_download_path, download_update_file_from_sources_cancellable,
+    verify_sha256,
+};
 use super::install::start_install_update;
 use super::util::{UpdateInstallAction, format_bytes};
+use crate::setting_tab::AppSettings;
 use crate::update::github_release::GITHUB_LATEST_RELEASE_URL;
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-    Styled, WeakEntity, Window, div,
+    App, AppContext, AsyncApp, Context, FocusHandle, Focusable, WeakEntity, Window, px, size,
 };
-use gpui_component::{
-    ActiveTheme, Disableable, Sizable, WindowExt,
-    button::{Button, ButtonVariants as _},
-    clipboard::Clipboard,
-    h_flex,
-    progress::Progress,
-    v_flex,
-};
+use gpui_component::WindowExt;
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
 
+#[path = "dialog_render.rs"]
+mod dialog_render;
+
 const DOWNLOAD_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const AVAILABLE_WINDOW_WIDTH: f32 = 560.0;
+const AVAILABLE_WINDOW_HEIGHT: f32 = 450.0;
+const DOWNLOAD_WINDOW_WIDTH: f32 = 440.0;
+const DOWNLOAD_WINDOW_HEIGHT: f32 = 170.0;
 
 pub(super) fn show_update_dialog(info: UpdateDialogInfo, cx: &mut App) {
     open_popup_window(
-        PopupWindowOptions::new(t!("Update.title").to_string()).size(480.0, 300.0),
+        PopupWindowOptions::new(t!("Update.title").to_string())
+            .size(AVAILABLE_WINDOW_WIDTH, AVAILABLE_WINDOW_HEIGHT),
         move |_window, cx| cx.new(|cx| UpdateDialogView::new(info, cx)),
         cx,
     );
@@ -41,8 +44,11 @@ struct UpdateDialogView {
     focus_handle: FocusHandle,
     info: UpdateDialogInfo,
     downloading: bool,
+    cancelling: bool,
+    cancelled: bool,
     applying: bool,
     completed: bool,
+    auto_update: bool,
     progress: f32,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
@@ -50,6 +56,7 @@ struct UpdateDialogView {
     status_message: String,
     error_message: Option<String>,
     expected_sha256: Option<String>,
+    cancel_requested: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -65,8 +72,11 @@ impl UpdateDialogView {
             focus_handle: cx.focus_handle(),
             info,
             downloading: false,
+            cancelling: false,
+            cancelled: false,
             applying: false,
             completed: false,
+            auto_update: AppSettings::global(cx).auto_update,
             progress: 0.0,
             downloaded_bytes: 0,
             total_bytes: None,
@@ -74,6 +84,7 @@ impl UpdateDialogView {
             status_message: t!("Update.ready").to_string(),
             error_message: None,
             expected_sha256,
+            cancel_requested: None,
         }
     }
 
@@ -83,7 +94,12 @@ impl UpdateDialogView {
             return;
         }
 
-        if one_core::app_paths::is_portable() {
+        if self.completed && self.info.is_local_simulation {
+            window.remove_window();
+            return;
+        }
+
+        if one_core::app_paths::is_portable() && !self.info.is_local_simulation {
             cx.open_url(GITHUB_LATEST_RELEASE_URL);
             return;
         }
@@ -93,11 +109,21 @@ impl UpdateDialogView {
             return;
         }
 
-        self.start_download(cx);
+        self.start_download(window, cx);
     }
 
     fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.downloading || self.applying {
+        if self.downloading {
+            if let Some(cancel_requested) = self.cancel_requested.as_ref() {
+                cancel_requested.store(true, Ordering::Relaxed);
+                self.cancelling = true;
+                self.status_message = t!("Update.cancelling").to_string();
+                cx.notify();
+            }
+            return;
+        }
+
+        if self.applying {
             window.push_notification(t!("Update.downloading_blocked").to_string(), cx);
             return;
         }
@@ -105,7 +131,7 @@ impl UpdateDialogView {
         window.remove_window();
     }
 
-    fn start_download(&mut self, cx: &mut Context<Self>) {
+    fn start_download(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.downloading || self.completed || self.applying {
             return;
         }
@@ -129,6 +155,8 @@ impl UpdateDialogView {
         };
 
         self.downloading = true;
+        self.cancelling = false;
+        self.cancelled = false;
         self.completed = false;
         self.progress = 0.0;
         self.downloaded_bytes = 0;
@@ -136,6 +164,13 @@ impl UpdateDialogView {
         self.downloaded_path = None;
         self.error_message = None;
         self.status_message = t!("Update.downloading").to_string();
+        window.resize(size(px(DOWNLOAD_WINDOW_WIDTH), px(DOWNLOAD_WINDOW_HEIGHT)));
+        let window_title = if self.info.is_local_simulation {
+            t!("Update.simulation_title")
+        } else {
+            t!("Update.downloading_title")
+        };
+        window.set_window_title(&window_title);
         cx.notify();
 
         let http_client = cx.http_client();
@@ -146,6 +181,9 @@ impl UpdateDialogView {
         let progress_finished_for_watcher = Arc::clone(&progress_finished);
         let view = cx.entity().downgrade();
         let expected_sha256 = self.expected_sha256.clone();
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let cancel_requested_for_task = Arc::clone(&cancel_requested);
+        self.cancel_requested = Some(cancel_requested);
 
         cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
@@ -165,10 +203,11 @@ impl UpdateDialogView {
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let download_task = Tokio::spawn(cx, async move {
-                download_update_file_from_sources(
+                download_update_file_from_sources_cancellable(
                     http_client,
                     &download_urls,
                     &download_path_for_task,
+                    cancel_requested_for_task,
                     move |downloaded, total| {
                         if let Ok(mut progress) = progress_state_for_task.lock() {
                             *progress = DownloadProgressSnapshot { downloaded, total };
@@ -191,7 +230,10 @@ impl UpdateDialogView {
                             let _ = std::fs::remove_file(&download_path);
                             let _ = this.update(cx, |view, cx| {
                                 view.downloading = false;
+                                view.cancelling = false;
+                                view.cancelled = false;
                                 view.applying = false;
+                                view.cancel_requested = None;
                                 view.downloaded_path = None;
                                 view.error_message = Some(err);
                                 view.status_message = t!("Update.download_failed").to_string();
@@ -204,17 +246,40 @@ impl UpdateDialogView {
                     let _ = this.update(cx, |view, cx| {
                         view.completed = true;
                         view.downloading = false;
+                        view.cancelling = false;
+                        view.cancelled = false;
                         view.applying = false;
+                        view.cancel_requested = None;
                         view.progress = 100.0;
                         view.downloaded_path = Some(download_path.clone());
-                        view.status_message = t!("Update.download_complete").to_string();
+                        view.status_message = if view.info.is_local_simulation {
+                            t!("Update.simulation_complete").to_string()
+                        } else {
+                            t!("Update.download_complete").to_string()
+                        };
+                        cx.notify();
+                    });
+                }
+                Err(err) if err == DOWNLOAD_CANCELLED_ERROR => {
+                    let _ = this.update(cx, |view, cx| {
+                        view.downloading = false;
+                        view.cancelling = false;
+                        view.cancelled = true;
+                        view.applying = false;
+                        view.cancel_requested = None;
+                        view.downloaded_path = None;
+                        view.error_message = None;
+                        view.status_message = t!("Update.cancelled").to_string();
                         cx.notify();
                     });
                 }
                 Err(err) => {
                     let _ = this.update(cx, |view, cx| {
                         view.downloading = false;
+                        view.cancelling = false;
+                        view.cancelled = false;
                         view.applying = false;
+                        view.cancel_requested = None;
                         view.downloaded_path = None;
                         view.error_message = Some(err);
                         view.status_message = t!("Update.download_failed").to_string();
@@ -241,6 +306,7 @@ impl UpdateDialogView {
         };
 
         self.applying = true;
+        self.cancelling = false;
         self.error_message = None;
         self.status_message = t!("Update.applying").to_string();
         cx.notify();
@@ -301,6 +367,30 @@ impl UpdateDialogView {
             _ => format_bytes(self.downloaded_bytes),
         }
     }
+
+    fn set_auto_update(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.auto_update = enabled;
+        AppSettings::update_and_save(cx, |settings| {
+            settings.auto_update = enabled;
+        });
+        cx.notify();
+    }
+
+    fn skip_version(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let latest_version = self.info.latest_version.clone();
+        AppSettings::update_and_save(cx, |settings| {
+            settings.skipped_update_version = Some(latest_version);
+        });
+        window.remove_window();
+    }
+
+    fn status_message(&self) -> String {
+        if let Some(error) = self.error_message.as_ref() {
+            format!("{}: {}", t!("Update.error_prefix"), error)
+        } else {
+            self.status_message.clone()
+        }
+    }
 }
 
 fn sync_download_progress(
@@ -321,135 +411,5 @@ fn sync_download_progress(
 impl Focusable for UpdateDialogView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-impl Render for UpdateDialogView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let message = t!(
-            "Update.message",
-            latest = self.info.latest_version,
-            current = self.info.current_version
-        )
-        .to_string();
-
-        let show_progress = self.downloading || self.completed;
-        let status_message = if let Some(error) = self.error_message.as_ref() {
-            format!("{}: {}", t!("Update.error_prefix"), error)
-        } else {
-            self.status_message.clone()
-        };
-        let action_text = if one_core::app_paths::is_portable() {
-            t!("Update.open_release_page").to_string()
-        } else if self.applying {
-            t!("Update.action_applying").to_string()
-        } else if self.downloading {
-            t!("Update.action_downloading").to_string()
-        } else if self.completed {
-            t!("Update.action_install").to_string()
-        } else {
-            t!("Update.action_download").to_string()
-        };
-
-        let release_page_url = GITHUB_LATEST_RELEASE_URL;
-
-        v_flex()
-            .gap_3()
-            .size_full()
-            .child(
-                div().flex_1().p_4().child(
-                    v_flex()
-                        .gap_3()
-                        .child(
-                            div()
-                                .text_base()
-                                .text_color(cx.theme().foreground)
-                                .child(message),
-                        )
-                        .when(show_progress, |this| {
-                            this.child(
-                                v_flex()
-                                    .gap_2()
-                                    .child(
-                                        Progress::new("update-progress")
-                                            .value(self.progress_value()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(self.progress_label()),
-                                    ),
-                            )
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(status_message),
-                        )
-                        .child(
-                            v_flex()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(t!("Update.open_release_page").to_string()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().link)
-                                                .child(release_page_url),
-                                        )
-                                        .child(
-                                            Clipboard::new("release-url-copy")
-                                                .value(release_page_url),
-                                        )
-                                        .child(
-                                            Button::new("release-url-open")
-                                                .xsmall()
-                                                .ghost()
-                                                .icon(gpui_component::IconName::ExternalLink)
-                                                .on_click(move |_, _, cx| {
-                                                    cx.open_url(&release_page_url);
-                                                }),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("update-later")
-                            .small()
-                            .label(t!("Update.later").to_string())
-                            .disabled(self.downloading || self.applying)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_cancel(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("update-action")
-                            .small()
-                            .primary()
-                            .label(action_text)
-                            .disabled(self.downloading || self.applying)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_ok_action(window, cx);
-                            })),
-                    ),
-            )
     }
 }

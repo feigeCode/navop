@@ -4,9 +4,13 @@ use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
 use serde::Deserialize;
 
+use super::local_source::local_file_path;
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateResponse {
     pub(crate) version: String,
+    #[serde(default, alias = "body", alias = "changelog")]
+    pub(crate) release_notes: Option<String>,
     #[serde(default)]
     download_url: Option<String>,
     #[serde(default)]
@@ -25,6 +29,14 @@ pub(crate) async fn fetch_update_info(
     http_client: Arc<dyn HttpClient>,
     update_url: &str,
 ) -> Result<UpdateResponse, String> {
+    if let Some(path) = local_file_path(update_url) {
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|err| format!("读取本地更新文件失败 {}: {}", path.display(), err))?;
+        return serde_json::from_slice::<UpdateResponse>(&bytes)
+            .map_err(|err| format!("解析本地更新文件失败 {}: {}", path.display(), err));
+    }
+
     let request = Request::builder()
         .method(Method::GET)
         .uri(update_url)
@@ -112,7 +124,79 @@ fn platform_download_keys() -> &'static [&'static str] {
 
 #[cfg(test)]
 mod tests {
+    use gpui::http_client::HttpClient;
+
+    use crate::update::test_support::FakeHttpClient;
+
     use super::*;
+
+    #[tokio::test]
+    async fn fetch_update_info_reads_plain_local_manifest_without_http_request() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("latest.json");
+        std::fs::write(
+            &manifest_path,
+            "{\"version\":\"99.0.0\",\"release_notes\":\"## 本地模拟\"}",
+        )
+        .expect("写入本地 manifest 失败");
+        let client = Arc::new(FakeHttpClient::new(Vec::new()));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+
+        let response = fetch_update_info(http_client, &manifest_path.to_string_lossy())
+            .await
+            .expect("应读取本地 manifest");
+
+        assert_eq!(response.version, "99.0.0");
+        assert_eq!(response.release_notes.as_deref(), Some("## 本地模拟"));
+        assert!(client.take_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_update_info_reads_file_url_without_http_request() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("latest file.json");
+        std::fs::write(&manifest_path, r#"{"version":"99.0.1"}"#).expect("写入本地 manifest 失败");
+        let manifest_url = url::Url::from_file_path(&manifest_path)
+            .expect("应生成 file URL")
+            .to_string();
+        let client = Arc::new(FakeHttpClient::new(Vec::new()));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+
+        let response = fetch_update_info(http_client, &manifest_url)
+            .await
+            .expect("应读取 file URL manifest");
+
+        assert_eq!(response.version, "99.0.1");
+        assert!(client.take_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn local_manifest_parse_error_includes_file_path() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let manifest_path = temp_dir.path().join("broken.json");
+        std::fs::write(&manifest_path, b"not-json").expect("写入损坏 manifest 失败");
+        let client: Arc<dyn HttpClient> = Arc::new(FakeHttpClient::new(Vec::new()));
+
+        let error = fetch_update_info(client, &manifest_path.to_string_lossy())
+            .await
+            .expect_err("损坏 manifest 应返回错误");
+
+        assert!(error.contains("解析本地更新文件失败"));
+        assert!(error.contains(&manifest_path.display().to_string()));
+    }
+
+    #[test]
+    fn update_response_accepts_release_notes_aliases() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            "{\n\
+                \"version\": \"1.2.3\",\n\
+                \"body\": \"## Fixes\"\n\
+            }",
+        )
+        .unwrap();
+
+        assert_eq!(response.release_notes.as_deref(), Some("## Fixes"));
+    }
 
     #[test]
     fn select_download_url_prefers_target_triple_before_os_fallback() {

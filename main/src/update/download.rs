@@ -1,13 +1,19 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
-use futures::AsyncReadExt;
+use futures::AsyncReadExt as FuturesAsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http};
 use sha2::{Digest, Sha256};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt};
+
+use super::local_source::local_file_path;
 
 const STALE_DOWNLOAD_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
+pub(crate) const DOWNLOAD_CANCELLED_ERROR: &str = "update download cancelled";
 
 #[path = "download_path.rs"]
 mod download_path;
@@ -15,6 +21,7 @@ mod download_path;
 pub(crate) use download_path::build_download_path;
 use download_path::{partial_download_path, update_root_for_download};
 
+#[cfg(test)]
 pub(crate) async fn download_update_file<F>(
     http_client: Arc<dyn HttpClient>,
     download_url: &str,
@@ -24,11 +31,43 @@ pub(crate) async fn download_update_file<F>(
 where
     F: FnMut(u64, Option<u64>),
 {
+    download_update_file_cancellable(
+        http_client,
+        download_url,
+        download_path,
+        None,
+        &mut on_progress,
+    )
+    .await
+}
+
+async fn download_update_file_cancellable<F>(
+    http_client: Arc<dyn HttpClient>,
+    download_url: &str,
+    download_path: &Path,
+    cancel_requested: Option<&AtomicBool>,
+    on_progress: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
     prepare_download_directory(download_path).await?;
     let partial_path = partial_download_path(download_path)?;
-    let result = download_to_file(http_client, download_url, &partial_path, &mut on_progress).await;
+    let result = download_to_file(
+        http_client,
+        download_url,
+        &partial_path,
+        cancel_requested,
+        on_progress,
+    )
+    .await;
 
     if let Err(err) = result {
+        let _ = fs::remove_file(&partial_path).await;
+        return Err(err);
+    }
+
+    if let Err(err) = ensure_download_not_cancelled(cancel_requested) {
         let _ = fs::remove_file(&partial_path).await;
         return Err(err);
     }
@@ -45,11 +84,17 @@ async fn download_to_file<F>(
     http_client: Arc<dyn HttpClient>,
     download_url: &str,
     destination: &Path,
+    cancel_requested: Option<&AtomicBool>,
     on_progress: &mut F,
 ) -> Result<(), String>
 where
     F: FnMut(u64, Option<u64>),
 {
+    if let Some(source_path) = local_file_path(download_url) {
+        return copy_local_update_file(&source_path, destination, cancel_requested, on_progress)
+            .await;
+    }
+
     let request = Request::builder()
         .method(Method::GET)
         .uri(download_url)
@@ -81,6 +126,7 @@ where
     let mut buffer = vec![0u8; 8192];
 
     loop {
+        ensure_download_not_cancelled(cancel_requested)?;
         let read = body
             .read(&mut buffer)
             .await
@@ -89,6 +135,7 @@ where
             break;
         }
 
+        ensure_download_not_cancelled(cancel_requested)?;
         file.write_all(&buffer[..read])
             .await
             .map_err(|err| format!("写入更新文件失败: {}", err))?;
@@ -97,6 +144,7 @@ where
         on_progress(downloaded, total_bytes);
     }
 
+    ensure_download_not_cancelled(cancel_requested)?;
     file.flush()
         .await
         .map_err(|err| format!("刷新更新文件失败: {}", err))?;
@@ -107,10 +155,88 @@ where
     Ok(())
 }
 
+async fn copy_local_update_file<F>(
+    source: &Path,
+    destination: &Path,
+    cancel_requested: Option<&AtomicBool>,
+    on_progress: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    ensure_download_not_cancelled(cancel_requested)?;
+
+    let total_bytes = fs::metadata(source)
+        .await
+        .map_err(|err| format!("读取本地更新包信息失败 {}: {}", source.display(), err))?
+        .len();
+    let mut source_file = fs::File::open(source)
+        .await
+        .map_err(|err| format!("打开本地更新包失败 {}: {}", source.display(), err))?;
+    let mut destination_file = fs::File::create(destination)
+        .await
+        .map_err(|err| format!("创建更新文件失败: {}", err))?;
+
+    let mut copied = 0;
+    let mut buffer = vec![0u8; 8192];
+    loop {
+        ensure_download_not_cancelled(cancel_requested)?;
+        let read = source_file
+            .read(&mut buffer)
+            .await
+            .map_err(|err| format!("读取本地更新包失败 {}: {}", source.display(), err))?;
+        if read == 0 {
+            break;
+        }
+
+        ensure_download_not_cancelled(cancel_requested)?;
+        destination_file
+            .write_all(&buffer[..read])
+            .await
+            .map_err(|err| format!("写入更新文件失败: {}", err))?;
+
+        copied += read as u64;
+        on_progress(copied, Some(total_bytes));
+    }
+
+    ensure_download_not_cancelled(cancel_requested)?;
+    destination_file
+        .flush()
+        .await
+        .map_err(|err| format!("刷新更新文件失败: {}", err))?;
+    destination_file
+        .sync_all()
+        .await
+        .map_err(|err| format!("同步更新文件失败: {}", err))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) async fn download_update_file_from_sources<F>(
     http_client: Arc<dyn HttpClient>,
     download_urls: &[String],
     download_path: &Path,
+    on_progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    download_update_file_from_sources_cancellable(
+        http_client,
+        download_urls,
+        download_path,
+        Arc::new(AtomicBool::new(false)),
+        on_progress,
+    )
+    .await
+}
+
+pub(crate) async fn download_update_file_from_sources_cancellable<F>(
+    http_client: Arc<dyn HttpClient>,
+    download_urls: &[String],
+    download_path: &Path,
+    cancel_requested: Arc<AtomicBool>,
     mut on_progress: F,
 ) -> Result<(), String>
 where
@@ -118,11 +244,13 @@ where
 {
     let mut last_error = None;
     for download_url in download_urls {
-        match download_update_file(
+        ensure_download_not_cancelled(Some(&cancel_requested))?;
+        match download_update_file_cancellable(
             http_client.clone(),
             download_url,
             download_path,
-            |done, total| {
+            Some(&cancel_requested),
+            &mut |done, total| {
                 on_progress(done, total);
             },
         )
@@ -134,6 +262,14 @@ where
     }
 
     Err(last_error.unwrap_or_else(|| "缺少可用的更新下载源".to_string()))
+}
+
+fn ensure_download_not_cancelled(cancel_requested: Option<&AtomicBool>) -> Result<(), String> {
+    if cancel_requested.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
+        Err(DOWNLOAD_CANCELLED_ERROR.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 /// 校验下载文件的 SHA256 哈希值。
