@@ -62,16 +62,11 @@ impl EntityInputHandler for TerminalView {
         _range: std::ops::Range<usize>,
         _bounds: Bounds<Pixels>,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         // 获取光标位置用于 IME 定位
-        let term = self.terminal.read(cx).term().lock();
-        let cursor = term.grid().cursor.point;
-        let display_offset = term.grid().display_offset();
-        drop(term);
-
-        let screen_line = cursor.line.0 + display_offset as i32;
-        let col = cursor.column.0;
+        let screen_line = self.terminal_frame_snapshot.cursor_screen_line;
+        let col = self.terminal_frame_snapshot.cursor_column;
 
         // 计算像素位置
         let origin = Point::new(

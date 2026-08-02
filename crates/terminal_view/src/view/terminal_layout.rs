@@ -38,7 +38,14 @@ impl TerminalView {
         column: usize,
         cx: &Context<Self>,
     ) -> AddonLineText {
-        let term = self.terminal.read(cx).term().lock();
+        let term = self.terminal.read(cx).term().clone();
+        let Some(term) = term.try_lock_unfair() else {
+            return AddonLineText {
+                text: String::new(),
+                column,
+                screen_line,
+            };
+        };
         let grid = term.grid();
         let display_offset = grid.display_offset();
         let grid_line = screen_line as i32 - display_offset as i32;

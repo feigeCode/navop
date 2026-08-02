@@ -1,6 +1,99 @@
 use super::*;
 
 impl TerminalView {
+    fn try_apply_terminal_selection_action(
+        &mut self,
+        action: PendingTerminalSelectionAction,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.terminal.update(cx, |terminal, _| match action {
+            PendingTerminalSelectionAction::Clear => terminal.try_clear_selection(),
+            PendingTerminalSelectionAction::Start {
+                selection_type,
+                point,
+                side,
+            } => terminal.try_start_selection(selection_type, point, side),
+            PendingTerminalSelectionAction::Update { point, side } => {
+                terminal.try_update_selection(point, side)
+            }
+        })
+    }
+
+    fn enqueue_terminal_selection_action(&mut self, action: PendingTerminalSelectionAction) {
+        match action {
+            PendingTerminalSelectionAction::Clear
+            | PendingTerminalSelectionAction::Start { .. } => {
+                // Clear and Start both replace all earlier selection state.
+                // Keeping only the latest prevents an unbounded mouse-move
+                // queue while the parser owns the terminal lock.
+                self.pending_selection_auto_copy = false;
+                self.pending_terminal_selection_actions.clear();
+                self.pending_terminal_selection_actions.push_back(action);
+            }
+            PendingTerminalSelectionAction::Update { .. } => {
+                if matches!(
+                    self.pending_terminal_selection_actions.back(),
+                    Some(PendingTerminalSelectionAction::Update { .. })
+                ) {
+                    self.pending_terminal_selection_actions.pop_back();
+                }
+                self.pending_terminal_selection_actions.push_back(action);
+            }
+        }
+    }
+
+    pub(super) fn apply_or_queue_terminal_selection_action(
+        &mut self,
+        action: PendingTerminalSelectionAction,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            action,
+            PendingTerminalSelectionAction::Clear | PendingTerminalSelectionAction::Start { .. }
+        ) {
+            self.pending_selection_auto_copy = false;
+        }
+        if self.pending_terminal_selection_actions.is_empty()
+            && self.try_apply_terminal_selection_action(action, cx)
+        {
+            return;
+        }
+
+        self.enqueue_terminal_selection_action(action);
+        self.schedule_terminal_render_retry(cx);
+    }
+
+    pub(super) fn apply_pending_terminal_selection_actions(&mut self, cx: &mut Context<Self>) {
+        while let Some(action) = self.pending_terminal_selection_actions.front().copied() {
+            if !self.try_apply_terminal_selection_action(action, cx) {
+                self.schedule_terminal_render_retry(cx);
+                return;
+            }
+            self.pending_terminal_selection_actions.pop_front();
+        }
+        self.try_finish_pending_selection_auto_copy(cx);
+    }
+
+    fn try_finish_pending_selection_auto_copy(&mut self, cx: &mut Context<Self>) {
+        if !self.pending_selection_auto_copy || !self.pending_terminal_selection_actions.is_empty()
+        {
+            return;
+        }
+
+        let term = self.terminal.read(cx).term().clone();
+        let Some(term) = term.try_lock_unfair() else {
+            self.schedule_terminal_render_retry(cx);
+            return;
+        };
+        let selection_text = term.selection_to_string();
+        drop(term);
+
+        self.pending_selection_auto_copy = false;
+        if let Some(text) = selection_text.filter(|text| !text.is_empty()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
     pub(super) fn handle_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -65,9 +158,10 @@ impl TerminalView {
         let point = self.pixel_to_point(event.position, bounds, cx);
         let side = self.pixel_to_side(event.position, bounds);
 
-        self.terminal.update(cx, |terminal, _| {
-            terminal.update_selection(point, side);
-        });
+        self.apply_or_queue_terminal_selection_action(
+            PendingTerminalSelectionAction::Update { point, side },
+            cx,
+        );
         cx.notify();
     }
 
@@ -109,13 +203,14 @@ impl TerminalView {
             _ => SelectionType::Lines,
         };
 
-        self.terminal.update(cx, |terminal, _| {
-            terminal.start_selection(
+        self.apply_or_queue_terminal_selection_action(
+            PendingTerminalSelectionAction::Start {
                 selection_type,
-                pending.point,
-                self.pixel_to_side(pending.position, bounds),
-            );
-        });
+                point: pending.point,
+                side: self.pixel_to_side(pending.position, bounds),
+            },
+            cx,
+        );
         self.mouse_state.selecting = true;
     }
 
@@ -135,10 +230,11 @@ impl TerminalView {
         }
         if let Some(pending) = self.mouse_state.pending_sgr_left_press.take() {
             if self.accepts_live_terminal_input(cx) {
-                self.terminal.update(cx, |terminal, _| {
-                    terminal.clear_selection();
-                });
-                if sgr_mouse_mode_enabled(self.terminal.read(cx).mode()) {
+                self.apply_or_queue_terminal_selection_action(
+                    PendingTerminalSelectionAction::Clear,
+                    cx,
+                );
+                if sgr_mouse_mode_enabled(self.terminal_frame_snapshot.mode) {
                     self.write_sgr_mouse_button_report(
                         MouseButton::Left,
                         pending.position,
@@ -249,11 +345,8 @@ impl TerminalView {
 
         self.mouse_state.selecting = false;
         if self.auto_copy_on_select {
-            if let Some(text) = self.terminal.read(cx).selection_text() {
-                if !text.is_empty() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            }
+            self.pending_selection_auto_copy = true;
+            self.try_finish_pending_selection_auto_copy(cx);
         }
         cx.notify();
     }

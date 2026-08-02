@@ -71,16 +71,19 @@ impl TerminalView {
         font_family: SharedString,
         cx: &App,
     ) -> TerminalViewportState {
-        let block_selection_text = self.block_selection_text(cx);
         let accepts_live_input = self.accepts_live_terminal_input(cx);
         let terminal = self.terminal.read(cx);
         let connection_state = terminal.connection_state().clone();
         let can_reconnect = terminal.can_reconnect();
-        let terminal_has_selection = terminal.term().lock().selection.is_some();
-        let has_selection = terminal_has_selection || block_selection_text.is_some();
-        let selection_text = block_selection_text.or_else(|| terminal.selection_text());
-        let terminal_mode = terminal.mode();
-        let history_size = terminal.term().lock().history_size();
+        let selection_text = self
+            .terminal_frame_snapshot
+            .block_selection_text
+            .clone()
+            .or_else(|| self.terminal_frame_snapshot.selection_text.clone());
+        let has_selection =
+            self.terminal_frame_snapshot.selection_present || selection_text.is_some();
+        let terminal_mode = self.terminal_frame_snapshot.mode;
+        let history_size = self.terminal_frame_snapshot.history_size;
         TerminalViewportState {
             font_family,
             connection_state,

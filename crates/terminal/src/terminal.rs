@@ -971,6 +971,8 @@ pub struct Terminal {
     pending_host_key_verification: Option<HostKeyVerificationRequest>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
+    /// 完整事件链路中是否已有尚未被 GPUI 消费的 Wakeup。
+    wakeup_pending: Arc<AtomicBool>,
     /// 事件发送器（用于 SSH 重连）
     event_tx: Option<UnboundedSender<TerminalEvent>>,
     /// 事件代理（用于设置 PtyWrite 回写通道）
@@ -1004,11 +1006,12 @@ pub struct Terminal {
 pub struct TerminalScrollProxy {
     term: Arc<FairMutex<Term<GpuiEventProxy>>>,
     event_tx: Option<UnboundedSender<TerminalEvent>>,
+    wakeup_pending: Arc<AtomicBool>,
 }
 
 /// Snapshot of terminal scroll state, captured in a single lock acquisition
 /// to ensure consistency.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerminalScrollSnapshot {
     pub display_offset: usize,
     pub history_size: usize,
@@ -1028,16 +1031,70 @@ pub struct TerminalTextSnapshot {
 }
 
 impl TerminalScrollProxy {
-    /// Snapshot all scroll-related state in a single lock acquisition
-    /// to avoid inconsistency from multiple separate locks.
-    pub fn snapshot(&self) -> TerminalScrollSnapshot {
-        let term = self.term.lock();
+    fn snapshot_from_term(term: &Term<GpuiEventProxy>) -> TerminalScrollSnapshot {
         TerminalScrollSnapshot {
             display_offset: term.grid().display_offset(),
             history_size: term.history_size(),
             screen_lines: term.screen_lines(),
             columns: term.columns(),
         }
+    }
+
+    /// Snapshot all scroll-related state in a single lock acquisition
+    /// to avoid inconsistency from multiple separate locks.
+    pub fn snapshot(&self) -> TerminalScrollSnapshot {
+        let term = self.term.lock();
+        Self::snapshot_from_term(&term)
+    }
+
+    /// Try to capture scroll state without waiting for the parser.
+    ///
+    /// GPUI layout/paint paths must use this instead of [`Self::snapshot`], so a
+    /// large PTY parse cannot block the Windows message pump.
+    pub fn try_snapshot(&self) -> Option<TerminalScrollSnapshot> {
+        let term = self.term.try_lock_unfair()?;
+        Some(Self::snapshot_from_term(&term))
+    }
+
+    /// Try to move the viewport to an exact display offset without waiting for
+    /// the parser. Returns `false` when the terminal is currently busy.
+    pub fn try_set_display_offset(&self, display_offset: usize) -> bool {
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        let current = term.grid().display_offset();
+        let delta = display_offset as i64 - current as i64;
+        if delta != 0 {
+            let delta = delta.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            term.scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+        }
+        drop(term);
+
+        if delta != 0 {
+            if let Some(tx) = &self.event_tx {
+                send_coalesced_wakeup(tx, &self.wakeup_pending);
+            }
+        }
+        true
+    }
+
+    /// Try to move the viewport by a relative number of lines without waiting
+    /// for the parser. Returns `false` when the terminal is currently busy.
+    pub fn try_scroll_display_delta(&self, delta: i32) -> bool {
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        if delta != 0 {
+            term.scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+        }
+        drop(term);
+
+        if delta != 0 {
+            if let Some(tx) = &self.event_tx {
+                send_coalesced_wakeup(tx, &self.wakeup_pending);
+            }
+        }
+        true
     }
 
     pub fn display_offset(&self) -> usize {
@@ -1075,7 +1132,7 @@ impl TerminalScrollProxy {
             .lock()
             .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
         if let Some(tx) = &self.event_tx {
-            let _ = tx.send(TerminalEvent::Wakeup);
+            send_coalesced_wakeup(tx, &self.wakeup_pending);
         }
     }
 }
@@ -1194,6 +1251,16 @@ struct PendingPlaybackEventLoop {
     wakeup_pending: Arc<AtomicBool>,
 }
 
+fn send_coalesced_wakeup(event_tx: &UnboundedSender<TerminalEvent>, wakeup_pending: &AtomicBool) {
+    if wakeup_pending.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    if event_tx.send(TerminalEvent::Wakeup).is_err() {
+        wakeup_pending.store(false, Ordering::Release);
+    }
+}
+
 impl Terminal {
     fn new_recording_session_id() -> String {
         Uuid::new_v4().to_string()
@@ -1201,12 +1268,13 @@ impl Terminal {
 
     fn create_recording_runtime(
         event_tx: UnboundedSender<TerminalEvent>,
+        wakeup_pending: Arc<AtomicBool>,
     ) -> std::result::Result<RecordingRuntime, RecordingRuntimeError> {
         RecordingRuntime::with_observer(RecordingRuntimeConfig::default(), move |_| {
             // Recording control transitions and asynchronous failures must
             // invalidate the pane, but they must never block the recording
             // worker when the terminal has already gone away.
-            let _ = event_tx.send(TerminalEvent::Wakeup);
+            send_coalesced_wakeup(&event_tx, &wakeup_pending);
         })
     }
 
@@ -1237,7 +1305,6 @@ impl Terminal {
 
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
         let recording_session_id = Self::new_recording_session_id();
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
@@ -1246,8 +1313,11 @@ impl Terminal {
             scrollback_lines,
             event_tx.clone(),
         );
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let recording_runtime =
+            Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
 
-        Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
+        Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
 
         Self {
             term,
@@ -1270,6 +1340,7 @@ impl Terminal {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None,
             connection_id: None,
@@ -1305,8 +1376,6 @@ impl Terminal {
     /// 创建本地终端
     pub fn new_local(config: LocalConfig, cx: &mut Context<Self>) -> Result<Self> {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
@@ -1314,6 +1383,10 @@ impl Terminal {
             scrollback_lines,
             event_tx.clone(),
         );
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let recording_runtime =
+            Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let LocalConfig {
             shell,
             args,
@@ -1350,7 +1423,7 @@ impl Terminal {
             recording_tap,
         )?;
 
-        Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
+        Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
         let history_repository = Self::history_repository(cx);
         let recording_session_id = Self::new_recording_session_id();
@@ -1376,6 +1449,7 @@ impl Terminal {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
             connection_id: None,
@@ -1406,6 +1480,28 @@ impl Terminal {
         cx.emit(TerminalModelEvent::Wakeup);
     }
 
+    /// Try to clear the terminal without waiting for the parser.
+    ///
+    /// GPUI event handlers should queue and retry this operation when it
+    /// returns `false`, keeping the Windows message loop responsive while the
+    /// parser owns the terminal lock.
+    pub fn try_clear_screen(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_read_only() {
+            return true;
+        }
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        term.grid_mut().reset::<Color>();
+        term.selection = None;
+        drop(term);
+        if let Some(bytes) = clear_screen_remote_redraw_bytes(self.connection_kind) {
+            self.write(bytes);
+        }
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
+    }
+
     /// 创建 SSH 终端
     pub fn new_ssh(
         conn: StoredConnection,
@@ -1414,8 +1510,6 @@ impl Terminal {
         sync_path_with_terminal: bool,
     ) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let resolved = resolve_ssh_connection(
             SshConnectionUpdate {
                 connection: conn,
@@ -1434,11 +1528,15 @@ impl Terminal {
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) =
             Self::create_term(cols, rows, scrollback_lines, event_tx.clone());
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let recording_runtime =
+            Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
 
         Self::spawn_disconnect_handler(disconnect_rx, connection_generation, cx);
-        Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
+        Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_ssh_connect(
             ssh_session_manager.clone(),
             config.clone(),
@@ -1478,6 +1576,7 @@ impl Terminal {
             ssh_mfa_responder: Some(resolved.responder),
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
             connection_id: resolved.connection_id,
@@ -1501,8 +1600,6 @@ impl Terminal {
             .expect("StoredConnection 应包含有效的 SerialParams");
 
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
-        let recording_runtime = Self::create_recording_runtime(event_tx.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) = Self::create_term(
             DEFAULT_COLS,
@@ -1510,11 +1607,15 @@ impl Terminal {
             scrollback_lines,
             event_tx.clone(),
         );
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let recording_runtime =
+            Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
+        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
         let connection_generation = 1;
 
         Self::spawn_disconnect_handler(disconnect_rx, connection_generation, cx);
-        Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
+        Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_serial_connect(
             serial_params.clone(),
             term.clone(),
@@ -1548,6 +1649,7 @@ impl Terminal {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: Some(serial_params),
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
             connection_id: conn.id,
@@ -1624,6 +1726,7 @@ impl Terminal {
                 ssh_mfa_responder: None,
                 pending_host_key_verification: None,
                 serial_params: None,
+                wakeup_pending: wakeup_pending.clone(),
                 event_tx: Some(event_tx),
                 event_proxy: None,
                 connection_id: None,
@@ -1763,7 +1866,6 @@ impl Terminal {
         wakeup_pending: Arc<AtomicBool>,
         cx: &mut Context<Self>,
     ) {
-        let _entity = cx.entity().downgrade();
         let (render_tx, mut render_rx) = futures::channel::mpsc::unbounded::<TerminalEvent>();
 
         // 后台事件聚合任务 - 8ms 节流
@@ -1776,7 +1878,17 @@ impl Terminal {
                 tokio::select! {
                     result = event_rx.recv() => {
                         match result {
-                            None => break,
+                            None => {
+                                // The producer can close between render ticks.
+                                // Forward the final semantic events and Wakeup
+                                // instead of silently dropping the tail.
+                                let _ = flush_pending_terminal_events(
+                                    &render_tx,
+                                    &mut pending_events,
+                                    &mut pending_wakeup,
+                                );
+                                break;
+                            }
                             Some(event) => {
                                 match &event {
                                     TerminalEvent::Wakeup => pending_wakeup = true,
@@ -1786,21 +1898,12 @@ impl Terminal {
                         }
                     }
                     _ = render_interval.tick() => {
-                        // 先发送非 Wakeup 事件
-                        for event in pending_events.drain(..) {
-                            if render_tx.unbounded_send(event).is_err() {
-                                return;
-                            }
-                        }
-                        // 最后发送 Wakeup
-                        if pending_wakeup {
-                            pending_wakeup = false;
-                            // 转发完毕后允许 alacritty 线程的下一次 Wakeup 重新入队，
-                            // 避免高速输出时被 GpuiEventProxy 的去重永久吞掉
-                            wakeup_pending.store(false, Ordering::Release);
-                            if render_tx.unbounded_send(TerminalEvent::Wakeup).is_err() {
-                                return;
-                            }
+                        if !flush_pending_terminal_events(
+                            &render_tx,
+                            &mut pending_events,
+                            &mut pending_wakeup,
+                        ) {
+                            return;
                         }
                     }
                 }
@@ -1810,7 +1913,9 @@ impl Terminal {
 
         // GPUI 线程事件处理
         cx.spawn(async move |this, cx| {
-            while let Some(event) = render_rx.next().await {
+            while let Some(event) =
+                receive_terminal_event_for_gpui(&mut render_rx, &wakeup_pending).await
+            {
                 if this
                     .update(cx, |this, cx| {
                         this.handle_terminal_event(event, cx);
@@ -2902,6 +3007,18 @@ impl Terminal {
         self.term.lock().selection = None;
     }
 
+    /// Try to clear the selection without waiting for the parser.
+    ///
+    /// UI event handlers should use this and retry later when it returns
+    /// `false`, so mouse input never blocks the GPUI/Windows message loop.
+    pub fn try_clear_selection(&mut self) -> bool {
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        term.selection = None;
+        true
+    }
+
     /// 全选
     pub fn select_all(&mut self) {
         let mut term = self.term.lock();
@@ -2926,6 +3043,24 @@ impl Terminal {
         term.selection = Some(Selection::new(selection_type, point_with_offset, side));
     }
 
+    /// Try to start a selection without waiting for the parser.
+    pub fn try_start_selection(
+        &mut self,
+        selection_type: SelectionType,
+        point: AlacPoint,
+        side: Side,
+    ) -> bool {
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        let point_with_offset = AlacPoint::new(
+            point.line - term.grid().display_offset() as i32,
+            point.column,
+        );
+        term.selection = Some(Selection::new(selection_type, point_with_offset, side));
+        true
+    }
+
     /// 更新选择
     pub fn update_selection(&mut self, point: AlacPoint, side: Side) {
         let mut term = self.term.lock();
@@ -2936,6 +3071,21 @@ impl Terminal {
         if let Some(selection) = &mut term.selection {
             selection.update(point_with_offset, side);
         }
+    }
+
+    /// Try to update a selection without waiting for the parser.
+    pub fn try_update_selection(&mut self, point: AlacPoint, side: Side) -> bool {
+        let Some(mut term) = self.term.try_lock_unfair() else {
+            return false;
+        };
+        let point_with_offset = AlacPoint::new(
+            point.line - term.grid().display_offset() as i32,
+            point.column,
+        );
+        if let Some(selection) = &mut term.selection {
+            selection.update(point_with_offset, side);
+        }
+        true
     }
 
     // ========== 滚动操作 ==========
@@ -2952,6 +3102,7 @@ impl Terminal {
         TerminalScrollProxy {
             term: self.term.clone(),
             event_tx: self.event_tx.clone(),
+            wakeup_pending: self.wakeup_pending.clone(),
         }
     }
 
@@ -2996,19 +3147,59 @@ fn host_key_verification_request(error: &anyhow::Error) -> Option<HostKeyVerific
 
 impl EventEmitter<TerminalModelEvent> for Terminal {}
 
+fn flush_pending_terminal_events(
+    render_tx: &futures::channel::mpsc::UnboundedSender<TerminalEvent>,
+    pending_events: &mut Vec<TerminalEvent>,
+    pending_wakeup: &mut bool,
+) -> bool {
+    // Preserve non-render events and finish each batch with a single render
+    // invalidation. Do not acknowledge the Wakeup here: render_tx is also
+    // unbounded, so clearing the end-to-end gate before GPUI consumes the
+    // event would allow stale Wakeups to accumulate while the UI is busy.
+    for event in pending_events.drain(..) {
+        if render_tx.unbounded_send(event).is_err() {
+            return false;
+        }
+    }
+
+    if *pending_wakeup {
+        *pending_wakeup = false;
+        if render_tx.unbounded_send(TerminalEvent::Wakeup).is_err() {
+            return false;
+        }
+    }
+
+    true
+}
+
+async fn receive_terminal_event_for_gpui(
+    render_rx: &mut futures::channel::mpsc::UnboundedReceiver<TerminalEvent>,
+    wakeup_pending: &AtomicBool,
+) -> Option<TerminalEvent> {
+    let event = render_rx.next().await?;
+    if matches!(&event, TerminalEvent::Wakeup) {
+        // Reopen only after GPUI has dequeued the sole outstanding invalidation.
+        // Doing this before the entity update also ensures output produced while
+        // the handler runs can queue the next Wakeup instead of being lost.
+        wakeup_pending.store(false, Ordering::Release);
+    }
+    Some(event)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
     use super::with_local_terminal_default_env;
     use super::{
         CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalSessionMode,
-        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
-        clear_screen_remote_redraw_bytes, compose_ssh_init_commands, format_connection_error,
-        host_key_verification_request, is_reconnect_generation,
-        keyboard_interactive_answers_for_terminal, merge_history_matches,
-        normalize_history_matches, recent_text_from_term, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, resolve_ssh_connection, shell_escape_arg,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
+        TerminalSessionMode, build_cd_command, build_ssh_base_init_commands,
+        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
+        flush_pending_terminal_events, format_connection_error, host_key_verification_request,
+        is_reconnect_generation, keyboard_interactive_answers_for_terminal, merge_history_matches,
+        normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
+        send_coalesced_wakeup, shell_escape_arg,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -3029,7 +3220,8 @@ mod tests {
     };
     use alacritty_terminal::event::{Event as AlacTermEvent, EventListener};
     use alacritty_terminal::grid::Dimensions;
-    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::SelectionType;
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use one_core::storage::models::{SshAuthMethod, SshParams, StoredConnection};
@@ -3042,6 +3234,7 @@ mod tests {
     use std::path::PathBuf;
     #[cfg(not(target_os = "windows"))]
     use std::process::Command;
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::mpsc::unbounded_channel;
@@ -3109,6 +3302,7 @@ mod tests {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, event_proxy, _colors, performance_metrics) =
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
 
         Terminal {
             term,
@@ -3131,6 +3325,7 @@ mod tests {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
             connection_id: Some(1),
@@ -4512,15 +4707,103 @@ mod tests {
     }
 
     #[test]
+    fn wakeup_gate_stays_closed_until_gpui_acknowledges_forwarded_event() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let (_term, event_proxy, _colors, _metrics) =
+            Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let (render_tx, mut render_rx) = futures::channel::mpsc::unbounded();
+
+        event_proxy.send_event(AlacTermEvent::Wakeup);
+        let mut pending_events = Vec::new();
+        let mut pending_wakeup = false;
+        match event_rx.try_recv().expect("first Wakeup should be queued") {
+            TerminalEvent::Wakeup => pending_wakeup = true,
+            event => pending_events.push(event),
+        }
+
+        assert!(flush_pending_terminal_events(
+            &render_tx,
+            &mut pending_events,
+            &mut pending_wakeup,
+        ));
+        assert!(
+            wakeup_pending.load(Ordering::Acquire),
+            "forwarding into the GPUI queue must not reopen the end-to-end Wakeup gate"
+        );
+
+        event_proxy.send_event(AlacTermEvent::Wakeup);
+        assert!(
+            event_rx.try_recv().is_err(),
+            "new Wakeups must still coalesce while GPUI has not consumed the forwarded event"
+        );
+        send_coalesced_wakeup(&event_tx, &wakeup_pending);
+        assert!(
+            event_rx.try_recv().is_err(),
+            "non-proxy invalidations must share the same end-to-end Wakeup gate"
+        );
+
+        let forwarded = futures::executor::block_on(receive_terminal_event_for_gpui(
+            &mut render_rx,
+            &wakeup_pending,
+        ))
+        .expect("GPUI should dequeue one forwarded Wakeup");
+        assert!(matches!(forwarded, TerminalEvent::Wakeup));
+
+        // The gate reopens as soon as GPUI dequeues the invalidation, before
+        // handling it. Output produced concurrently with the handler therefore
+        // queues the next Wakeup instead of being lost by a later reset.
+        send_coalesced_wakeup(&event_tx, &wakeup_pending);
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+        event_proxy.send_event(AlacTermEvent::Wakeup);
+        assert!(
+            event_rx.try_recv().is_err(),
+            "proxy Wakeups must coalesce behind a direct invalidation queued during handling"
+        );
+    }
+
+    #[test]
+    fn terminal_event_flush_preserves_semantic_order_and_finishes_with_wakeup() {
+        let (render_tx, mut render_rx) = futures::channel::mpsc::unbounded();
+        let mut pending_events = vec![
+            TerminalEvent::TitleChanged("shell".to_string()),
+            TerminalEvent::Bell,
+            TerminalEvent::ChildExit(7),
+        ];
+        let mut pending_wakeup = true;
+
+        assert!(flush_pending_terminal_events(
+            &render_tx,
+            &mut pending_events,
+            &mut pending_wakeup,
+        ));
+        assert!(pending_events.is_empty());
+        assert!(!pending_wakeup);
+
+        assert!(matches!(
+            render_rx.try_recv(),
+            Ok(TerminalEvent::TitleChanged(title)) if title == "shell"
+        ));
+        assert!(matches!(render_rx.try_recv(), Ok(TerminalEvent::Bell)));
+        assert!(matches!(
+            render_rx.try_recv(),
+            Ok(TerminalEvent::ChildExit(7))
+        ));
+        assert!(matches!(render_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+        assert!(render_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn reconnect_preparation_preserves_buffer_and_clears_stale_connection_metadata() {
         let (event_tx, _event_rx) = unbounded_channel();
-        let (term, _event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
+        let (term, event_proxy, _colors, performance_metrics) = Terminal::create_term_with_metrics(
             80,
             24,
             10_000,
             event_tx.clone(),
             Arc::new(TerminalPerformanceMetrics::enabled()),
         );
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
         let shared_metrics = performance_metrics.clone();
         let original_term = term.clone();
         let mut terminal = Terminal {
@@ -4528,7 +4811,10 @@ mod tests {
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
-            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            recording_runtime: Terminal::create_recording_runtime(
+                event_tx.clone(),
+                wakeup_pending.clone(),
+            ),
             playback_runtime: None,
             recording_session_id: "surface-reset-test-session".to_string(),
             title: "old title".to_string(),
@@ -4544,6 +4830,7 @@ mod tests {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: None,
             connection_id: Some(1),
@@ -4608,16 +4895,99 @@ mod tests {
     }
 
     #[test]
+    fn terminal_scroll_proxy_try_operations_never_wait_for_parser() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(20, 3, 10_000, event_tx.clone());
+        let proxy = TerminalScrollProxy {
+            term: term.clone(),
+            event_tx: Some(event_tx),
+            wakeup_pending: event_proxy.wakeup_pending_handle(),
+        };
+        let parser_guard = term.lock();
+
+        assert_eq!(None, proxy.try_snapshot());
+        assert!(!proxy.try_set_display_offset(1));
+        assert!(!proxy.try_scroll_display_delta(1));
+
+        drop(parser_guard);
+        assert_eq!(Some(proxy.snapshot()), proxy.try_snapshot());
+    }
+
+    #[test]
+    fn terminal_scroll_proxy_try_scroll_updates_offset_and_coalesces_wakeup() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors, _performance_metrics) =
+            Terminal::create_term(20, 3, 10_000, event_tx.clone());
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
+        let proxy = TerminalScrollProxy {
+            term: term.clone(),
+            event_tx: Some(event_tx),
+            wakeup_pending: wakeup_pending.clone(),
+        };
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *term.lock(), b"one\r\ntwo\r\nthree\r\nfour");
+        while event_rx.try_recv().is_ok() {}
+        wakeup_pending.store(false, Ordering::Release);
+
+        assert!(proxy.try_scroll_display_delta(1));
+        assert_eq!(1, proxy.try_snapshot().unwrap().display_offset);
+        assert!(matches!(event_rx.try_recv(), Ok(TerminalEvent::Wakeup)));
+
+        assert!(proxy.try_set_display_offset(0));
+        assert_eq!(0, proxy.try_snapshot().unwrap().display_offset);
+        assert!(
+            event_rx.try_recv().is_err(),
+            "scroll invalidations must share the end-to-end Wakeup gate"
+        );
+    }
+
+    #[test]
+    fn terminal_try_selection_operations_never_wait_for_parser() {
+        let runtime = RecordingRuntime::new(RecordingRuntimeConfig::default())
+            .expect("create recording runtime");
+        let mut terminal = test_terminal_with_recording_runtime(Ok(runtime));
+        let term = terminal.term.clone();
+        let start = Point::new(Line(0), Column(0));
+        let end = Point::new(Line(0), Column(2));
+        let parser_guard = term.lock();
+
+        assert!(!terminal.try_clear_selection());
+        assert!(!terminal.try_start_selection(SelectionType::Simple, start, Side::Left));
+        assert!(!terminal.try_update_selection(end, Side::Right));
+
+        drop(parser_guard);
+        assert!(terminal.try_start_selection(SelectionType::Simple, start, Side::Left));
+        assert!(terminal.try_update_selection(end, Side::Right));
+        {
+            let term = term.lock();
+            let selection = term.selection.as_ref().expect("selection should exist");
+            assert_eq!(SelectionType::Simple, selection.ty);
+            let range = selection
+                .to_range(&term)
+                .expect("selection should resolve to a grid range");
+            assert_eq!(start, range.start);
+            assert_eq!(end, range.end);
+        }
+        assert!(terminal.try_clear_selection());
+        assert!(term.lock().selection.is_none());
+    }
+
+    #[test]
     fn terminal_scrollback_limit_can_be_updated_without_replacing_surface() {
         let (event_tx, _event_rx) = unbounded_channel();
         let (term, event_proxy, _colors, performance_metrics) =
             Terminal::create_term(80, 24, 10_000, event_tx.clone());
+        let wakeup_pending = event_proxy.wakeup_pending_handle();
         let mut terminal = Terminal {
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
             backend: None,
-            recording_runtime: Terminal::create_recording_runtime(event_tx.clone()),
+            recording_runtime: Terminal::create_recording_runtime(
+                event_tx.clone(),
+                wakeup_pending.clone(),
+            ),
             playback_runtime: None,
             recording_session_id: "scrollback-test-session".to_string(),
             title: String::new(),
@@ -4633,6 +5003,7 @@ mod tests {
             ssh_mfa_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
+            wakeup_pending,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
             connection_id: Some(1),

@@ -9,10 +9,7 @@ impl TerminalView {
     ) {
         self.block_selection = None;
         self.mouse_state.block_selecting = false;
-        self.terminal.update(cx, |terminal, _| {
-            terminal.select_all();
-        });
-        cx.notify();
+        self.apply_or_queue_terminal_action(PendingTerminalAction::SelectAll, Some(_window), cx);
     }
 
     pub(super) fn clear_screen(
@@ -25,21 +22,27 @@ impl TerminalView {
             return;
         }
         self.clear_history_prompt();
-        self.terminal.update(cx, |terminal, cx| {
-            terminal.clear_screen(cx);
-        });
-        self.reset_render_cache(cx);
+        self.apply_or_queue_terminal_action(PendingTerminalAction::ClearScreen, Some(window), cx);
         self.focus_terminal(window, cx);
-        cx.notify();
     }
 
     pub(super) fn reset_render_cache(&mut self, cx: &mut Context<Self>) {
-        let (screen_lines, columns, colors) = {
-            let terminal = self.terminal.read(cx);
-            let term = terminal.term().lock();
-            (term.screen_lines(), term.columns(), term.colors().clone())
+        self.pending_render_cache_reset = true;
+        self.apply_pending_render_cache_reset(cx);
+    }
+
+    pub(super) fn apply_pending_render_cache_reset(&mut self, cx: &mut Context<Self>) {
+        if !self.pending_render_cache_reset {
+            return;
+        }
+        let term = self.terminal.read(cx).term().clone();
+        let Some(term) = term.try_lock_unfair() else {
+            self.schedule_terminal_render_retry(cx);
+            return;
         };
-        self.render_cache = RenderCache::new(screen_lines, columns, colors);
+        self.render_cache =
+            RenderCache::new(term.screen_lines(), term.columns(), term.colors().clone());
+        self.pending_render_cache_reset = false;
     }
 
     pub(super) fn clear_selection(
@@ -60,6 +63,7 @@ impl TerminalView {
             if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
                 search.clear();
             }
+            self.invalidate_terminal_searches();
             cx.notify();
             return;
         }
@@ -67,30 +71,17 @@ impl TerminalView {
         let accepts_live_input = self.accepts_live_terminal_input(cx);
         let had_block_selection = self.block_selection.take().is_some();
         self.mouse_state.block_selecting = false;
-
-        let term = self.terminal.read(cx).term().clone();
-        let mut term_lock = term.lock();
-        let in_vi_mode = term_lock.mode().contains(TermMode::VI);
-        let has_selection = term_lock.selection.is_some();
-
-        if in_vi_mode {
-            if has_selection {
-                term_lock.selection = None;
-            } else if accepts_live_input {
-                term_lock.toggle_vi_mode();
-            }
-            drop(term_lock);
+        if had_block_selection {
             cx.notify();
-        } else if has_selection || had_block_selection {
-            if has_selection {
-                term_lock.selection = None;
-            }
-            drop(term_lock);
-            cx.notify();
-        } else {
-            drop(term_lock);
-            self.write_to_pty(b"\x1b".to_vec(), cx);
         }
+        self.apply_or_queue_terminal_action(
+            PendingTerminalAction::ResolveClearSelection {
+                accepts_live_input,
+                had_block_selection,
+            },
+            Some(window),
+            cx,
+        );
     }
 
     pub(super) fn search_forward(
@@ -130,10 +121,16 @@ impl TerminalView {
     }
 
     pub fn set_search_pattern(&mut self, pattern: &str) -> Result<()> {
-        if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
+        let changed = if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
             search
                 .set_pattern(pattern)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
+            true
+        } else {
+            false
+        };
+        if changed {
+            self.invalidate_terminal_searches();
         }
         Ok(())
     }

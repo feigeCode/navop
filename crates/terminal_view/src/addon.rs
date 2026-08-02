@@ -607,6 +607,50 @@ pub struct SearchAddon {
     pattern: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalSearchDirection {
+    Forward,
+    Backward,
+}
+
+pub(crate) struct TerminalSearchRequest {
+    pub(crate) regex: RegexSearch,
+    pub(crate) current_match: Option<RangeInclusive<AlacPoint>>,
+    pub(crate) pattern: String,
+}
+
+pub(crate) fn find_terminal_search_match(
+    term: &mut Term<GpuiEventProxy>,
+    regex: &mut RegexSearch,
+    current_match: Option<&RangeInclusive<AlacPoint>>,
+    direction: TerminalSearchDirection,
+) -> Option<RangeInclusive<AlacPoint>> {
+    use alacritty_terminal::index::Side;
+
+    match direction {
+        TerminalSearchDirection::Forward => {
+            let origin = current_match
+                .map(|current| *current.end())
+                .unwrap_or(term.grid().cursor.point);
+            term.search_next(regex, origin, Direction::Right, Side::Left, None)
+                .or_else(|| {
+                    let top = AlacPoint::new(term.topmost_line(), Column(0));
+                    term.search_next(regex, top, Direction::Right, Side::Left, None)
+                })
+        }
+        TerminalSearchDirection::Backward => {
+            let origin = current_match
+                .map(|current| *current.start())
+                .unwrap_or(term.grid().cursor.point);
+            term.search_next(regex, origin, Direction::Left, Side::Right, None)
+                .or_else(|| {
+                    let bottom = AlacPoint::new(term.bottommost_line(), Column(term.columns() - 1));
+                    term.search_next(regex, bottom, Direction::Left, Side::Right, None)
+                })
+        }
+    }
+}
+
 impl SearchAddon {
     pub fn new() -> Self {
         Self {
@@ -645,6 +689,30 @@ impl SearchAddon {
         self.current_match.as_ref()
     }
 
+    pub(crate) fn search_request(&self) -> Option<TerminalSearchRequest> {
+        Some(TerminalSearchRequest {
+            regex: self.regex.clone()?,
+            current_match: self.current_match.clone(),
+            pattern: self.pattern.clone(),
+        })
+    }
+
+    pub(crate) fn apply_search_result(
+        &mut self,
+        pattern: &str,
+        previous_match: &Option<RangeInclusive<AlacPoint>>,
+        result: Option<RangeInclusive<AlacPoint>>,
+    ) -> bool {
+        if self.pattern != pattern || &self.current_match != previous_match {
+            return false;
+        }
+        let Some(result) = result else {
+            return false;
+        };
+        self.current_match = Some(result);
+        true
+    }
+
     /// Clear search
     pub fn clear(&mut self) {
         self.regex = None;
@@ -677,31 +745,19 @@ impl SearchAddon {
         &mut self,
         term: &mut Term<GpuiEventProxy>,
     ) -> Option<RangeInclusive<AlacPoint>> {
-        use alacritty_terminal::index::{Column, Direction, Side};
-
         let regex = self.regex.as_mut()?;
-        let origin = if let Some(ref current) = self.current_match {
-            *current.end()
-        } else {
-            term.grid().cursor.point
-        };
+        let match_ = find_terminal_search_match(
+            term,
+            regex,
+            self.current_match.as_ref(),
+            TerminalSearchDirection::Forward,
+        );
 
-        let result = term.search_next(regex, origin, Direction::Right, Side::Left, None);
-
-        let match_ = if result.is_none() {
-            let top = AlacPoint::new(term.topmost_line(), Column(0));
-            term.search_next(regex, top, Direction::Right, Side::Left, None)
-        } else {
-            result
-        };
-
-        if let Some(match_) = match_ {
+        if let Some(match_) = &match_ {
             term.scroll_to_point(*match_.start());
             self.current_match = Some(match_.clone());
-            Some(match_)
-        } else {
-            None
         }
+        match_
     }
 
     /// Find previous match in terminal (with wrap around)
@@ -709,31 +765,19 @@ impl SearchAddon {
         &mut self,
         term: &mut Term<GpuiEventProxy>,
     ) -> Option<RangeInclusive<AlacPoint>> {
-        use alacritty_terminal::index::{Column, Direction, Side};
-
         let regex = self.regex.as_mut()?;
-        let origin = if let Some(ref current) = self.current_match {
-            *current.start()
-        } else {
-            term.grid().cursor.point
-        };
+        let match_ = find_terminal_search_match(
+            term,
+            regex,
+            self.current_match.as_ref(),
+            TerminalSearchDirection::Backward,
+        );
 
-        let result = term.search_next(regex, origin, Direction::Left, Side::Right, None);
-
-        let match_ = if result.is_none() {
-            let bottom = AlacPoint::new(term.bottommost_line(), Column(term.columns() - 1));
-            term.search_next(regex, bottom, Direction::Left, Side::Right, None)
-        } else {
-            result
-        };
-
-        if let Some(match_) = match_ {
+        if let Some(match_) = &match_ {
             term.scroll_to_point(*match_.start());
             self.current_match = Some(match_.clone());
-            Some(match_)
-        } else {
-            None
         }
+        match_
     }
 
     /// Check if search is active
@@ -1567,6 +1611,46 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(vec![90, 90, 100], priorities);
+    }
+
+    #[test]
+    fn async_search_result_requires_the_exact_request_snapshot() {
+        use alacritty_terminal::index::{Column, Line, Point};
+
+        let mut addon = SearchAddon::new();
+        addon.set_pattern("foo").expect("pattern should compile");
+        let first = Point::new(Line(0), Column(0))..=Point::new(Line(0), Column(2));
+        addon.current_match = Some(first.clone());
+
+        let request = addon
+            .search_request()
+            .expect("active search should produce a request");
+        assert_eq!("foo", request.pattern);
+        assert_eq!(Some(first.clone()), request.current_match);
+
+        let next = Point::new(Line(0), Column(4))..=Point::new(Line(0), Column(6));
+        assert!(addon.apply_search_result(
+            &request.pattern,
+            &request.current_match,
+            Some(next.clone()),
+        ));
+        assert_eq!(Some(&next), addon.current_match());
+
+        let stale_pattern_result = Point::new(Line(1), Column(4))..=Point::new(Line(1), Column(6));
+        assert!(
+            !addon.apply_search_result("bar", &Some(next.clone()), Some(stale_pattern_result),)
+        );
+        assert_eq!(Some(&next), addon.current_match());
+
+        assert!(!addon.apply_search_result(
+            "foo",
+            &Some(first),
+            Some(Point::new(Line(1), Column(4))..=Point::new(Line(1), Column(6))),
+        ));
+        assert_eq!(Some(&next), addon.current_match());
+
+        assert!(!addon.apply_search_result("foo", &Some(next.clone()), None));
+        assert_eq!(Some(&next), addon.current_match());
     }
 
     #[test]

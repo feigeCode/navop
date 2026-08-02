@@ -33,12 +33,16 @@ impl TerminalView {
             self.last_size = None;
         }
         self.line_height = self.font_size * self.line_height_scale;
+        self.apply_pending_terminal_selection_actions(cx);
+        self.apply_pending_terminal_actions(window, cx);
+        self.apply_pending_render_cache_reset(cx);
+        self.apply_pending_vi_scroll(cx);
         self.apply_pending_scrollbar_offset(cx);
         self.sync_recording_ticker(cx);
         self.sync_recording_playback_ticker(cx);
         self.sync_recording_playback_slider(window, cx);
 
-        let terminal_mode = self.terminal.read(cx).mode();
+        let terminal_mode = self.terminal_frame_snapshot.mode;
         self.handle_alt_screen_transition(terminal_mode, cx);
         font_metrics.effective_family
     }
@@ -47,13 +51,14 @@ impl TerminalView {
         let Some(new_display_offset) = self.scrollbar_handle.take_future_display_offset() else {
             return;
         };
-        self.terminal.update(cx, |terminal, _| {
-            let current = terminal.term().lock().grid().display_offset() as i32;
-            let delta = new_display_offset as i32 - current;
-            if delta != 0 {
-                terminal.scroll(delta);
-            }
-        });
+        if !self
+            .scrollbar_handle
+            .try_set_display_offset(new_display_offset)
+        {
+            self.scrollbar_handle
+                .put_back_future_display_offset(new_display_offset);
+            self.schedule_terminal_render_retry(cx);
+        }
     }
 
     fn handle_alt_screen_transition(&mut self, terminal_mode: TermMode, cx: &mut Context<Self>) {

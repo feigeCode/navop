@@ -4,7 +4,7 @@ impl TerminalView {
     pub(super) fn copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.block_selection_text(cx) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-        } else if let Some(text) = self.terminal.read(cx).selection_text() {
+        } else if let Some(text) = self.selection_text(cx) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
         self.focus_terminal(window, cx);
@@ -16,30 +16,21 @@ impl TerminalView {
             return None;
         }
 
-        let terminal = self.terminal.read(cx);
-        let term = terminal.term().lock();
-        let columns = term.columns();
-        let screen_lines = term.screen_lines();
-        let content = term.renderable_content();
-        let display_offset = content.display_offset;
-        let mut rows = vec![vec![' '; columns]; screen_lines];
+        let term = self.terminal.read(cx).term().clone();
+        let selection_text = match term.try_lock_unfair() {
+            Some(term) => block_selection_text_from_term(&term, Some(selection)),
+            None => self.terminal_frame_snapshot.block_selection_text.clone(),
+        };
+        selection_text
+    }
 
-        for cell in content.display_iter {
-            let screen_line = cell.point.line.0 + display_offset as i32;
-            let Ok(row) = usize::try_from(screen_line) else {
-                continue;
-            };
-            if row >= rows.len() || cell.point.column.0 >= columns {
-                continue;
-            }
-            rows[row][cell.point.column.0] = cell.c;
-        }
-
-        let rows = rows
-            .into_iter()
-            .map(|chars| chars.into_iter().collect::<String>())
-            .collect::<Vec<_>>();
-        block_selection_text_from_rows(&rows, selection.anchor, selection.active)
+    pub(super) fn selection_text(&self, cx: &App) -> Option<String> {
+        let term = self.terminal.read(cx).term().clone();
+        let selection_text = match term.try_lock_unfair() {
+            Some(term) => term.selection_to_string(),
+            None => self.terminal_frame_snapshot.selection_text.clone(),
+        };
+        selection_text
     }
 
     pub(super) fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
@@ -47,10 +38,8 @@ impl TerminalView {
             return;
         }
         if let Some(clipboard) = cx.read_from_clipboard() {
-            let (live_connection_kind, mode) = {
-                let terminal = self.terminal.read(cx);
-                (terminal.live_connection_kind(), terminal.mode())
-            };
+            let live_connection_kind = self.terminal.read(cx).live_connection_kind();
+            let mode = self.terminal_frame_snapshot.mode;
             let Some(connection_kind) = live_connection_kind else {
                 return;
             };
@@ -118,7 +107,7 @@ impl TerminalView {
         }
         let text = normalize_paste_line_endings(text);
         let text = text.as_ref();
-        let mode = self.terminal.read(cx).mode();
+        let mode = self.terminal_frame_snapshot.mode;
 
         // ALT_SCREEN（如 Vim、less）属于全屏交互程序，粘贴内容不会像 shell 那样直接执行。
         // 这里跳过高危/多行确认，避免编辑器场景误弹确认框。
@@ -175,9 +164,38 @@ impl TerminalView {
         let text = text.as_ref();
         // 仅在应用请求 bracketed paste 模式时才包装，避免把控制序列
         // 原样送进不支持的程序（例如 Vim 未开启时可能导致光标/位置异常）。
-        let mode = self.terminal.read(cx).mode();
+        let mode = self.terminal_frame_snapshot.mode;
         self.apply_paste_to_history_prompt(text, cx);
         self.write_to_pty(terminal_paste_bytes(text, mode), cx);
         self.focus_terminal(window, cx);
     }
+}
+
+pub(super) fn block_selection_text_from_term(
+    term: &Term<GpuiEventProxy>,
+    selection: Option<BlockSelection>,
+) -> Option<String> {
+    let selection = selection.filter(|selection| !selection.is_empty())?;
+    let columns = term.columns();
+    let screen_lines = term.screen_lines();
+    let content = term.renderable_content();
+    let display_offset = content.display_offset;
+    let mut rows = vec![vec![' '; columns]; screen_lines];
+
+    for cell in content.display_iter {
+        let screen_line = cell.point.line.0 + display_offset as i32;
+        let Ok(row) = usize::try_from(screen_line) else {
+            continue;
+        };
+        if row >= rows.len() || cell.point.column.0 >= columns {
+            continue;
+        }
+        rows[row][cell.point.column.0] = cell.c;
+    }
+
+    let rows = rows
+        .into_iter()
+        .map(|chars| chars.into_iter().collect::<String>())
+        .collect::<Vec<_>>();
+    block_selection_text_from_rows(&rows, selection.anchor, selection.active)
 }

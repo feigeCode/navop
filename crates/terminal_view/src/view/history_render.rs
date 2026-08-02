@@ -19,13 +19,8 @@ impl TerminalView {
             return None;
         }
 
-        let (cursor_line, cursor_col) = {
-            let terminal = self.terminal.read(cx);
-            let term = terminal.term().lock();
-            let cursor = term.grid().cursor.point;
-            let display_offset = term.grid().display_offset() as i32;
-            (cursor.line.0 + display_offset, cursor.column.0)
-        };
+        let cursor_line = self.terminal_frame_snapshot.cursor_screen_line;
+        let cursor_col = self.terminal_frame_snapshot.cursor_column;
 
         if cursor_line < 0 {
             return None;

@@ -1,41 +1,91 @@
+use super::clipboard::block_selection_text_from_term;
 use super::*;
+use alacritty_terminal::sync::FairMutex;
+
+fn with_terminal_if_ready<T, R>(
+    term: &FairMutex<T>,
+    update: impl FnOnce(&mut T) -> R,
+) -> Option<R> {
+    let mut term = term.try_lock_unfair()?;
+    Some(update(&mut term))
+}
 
 impl TerminalView {
+    pub(super) fn schedule_terminal_render_retry(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_render_retry.is_some() {
+            return;
+        }
+
+        self.terminal_render_retry = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(8))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.terminal_render_retry = None;
+                cx.notify();
+            });
+        }));
+    }
+
     pub(super) fn render_terminal(
         &mut self,
         font_family: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // Prepare addons before rendering
-        {
-            let is_local = self.terminal.read(cx).live_connection_kind()
-                == Some(TerminalConnectionKind::Local);
-            let term = self.terminal.read(cx).term().lock();
-            let display_offset = term.grid().display_offset();
-            let visible_lines = 0..term.screen_lines();
-            let context = TerminalAddonFrameContext {
-                term: &term,
-                visible_lines,
-                display_offset,
-                is_local,
-                base_dir: self.local_working_dir.as_deref(),
-            };
-            self.addon_manager.dispatch_frame(&context);
-        }
+        let (is_local, term) = {
+            let terminal = self.terminal.read(cx);
+            (
+                terminal.live_connection_kind() == Some(TerminalConnectionKind::Local),
+                terminal.term().clone(),
+            )
+        };
 
-        // Update render cache with decorations from all addons
-        {
-            let term = self.terminal.read(cx).term().clone();
-            let mut term = term.lock();
+        let updated = with_terminal_if_ready(&term, |term| {
+            let cursor = term.grid().cursor.point;
+            let display_offset = term.grid().display_offset();
+            self.terminal_frame_snapshot = TerminalFrameSnapshot {
+                mode: *term.mode(),
+                display_offset,
+                history_size: term.history_size(),
+                screen_lines: term.screen_lines(),
+                columns: term.columns(),
+                selection_present: term.selection.is_some(),
+                selection_text: term.selection_to_string(),
+                block_selection_text: block_selection_text_from_term(term, self.block_selection),
+                cursor_screen_line: cursor.line.0 + display_offset as i32,
+                cursor_column: cursor.column.0,
+            };
+
+            // Keep terminal parsing off the GPUI critical path. A fair blocking
+            // lock here can freeze the entire window while a large PTY chunk is
+            // being parsed. If the parser owns the lock, preserve the previous
+            // render cache and retry on a later frame instead.
+            {
+                let display_offset = term.grid().display_offset();
+                let visible_lines = 0..term.screen_lines();
+                let context = TerminalAddonFrameContext {
+                    term,
+                    visible_lines,
+                    display_offset,
+                    is_local,
+                    base_dir: self.local_working_dir.as_deref(),
+                };
+                self.addon_manager.dispatch_frame(&context);
+            }
 
             self.render_cache.update(
-                &mut term,
+                term,
                 &self.addon_manager,
                 &self.current_theme,
                 self.block_selection
                     .filter(|selection| !selection.is_empty())
                     .map(|selection| selection.bounds()),
             );
+        });
+        if updated.is_none() {
+            // A skipped frame must arrange another attempt: the Wakeup that
+            // triggered this render has already been consumed.
+            self.schedule_terminal_render_retry(cx);
         }
 
         // 获取光标可见性
@@ -187,5 +237,23 @@ impl TerminalView {
         }
 
         menu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_terminal_if_ready;
+    use alacritty_terminal::sync::FairMutex;
+
+    #[test]
+    fn terminal_frame_lock_attempt_never_waits_for_parser() {
+        let term = FairMutex::new(1usize);
+        let parser_guard = term.lock();
+
+        assert_eq!(None, with_terminal_if_ready(&term, |value| *value += 1));
+
+        drop(parser_guard);
+        assert_eq!(Some(()), with_terminal_if_ready(&term, |value| *value += 1));
+        assert_eq!(2, *term.lock());
     }
 }

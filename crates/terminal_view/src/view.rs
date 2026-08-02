@@ -1,8 +1,9 @@
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint, Side};
-use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::TermMode;
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Term, TermMode};
+use alacritty_terminal::vi_mode::ViMotion;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
@@ -23,10 +24,13 @@ use one_core::keybindings::{
 use one_core::settings::{AppSettings, resolve_installed_grid_monospace_font_family};
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{
+    Arc, Mutex as StdMutex,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) mod block_selection;
@@ -40,7 +44,8 @@ pub(crate) use workspace_support::{TerminalPaneEvent, TerminalWorkspaceSidebarSn
 
 use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
-    TerminalAddonMouseContext, register_default_addons,
+    TerminalAddonMouseContext, TerminalSearchDirection, find_terminal_search_match,
+    register_default_addons,
 };
 use crate::broadcast_input::BroadcastClientId;
 use crate::broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry};
@@ -100,10 +105,12 @@ use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
+use terminal::GpuiEventProxy;
 use terminal::LocalConfig;
 use terminal::terminal::{
     ConnectionState, HostKeyVerificationDecision, SshConnectionUpdate, Terminal,
-    TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, resolve_local_working_dir,
+    TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy, TerminalScrollSnapshot,
+    resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 use workspace_explorer::{WorkspaceEditor, WorkspaceEditorEvent};
@@ -207,8 +214,16 @@ pub struct TerminalView {
     /// 避免出现底部残留上一次渲染内容的问题。
     last_alt_screen: bool,
     scroll_lines_accumulated: f32,
+    pending_vi_scroll_lines: i32,
 
     mouse_state: MouseState,
+    pending_terminal_actions: VecDeque<PendingTerminalAction>,
+    pending_terminal_selection_actions: VecDeque<PendingTerminalSelectionAction>,
+    pending_terminal_searches: VecDeque<PendingTerminalSearch>,
+    terminal_search_task: Option<Task<()>>,
+    terminal_search_generation: Arc<AtomicU64>,
+    pending_selection_auto_copy: bool,
+    pending_render_cache_reset: bool,
     block_selection: Option<BlockSelection>,
     addon_manager: AddonManager,
 
@@ -217,6 +232,12 @@ pub struct TerminalView {
     mouse_position: Option<Point<Pixels>>,
 
     render_cache: RenderCache,
+    /// Last terminal metadata/text captured while the render path successfully
+    /// held the terminal lock. GPUI render/layout code reads this snapshot and
+    /// never waits for the parser.
+    terminal_frame_snapshot: TerminalFrameSnapshot,
+    /// Deduplicated delayed retry used when a non-blocking terminal lock misses.
+    terminal_render_retry: Option<Task<()>>,
     focus_handle: FocusHandle,
     /// Present only when the developer performance diagnostics switch was
     /// enabled when this terminal was created.

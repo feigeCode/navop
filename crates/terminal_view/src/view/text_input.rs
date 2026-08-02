@@ -21,17 +21,15 @@ impl TerminalView {
             return;
         }
         // 用户输入时自动滚动到底部
-        let display_offset = self.terminal.read(cx).term().lock().grid().display_offset();
+        let display_offset = self.terminal_frame_snapshot.display_offset;
         if should_scroll_to_bottom_on_user_input(
             display_offset,
             &self.scrollbar_handle.future_display_offset,
         ) {
-            self.terminal.update(cx, |terminal, _| {
-                terminal
-                    .term()
-                    .lock()
-                    .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-            });
+            if !self.scrollbar_handle.try_set_display_offset(0) {
+                self.scrollbar_handle.put_back_future_display_offset(0);
+                self.schedule_terminal_render_retry(cx);
+            }
         }
         self.terminal.read(cx).write(data);
     }
@@ -105,7 +103,7 @@ impl TerminalView {
             return;
         }
 
-        let mode = self.terminal.read(cx).mode();
+        let mode = self.terminal_frame_snapshot.mode;
 
         if mode.contains(TermMode::VI) {
             self.hide_history_prompt_dropdown();

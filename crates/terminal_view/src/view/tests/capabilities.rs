@@ -97,7 +97,7 @@ fn playback_pty_and_ime_writes_are_rejected_before_side_effects() {
         (
             "pub(super) fn write_input_to_terminal",
             "pub(super) fn commit_text",
-            "grid().display_offset()",
+            "self.terminal_frame_snapshot.display_offset",
             "terminal input",
         ),
         (
@@ -227,7 +227,7 @@ fn playback_history_assistance_never_starts_sftp_completion() {
         "pub(super) fn history_prompt_enabled",
         "pub(super) fn refresh_history_prompt_matches",
         "let Some(connection_kind) = terminal.live_connection_kind()",
-        "terminal.mode()",
+        "self.terminal_frame_snapshot.mode",
         "history prompt availability",
     );
     assert_function_guard_precedes(
@@ -377,7 +377,7 @@ fn playback_action_input_paths_are_rejected_before_local_side_effects() {
         "pub(super) fn handle_vi_key_event",
         "pub(super) fn vi_start_selection",
         "if !self.accepts_live_terminal_input(cx)",
-        "term.vi_motion",
+        "PendingTerminalAction::ViMotion",
         "VI key input",
     );
     assert_function_guard_precedes(
@@ -385,7 +385,7 @@ fn playback_action_input_paths_are_rejected_before_local_side_effects() {
         "pub(super) fn toggle_vi_mode",
         "\n}",
         "if !self.accepts_live_terminal_input(cx)",
-        "terminal.toggle_vi_mode",
+        "PendingTerminalAction::ToggleViMode",
         "toggle-VI action",
     );
 }
@@ -401,13 +401,87 @@ fn playback_clear_selection_never_changes_recorded_vi_mode() {
     let capability = clear_selection
         .find("let accepts_live_input = self.accepts_live_terminal_input(cx);")
         .expect("clear selection must inspect the live input capability");
-    let live_only_branch = clear_selection
+    let queued_resolution = clear_selection
+        .find("PendingTerminalAction::ResolveClearSelection")
+        .expect("clear selection must defer terminal inspection without blocking");
+    assert!(capability < queued_resolution);
+
+    let vi_action_source = include_str!("../vi_input.rs");
+    let terminal_action = function_region(
+        vi_action_source,
+        "fn try_apply_terminal_action",
+        "fn finish_terminal_action",
+    );
+    let clear_selection_action = terminal_action
+        .find("PendingTerminalAction::ResolveClearSelection")
+        .expect("clear selection resolution must be handled by the non-blocking action queue");
+    let clear_selection_resolution = &terminal_action[clear_selection_action..];
+    let live_only_branch = clear_selection_resolution
         .find("else if accepts_live_input")
         .expect("leaving VI mode must be restricted to live terminals");
-    let toggle = clear_selection
-        .find("term_lock.toggle_vi_mode()")
+    let toggle = clear_selection_resolution
+        .find("term.toggle_vi_mode()")
         .expect("live terminals should retain clear-selection VI behavior");
-    assert!(capability < live_only_branch && live_only_branch < toggle);
+    assert!(live_only_branch < toggle);
+}
+
+#[test]
+fn terminal_key_and_selection_actions_never_wait_for_the_parser() {
+    let vi_input = include_str!("../vi_input.rs");
+    assert!(
+        !vi_input.contains(".lock()"),
+        "VI key handling must never block the GPUI thread on the terminal parser lock"
+    );
+    assert!(vi_input.contains("term.try_lock_unfair()?"));
+    assert!(vi_input.contains("MAX_PENDING_TERMINAL_ACTIONS"));
+    assert!(vi_input.contains("MAX_TERMINAL_ACTIONS_PER_FRAME"));
+
+    let selection = include_str!("../selection_search.rs");
+    let hot_actions = function_region(
+        selection,
+        "pub(super) fn select_all",
+        "pub(super) fn search_forward",
+    );
+    assert!(
+        !hot_actions.contains(".lock()"),
+        "select-all, clear-screen, cache reset, and Escape handling must not wait for the parser"
+    );
+    assert!(hot_actions.contains("term.try_lock_unfair()"));
+    assert!(hot_actions.contains("PendingTerminalAction::ResolveClearSelection"));
+}
+
+#[test]
+fn terminal_search_never_waits_for_the_parser_on_the_gpui_thread() {
+    let source = include_str!("../sidebar_events.rs");
+    let forward = function_region(
+        source,
+        "pub(super) fn search_forward_internal",
+        "pub(super) fn search_backward_internal",
+    );
+    let backward = function_region(source, "pub(super) fn search_backward_internal", "\n}");
+    assert!(!forward.contains(".lock()"));
+    assert!(!backward.contains(".lock()"));
+    assert!(forward.contains("self.enqueue_terminal_search"));
+    assert!(backward.contains("self.enqueue_terminal_search"));
+
+    let worker = function_region(
+        source,
+        "fn start_next_terminal_search",
+        "/// 内部搜索：向前搜索",
+    );
+    assert!(worker.contains("cx.background_executor().spawn"));
+    assert!(worker.contains("let mut term = term.lock()"));
+    assert!(worker.contains("self.terminal_search_task.is_some()"));
+    assert!(worker.contains("this.terminal_search_task = None"));
+    assert!(worker.contains("this.start_next_terminal_search(cx)"));
+    assert!(worker.contains("terminal_search_generation"));
+    assert!(!worker.contains("term.scroll_to_point"));
+    assert!(source.contains("MAX_PENDING_TERMINAL_SEARCH_RUNS"));
+    assert!(source.contains("MAX_PENDING_TERMINAL_SEARCH_REQUESTS"));
+    assert!(
+        source.contains("usize::from(self.terminal_search_task.is_some())"),
+        "the total search request bound must include the in-flight worker"
+    );
 }
 
 #[test]
@@ -419,7 +493,7 @@ fn playback_mouse_reporting_is_rejected_before_report_side_effects() {
         "pub(super) fn try_report_sgr_mouse_button",
         "pub(super) fn write_sgr_mouse_button_report",
         "if !self.accepts_live_terminal_input(cx)",
-        "self.terminal.read(cx).mode()",
+        "self.terminal_frame_snapshot.mode",
         "SGR mouse reporting",
     );
     assert_function_guard_precedes(
@@ -470,7 +544,7 @@ fn playback_stale_sgr_press_never_clears_the_local_selection() {
     assert_guard_precedes(
         pending_press,
         "if self.accepts_live_terminal_input(cx)",
-        "terminal.clear_selection()",
+        "PendingTerminalSelectionAction::Clear",
         "pending SGR mouse press",
     );
 }

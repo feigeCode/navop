@@ -17,14 +17,15 @@ impl TerminalView {
             self.mouse_state.block_selecting = true;
             self.mouse_state.pending_sgr_left_press = None;
             self.mouse_state.selecting = false;
-            self.terminal.update(cx, |terminal, _| {
-                terminal.clear_selection();
-            });
+            self.apply_or_queue_terminal_selection_action(
+                PendingTerminalSelectionAction::Clear,
+                cx,
+            );
             self.dismiss_history_prompt();
             cx.notify();
             return;
         }
-        let mode = self.terminal.read(cx).mode();
+        let mode = self.terminal_frame_snapshot.mode;
         if accepts_live_input && should_defer_sgr_left_press(event.button, event.modifiers, mode) {
             self.mouse_state.pending_sgr_left_press = Some(PendingSgrMousePress {
                 point: self.pixel_to_point(event.position, self.terminal_bounds, cx),
@@ -59,12 +60,13 @@ impl TerminalView {
         self.mouse_state.block_selecting = false;
 
         let point = self.pixel_to_point(event.position, bounds, cx);
-        let has_selection = self.terminal.read(cx).term().lock().selection.is_some();
+        let has_selection = self.terminal_frame_snapshot.selection_present;
         if should_extend_selection_on_shift_click(event.button, event.modifiers, has_selection) {
             let side = self.pixel_to_side(event.position, bounds);
-            self.terminal.update(cx, |terminal, _| {
-                terminal.update_selection(point, side);
-            });
+            self.apply_or_queue_terminal_selection_action(
+                PendingTerminalSelectionAction::Update { point, side },
+                cx,
+            );
             self.mouse_state.selecting = true;
             cx.notify();
             return;
@@ -119,13 +121,14 @@ impl TerminalView {
             _ => SelectionType::Lines,
         };
 
-        self.terminal.update(cx, |terminal, _| {
-            terminal.start_selection(
+        self.apply_or_queue_terminal_selection_action(
+            PendingTerminalSelectionAction::Start {
                 selection_type,
                 point,
-                self.pixel_to_side(event.position, bounds),
-            );
-        });
+                side: self.pixel_to_side(event.position, bounds),
+            },
+            cx,
+        );
 
         self.mouse_state.selecting = true;
         cx.notify();

@@ -670,7 +670,7 @@ pub struct GpuiEventProxy {
     write_back: Arc<Mutex<Option<PtyWriteBack>>>,
     /// 共享窗口尺寸，供 TextAreaSizeRequest 真实回复使用
     window_size: Arc<Mutex<WindowSize>>,
-    /// Wakeup 去重标记：true 表示已有未消费的 Wakeup 在事件队列里
+    /// Wakeup 去重标记：true 表示完整事件链路中已有尚未被 GPUI 消费的 Wakeup
     wakeup_pending: Arc<AtomicBool>,
     metrics: Arc<TerminalPerformanceMetrics>,
 }
@@ -737,7 +737,8 @@ impl GpuiEventProxy {
     }
 
     /// 当 UI 已经消费 Wakeup 后调用，允许下一次 Wakeup 入队
-    pub fn reset_wakeup_pending(&self) {
+    #[cfg(test)]
+    fn reset_wakeup_pending(&self) {
         self.wakeup_pending.store(false, Ordering::Release);
     }
 
@@ -745,9 +746,9 @@ impl GpuiEventProxy {
         self.send_event(AlacTermEvent::Wakeup);
     }
 
-    /// 返回 Wakeup 去重标记的句柄，便于事件聚合任务在转发 Wakeup 后立即 reset，
-    /// 让下一次 PTY 输出能继续触发 Wakeup
-    pub fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
+    /// 返回端到端 Wakeup 去重标记的句柄。
+    /// 只有 GPUI 消费对应 Wakeup 后才能 reset，防止前台繁忙时渲染队列无限积压。
+    pub(crate) fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
         self.wakeup_pending.clone()
     }
 

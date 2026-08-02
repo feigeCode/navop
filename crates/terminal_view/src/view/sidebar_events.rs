@@ -1,5 +1,32 @@
 use super::*;
 
+const MAX_PENDING_TERMINAL_SEARCH_RUNS: usize = 64;
+const MAX_PENDING_TERMINAL_SEARCH_REQUESTS: usize = 256;
+
+struct TerminalSearchCompletion {
+    generation: u64,
+    pattern: String,
+    previous_match: Option<std::ops::RangeInclusive<AlacPoint>>,
+    result: Option<std::ops::RangeInclusive<AlacPoint>>,
+    display_offset: Option<usize>,
+}
+
+fn terminal_search_display_offset(term: &Term<GpuiEventProxy>, point: AlacPoint) -> usize {
+    let current = term.grid().display_offset() as i64;
+    let history_size = term.history_size() as i64;
+    let screen_lines = term.screen_lines() as i64;
+    let line = point.line.0 as i64;
+
+    let target = if line < -current {
+        -line
+    } else if line >= screen_lines - current {
+        screen_lines.saturating_sub(1).saturating_sub(line)
+    } else {
+        current
+    };
+    target.clamp(0, history_size) as usize
+}
+
 impl TerminalView {
     pub(super) fn handle_workspace_editor_event(
         &mut self,
@@ -170,23 +197,162 @@ impl TerminalView {
         }
     }
 
+    pub(super) fn invalidate_terminal_searches(&mut self) {
+        self.pending_terminal_searches.clear();
+        self.terminal_search_generation
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn enqueue_terminal_search(
+        &mut self,
+        direction: TerminalSearchDirection,
+        cx: &mut Context<Self>,
+    ) {
+        let pending_request_count = self
+            .pending_terminal_searches
+            .iter()
+            .map(|pending| pending.repetitions as usize)
+            .sum::<usize>()
+            + usize::from(self.terminal_search_task.is_some());
+        if pending_request_count >= MAX_PENDING_TERMINAL_SEARCH_REQUESTS {
+            tracing::warn!(
+                max_pending_requests = MAX_PENDING_TERMINAL_SEARCH_REQUESTS,
+                "dropping terminal search request because the pending queue is full"
+            );
+            return;
+        }
+
+        let merged = if let Some(pending) = self.pending_terminal_searches.back_mut() {
+            if pending.direction == direction {
+                pending.repetitions += 1;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !merged && self.pending_terminal_searches.len() < MAX_PENDING_TERMINAL_SEARCH_RUNS {
+            self.pending_terminal_searches
+                .push_back(PendingTerminalSearch {
+                    direction,
+                    repetitions: 1,
+                });
+        } else if !merged {
+            tracing::warn!(
+                max_pending_runs = MAX_PENDING_TERMINAL_SEARCH_RUNS,
+                "dropping terminal search request because the pending queue is full"
+            );
+            return;
+        }
+        self.start_next_terminal_search(cx);
+    }
+
+    fn start_next_terminal_search(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_search_task.is_some() {
+            return;
+        }
+
+        let Some(pending) = self.pending_terminal_searches.front_mut() else {
+            return;
+        };
+        let direction = pending.direction;
+        pending.repetitions -= 1;
+        if pending.repetitions == 0 {
+            self.pending_terminal_searches.pop_front();
+        }
+
+        let Some(request) = self
+            .addon_manager
+            .get_as::<SearchAddon>("search")
+            .and_then(SearchAddon::search_request)
+        else {
+            self.pending_terminal_searches.clear();
+            return;
+        };
+
+        let term = self.terminal.read(cx).term().clone();
+        let generation_counter = self.terminal_search_generation.clone();
+        let generation = generation_counter.load(Ordering::Acquire);
+        let task = cx.background_executor().spawn(async move {
+            if generation_counter.load(Ordering::Acquire) != generation {
+                return None;
+            }
+
+            let mut term = term.lock();
+            if generation_counter.load(Ordering::Acquire) != generation {
+                return None;
+            }
+
+            let mut regex = request.regex;
+            let result = find_terminal_search_match(
+                &mut term,
+                &mut regex,
+                request.current_match.as_ref(),
+                direction,
+            );
+            let display_offset = result
+                .as_ref()
+                .map(|result| terminal_search_display_offset(&term, *result.start()));
+
+            if generation_counter.load(Ordering::Acquire) != generation {
+                return None;
+            }
+
+            Some(TerminalSearchCompletion {
+                generation,
+                pattern: request.pattern,
+                previous_match: request.current_match,
+                result,
+                display_offset,
+            })
+        });
+
+        self.terminal_search_task = Some(cx.spawn(async move |this, cx| {
+            let completion = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.terminal_search_task = None;
+
+                if let Some(completion) = completion {
+                    if this.terminal_search_generation.load(Ordering::Acquire)
+                        == completion.generation
+                    {
+                        let applied = this
+                            .addon_manager
+                            .get_as_mut::<SearchAddon>("search")
+                            .is_some_and(|search| {
+                                search.apply_search_result(
+                                    &completion.pattern,
+                                    &completion.previous_match,
+                                    completion.result,
+                                )
+                            });
+
+                        if applied {
+                            if let Some(display_offset) = completion.display_offset {
+                                if !this.scrollbar_handle.try_set_display_offset(display_offset) {
+                                    this.scrollbar_handle
+                                        .put_back_future_display_offset(display_offset);
+                                    this.schedule_terminal_render_retry(cx);
+                                }
+                            }
+                            cx.notify();
+                        }
+                    }
+                }
+
+                this.start_next_terminal_search(cx);
+            });
+        }));
+    }
+
     /// 内部搜索：向前搜索
     pub(super) fn search_forward_internal(&mut self, cx: &mut Context<Self>) {
-        if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
-            let term = self.terminal.read(cx).term().clone();
-            let mut term = term.lock();
-            search.find_next(&mut term);
-        }
-        cx.notify();
+        self.enqueue_terminal_search(TerminalSearchDirection::Forward, cx);
     }
 
     /// 内部搜索：向后搜索
     pub(super) fn search_backward_internal(&mut self, cx: &mut Context<Self>) {
-        if let Some(search) = self.addon_manager.get_as_mut::<SearchAddon>("search") {
-            let term = self.terminal.read(cx).term().clone();
-            let mut term = term.lock();
-            search.find_previous(&mut term);
-        }
-        cx.notify();
+        self.enqueue_terminal_search(TerminalSearchDirection::Backward, cx);
     }
 }

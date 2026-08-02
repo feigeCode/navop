@@ -6,11 +6,10 @@ impl TerminalView {
         let Some(connection_kind) = terminal.live_connection_kind() else {
             return false;
         };
-        let mode = terminal.mode();
         history_prompt_available(
             self.autocomplete_enabled,
             connection_kind,
-            mode,
+            self.terminal_frame_snapshot.mode,
             self.shell_prompt_input_active,
         )
     }

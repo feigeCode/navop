@@ -13,6 +13,32 @@ pub(super) struct ImeState {
     pub(super) marked_range: Option<std::ops::Range<usize>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingTerminalAction {
+    ViMotion {
+        motion: ViMotion,
+        repetitions: u16,
+    },
+    ViToggleSelection(SelectionType),
+    ViYank,
+    ViScrollHalf(i32),
+    ViGotoTop,
+    ViGotoBottom,
+    ToggleViMode,
+    ResolveClearSelection {
+        accepts_live_input: bool,
+        had_block_selection: bool,
+    },
+    SelectAll,
+    ClearScreen,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PendingTerminalSearch {
+    pub(super) direction: TerminalSearchDirection,
+    pub(super) repetitions: u16,
+}
+
 pub(super) struct SshMfaInput {
     pub(super) prompt: String,
     pub(super) echo: bool,
@@ -147,6 +173,20 @@ pub(super) struct PendingSgrMousePress {
     pub(super) modifiers: Modifiers,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PendingTerminalSelectionAction {
+    Clear,
+    Start {
+        selection_type: SelectionType,
+        point: AlacPoint,
+        side: Side,
+    },
+    Update {
+        point: AlacPoint,
+        side: Side,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct TerminalScrollbarMetrics {
     pub(super) viewport_size: Size<Pixels>,
@@ -186,11 +226,43 @@ impl TerminalFontMetrics {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TerminalFrameSnapshot {
+    pub(super) mode: TermMode,
+    pub(super) display_offset: usize,
+    pub(super) history_size: usize,
+    pub(super) screen_lines: usize,
+    pub(super) columns: usize,
+    pub(super) selection_present: bool,
+    pub(super) selection_text: Option<String>,
+    pub(super) block_selection_text: Option<String>,
+    pub(super) cursor_screen_line: i32,
+    pub(super) cursor_column: usize,
+}
+
+impl Default for TerminalFrameSnapshot {
+    fn default() -> Self {
+        Self {
+            mode: TermMode::empty(),
+            display_offset: 0,
+            history_size: 0,
+            screen_lines: DEFAULT_ROWS,
+            columns: DEFAULT_COLS,
+            selection_present: false,
+            selection_text: None,
+            block_selection_text: None,
+            cursor_screen_line: 0,
+            cursor_column: 0,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct TerminalScrollbarHandle {
     pub(super) proxy: TerminalScrollProxy,
     pub(super) metrics: Rc<RefCell<TerminalScrollbarMetrics>>,
     pub(super) future_display_offset: Rc<StdCell<Option<usize>>>,
+    last_snapshot: Rc<RefCell<TerminalScrollSnapshot>>,
 }
 
 impl TerminalScrollbarHandle {
@@ -198,15 +270,42 @@ impl TerminalScrollbarHandle {
         proxy: TerminalScrollProxy,
         metrics: Rc<RefCell<TerminalScrollbarMetrics>>,
     ) -> Self {
+        let last_snapshot = proxy.try_snapshot().unwrap_or_default();
         Self {
             proxy,
             metrics,
             future_display_offset: Rc::new(StdCell::new(None)),
+            last_snapshot: Rc::new(RefCell::new(last_snapshot)),
         }
     }
 
     pub(super) fn take_future_display_offset(&self) -> Option<usize> {
         self.future_display_offset.take()
+    }
+
+    pub(super) fn put_back_future_display_offset(&self, display_offset: usize) {
+        self.future_display_offset.set(Some(display_offset));
+    }
+
+    pub(super) fn future_display_offset(&self) -> Option<usize> {
+        self.future_display_offset.get()
+    }
+
+    pub(super) fn try_set_display_offset(&self, display_offset: usize) -> bool {
+        self.proxy.try_set_display_offset(display_offset)
+    }
+
+    pub(super) fn try_scroll_display_delta(&self, delta: i32) -> bool {
+        self.proxy.try_scroll_display_delta(delta)
+    }
+
+    fn snapshot_or_cached(&self) -> TerminalScrollSnapshot {
+        if let Some(snapshot) = self.proxy.try_snapshot() {
+            *self.last_snapshot.borrow_mut() = snapshot.clone();
+            snapshot
+        } else {
+            self.last_snapshot.borrow().clone()
+        }
     }
 }
 
@@ -214,8 +313,7 @@ impl ScrollbarHandle for TerminalScrollbarHandle {
     fn offset(&self) -> Point<Pixels> {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));
-        // Snapshot terminal state in a single lock to avoid inconsistency
-        let snapshot = self.proxy.snapshot();
+        let snapshot = self.snapshot_or_cached();
         let max_offset = snapshot.history_size;
         let scroll_offset = max_offset.saturating_sub(snapshot.display_offset);
         Point::new(px(0.0), -(scroll_offset as f32 * line_height))
@@ -224,7 +322,7 @@ impl ScrollbarHandle for TerminalScrollbarHandle {
     fn set_offset(&self, offset: Point<Pixels>) {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));
-        let snapshot = self.proxy.snapshot();
+        let snapshot = self.snapshot_or_cached();
         let max_offset = snapshot.history_size as i32;
         if max_offset == 0 {
             return;
@@ -237,7 +335,7 @@ impl ScrollbarHandle for TerminalScrollbarHandle {
     fn content_size(&self) -> Size<Pixels> {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));
-        let snapshot = self.proxy.snapshot();
+        let snapshot = self.snapshot_or_cached();
         let total_lines = snapshot.history_size + snapshot.screen_lines;
         let height = line_height * total_lines as f32;
         let width = metrics

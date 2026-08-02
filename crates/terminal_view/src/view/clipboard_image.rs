@@ -118,7 +118,7 @@ impl TerminalView {
         if !self.is_live_ssh_terminal(cx) {
             return;
         }
-        let mode = self.terminal.read(cx).mode();
+        let mode = self.terminal_frame_snapshot.mode;
         self.apply_paste_to_history_prompt(path, cx);
         self.write_to_pty(terminal_paste_bytes(path, mode), cx);
     }
