@@ -4,6 +4,52 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.1] - 2026-08-02
+
+### 中文
+
+#### 更新内容
+
+- 新增终端会话录制与只读时间线回放，支持持久化保存、录制文件关联和安全浏览；回放期间会阻止输入、在线操作及 Public MCP 暴露，避免误执行。
+- 数据库表数据视图新增打开表查询入口，单元格预览面板支持调整大小，并改进行选择与 Shift 连续范围选择。
+- 改进 Markdown 编辑和文件交互：增强 Typora 兼容编辑体验、支持在表格单元格中渲染图片、补充笔记导航快捷键，并可通过拖放打开已关联文件。
+- 更新对话框提供更完整的版本信息与跳过版本选项，同时增加本地更新模拟能力，便于验证完整更新流程。
+
+#### 修复与优化
+
+- 修复 Windows 上 WSL、PowerShell 等终端在持续输出或高负载下白屏、窗口无响应的问题；同时为渲染、搜索、选择、剪贴板、滚动和控制操作增加非阻塞调度与有界排队，持续输出时界面仍可响应。
+- 全面优化终端高负载路径：限制输入队列和命令执行输出捕获，改进 SSH/串口解析入口、性能指标、命令栏历史导航，并在 SSH 重连后保留现有终端输出。
+- 改进 SSH 主机密钥校验、信任提示、会话复用、闲置回收和重连行为，使多窗口及连接恢复更加稳定。
+- 提升 SFTP 传输可靠性：断开和重连时及时淘汰过期客户端与传输池，远程写入采用暂存后替换，并正确反馈远程读取失败，降低卡住和文件半写风险。
+- 保留并展示 IPC 数据库驱动和 PostgreSQL 返回的详细错误信息，帮助定位 SQL、连接和服务端问题；同时提前阻止与当前 Navop 宿主不兼容的 IPC 驱动。
+- 修复 CSV 导入导出以及 ClickHouse、DuckDB IPC 驱动中 `NULL` 与空字符串语义混淆的问题，并改进数据库表格编辑、搜索快捷键和大文本预览体验。
+- 修复 RDP Caps Lock 状态不同步的问题，并使服务器监控中的进程颜色更好地适配当前终端主题。
+- 改进 Public MCP 工具目标恢复和超大终端命令输出的截断反馈，降低异常会话或大输出对应用稳定性的影响。
+
+---
+
+### English
+
+#### What's New
+
+- Added persistent terminal session recording with read-only timeline playback, recording file associations, and safe browsing. Playback blocks input, online operations, and Public MCP exposure to prevent accidental execution.
+- Added an entry point for opening table queries from database table views, made the cell preview panel resizable, and improved row selection with Shift-based range extension.
+- Improved Markdown editing and file interactions with better Typora compatibility, image rendering inside table cells, note-navigation shortcuts, and drag-and-drop opening for associated files.
+- Expanded the update dialog with richer version information and a skip-version option, and added local update simulation for validating the complete update flow.
+
+#### Fixes and Improvements
+
+- Fixed Windows terminals such as WSL and PowerShell blanking or becoming unresponsive during continuous output or heavy load. Rendering, search, selection, clipboard, scrolling, and control operations now use non-blocking scheduling with bounded queues so the UI remains responsive.
+- Optimized high-load terminal paths by bounding ingress queues and command-output capture, improving SSH and serial parser ingestion and performance metrics, adding command-bar history navigation, and preserving terminal output across SSH reconnects.
+- Improved SSH host-key verification, trust prompts, session reuse, idle cleanup, and reconnect behavior for more reliable multi-window and connection recovery workflows.
+- Improved SFTP reliability by retiring stale clients and transfer pools during disconnects and reconnects, staging remote writes before replacement, and surfacing remote read failures to reduce hangs and partial-write risks.
+- Preserved and surfaced detailed IPC database-driver and PostgreSQL server errors for easier SQL and connection diagnostics, and now reject IPC drivers that are incompatible with the current Navop host before startup.
+- Fixed `NULL` versus empty-string semantics across CSV import/export and the ClickHouse and DuckDB IPC drivers, and improved database table editing, search shortcuts, and large-text previews.
+- Fixed RDP Caps Lock synchronization and adjusted server-monitor process colors to better match the active terminal theme.
+- Improved Public MCP tool-target recovery and truncation feedback for very large terminal command output, reducing the stability impact of stale sessions and oversized results.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.0...v0.10.1
+
 ## [v0.10.0] - 2026-07-30
 
 ### 中文
