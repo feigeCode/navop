@@ -2397,6 +2397,8 @@ impl Render for SshFormWindow {
         v_flex()
             .justify_center()
             .size_full()
+            .min_h_0()
+            .overflow_hidden()
             // TabBar
             .child(
                 div().flex().justify_center().px_3().pt_2().child(
@@ -2422,18 +2424,20 @@ impl Render for SshFormWindow {
                     .id("ssh-form-content")
                     .w_full()
                     .min_w_0()
+                    .min_h_0()
                     .flex_1()
-                    .p_3()
-                    .overflow_y_scroll()
-                    .child(match active_tab {
-                        0 => self.render_basic_tab(cx).into_any_element(),
-                        1 => self.render_init_tab(cx).into_any_element(),
-                        2 => self.render_jump_server_tab(cx).into_any_element(),
-                        3 => self.render_proxy_tab(cx).into_any_element(),
-                        4 => self.render_advanced_tab(cx).into_any_element(),
-                        5 => self.render_other_tab().into_any_element(),
-                        _ => div().into_any_element(),
-                    }),
+                    .overflow_hidden()
+                    .child(div().size_full().p_3().overflow_y_scrollbar().child(
+                        match active_tab {
+                            0 => self.render_basic_tab(cx).into_any_element(),
+                            1 => self.render_init_tab(cx).into_any_element(),
+                            2 => self.render_jump_server_tab(cx).into_any_element(),
+                            3 => self.render_proxy_tab(cx).into_any_element(),
+                            4 => self.render_advanced_tab(cx).into_any_element(),
+                            5 => self.render_other_tab().into_any_element(),
+                            _ => div().into_any_element(),
+                        },
+                    )),
             )
             // 测试结果
             .when_some(test_result_element, |this, elem| {
@@ -2445,6 +2449,7 @@ impl Render for SshFormWindow {
             // 底部按钮
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .justify_end()
                     .gap_2()
                     .px_6()
@@ -2533,6 +2538,49 @@ mod tests {
             x11_forwarding: None,
             allow_legacy_algorithms: None,
         }
+    }
+
+    #[test]
+    fn ssh_form_content_uses_bounded_scroll_container() {
+        let source = include_str!("ssh_form_window.rs");
+        let render = source
+            .split_once("impl Render for SshFormWindow")
+            .expect("SSH form render implementation should exist")
+            .1
+            .split_once("#[cfg(test)]")
+            .expect("SSH form render implementation should end before tests")
+            .0;
+
+        let content = render
+            .split_once(".id(\"ssh-form-content\")")
+            .expect("SSH form content container should exist")
+            .1
+            .split_once("// 测试结果")
+            .expect("SSH form content should end before test results")
+            .0;
+        assert!(content.contains(".min_w_0()"));
+        assert!(content.contains(".min_h_0()"));
+        assert!(content.contains(".flex_1()"));
+        assert!(content.contains(".overflow_hidden()"));
+        assert!(content.contains(".size_full()"));
+        assert!(content.contains(".overflow_y_scrollbar()"));
+
+        let root = render
+            .split_once("v_flex()")
+            .expect("SSH form root should exist")
+            .1
+            .split_once("// TabBar")
+            .expect("SSH form root should end before the tab bar")
+            .0;
+        assert!(root.contains(".size_full()"));
+        assert!(root.contains(".min_h_0()"));
+        assert!(root.contains(".overflow_hidden()"));
+
+        let footer = render
+            .split_once("// 底部按钮")
+            .expect("SSH form footer should exist")
+            .1;
+        assert!(footer.contains(".flex_shrink_0()"));
     }
 
     #[test]
