@@ -1,11 +1,6 @@
 name: Upload R2
 
 on:
-  workflow_run:
-    workflows:
-      - Release
-    types:
-      - completed
   workflow_dispatch:
     inputs:
       tag:
@@ -18,13 +13,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.run_id }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: true
 
 jobs:
   upload:
     name: Upload release assets to R2
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -47,28 +41,11 @@ jobs:
         if: ${{ steps.r2_config.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
-          WORKFLOW_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
-          if [ -n "$INPUT_TAG" ]; then
-            release_tag="$INPUT_TAG"
-          else
-            mkdir -p run-metadata
-            if ! gh run download "$WORKFLOW_RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name release-metadata \
-              --dir run-metadata; then
-              echo "::warning::Release workflow metadata was not found; skipping R2 upload."
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-
-            release_tag="$(
-              node -e 'const fs = require("fs"); const data = JSON.parse(fs.readFileSync("run-metadata/release-metadata.json", "utf8")); process.stdout.write(data.release_tag || "");'
-            )"
-          fi
+          release_tag="$INPUT_TAG"
 
           if [ -z "$release_tag" ]; then
             echo "::warning::Release tag is empty; skipping R2 upload."
@@ -303,10 +280,47 @@ jobs:
             local key="$2"
             local content_type="$3"
             local cache_control="$4"
+            local expected_size
+            local expected_sha256
+            local head_json
+            local actual_size
+            local actual_sha256
+            local actual_cache_control
+
+            expected_size="$(wc -c < "$source" | tr -d '[:space:]')"
+            expected_sha256="$(sha256sum "$source" | awk '{print $1}')"
+
             aws s3 cp "$source" "s3://${CLOUDFLARE_R2_BUCKET}/${key}" \
               --endpoint-url "$endpoint" \
               --content-type "$content_type" \
-              --cache-control "$cache_control"
+              --cache-control "$cache_control" \
+              --metadata "sha256=${expected_sha256}"
+
+            head_json="$(
+              aws s3api head-object \
+                --bucket "$CLOUDFLARE_R2_BUCKET" \
+                --key "$key" \
+                --endpoint-url "$endpoint" \
+                --output json
+            )"
+            actual_size="$(jq -r '.ContentLength' <<< "$head_json")"
+            actual_sha256="$(jq -r '.Metadata.sha256 // empty' <<< "$head_json")"
+            actual_cache_control="$(jq -r '.CacheControl // empty' <<< "$head_json")"
+
+            if [ "$actual_size" != "$expected_size" ]; then
+              echo "::error::R2 object size mismatch for ${key}: expected ${expected_size}, got ${actual_size}"
+              exit 1
+            fi
+            if [ "$actual_sha256" != "$expected_sha256" ]; then
+              echo "::error::R2 object checksum metadata mismatch for ${key}"
+              exit 1
+            fi
+            if [ "$actual_cache_control" != "$cache_control" ]; then
+              echo "::error::R2 object cache-control mismatch for ${key}: expected '${cache_control}', got '${actual_cache_control}'"
+              exit 1
+            fi
+
+            echo "Verified R2 object: ${key} (${actual_size} bytes, sha256=${actual_sha256})"
           }
 
           release_files=( \
@@ -324,7 +338,10 @@ jobs:
             else
               content_type="application/gzip"
             fi
-            upload_object "artifacts/${file}" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=31536000, immutable"
+            # Release repair workflows may replace an object under the same tag
+            # and filename, so these URLs must be revalidated instead of cached
+            # as immutable for a year.
+            upload_object "artifacts/${file}" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=0, must-revalidate"
           done
 
-          upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-cache"
+          upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-store, max-age=0"

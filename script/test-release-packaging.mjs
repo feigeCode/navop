@@ -376,6 +376,23 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
   assert.doesNotMatch(uploadList, /sha256sums\.txt/);
 });
 
+test("R2 uploads are single-dispatch, revalidated, and verified after overwrite", () => {
+  const upload = read(".github/workflows/upload-r2.yml");
+
+  assert.match(upload, /workflow_dispatch:/);
+  assert.doesNotMatch(upload, /workflow_run:/);
+  assert.match(upload, /group: \$\{\{ github\.workflow \}\}-\$\{\{ inputs\.tag \}\}/);
+  assert.match(upload, /cancel-in-progress: true/);
+  assert.match(upload, /--metadata "sha256=\$\{expected_sha256\}"/);
+  assert.match(upload, /aws s3api head-object/);
+  assert.match(upload, /R2 object size mismatch/);
+  assert.match(upload, /R2 object checksum metadata mismatch/);
+  assert.match(upload, /public, max-age=0, must-revalidate/);
+  assert.match(upload, /no-store, max-age=0/);
+  assert.doesNotMatch(upload, /max-age=31536000/);
+  assert.doesNotMatch(upload, /max-age=31536000, immutable/);
+});
+
 test("CI runs release packaging regression checks", () => {
   const ci = read(".github/workflows/ci.yml");
 
