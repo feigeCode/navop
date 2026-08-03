@@ -139,8 +139,9 @@ test("Windows release builds an EXE installer bundle from the MSI", () => {
   assert.match(bundle, /<bal:WixInternalUIBootstrapperApplication\s*\/>/);
   assert.match(
     bundle,
-    /<MsiPackage[^>]*SourceFile="\$\(MsiPath\)"[^>]*Compressed="yes"[^>]*bal:PrimaryPackageType="x64"/,
+    /<MsiPackage[^>]*SourceFile="\$\(MsiPath\)"[^>]*Compressed="yes"[^>]*bal:PrimaryPackageType="default"/,
   );
+  assert.doesNotMatch(bundle, /bal:PrimaryPackageType="x64"/);
 
   for (const workflow of workflows) {
     assert.match(

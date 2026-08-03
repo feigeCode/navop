@@ -15,7 +15,7 @@
       <MsiPackage
         SourceFile="$(MsiPath)"
         Compressed="yes"
-        bal:PrimaryPackageType="x64" />
+        bal:PrimaryPackageType="default" />
     </Chain>
   </Bundle>
 </Wix>
