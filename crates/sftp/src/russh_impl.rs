@@ -16,8 +16,8 @@ use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
     AuthFailureMessages, HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyVerifier,
-    ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, authenticate_with_strategy,
-    build_client_preferred_algorithms_with_legacy, defaults,
+    ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, add_legacy_algorithm_hint,
+    authenticate_with_strategy, build_client_preferred_algorithms_with_legacy, defaults,
 };
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -1116,10 +1116,18 @@ impl SftpClient for RusshSftpClient {
                 tracing::info!("SFTP: 通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                 let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
                 let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect_stream(jump_russh_config, stream, handler).await?
+                client::connect_stream(jump_russh_config, stream, handler)
+                    .await
+                    .map_err(|error| {
+                        add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                    })?
             } else {
                 let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler).await?
+                client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler)
+                    .await
+                    .map_err(|error| {
+                        add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                    })?
             };
 
             // 认证跳板机
@@ -1143,7 +1151,10 @@ impl SftpClient for RusshSftpClient {
                 forwarded_channel.into_stream(),
                 handler,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+            })?;
 
             (session, Some(jump_session))
         } else if let Some(ref proxy) = ssh_config.proxy {
@@ -1151,7 +1162,11 @@ impl SftpClient for RusshSftpClient {
             let stream = sftp_connect_via_proxy(proxy, &ssh_config.host, ssh_config.port).await?;
             let handler =
                 SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
-            let session = client::connect_stream(target_russh_config, stream, handler).await?;
+            let session = client::connect_stream(target_russh_config, stream, handler)
+                .await
+                .map_err(|error| {
+                    add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+                })?;
             (session, None)
         } else {
             let handler =
@@ -1161,7 +1176,10 @@ impl SftpClient for RusshSftpClient {
                 (ssh_config.host.as_str(), ssh_config.port),
                 handler,
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                add_legacy_algorithm_hint(error, ssh_config.allow_legacy_algorithms)
+            })?;
             (session, None)
         };
 

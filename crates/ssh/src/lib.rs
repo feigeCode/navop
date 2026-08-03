@@ -1,5 +1,6 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod connection_error;
 mod connection_key;
 mod dynamic_socks;
 mod host_key;
@@ -9,6 +10,7 @@ mod session_registry;
 mod socks5;
 mod ssh;
 
+pub use connection_error::{LegacyAlgorithmRequired, add_legacy_algorithm_hint};
 pub use connection_key::{
     ConnectionCredentialRevisions, ConnectionKey, ConnectionKeyError, CredentialRevision,
     CredentialScope,

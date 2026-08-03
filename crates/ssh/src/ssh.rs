@@ -17,7 +17,7 @@ use x11_forwarding::{ForwardRequest, X11Proxy, X11ProxyHandle};
 use crate::remote_forwarding::RemoteForwardTarget;
 use crate::{
     HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
-    HostKeyVerifier,
+    HostKeyVerifier, add_legacy_algorithm_hint,
 };
 
 /// keepalive/超时的集中默认值，供 ssh 与 sftp 两侧共享。
@@ -1671,7 +1671,11 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                     );
-                    client::connect_stream(jump_russh_config, stream, handler).await?
+                    client::connect_stream(jump_russh_config, stream, handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                        })?
                 } else {
                     let addrs = (jump.host.as_str(), jump.port);
                     let handler = RusshHandler::new(
@@ -1680,7 +1684,11 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                     );
-                    client::connect(jump_russh_config, addrs, handler).await?
+                    client::connect(jump_russh_config, addrs, handler)
+                        .await
+                        .map_err(|error| {
+                            add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                        })?
                 };
 
                 // 认证跳板机
@@ -1713,7 +1721,10 @@ impl SshClient for RusshClient {
                     forwarded_channel.into_stream(),
                     handler,
                 )
-                .await?;
+                .await
+                .map_err(|error| {
+                    add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                })?;
 
                 // 认证目标服务器
                 authenticate_with_strategy_for_target(
@@ -1749,8 +1760,11 @@ impl SshClient for RusshClient {
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
                 );
-                let mut session =
-                    client::connect_stream(target_russh_config, stream, handler).await?;
+                let mut session = client::connect_stream(target_russh_config, stream, handler)
+                    .await
+                    .map_err(|error| {
+                        add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                    })?;
 
                 authenticate_with_strategy_for_target(
                     &mut session,
@@ -1778,7 +1792,11 @@ impl SshClient for RusshClient {
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
                 );
-                let mut session = client::connect(target_russh_config, addrs, handler).await?;
+                let mut session = client::connect(target_russh_config, addrs, handler)
+                    .await
+                    .map_err(|error| {
+                        add_legacy_algorithm_hint(error, config.allow_legacy_algorithms)
+                    })?;
 
                 authenticate_with_strategy_for_target(
                     &mut session,
@@ -1897,7 +1915,7 @@ mod port_forward_tests {
     use tempfile::TempDir;
     use tokio::net::TcpListener;
 
-    use crate::HostKeyPolicy;
+    use crate::{HostKeyPolicy, LegacyAlgorithmRequired};
 
     use super::{
         Algorithm, EcdsaCurve, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
@@ -2378,10 +2396,12 @@ mod port_forward_tests {
     async fn client_rejects_group14_sha1_when_legacy_algorithms_are_disabled() {
         let result = connect_client_to_server_with_only(russh::kex::DH_G14_SHA1, false).await;
 
-        assert!(
-            result.is_err(),
-            "group14 SHA-1 must not be negotiated unless the connection opts in"
-        );
+        let Err(error) = result else {
+            panic!("group14 SHA-1 must not be negotiated unless the connection opts in");
+        };
+        assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
+        assert!(error.to_string().contains("No common Kex algorithm"));
+        assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
     }
 
     #[test]
