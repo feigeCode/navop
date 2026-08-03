@@ -32,6 +32,15 @@ Navop 提供 macOS、Windows 和 Linux 桌面版本。安装包、系统架构�
 
 普通 `navop-x86_64-pc-windows-msvc.zip` 只包含常规的 `navop.exe`，使用前需要完整解压。它不会安装快捷方式或文件关联，但仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。除非要主动启用下述便携模式，否则不要在程序旁放置 `navop.portable`。
 
+### 从 v0.10.1 或更早版本的 Windows ZIP 升级
+
+> [!IMPORTANT]
+> v0.10.1 及更早版本的普通 Windows ZIP 实际上已经包含 `navop.portable`，因此这些用户当前使用的是便携模式。升级时请下载新的 `navop-x86_64-pc-windows-msvc-portable.zip`，备份并完整保留旧目录中的 `data`，同时确保 `navop.portable` 仍与 `navop.exe` 同级。
+
+不要为了切换版本而直接删除旧目录中的 `navop.portable`。删除标记只会让 Navop 改用正常的 Windows 用户数据目录，并不会自动复制或迁移原来的便携数据。
+
+如果将新的普通 `navop-x86_64-pc-windows-msvc.zip` 解压到一个全新目录，或改用 MSI/EXE 安装版，Navop 将使用正常的 Windows 用户数据目录。此时原有连接、设置和扩展可能看起来消失，但旧便携目录中的数据并未被删除；安装程序也不会自动迁移该目录。需要改用安装版时，请先保留完整的旧便携目录和主密钥，确认迁移后的数据可用后再清理旧目录。
+
 ## Windows 便携版
 
 ### 解压与首次启动

@@ -30,6 +30,15 @@ Navop 提供 macOS、Windows 與 Linux 桌面版本。安裝包必須符合系�
 
 一般 `navop-x86_64-pc-windows-msvc.zip` 只包含普通的 `navop.exe`，使用前必須完整解壓縮。它不會安裝捷徑或檔案關聯，但仍使用標準 Windows 使用者資料目錄，並支援記住主密鑰後自動解鎖。除非要主動啟用下述便攜模式，否則不要在執行檔旁放置 `navop.portable`。
 
+### 從 v0.10.1 或更早版本的 Windows ZIP 升級
+
+> [!IMPORTANT]
+> v0.10.1 及更早版本的一般 Windows ZIP 實際上已包含 `navop.portable`，因此這些使用者目前執行的是便攜模式。升級時請下載新的 `navop-x86_64-pc-windows-msvc-portable.zip`，備份並完整保留舊目錄中的 `data`，同時確認 `navop.portable` 仍與 `navop.exe` 位於同一層。
+
+不要為了切換版本而直接刪除舊目錄中的 `navop.portable`。刪除標記只會讓 Navop 改用標準 Windows 使用者資料目錄，不會自動複製或搬移原有的便攜資料。
+
+如果將新的一般 `navop-x86_64-pc-windows-msvc.zip` 解壓縮到全新目錄，或改用 MSI/EXE 安裝版，Navop 將使用標準 Windows 使用者資料目錄。此時原有連線、設定與擴充可能看似消失，但舊便攜目錄中的資料並未被刪除；安裝程式也不會自動搬移該目錄。需要改用安裝版時，請先保留完整的舊便攜目錄與主密鑰，確認搬移後的資料可用，再清理舊目錄。
+
 ## Windows 便攜版
 
 ### 解壓縮與首次啟動

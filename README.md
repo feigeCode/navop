@@ -174,6 +174,8 @@ Download the latest build from [GitHub Releases](https://github.com/feigeCode/na
 
 The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable; this mode intentionally asks for the master key again on every start.
 
+> **Upgrading from the Windows ZIP in v0.10.1 or earlier:** those archives enabled portable mode. Download the new `-portable.zip`, extract it to a new directory, and copy the complete existing `data` directory into it. Extracting the new standard `.zip` to a different directory, or switching to the MSI/EXE installer, uses the normal Windows user data location and does not automatically migrate portable data. The old connections and settings may therefore appear missing even though the original portable data has not been deleted.
+
 ### macOS Gatekeeper
 
 If macOS reports that Apple cannot check the app for malicious software after installing the DMG, run:

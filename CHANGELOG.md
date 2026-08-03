@@ -4,6 +4,54 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.2] - 2026-08-03
+
+### 中文
+
+#### 更新内容
+
+- Windows 新增 EXE 安装包，与 MSI 共用同一套当前用户安装流程；使用默认安装位置时无需管理员权限，并提供开始菜单、桌面快捷方式和文件关联。
+- Windows 普通免安装 ZIP 与便携 ZIP 现已明确拆分：普通 `navop-x86_64-pc-windows-msvc.zip` 使用标准 Windows 用户数据目录并支持记住主密钥，`navop-x86_64-pc-windows-msvc-portable.zip` 则将数据保存在程序旁，并在每次启动时要求输入主密钥。
+- SSH 连接新增“允许旧版 SSH 算法”兼容选项，默认关闭；需要连接旧服务器时可按连接启用，并覆盖 SSH、SFTP、跳板机和连接复用场景。
+
+#### Windows ZIP 用户升级提示
+
+- **如果你使用的是 v0.10.1 或更早版本的 Windows ZIP，请继续下载新的 `navop-x86_64-pc-windows-msvc-portable.zip`。**旧版普通 ZIP 实际包含 `navop.portable`，因此原有数据位于程序旁的 `data` 目录。
+- 升级前请完整备份旧便携目录；将新版便携 ZIP 解压到新目录后，把旧目录中的整个 `data` 复制过去，并确认 `navop.portable` 仍与 `navop.exe` 同级。启动后需要输入原主密钥。
+- 不要通过删除 `navop.portable` 来迁移数据。新的普通 ZIP、MSI 和 EXE 安装版使用标准 Windows 用户数据目录，不会自动迁移旧便携数据；切换后连接和设置看似消失时，旧数据仍保留在原便携目录中。
+
+#### 修复与优化
+
+- 改进 SiliconFlow 等模型的图片附件兼容性：根据实际图片格式处理 PNG、JPEG、WebP 和 GIF，并对不兼容或过大的图片进行转换或缩放；无法处理的附件会在发送请求前给出明确错误。
+- 改进旧版 SSH 服务器的连接失败提示：当密钥交换协商失败且没有共同 KEX 算法时，引导用户在连接的高级设置中启用旧版算法兼容选项。
+- 优化 SSH 主机密钥算法选择，在不弱化主机密钥校验的前提下优先使用已信任密钥对应的算法，旧版算法仅在连接明确启用兼容选项后加入。
+- 修复 SSH 连接设置窗口内容过长时的滚动和底部按钮布局，避免表单撑开窗口或遮挡操作按钮。
+
+---
+
+### English
+
+#### What's New
+
+- Added a Windows EXE installer that uses the same per-user installation flow as the MSI. The default installation location does not require administrator privileges and provides Start menu shortcuts, a desktop shortcut, and file associations.
+- Clearly separated the standard Windows no-install ZIP from the portable ZIP. The standard `navop-x86_64-pc-windows-msvc.zip` uses the normal Windows user data directories and supports remembered master-key unlock, while `navop-x86_64-pc-windows-msvc-portable.zip` keeps data beside the executable and asks for the master key on every start.
+- Added an opt-in “Allow Legacy SSH Algorithms” compatibility setting for individual SSH connections. It is disabled by default and applies to SSH, SFTP, jump hosts, and connection reuse when explicitly enabled for legacy servers.
+
+#### Upgrade Notice for Windows ZIP Users
+
+- **If you use the Windows ZIP from v0.10.1 or earlier, continue with the new `navop-x86_64-pc-windows-msvc-portable.zip`.** The earlier standard ZIP contained `navop.portable`, so its existing data is stored in the `data` directory beside the executable.
+- Back up the complete old portable directory before upgrading. Extract the new portable ZIP to a new directory, copy the entire old `data` directory into it, keep `navop.portable` beside `navop.exe`, and enter the original master key when starting the new version.
+- Do not migrate by deleting `navop.portable`. The new standard ZIP and the MSI/EXE installers use the normal Windows user data directories and do not automatically migrate old portable data. If connections and settings appear missing after switching editions, the original data remains in the old portable directory.
+
+#### Fixes and Improvements
+
+- Improved image attachment compatibility for SiliconFlow and other models by handling PNG, JPEG, WebP, and GIF according to their actual encoding, converting or resizing incompatible and oversized images, and reporting unsupported attachments before sending the request.
+- Added an actionable hint when an older SSH server fails key-exchange negotiation because there is no common KEX algorithm, directing users to enable legacy algorithm compatibility in the connection's advanced settings.
+- Improved SSH host-key algorithm selection by prioritizing algorithms associated with trusted keys without weakening host-key verification. Legacy algorithms are added only when explicitly enabled for the connection.
+- Fixed scrolling and footer-button layout in the SSH connection form when the content is taller than the window.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.1...v0.10.2
+
 ## [v0.10.1] - 2026-08-02
 
 ### 中文

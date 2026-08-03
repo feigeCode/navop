@@ -30,6 +30,15 @@ Choose either `navop-x86_64-pc-windows-msvc.msi` or `navop-x86_64-pc-windows-msv
 
 The standard `navop-x86_64-pc-windows-msvc.zip` contains only the ordinary `navop.exe`. Extract it before running. It does not install shortcuts or file associations, but it still uses the normal Windows user data directories and supports remembered master-key unlock. Do not place `navop.portable` beside the executable unless you intentionally want the portable behavior described below.
 
+### Upgrading from the Windows ZIP in v0.10.1 or earlier
+
+> [!IMPORTANT]
+> The standard Windows ZIP in v0.10.1 and earlier already contained `navop.portable`, so users of those archives are currently running in portable mode. Upgrade by downloading the new `navop-x86_64-pc-windows-msvc-portable.zip`, backing up and preserving the complete existing `data` directory, and keeping `navop.portable` beside `navop.exe`.
+
+Do not simply delete `navop.portable` from the old directory when changing editions. Removing the marker only makes Navop use the normal Windows user data directories; it does not copy or migrate the existing portable data.
+
+If you extract the new standard `navop-x86_64-pc-windows-msvc.zip` to a new directory, or switch to the MSI/EXE installer, Navop uses the normal Windows user data directories. Existing connections, settings, and extensions may then appear missing, but the original portable data has not been deleted. The installer does not migrate that directory automatically. Keep the complete old portable directory and the master key until the migrated setup has been verified.
+
 ## Windows portable edition
 
 ### Extract and start
