@@ -277,6 +277,9 @@ pub struct SshParams {
     /// 启用 X11 转发（需要本机有可用 X server，如 macOS 的 XQuartz）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x11_forwarding: Option<bool>,
+    /// 为旧版 SSH 服务器启用兼容算法；默认关闭
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_legacy_algorithms: Option<bool>,
     /// 跳板机配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jump_server: Option<JumpServerConfig>,
@@ -1518,6 +1521,7 @@ mod tests {
                 init_script: None,
                 disable_shell_integration: None,
                 x11_forwarding: None,
+                allow_legacy_algorithms: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -1695,6 +1699,7 @@ mod tests {
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
             jump_server: None,
             proxy: None,
             os_id: None,
@@ -2504,6 +2509,7 @@ mod serial_tests {
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
             jump_server: None,
             proxy: None,
             os_id: Some("ubuntu".to_string()),
@@ -2517,6 +2523,22 @@ mod serial_tests {
         params.os_id = None;
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
         assert!(!json.contains("os_id"));
+    }
+
+    #[test]
+    fn ssh_params_legacy_algorithms_are_opt_in_and_round_trip() {
+        let mut params: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少兼容算法字段时应可反序列化");
+        assert_eq!(params.allow_legacy_algorithms, None);
+
+        params.allow_legacy_algorithms = Some(true);
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("\"allow_legacy_algorithms\":true"));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(parsed.allow_legacy_algorithms, Some(true));
     }
 
     #[test]

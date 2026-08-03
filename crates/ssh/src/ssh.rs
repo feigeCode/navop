@@ -32,36 +32,80 @@ pub mod defaults {
     pub const KEEPALIVE_MAX: usize = 6;
 }
 
-/// 保留 russh 的现代算法优先级，并在扩展标记前追加必要的透明兼容回退。
+/// 保留 russh 的现代算法优先级，并可在扩展标记前追加旧服务器兼容回退。
 ///
-/// `group1-sha1` 与 `group-exchange-sha1` 风险更高，不应随兼容回退一起开放。
-fn build_client_preferred_algorithms() -> Preferred {
-    let mut preferred = Preferred::default();
-    let mut kex = preferred.kex.into_owned();
-    let extension_start = kex
-        .iter()
-        .position(|name| {
-            matches!(
-                *name,
-                kex::EXTENSION_SUPPORT_AS_CLIENT
-                    | kex::EXTENSION_SUPPORT_AS_SERVER
-                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
-                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
-            )
-        })
-        .unwrap_or(kex.len());
+/// 兼容回退默认由调用方关闭。即使开启，`group1-sha1` 与
+/// `group-exchange-sha1` 风险更高，也不会随兼容回退一起开放。
+///
+/// 已知的 host-key 算法只会稳定地移动到 russh 默认列表前部；默认算法不会被
+/// 删除，因此服务器不再提供已知算法时仍可完成协商，并由完整公钥校验拒绝变更。
+#[must_use]
+pub fn build_client_preferred_algorithms(known_host_key_algorithms: &[String]) -> Preferred {
+    build_client_preferred_algorithms_with_legacy(known_host_key_algorithms, false)
+}
 
-    kex.splice(
-        extension_start..extension_start,
-        [
-            kex::ECDH_SHA2_NISTP256,
-            kex::ECDH_SHA2_NISTP384,
-            kex::ECDH_SHA2_NISTP521,
-            kex::DH_G14_SHA1,
-        ],
-    );
-    preferred.kex = Cow::Owned(kex);
+/// 构建 SSH 算法偏好，并按连接配置决定是否启用旧服务器兼容 KEX。
+#[must_use]
+pub fn build_client_preferred_algorithms_with_legacy(
+    known_host_key_algorithms: &[String],
+    allow_legacy_algorithms: bool,
+) -> Preferred {
+    let mut preferred = Preferred::default();
+    if allow_legacy_algorithms {
+        let mut kex = preferred.kex.into_owned();
+        let extension_start = kex
+            .iter()
+            .position(|name| {
+                matches!(
+                    *name,
+                    kex::EXTENSION_SUPPORT_AS_CLIENT
+                        | kex::EXTENSION_SUPPORT_AS_SERVER
+                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
+                        | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
+                )
+            })
+            .unwrap_or(kex.len());
+
+        kex.splice(
+            extension_start..extension_start,
+            [
+                kex::ECDH_SHA2_NISTP256,
+                kex::ECDH_SHA2_NISTP384,
+                kex::ECDH_SHA2_NISTP521,
+                kex::DH_G14_SHA1,
+            ],
+        );
+        preferred.kex = Cow::Owned(kex);
+    }
+
+    let default_keys = preferred.key.into_owned();
+    let mut keys = Vec::with_capacity(default_keys.len());
+    for known in known_host_key_algorithms {
+        for candidate in &default_keys {
+            if host_key_algorithm_matches(candidate, known) && !keys.contains(candidate) {
+                keys.push(candidate.clone());
+            }
+        }
+    }
+    for candidate in default_keys {
+        if !keys.contains(&candidate) {
+            keys.push(candidate);
+        }
+    }
+    preferred.key = Cow::Owned(keys);
     preferred
+}
+
+fn host_key_algorithm_matches(candidate: &Algorithm, known: &str) -> bool {
+    match known {
+        // An RSA public-key blob is named `ssh-rsa`, while negotiation may use
+        // either RSA/SHA-2 signature algorithm. Prefer the whole compatible
+        // family, retaining russh's strongest-first order.
+        "ssh-rsa" | "rsa-sha2-256" | "rsa-sha2-512" => {
+            matches!(candidate, Algorithm::Rsa { .. })
+        }
+        _ => candidate.as_str() == known,
+    }
 }
 
 /// 远端 shell integration 安装后采集的"会话信息"。
@@ -94,6 +138,8 @@ pub struct SshConnectConfig {
     pub host_key_verifier: HostKeyVerifier,
     /// 是否启用 X11 转发（需要本机有可用 X server，如 macOS 的 XQuartz）。
     pub x11_forwarding: bool,
+    /// 是否为旧版 SSH 服务器启用兼容算法。默认应由连接配置保持关闭。
+    pub allow_legacy_algorithms: bool,
 }
 
 impl SshConnectConfig {
@@ -137,6 +183,30 @@ impl SshConnectConfig {
             HostKeyIdentity::new(&jump.host, jump.port, route)
         })
     }
+}
+
+fn build_russh_client_config(
+    config: &SshConnectConfig,
+    identity: &HostKeyIdentity,
+) -> Result<Arc<client::Config>> {
+    let known_host_key_algorithms = config
+        .host_key_verifier
+        .known_host_key_algorithms(identity)
+        .map_err(|reason| {
+            anyhow::anyhow!("load known SSH host keys for {identity} before handshake: {reason}")
+        })?;
+    Ok(Arc::new(client::Config {
+        preferred: build_client_preferred_algorithms_with_legacy(
+            &known_host_key_algorithms,
+            config.allow_legacy_algorithms,
+        ),
+        inactivity_timeout: Some(defaults::INACTIVITY_TIMEOUT),
+        keepalive_interval: config
+            .keepalive_interval
+            .or(Some(defaults::KEEPALIVE_INTERVAL)),
+        keepalive_max: config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
+        ..<_>::default()
+    }))
 }
 
 fn host_key_proxy_type(proxy_type: ProxyType) -> HostKeyProxyType {
@@ -1562,15 +1632,13 @@ impl SshClient for RusshClient {
 
     async fn connect(config: SshConnectConfig) -> Result<Self> {
         let connect_timeout = config.timeout;
-        let russh_config = Arc::new(client::Config {
-            preferred: build_client_preferred_algorithms(),
-            inactivity_timeout: Some(defaults::INACTIVITY_TIMEOUT),
-            keepalive_interval: config
-                .keepalive_interval
-                .or(Some(defaults::KEEPALIVE_INTERVAL)),
-            keepalive_max: config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
-            ..<_>::default()
-        });
+        let target_host_key_identity = config.target_host_key_identity();
+        let jump_host_key_identity = config.jump_host_key_identity();
+        let target_russh_config = build_russh_client_config(&config, &target_host_key_identity)?;
+        let jump_russh_config = jump_host_key_identity
+            .as_ref()
+            .map(|identity| build_russh_client_config(&config, identity))
+            .transpose()?;
 
         // X11 转发依赖本机 X server（DISPLAY/XAUTHORITY），解析失败仅降级不阻断连接。
         let x11_proxy = if config.x11_forwarding {
@@ -1579,8 +1647,6 @@ impl SshClient for RusshClient {
             None
         };
         let x11_handle = x11_proxy.as_ref().map(|proxy| proxy.handle());
-        let target_host_key_identity = config.target_host_key_identity();
-        let jump_host_key_identity = config.jump_host_key_identity();
         let host_key_verifier = config.host_key_verifier.clone();
         let remote_forward_target = Arc::new(RwLock::new(None));
 
@@ -1591,6 +1657,9 @@ impl SshClient for RusshClient {
                 let jump_identity = jump_host_key_identity
                     .clone()
                     .expect("jump identity must exist when jump server is configured");
+                let jump_russh_config = jump_russh_config
+                    .clone()
+                    .expect("jump config must exist when jump server is configured");
 
                 // 先连接到跳板机（可能通过代理）
                 let jump_session = if let Some(ref proxy) = config.proxy {
@@ -1602,7 +1671,7 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                     );
-                    client::connect_stream(russh_config.clone(), stream, handler).await?
+                    client::connect_stream(jump_russh_config, stream, handler).await?
                 } else {
                     let addrs = (jump.host.as_str(), jump.port);
                     let handler = RusshHandler::new(
@@ -1611,7 +1680,7 @@ impl SshClient for RusshClient {
                         None,
                         Arc::new(RwLock::new(None)),
                     );
-                    client::connect(russh_config.clone(), addrs, handler).await?
+                    client::connect(jump_russh_config, addrs, handler).await?
                 };
 
                 // 认证跳板机
@@ -1639,9 +1708,12 @@ impl SshClient for RusshClient {
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
                 );
-                let mut session =
-                    client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
-                        .await?;
+                let mut session = client::connect_stream(
+                    target_russh_config,
+                    forwarded_channel.into_stream(),
+                    handler,
+                )
+                .await?;
 
                 // 认证目标服务器
                 authenticate_with_strategy_for_target(
@@ -1677,7 +1749,8 @@ impl SshClient for RusshClient {
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
                 );
-                let mut session = client::connect_stream(russh_config, stream, handler).await?;
+                let mut session =
+                    client::connect_stream(target_russh_config, stream, handler).await?;
 
                 authenticate_with_strategy_for_target(
                     &mut session,
@@ -1705,7 +1778,7 @@ impl SshClient for RusshClient {
                     x11_handle.clone(),
                     Arc::clone(&remote_forward_target),
                 );
-                let mut session = client::connect(russh_config, addrs, handler).await?;
+                let mut session = client::connect(target_russh_config, addrs, handler).await?;
 
                 authenticate_with_strategy_for_target(
                     &mut session,
@@ -1821,13 +1894,17 @@ mod port_forward_tests {
     use std::time::Duration;
 
     use russh::server::{Auth, Server as _};
+    use tempfile::TempDir;
     use tokio::net::TcpListener;
 
+    use crate::HostKeyPolicy;
+
     use super::{
-        Algorithm, HostKeyProxyType, HostKeyRoute, HostKeyVerifier, JumpServerConnectConfig,
-        Preferred, PrivateKey, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
-        SshConnectConfig, build_client_preferred_algorithms, build_local_forward_bind_addr,
-        normalize_disconnect_result,
+        Algorithm, EcdsaCurve, HostKeyDetails, HostKeyIdentity, HostKeyProxyType, HostKeyRoute,
+        HostKeyVerifier, JumpServerConnectConfig, Preferred, PrivateKey, ProxyConnectConfig,
+        ProxyType, RusshClient, SshAuth, SshClient, SshConnectConfig,
+        build_client_preferred_algorithms, build_client_preferred_algorithms_with_legacy,
+        build_local_forward_bind_addr, build_russh_client_config, normalize_disconnect_result,
     };
 
     #[derive(Clone)]
@@ -1849,11 +1926,19 @@ mod port_forward_tests {
         }
     }
 
-    fn kex_names() -> Vec<String> {
-        build_client_preferred_algorithms()
+    fn kex_names(allow_legacy_algorithms: bool) -> Vec<String> {
+        build_client_preferred_algorithms_with_legacy(&[], allow_legacy_algorithms)
             .kex
             .iter()
             .map(|name| name.as_ref().to_string())
+            .collect()
+    }
+
+    fn host_key_names(known: &[String]) -> Vec<String> {
+        build_client_preferred_algorithms(known)
+            .key
+            .iter()
+            .map(|algorithm| algorithm.as_str().to_owned())
             .collect()
     }
 
@@ -1871,6 +1956,7 @@ mod port_forward_tests {
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
+            allow_legacy_algorithms: false,
         }
     }
 
@@ -1990,8 +2076,19 @@ mod port_forward_tests {
     }
 
     #[test]
+    fn client_kex_uses_only_russh_defaults_when_legacy_algorithms_are_disabled() {
+        let defaults = Preferred::default()
+            .kex
+            .iter()
+            .map(|name| name.as_ref().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(kex_names(false), defaults);
+    }
+
+    #[test]
     fn client_kex_keeps_modern_algorithms_ahead_of_compatibility_fallbacks() {
-        let names = kex_names();
+        let names = kex_names(true);
         let curve25519 = names
             .iter()
             .position(|name| name == "curve25519-sha256")
@@ -2010,15 +2107,95 @@ mod port_forward_tests {
     }
 
     #[test]
-    fn client_kex_does_not_enable_high_risk_group1_sha1() {
+    fn client_kex_does_not_enable_high_risk_sha1_algorithms() {
+        let names = kex_names(true);
         assert!(
-            !kex_names()
+            !names
                 .iter()
                 .any(|name| name == "diffie-hellman-group1-sha1")
         );
+        assert!(
+            !names
+                .iter()
+                .any(|name| name == "diffie-hellman-group-exchange-sha1")
+        );
     }
 
-    async fn assert_client_connects_to_server_with_only(kex: russh::kex::Name) {
+    #[test]
+    fn client_promotes_known_host_key_algorithm_without_removing_fallbacks() {
+        let defaults = host_key_names(&[]);
+        let promoted = host_key_names(&["ecdsa-sha2-nistp256".to_owned()]);
+
+        assert_eq!(
+            promoted.first().map(String::as_str),
+            Some("ecdsa-sha2-nistp256")
+        );
+        assert_eq!(promoted.len(), defaults.len());
+        for algorithm in defaults {
+            assert!(
+                promoted.contains(&algorithm),
+                "default host-key algorithm {algorithm} must remain enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn client_promotes_rsa_sha2_family_for_known_ssh_rsa_key() {
+        let promoted = host_key_names(&["ssh-rsa".to_owned()]);
+
+        assert_eq!(&promoted[..3], ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"]);
+    }
+
+    #[test]
+    fn jump_and_target_configs_use_their_own_known_host_key_algorithms() {
+        let mut config = identity_test_config();
+        config.jump_server = Some(JumpServerConnectConfig {
+            host: "jump.example".to_owned(),
+            port: 22,
+            username: "jumper".to_owned(),
+            auth: SshAuth::Agent,
+        });
+        let target_identity = config.target_host_key_identity();
+        let jump_identity = config
+            .jump_host_key_identity()
+            .expect("jump identity should exist");
+        config.host_key_verifier = HostKeyVerifier::new(HostKeyPolicy::Strict, None, None)
+            .with_confirmed_key(
+                target_identity.clone(),
+                HostKeyDetails {
+                    algorithm: "ecdsa-sha2-nistp256".to_owned(),
+                    fingerprint: "SHA256:target".to_owned(),
+                },
+                false,
+            )
+            .with_confirmed_key(
+                jump_identity.clone(),
+                HostKeyDetails {
+                    algorithm: "ssh-ed25519".to_owned(),
+                    fingerprint: "SHA256:jump".to_owned(),
+                },
+                false,
+            );
+
+        let target = build_russh_client_config(&config, &target_identity)
+            .expect("target config should build");
+        let jump =
+            build_russh_client_config(&config, &jump_identity).expect("jump config should build");
+
+        assert_eq!(
+            target.preferred.key.first().map(Algorithm::as_str),
+            Some("ecdsa-sha2-nistp256")
+        );
+        assert_eq!(
+            jump.preferred.key.first().map(Algorithm::as_str),
+            Some("ssh-ed25519")
+        );
+    }
+
+    async fn connect_client_to_server_with_only(
+        kex: russh::kex::Name,
+        allow_legacy_algorithms: bool,
+    ) -> anyhow::Result<RusshClient> {
         let socket = TcpListener::bind(("127.0.0.1", 0))
             .await
             .expect("compatibility test server should bind");
@@ -2058,22 +2235,153 @@ mod port_forward_tests {
             // enrollment. Production connection builders use strict mode.
             host_key_verifier: HostKeyVerifier::insecure(),
             x11_forwarding: false,
+            allow_legacy_algorithms,
         };
 
         let result = RusshClient::connect(config).await;
         server_task.abort();
 
-        result.expect("client should negotiate the server's compatibility KEX");
+        result
+    }
+
+    async fn spawn_host_key_test_server(
+        keys: Vec<PrivateKey>,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("host-key test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("host-key test server should have an address");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys,
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            let mut server = CompatibilityTestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        (address, server_task)
+    }
+
+    fn host_key_test_config(
+        address: std::net::SocketAddr,
+        host_key_verifier: HostKeyVerifier,
+    ) -> SshConnectConfig {
+        SshConnectConfig {
+            host: address.ip().to_string(),
+            port: address.port(),
+            username: "tester".to_owned(),
+            auth: SshAuth::Password("password".to_owned()),
+            timeout: Some(Duration::from_secs(5)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier,
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn client_negotiates_the_trusted_ecdsa_key_when_ed25519_is_also_available() {
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let ecdsa = PrivateKey::random(
+            &mut rand_010::rng(),
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+        )
+        .expect("ECDSA host key should be generated");
+        let trusted_public_key = ecdsa.public_key().clone();
+        let (address, server_task) = spawn_host_key_test_server(vec![ed25519, ecdsa]).await;
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let identity = HostKeyIdentity::new(
+            address.ip().to_string(),
+            address.port(),
+            HostKeyRoute::Direct,
+        );
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&identity, &trusted_public_key)
+            .expect("trusted ECDSA key should be seeded");
+
+        let result = RusshClient::connect(host_key_test_config(
+            address,
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path),
+        ))
+        .await;
+        server_task.abort();
+
+        result.expect("client should negotiate the already trusted ECDSA host key");
+    }
+
+    #[tokio::test]
+    async fn client_keeps_fallback_algorithms_but_rejects_an_untrusted_fallback_key() {
+        let ed25519 = PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 host key should be generated");
+        let unavailable_ecdsa = PrivateKey::random(
+            &mut rand_010::rng(),
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+        )
+        .expect("ECDSA host key should be generated");
+        let (address, server_task) = spawn_host_key_test_server(vec![ed25519]).await;
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let identity = HostKeyIdentity::new(
+            address.ip().to_string(),
+            address.port(),
+            HostKeyRoute::Direct,
+        );
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&identity, unavailable_ecdsa.public_key())
+            .expect("trusted ECDSA key should be seeded");
+
+        let result = RusshClient::connect(host_key_test_config(
+            address,
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path),
+        ))
+        .await;
+        server_task.abort();
+
+        let Err(error) = result else {
+            panic!("a different fallback key must remain rejected");
+        };
+        assert!(error.to_string().contains("changed SSH host key"));
     }
 
     #[tokio::test]
     async fn client_negotiates_nist_ecdh_compatibility_kex() {
-        assert_client_connects_to_server_with_only(russh::kex::ECDH_SHA2_NISTP256).await;
+        connect_client_to_server_with_only(russh::kex::ECDH_SHA2_NISTP256, true)
+            .await
+            .expect("client should negotiate the enabled NIST ECDH compatibility KEX");
     }
 
     #[tokio::test]
     async fn client_falls_back_to_group14_sha1_when_it_is_the_only_server_kex() {
-        assert_client_connects_to_server_with_only(russh::kex::DH_G14_SHA1).await;
+        connect_client_to_server_with_only(russh::kex::DH_G14_SHA1, true)
+            .await
+            .expect("client should negotiate the explicitly enabled group14 SHA-1 KEX");
+    }
+
+    #[tokio::test]
+    async fn client_rejects_group14_sha1_when_legacy_algorithms_are_disabled() {
+        let result = connect_client_to_server_with_only(russh::kex::DH_G14_SHA1, false).await;
+
+        assert!(
+            result.is_err(),
+            "group14 SHA-1 must not be negotiated unless the connection opts in"
+        );
     }
 
     #[test]

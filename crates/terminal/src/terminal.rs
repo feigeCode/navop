@@ -500,6 +500,7 @@ fn resolve_ssh_connection(
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
+        allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
     };
     ssh_config.keyboard_interactive_responder = Some(Arc::new(responder.clone()));
     Ok(ResolvedSshConnection {
@@ -4083,6 +4084,7 @@ mod tests {
                 init_script: Some("echo ready".to_string()),
                 disable_shell_integration: None,
                 x11_forwarding: None,
+                allow_legacy_algorithms: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

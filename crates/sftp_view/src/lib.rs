@@ -6469,6 +6469,7 @@ mod tests {
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
+            allow_legacy_algorithms: false,
         }
     }
 

@@ -423,6 +423,56 @@ impl HostKeyVerifier {
         self
     }
 
+    /// Return the host-key algorithms already trusted for an identity.
+    ///
+    /// This is used before the SSH handshake so the client can prefer a key
+    /// algorithm that is already trusted for this exact host, port, and route.
+    /// The final host-key decision still compares the complete public key in
+    /// [`Self::verify`]; this method never authorizes a different key.
+    pub fn known_host_key_algorithms(
+        &self,
+        identity: &HostKeyIdentity,
+    ) -> Result<Vec<String>, String> {
+        // Preserve insecure mode's existing behavior: it must not become
+        // dependent on the availability or validity of trust files.
+        if self.policy == HostKeyPolicy::Insecure {
+            return Ok(Vec::new());
+        }
+
+        let _lock = trust_store_lock();
+        let app_entries = self.load_app_entries()?;
+        let app_matches = app_entries
+            .iter()
+            .filter(|entry| entry.identity == *identity)
+            .collect::<Vec<_>>();
+        if !app_matches.is_empty() {
+            let mut algorithms = Vec::new();
+            for entry in app_matches {
+                push_unique_algorithm(&mut algorithms, &entry.details.algorithm);
+            }
+            return Ok(algorithms);
+        }
+
+        let openssh_entries = self.load_openssh_entries(identity)?;
+        if !openssh_entries.is_empty() {
+            let mut algorithms = Vec::new();
+            for entry in openssh_entries.iter().filter(|entry| !entry.revoked) {
+                push_unique_algorithm(&mut algorithms, &entry.details.algorithm);
+            }
+            return Ok(algorithms);
+        }
+
+        let mut algorithms = Vec::new();
+        for confirmation in self
+            .confirmed_keys
+            .iter()
+            .filter(|confirmation| confirmation.identity == *identity)
+        {
+            push_unique_algorithm(&mut algorithms, &confirmation.details.algorithm);
+        }
+        Ok(algorithms)
+    }
+
     /// Verify a server key and, in `AcceptNew`, persist an unknown key.
     pub fn verify(
         &self,
@@ -626,13 +676,37 @@ impl HostKeyVerifier {
         identity: &HostKeyIdentity,
         server_public_key: &PublicKey,
     ) -> Result<OpenSshLookup, String> {
-        let Some(path) = &self.openssh_known_hosts_path else {
+        let entries = self.load_openssh_entries(identity)?;
+        if entries.is_empty() {
             return Ok(OpenSshLookup::Unknown);
+        }
+
+        let mut expected = Vec::new();
+        for entry in entries {
+            if entry.revoked && entry.public_key == *server_public_key {
+                return Ok(OpenSshLookup::Revoked);
+            }
+            if entry.public_key == *server_public_key {
+                return Ok(OpenSshLookup::Known);
+            }
+            if !expected.contains(&entry.details) {
+                expected.push(entry.details);
+            }
+        }
+        Ok(OpenSshLookup::Changed(expected))
+    }
+
+    fn load_openssh_entries(
+        &self,
+        identity: &HostKeyIdentity,
+    ) -> Result<Vec<OpenSshHostKey>, String> {
+        let Some(path) = &self.openssh_known_hosts_path else {
+            return Ok(Vec::new());
         };
         let input = match fs::read_to_string(path) {
             Ok(input) => input,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(OpenSshLookup::Unknown);
+                return Ok(Vec::new());
             }
             Err(error) => {
                 return Err(format!(
@@ -643,8 +717,7 @@ impl HostKeyVerifier {
         };
 
         let candidate = identity.openssh_host();
-        let mut host_matched = false;
-        let mut expected = Vec::new();
+        let mut entries = Vec::new();
         for parsed in ssh_key::known_hosts::KnownHosts::new(&input) {
             let entry = match parsed {
                 Ok(entry) => entry,
@@ -663,26 +736,15 @@ impl HostKeyVerifier {
                 // which russh does not expose through this callback yet.
                 continue;
             }
-            host_matched = true;
             let details = HostKeyDetails::from_public_key(entry.public_key());
-            if entry.marker() == Some(&ssh_key::known_hosts::Marker::Revoked)
-                && entry.public_key() == server_public_key
-            {
-                return Ok(OpenSshLookup::Revoked);
-            }
-            if entry.public_key() == server_public_key {
-                return Ok(OpenSshLookup::Known);
-            }
-            if !expected.contains(&details) {
-                expected.push(details);
-            }
+            entries.push(OpenSshHostKey {
+                public_key: entry.public_key().clone(),
+                details,
+                revoked: entry.marker() == Some(&ssh_key::known_hosts::Marker::Revoked),
+            });
         }
 
-        if host_matched {
-            Ok(OpenSshLookup::Changed(expected))
-        } else {
-            Ok(OpenSshLookup::Unknown)
-        }
+        Ok(entries)
     }
 }
 
@@ -691,6 +753,12 @@ struct StoredHostKey {
     identity: HostKeyIdentity,
     public_key: String,
     details: HostKeyDetails,
+}
+
+struct OpenSshHostKey {
+    public_key: PublicKey,
+    details: HostKeyDetails,
+    revoked: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -753,6 +821,12 @@ fn public_key_string(public_key: &PublicKey) -> String {
     public_key
         .to_openssh()
         .unwrap_or_else(|_| public_key.to_string())
+}
+
+fn push_unique_algorithm(algorithms: &mut Vec<String>, algorithm: &str) {
+    if !algorithms.iter().any(|known| known == algorithm) {
+        algorithms.push(algorithm.to_owned());
+    }
 }
 
 pub(crate) fn normalize_host(host: &str) -> String {
@@ -1042,6 +1116,92 @@ mod tests {
             panic!("expected changed rejection");
         };
         assert_ne!(presented.algorithm, expected[0].algorithm);
+    }
+
+    #[test]
+    fn known_algorithms_follow_app_identity_and_route_isolation() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let direct = identity("host.example", 22);
+        let proxy = HostKeyIdentity::new(
+            "host.example",
+            22,
+            HostKeyRoute::Proxy {
+                proxy_type: HostKeyProxyType::Socks5,
+                host: "proxy.example".to_owned(),
+                port: 1080,
+            },
+        );
+        let ecdsa = key(ssh_key::Algorithm::Ecdsa {
+            curve: ssh_key::EcdsaCurve::NistP256,
+        });
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&direct, &ecdsa)
+            .expect("seed direct key");
+
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path);
+        assert_eq!(
+            verifier
+                .known_host_key_algorithms(&direct)
+                .expect("known algorithms should load"),
+            vec!["ecdsa-sha2-nistp256"]
+        );
+        assert!(
+            verifier
+                .known_host_key_algorithms(&proxy)
+                .expect("proxy identity lookup should load")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn app_algorithms_keep_precedence_over_openssh_algorithms() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_path = temp.path().join("keys.json");
+        let openssh_path = temp.path().join("known_hosts");
+        let id = identity("host.example", 22);
+        let ecdsa = key(ssh_key::Algorithm::Ecdsa {
+            curve: ssh_key::EcdsaCurve::NistP256,
+        });
+        let ed25519 = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &app_path)
+            .verify(&id, &ecdsa)
+            .expect("seed app key");
+        fs::write(
+            &openssh_path,
+            format!("host.example {}\n", public_key_string(&ed25519)),
+        )
+        .expect("write known_hosts");
+
+        let verifier =
+            HostKeyVerifier::new(HostKeyPolicy::Strict, Some(app_path), Some(openssh_path));
+        assert_eq!(
+            verifier
+                .known_host_key_algorithms(&id)
+                .expect("known algorithms should load"),
+            vec!["ecdsa-sha2-nistp256"]
+        );
+    }
+
+    #[test]
+    fn confirmed_key_algorithm_is_known_before_handshake() {
+        let temp = TempDir::new().expect("temp dir");
+        let id = identity("host.example", 22);
+        let verifier = verifier(&temp, HostKeyPolicy::Strict).with_confirmed_key(
+            id.clone(),
+            HostKeyDetails {
+                algorithm: "ecdsa-sha2-nistp384".to_owned(),
+                fingerprint: "SHA256:test".to_owned(),
+            },
+            false,
+        );
+
+        assert_eq!(
+            verifier
+                .known_host_key_algorithms(&id)
+                .expect("confirmed algorithm should be available"),
+            vec!["ecdsa-sha2-nistp384"]
+        );
     }
 
     #[test]

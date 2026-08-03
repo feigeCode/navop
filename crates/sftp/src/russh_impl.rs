@@ -17,7 +17,7 @@ use rust_i18n::t;
 use ssh::{
     AuthFailureMessages, HostKeyAcceptance, HostKeyDetails, HostKeyIdentity, HostKeyVerifier,
     ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, authenticate_with_strategy,
-    defaults,
+    build_client_preferred_algorithms_with_legacy, defaults,
 };
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -1063,22 +1063,43 @@ impl RusshSftpClient {
     }
 }
 
+fn build_sftp_russh_config(
+    ssh_config: &SshConnectConfig,
+    identity: &HostKeyIdentity,
+) -> Result<Arc<client::Config>> {
+    let known_host_key_algorithms = ssh_config
+        .host_key_verifier
+        .known_host_key_algorithms(identity)
+        .map_err(|reason| {
+            anyhow!("load known SFTP SSH host keys for {identity} before handshake: {reason}")
+        })?;
+    Ok(Arc::new(client::Config {
+        preferred: build_client_preferred_algorithms_with_legacy(
+            &known_host_key_algorithms,
+            ssh_config.allow_legacy_algorithms,
+        ),
+        inactivity_timeout: ssh_config.timeout.or(Some(defaults::INACTIVITY_TIMEOUT)),
+        keepalive_interval: ssh_config
+            .keepalive_interval
+            .or(Some(defaults::KEEPALIVE_INTERVAL)),
+        keepalive_max: ssh_config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
+        window_size: 16 * 1024 * 1024, // 16 MB
+        maximum_packet_size: 0xFFFF,   // 65535, max allowed by russh
+        nodelay: true,
+        ..<_>::default()
+    }))
+}
+
 #[async_trait]
 impl SftpClient for RusshSftpClient {
     async fn connect(ssh_config: SshConnectConfig) -> Result<Self> {
-        let config = Arc::new(client::Config {
-            inactivity_timeout: ssh_config.timeout.or(Some(defaults::INACTIVITY_TIMEOUT)),
-            keepalive_interval: ssh_config
-                .keepalive_interval
-                .or(Some(defaults::KEEPALIVE_INTERVAL)),
-            keepalive_max: ssh_config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
-            window_size: 16 * 1024 * 1024, // 16 MB
-            maximum_packet_size: 0xFFFF,   // 65535, max allowed by russh
-            nodelay: true,
-            ..<_>::default()
-        });
         let target_host_key_identity = ssh_config.target_host_key_identity();
         let jump_host_key_identity = ssh_config.jump_host_key_identity();
+        let target_russh_config = build_sftp_russh_config(&ssh_config, &target_host_key_identity)?;
+        let jump_russh_config = jump_host_key_identity
+            .as_ref()
+            .map(|identity| build_sftp_russh_config(&ssh_config, identity))
+            .transpose()?;
         let host_key_verifier = ssh_config.host_key_verifier.clone();
 
         let (mut session, jump_session) = if let Some(ref jump) = ssh_config.jump_server {
@@ -1086,16 +1107,19 @@ impl SftpClient for RusshSftpClient {
             let jump_identity = jump_host_key_identity
                 .clone()
                 .expect("jump identity must exist when jump server is configured");
+            let jump_russh_config = jump_russh_config
+                .clone()
+                .expect("jump config must exist when jump server is configured");
 
             // 连接跳板机
             let mut jump_session = if let Some(ref proxy) = ssh_config.proxy {
                 tracing::info!("SFTP: 通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
                 let stream = sftp_connect_via_proxy(proxy, &jump.host, jump.port).await?;
                 let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect_stream(config.clone(), stream, handler).await?
+                client::connect_stream(jump_russh_config, stream, handler).await?
             } else {
                 let handler = SftpHandler::new(jump_identity, host_key_verifier.clone());
-                client::connect(config.clone(), (jump.host.as_str(), jump.port), handler).await?
+                client::connect(jump_russh_config, (jump.host.as_str(), jump.port), handler).await?
             };
 
             // 认证跳板机
@@ -1114,8 +1138,12 @@ impl SftpClient for RusshSftpClient {
 
             let handler =
                 SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
-            let session =
-                client::connect_stream(config, forwarded_channel.into_stream(), handler).await?;
+            let session = client::connect_stream(
+                target_russh_config,
+                forwarded_channel.into_stream(),
+                handler,
+            )
+            .await?;
 
             (session, Some(jump_session))
         } else if let Some(ref proxy) = ssh_config.proxy {
@@ -1123,14 +1151,17 @@ impl SftpClient for RusshSftpClient {
             let stream = sftp_connect_via_proxy(proxy, &ssh_config.host, ssh_config.port).await?;
             let handler =
                 SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
-            let session = client::connect_stream(config, stream, handler).await?;
+            let session = client::connect_stream(target_russh_config, stream, handler).await?;
             (session, None)
         } else {
             let handler =
                 SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
-            let session =
-                client::connect(config, (ssh_config.host.as_str(), ssh_config.port), handler)
-                    .await?;
+            let session = client::connect(
+                target_russh_config,
+                (ssh_config.host.as_str(), ssh_config.port),
+                handler,
+            )
+            .await?;
             (session, None)
         };
 
@@ -2009,6 +2040,88 @@ impl SftpClient for RusshSftpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sftp_config_promotes_the_known_host_key_algorithm() {
+        let identity = HostKeyIdentity::new("host.example", 22, ssh::HostKeyRoute::Direct);
+        let host_key_verifier = HostKeyVerifier::new(ssh::HostKeyPolicy::Strict, None, None)
+            .with_confirmed_key(
+                identity.clone(),
+                HostKeyDetails {
+                    algorithm: "ecdsa-sha2-nistp256".to_owned(),
+                    fingerprint: "SHA256:test".to_owned(),
+                },
+                false,
+            );
+        let ssh_config = SshConnectConfig {
+            host: "host.example".to_owned(),
+            port: 22,
+            username: "tester".to_owned(),
+            auth: ssh::SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier,
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+        };
+
+        let config =
+            build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
+
+        assert_eq!(
+            config
+                .preferred
+                .key
+                .first()
+                .map(russh::keys::Algorithm::as_str),
+            Some("ecdsa-sha2-nistp256")
+        );
+    }
+
+    #[test]
+    fn sftp_config_enables_legacy_kex_only_when_requested() {
+        let identity = HostKeyIdentity::new("host.example", 22, ssh::HostKeyRoute::Direct);
+        let mut ssh_config = SshConnectConfig {
+            host: "host.example".to_owned(),
+            port: 22,
+            username: "tester".to_owned(),
+            auth: ssh::SshAuth::Agent,
+            timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+            host_key_verifier: HostKeyVerifier::default(),
+            x11_forwarding: false,
+            allow_legacy_algorithms: false,
+        };
+
+        let default_config =
+            build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
+        assert!(
+            !default_config
+                .preferred
+                .kex
+                .iter()
+                .any(|name| *name == russh::kex::DH_G14_SHA1)
+        );
+
+        ssh_config.allow_legacy_algorithms = true;
+        let compatible_config =
+            build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
+        assert!(
+            compatible_config
+                .preferred
+                .kex
+                .iter()
+                .any(|name| *name == russh::kex::DH_G14_SHA1)
+        );
+    }
 
     #[test]
     fn pipeline_chunk_length_covers_full_and_final_partial_chunks() {

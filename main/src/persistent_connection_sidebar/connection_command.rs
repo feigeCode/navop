@@ -432,6 +432,7 @@ mod tests {
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: Some(true),
+            allow_legacy_algorithms: None,
             jump_server: Some(JumpServerConfig {
                 host: "jump host".to_string(),
                 port: 2200,

@@ -22,6 +22,7 @@ fn ssh_connection() -> StoredConnection {
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
             jump_server: None,
             proxy: None,
             os_id: None,
@@ -97,6 +98,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
             jump_server: Some(JumpServerConfig {
                 host: "jump.example.test".to_string(),
                 port: 22,
@@ -148,6 +150,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
             init_script: None,
             disable_shell_integration: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
             jump_server: Some(JumpServerConfig {
                 host: "jump.example.test".to_string(),
                 port: 22,

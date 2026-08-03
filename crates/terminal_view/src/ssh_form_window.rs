@@ -177,6 +177,7 @@ pub struct SshFormWindow {
     connect_timeout_input: Entity<InputState>,
     keepalive_interval_input: Entity<InputState>,
     keepalive_max_input: Entity<InputState>,
+    allow_legacy_algorithms: bool,
 
     // 初始化
     init_script_input: Entity<InputState>,
@@ -575,6 +576,7 @@ impl SshFormWindow {
         let mut sync_enabled = true; // 默认启用云同步
         let mut disable_shell_integration = false;
         let mut x11_forwarding = false;
+        let mut allow_legacy_algorithms = false;
         let mut detected_os_id: Option<String> = None;
         let mut manual_icon: Option<String> = None;
 
@@ -649,6 +651,7 @@ impl SshFormWindow {
                 }
                 disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
+                allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
 
                 // 加载跳板机设置
                 if let Some(ref jump) = params.jump_server {
@@ -775,6 +778,7 @@ impl SshFormWindow {
             connect_timeout_input,
             keepalive_interval_input,
             keepalive_max_input,
+            allow_legacy_algorithms,
             init_script_input,
             default_directory_input,
             remark_input,
@@ -984,6 +988,11 @@ impl SshFormWindow {
             } else {
                 None
             },
+            allow_legacy_algorithms: if self.allow_legacy_algorithms {
+                Some(true)
+            } else {
+                None
+            },
             jump_server,
             proxy,
             os_id: self.detected_os_id.clone(),
@@ -1073,6 +1082,7 @@ impl SshFormWindow {
             keyboard_interactive_responder: None,
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: params.x11_forwarding.unwrap_or(false),
+            allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
         }
     }
 
@@ -2246,7 +2256,7 @@ impl SshFormWindow {
     }
 
     /// 渲染高级设置标签页
-    fn render_advanced_tab(&self) -> impl IntoElement {
+    fn render_advanced_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .w_full()
             .gap_2()
@@ -2262,6 +2272,34 @@ impl SshFormWindow {
                 &t!("SSH.keepalive_max"),
                 self.render_form_input(&self.keepalive_max_input),
             ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.allow_legacy_algorithms"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("allow-legacy-algorithms")
+                                    .checked(self.allow_legacy_algorithms)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.allow_legacy_algorithms =
+                                            !this.allow_legacy_algorithms;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.allow_legacy_algorithms_desc").to_string()),
+                        ),
+                ),
+            )
     }
 
     /// 渲染其他设置标签页
@@ -2392,7 +2430,7 @@ impl Render for SshFormWindow {
                         1 => self.render_init_tab(cx).into_any_element(),
                         2 => self.render_jump_server_tab(cx).into_any_element(),
                         3 => self.render_proxy_tab(cx).into_any_element(),
-                        4 => self.render_advanced_tab().into_any_element(),
+                        4 => self.render_advanced_tab(cx).into_any_element(),
                         5 => self.render_other_tab().into_any_element(),
                         _ => div().into_any_element(),
                     }),
@@ -2493,6 +2531,7 @@ mod tests {
             os_id: None,
             icon: None,
             x11_forwarding: None,
+            allow_legacy_algorithms: None,
         }
     }
 

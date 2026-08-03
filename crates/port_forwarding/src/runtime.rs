@@ -266,6 +266,7 @@ fn build_ssh_connect_config(params: &SshParams) -> SshConnectConfig {
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
+        allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
     }
 }
 

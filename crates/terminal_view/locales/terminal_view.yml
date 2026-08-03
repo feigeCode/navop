@@ -401,6 +401,14 @@ SSH:
     en: Keepalive Max
     zh-CN: 最大心跳次数
     zh-HK: 最大心跳次數
+  allow_legacy_algorithms:
+    en: Allow Legacy SSH Algorithms
+    zh-CN: 允许旧版 SSH 算法
+    zh-HK: 允許舊版 SSH 演算法
+  allow_legacy_algorithms_desc:
+    en: Enable compatibility key-exchange algorithms for legacy SSH servers. Keep disabled unless the server requires them.
+    zh-CN: 为旧版 SSH 服务器启用兼容密钥交换算法。仅在服务器确有需要时开启。
+    zh-HK: 為舊版 SSH 伺服器啟用相容金鑰交換演算法。僅在伺服器確有需要時開啟。
   # 初始化
   init_script:
     en: Init Script

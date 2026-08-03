@@ -32,7 +32,8 @@ pub use ssh::{
     LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
     ProxyType, PtyConfig, RusshChannel, RusshClient, ShellIntegrationSetup, SshAuth, SshChannel,
     SshClient, SshConnectConfig, authenticate_session, authenticate_session_with_fallbacks,
-    authenticate_with_strategy, connect_via_proxy, defaults, expand_auto_publickey_auth,
-    start_local_port_forward, start_local_port_forward_with_config,
+    authenticate_with_strategy, build_client_preferred_algorithms,
+    build_client_preferred_algorithms_with_legacy, connect_via_proxy, defaults,
+    expand_auto_publickey_auth, start_local_port_forward, start_local_port_forward_with_config,
 };
 pub use x11_forwarding::{ForwardRequest, X11Proxy};

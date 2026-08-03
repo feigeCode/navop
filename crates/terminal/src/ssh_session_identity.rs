@@ -289,6 +289,7 @@ mod tests {
                 init_script: None,
                 disable_shell_integration: None,
                 x11_forwarding: None,
+                allow_legacy_algorithms: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -315,6 +316,7 @@ mod tests {
             keyboard_interactive_responder: Some(Arc::new(TestResponder)),
             host_key_verifier: HostKeyVerifier::default(),
             x11_forwarding: false,
+            allow_legacy_algorithms: false,
         }
     }
 

@@ -416,6 +416,7 @@ mod sensitive_copy_tests {
                 init_script: None,
                 disable_shell_integration: None,
                 x11_forwarding: None,
+                allow_legacy_algorithms: None,
                 jump_server: None,
                 proxy: None,
                 os_id: None,

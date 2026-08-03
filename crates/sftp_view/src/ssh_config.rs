@@ -37,6 +37,7 @@ pub(crate) fn ssh_config_for(connection: &StoredConnection) -> Result<SshConnect
         keyboard_interactive_responder: None,
         host_key_verifier: HostKeyVerifier::default(),
         x11_forwarding: false,
+        allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
     })
 }
 
@@ -88,6 +89,7 @@ mod tests {
                 init_script: None,
                 disable_shell_integration: None,
                 x11_forwarding: None,
+                allow_legacy_algorithms: Some(true),
                 jump_server: None,
                 proxy: None,
                 os_id: None,
@@ -100,5 +102,6 @@ mod tests {
         assert_eq!(config.host, "source.internal");
         assert_eq!(config.port, 2222);
         assert!(matches!(config.auth, SshAuth::Password(ref value) if value == "secret"));
+        assert!(config.allow_legacy_algorithms);
     }
 }

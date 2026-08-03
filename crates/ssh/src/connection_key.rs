@@ -157,7 +157,7 @@ impl std::error::Error for ConnectionKeyError {}
 /// Equality covers endpoint/route normalization, usernames, authentication
 /// type and opaque revisions, host-key trust namespace, proxy/jump security
 /// context, transport timeouts/keepalive, keyboard-interactive context, and
-/// X11 forwarding.
+/// X11 forwarding and legacy-algorithm compatibility.
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct ConnectionKey {
     target: HostKeyIdentity,
@@ -171,6 +171,7 @@ pub struct ConnectionKey {
     keepalive_max: Option<usize>,
     keyboard_interactive: Option<CredentialRevision>,
     x11_forwarding: bool,
+    allow_legacy_algorithms: bool,
 }
 
 impl ConnectionKey {
@@ -227,6 +228,7 @@ impl ConnectionKey {
             keepalive_max: config.keepalive_max,
             keyboard_interactive,
             x11_forwarding: config.x11_forwarding,
+            allow_legacy_algorithms: config.allow_legacy_algorithms,
         })
     }
 
@@ -279,6 +281,7 @@ impl fmt::Debug for ConnectionKey {
                 &self.keyboard_interactive.is_some(),
             )
             .field("x11_forwarding", &self.x11_forwarding)
+            .field("allow_legacy_algorithms", &self.allow_legacy_algorithms)
             .finish()
     }
 }
@@ -486,6 +489,7 @@ mod tests {
                 Some("/trust/known_hosts".into()),
             ),
             x11_forwarding: false,
+            allow_legacy_algorithms: false,
         }
     }
 
@@ -535,6 +539,13 @@ mod tests {
         let mut changed_x11 = base_config();
         changed_x11.x11_forwarding = true;
         assert_ne!(baseline_key, key(&changed_x11, target_credentials()));
+
+        let mut changed_legacy_algorithms = base_config();
+        changed_legacy_algorithms.allow_legacy_algorithms = true;
+        assert_ne!(
+            baseline_key,
+            key(&changed_legacy_algorithms, target_credentials())
+        );
     }
 
     #[test]
