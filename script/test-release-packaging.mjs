@@ -120,20 +120,112 @@ test("Windows release builds an installable per-user MSI", () => {
   assert.match(wix, /Root="HKCU"/);
 });
 
-test("Windows ZIP is portable without making the MSI portable", () => {
+test("Windows release builds an EXE installer bundle from the MSI", () => {
+  const bundlePath = "installer/windows/navop-bundle.wxs";
+  assert.ok(fs.existsSync(bundlePath), `${bundlePath} must exist`);
+
+  const bundle = read(bundlePath);
+  const workflows = [
+    read(".github/workflows/release.yml"),
+    read(".github/workflows/build-windows-msi.yml"),
+  ];
+
+  assert.match(
+    bundle,
+    /xmlns:bal="http:\/\/wixtoolset\.org\/schemas\/v4\/wxs\/bal"/,
+  );
+  assert.match(bundle, /<Bundle[^>]*Id="feigeCode\.Navop"/);
+  assert.doesNotMatch(bundle, /UpgradeCode=/);
+  assert.match(bundle, /<bal:WixInternalUIBootstrapperApplication\s*\/>/);
+  assert.match(
+    bundle,
+    /<MsiPackage[^>]*SourceFile="\$\(MsiPath\)"[^>]*Compressed="yes"[^>]*bal:PrimaryPackageType="x64"/,
+  );
+
+  for (const workflow of workflows) {
+    assert.match(
+      workflow,
+      /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
+    );
+    assert.match(
+      workflow,
+      /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]+navop-x86_64-pc-windows-msvc\.msi[^]*-out "navop-x86_64-pc-windows-msvc\.exe"/,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /Copy-Item[^\n]+"navop-x86_64-pc-windows-msvc\.exe"/,
+    );
+
+    const msiBuild = workflow.indexOf(
+      "wix build installer/windows/navop.wxs",
+    );
+    const bundleBuild = workflow.indexOf(
+      "wix build installer/windows/navop-bundle.wxs",
+    );
+    assert.ok(msiBuild >= 0, "missing MSI build");
+    assert.ok(bundleBuild > msiBuild, "EXE installer must be built after MSI");
+  }
+});
+
+test("Windows release keeps the legacy ZIP standard and publishes portable separately", () => {
   const release = read(".github/workflows/release.yml");
   const manual = read(".github/workflows/build-windows-msi.yml");
+  const installGuides = [
+    read("docs-site/docs/guide/install-update.md"),
+    read("docs-site/docs/en-US/guide/install-update.md"),
+    read("docs-site/docs/zh-TW/guide/install-update.md"),
+  ];
 
   for (const workflow of [release, manual]) {
     assert.match(workflow, /portable-package/);
     assert.match(workflow, /navop\.portable/);
     assert.match(
       workflow,
-      /Compress-Archive -Path "portable-package\/\*"/,
+      /Set-Content -Path "portable-package\/navop\.portable"/,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /"package\/navop\.portable"/,
+    );
+    assert.match(
+      workflow,
+      /Compress-Archive -Path "package\/\*" -DestinationPath "(?:\$\{\{ matrix\.archive \}\}|navop-x86_64-pc-windows-msvc\.zip)"/,
+    );
+    assert.match(
+      workflow,
+      /Compress-Archive -Path "portable-package\/\*" -DestinationPath "navop-x86_64-pc-windows-msvc-portable\.zip"/,
     );
     assert.match(workflow, /navop-x86_64-pc-windows-msvc\.zip/);
+    assert.match(workflow, /navop-x86_64-pc-windows-msvc-portable\.zip/);
     assert.match(workflow, /-d SourceDir=.*\\package/);
     assert.doesNotMatch(workflow, /-d SourceDir=.*portable-package/);
+  }
+  assert.match(
+    release,
+    /windows_x64='\{"target":"x86_64-pc-windows-msvc"[^']*"archive":"navop-x86_64-pc-windows-msvc\.zip"/,
+  );
+  assert.match(release, /name: navop-windows-portable/);
+  assert.match(
+    release,
+    /path: navop-x86_64-pc-windows-msvc-portable\.zip/,
+  );
+  assert.match(release, /name: navop-windows-exe-installer/);
+  assert.match(
+    release,
+    /path: navop-x86_64-pc-windows-msvc\.exe/,
+  );
+  for (const [guide, installerLabel] of [
+    [installGuides[0], /EXE 安装包/],
+    [installGuides[1], /EXE installer/],
+    [installGuides[2], /EXE 安裝包/],
+  ]) {
+    assert.match(guide, /navop-x86_64-pc-windows-msvc\.exe/);
+    assert.match(guide, installerLabel);
+    assert.match(guide, /-portable\.zip/);
+    assert.doesNotMatch(
+      guide,
+      /(?:独立 EXE|獨立 EXE|standalone EXE|standalone \.exe|官方 Windows ZIP 已包含|官方 Windows \.zip 是便携版|The official Windows ZIP already includes|The official Windows \.zip is the portable edition|官方 Windows ZIP 已包含|官方 Windows \.zip 是便攜版)/,
+    );
   }
 });
 
@@ -268,6 +360,8 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
   );
   assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
+  assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-portable\.zip/);
+  assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc\.exe/);
   assert.match(upload, /navop-aarch64-apple-darwin\.tar\.gz/);
   assert.match(upload, /navop-x86_64-unknown-linux-gnu\.tar\.gz/);
   assert.doesNotMatch(upload, /\.msi/);
@@ -307,10 +401,26 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(workflow, /wix --version 6\.0\.2/);
   assert.match(workflow, /WixToolset\.UI\.wixext\/6\.0\.2/);
   assert.match(workflow, /-ext WixToolset\.UI\.wixext/);
+  assert.match(
+    workflow,
+    /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
+  );
+  assert.match(
+    workflow,
+    /-ext WixToolset\.BootstrapperApplications\.wixext/,
+  );
   assert.match(workflow, /Get-FileHash[^]*SHA256/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /Compress-Archive[^]*navop-x86_64-pc-windows-msvc\.zip/);
   assert.match(workflow, /Get-FileHash[^]*navop-x86_64-pc-windows-msvc\.zip/);
+  assert.match(
+    workflow,
+    /Get-FileHash[^]*navop-x86_64-pc-windows-msvc\.exe/,
+  );
+  assert.match(
+    workflow,
+    /Get-FileHash[^]*navop-x86_64-pc-windows-msvc-portable\.zip/,
+  );
   assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
   assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   assert.match(workflow, /sha256sums-windows\.txt/);

@@ -170,9 +170,9 @@ Download the latest build from [GitHub Releases](https://github.com/feigeCode/na
 | macOS | Apple Silicon, Intel | `.dmg`, `.tar.gz` |
 | Linux | x86_64 | `.tar.gz`, `.deb`, `.rpm`, `.AppImage` |
 | Linux | ARM64 | `.tar.gz` |
-| Windows | x86_64 | `.msi`, `.zip` |
+| Windows | x86_64 | `.msi`, `.exe`, `.zip`, `-portable.zip` |
 
-The Windows MSI is a bilingual per-user installer and does not require administrator privileges when using the default location. The ZIP archive is available for portable use.
+The Windows `.msi` and `.exe` are bilingual per-user installers and do not require administrator privileges when using the default location. The EXE installer wraps the same MSI installation. The standard `.zip` requires no installation but still uses the normal per-user data directories and supports remembered master-key unlock. Use `-portable.zip` only when the application data must stay beside the executable; this mode intentionally asks for the master key again on every start.
 
 ### macOS Gatekeeper
 

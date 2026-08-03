@@ -440,7 +440,8 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "portable-package/${{ matrix.binary }}"
           Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
-          Compress-Archive -Path "portable-package/*" -DestinationPath "${{ matrix.archive }}"
+          Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
+          Compress-Archive -Path "portable-package/*" -DestinationPath "navop-x86_64-pc-windows-msvc-portable.zip"
 
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
@@ -449,8 +450,9 @@ jobs:
           node script/generate-windows-license.mjs
           dotnet tool install --global wix --version 6.0.2
           wix extension add -g WixToolset.UI.wixext/6.0.2
+          wix extension add -g WixToolset.BootstrapperApplications.wixext/6.0.2
 
-      - name: Build Windows MSI installer
+      - name: Build Windows installers
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -467,6 +469,13 @@ jobs:
             -d SourceDir="${{ github.workspace }}\package" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
             -out "navop-x86_64-pc-windows-msvc.msi"
+          wix build installer/windows/navop-bundle.wxs `
+            -ext WixToolset.BootstrapperApplications.wixext `
+            -arch x64 `
+            -d Version="$msiVersion" `
+            -d MsiPath="${{ github.workspace }}\navop-x86_64-pc-windows-msvc.msi" `
+            -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
+            -out "navop-x86_64-pc-windows-msvc.exe"
 
       - name: Validate Windows MSI metadata
         if: runner.os == 'Windows'
@@ -495,6 +504,20 @@ jobs:
         with:
           name: navop-windows-msi
           path: navop-x86_64-pc-windows-msvc.msi
+
+      - name: Upload Windows portable ZIP artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-windows-portable
+          path: navop-x86_64-pc-windows-msvc-portable.zip
+
+      - name: Upload Windows EXE artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-windows-exe-installer
+          path: navop-x86_64-pc-windows-msvc.exe
 
       - name: Upload Linux installer artifacts
         if: matrix.target == 'x86_64-unknown-linux-gnu'

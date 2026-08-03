@@ -1,0 +1,21 @@
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Id="feigeCode.Navop"
+    Name="Navop"
+    Manufacturer="feigeCode"
+    Version="$(Version)"
+    IconSourceFile="$(IconPath)">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage
+        SourceFile="$(MsiPath)"
+        Compressed="yes"
+        bal:PrimaryPackageType="x64" />
+    </Chain>
+  </Bundle>
+</Wix>

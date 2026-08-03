@@ -14,17 +14,27 @@ If Gatekeeper blocks the first macOS launch, verify the official release source 
 | --- | --- | --- | --- |
 | macOS | Apple Silicon | Apple Silicon `.dmg` or `.tar.gz` | M-series Macs |
 | macOS | Intel | Intel `.dmg` or `.tar.gz` | Intel Macs |
-| Windows | x86_64 | `.msi` | Standard installation, Start menu, desktop shortcuts, and stable file associations |
-| Windows | x86_64 | `.zip` | Portable use or a manually managed folder |
+| Windows | x86_64 | `.msi` | MSI installer with Start menu, desktop shortcuts, and stable file associations |
+| Windows | x86_64 | `.exe` | EXE installer wrapping the same standard per-user MSI installation |
+| Windows | x86_64 | `.zip` | No-install use with data kept in the normal Windows user directories |
+| Windows | x86_64 | `-portable.zip` | Keep the application and data together in a movable folder |
 | Linux | x86_64 | `.deb`, `.rpm`, `.AppImage`, or `.tar.gz` | Select for the distribution and desktop environment |
 
 Use `sha256sums.txt` from the same release to verify download integrity.
+
+## Windows installers
+
+Choose either `navop-x86_64-pc-windows-msvc.msi` or `navop-x86_64-pc-windows-msvc.exe` for a normal Windows installation. The EXE installer embeds and launches the same MSI installation, so both install for the current user by default, create Start menu and desktop shortcuts, register supported file associations, use the normal Windows user data directories, and support remembered master-key unlock. The default per-user location does not require administrator privileges.
+
+## Windows no-install ZIP
+
+The standard `navop-x86_64-pc-windows-msvc.zip` contains only the ordinary `navop.exe`. Extract it before running. It does not install shortcuts or file associations, but it still uses the normal Windows user data directories and supports remembered master-key unlock. Do not place `navop.portable` beside the executable unless you intentionally want the portable behavior described below.
 
 ## Windows portable edition
 
 ### Extract and start
 
-The official Windows `.zip` is the portable edition and contains:
+The official Windows `-portable.zip` is the separate portable edition and contains:
 
 ```text
 navop.exe
@@ -67,14 +77,14 @@ Keep the master key separately; do not store it as plain text in the portable di
 
 ### Update a portable installation
 
-Portable mode does not support installing updates in the app, and automatic update checks are skipped. You can still check manually to learn that a release is available, but confirming the update opens GitHub Releases so that you can download a new Windows `.zip`.
+Portable mode does not support installing updates in the app, and automatic update checks are skipped. You can still check manually to learn that a release is available, but confirming the update opens GitHub Releases so that you can download a new Windows `-portable.zip`.
 
 Do not overwrite an old directory that is still in use. Use this upgrade procedure:
 
 1. Save SQL, Notes, and remote files; commit or roll back manual transactions; and wait for SFTP and remote-editing tasks to finish.
 2. Quit Navop completely.
 3. Back up the old portable directory, or at least its complete `data` directory.
-4. Download the new Windows `.zip` for the matching architecture and extract it into a new, empty directory.
+4. Download the new Windows `-portable.zip` for the matching architecture and extract it into a new, empty directory.
 5. Copy the entire old `data` directory into the new directory, next to the new `navop.exe`.
 6. Confirm that the new directory still contains `navop.portable` next to `navop.exe`.
 7. Start the new version, enter the original master key, and verify the version, connections, extensions, Notes, theme, and keyboard shortcuts.
@@ -98,13 +108,13 @@ D:\Apps\
 
 Quit Navop and finish transactions, transfers, and remote-editing tasks before moving the portable folder. You can normally move the entire folder, but do not let two Navop instances or two computers write to the same `data` directory at the same time.
 
-Portable mode does not automatically register Windows associations for `.db`, `.duckdb`, or `.md`. You can still open files from inside Navop or manually select `navop.exe` with Windows Open With. A manually configured Open With path may stop working after you move the portable directory. Choose the `.msi` edition when you need stable file associations, Start menu or desktop shortcuts, in-app updates, or a master key persisted by the operating system.
+Portable mode does not automatically register Windows associations for `.db`, `.duckdb`, or `.md`. You can still open files from inside Navop or manually select `navop.exe` with Windows Open With. A manually configured Open With path may stop working after you move the portable directory. Choose the `.msi` or EXE installer when you need stable file associations, Start menu or desktop shortcuts, in-app updates, or a master key persisted by the operating system.
 
 Losing removable media can expose encrypted data and related metadata. A moved copy still requires the correct master key. Do not delete the original folder or backup until the new copy has been verified.
 
 ### Advanced startup options
 
-The official Windows ZIP already includes `navop.portable`, so normal use requires no additional options. For testing or custom deployment, portable mode and the data location can also be selected explicitly:
+The official Windows `-portable.zip` already includes `navop.portable`, so normal use requires no additional options. For testing or custom deployment, portable mode and the data location can also be selected explicitly:
 
 ```powershell
 # Enable portable mode temporarily; use data next to navop.exe
@@ -132,7 +142,7 @@ Create a non-production test connection before importing real credentials. Insta
 
 ## Update and roll back
 
-For a standard installation, enable automatic update checks in Settings or check manually. Close active connections, commit or roll back manual transactions, and finish SFTP transfers before applying an update. After restart, verify important connections, extensions, and keyboard shortcuts. Follow the separate portable update procedure above for the Windows `.zip` edition.
+For the MSI, EXE installer, and standard ZIP edition, enable automatic update checks in Settings or check manually. Close active connections, commit or roll back manual transactions, and finish SFTP transfers before applying an update. After restart, verify important connections, extensions, and keyboard shortcuts. Follow the separate portable update procedure above for the Windows `-portable.zip` edition.
 
 If a new release is incompatible with a critical extension, back up the Navop data directory and reinstall a known stable package from Releases. Downgrading is not a substitute for backup: local configuration formats may evolve, so confirm compatibility before opening older versions.
 

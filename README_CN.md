@@ -170,9 +170,9 @@ npx -y @navop/mcp@latest
 | macOS | Apple Silicon、Intel | `.dmg`、`.tar.gz` |
 | Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage` |
 | Linux | ARM64 | `.tar.gz` |
-| Windows | x86_64 | `.msi`、`.zip` |
+| Windows | x86_64 | `.msi`、`.exe`、`.zip`、`-portable.zip` |
 
-Windows MSI 是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；ZIP 压缩包可用于便携运行。
+Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`；该模式为避免主密钥随便携目录保存，会在每次启动时重新要求输入主密钥。
 
 ### macOS Gatekeeper
 
