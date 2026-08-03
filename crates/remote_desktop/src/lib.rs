@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod capabilities;
 pub mod config;
+pub mod connection_test;
 pub mod framebuffer;
 pub mod helper_protocol;
 pub mod input;
@@ -24,6 +25,7 @@ pub use config::{
     RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSharedFolder,
     RemoteDesktopSize,
 };
+pub use connection_test::{RemoteDesktopConnectionTestFailure, test_connection};
 pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
 pub use framebuffer::RgbaFramebuffer;
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};

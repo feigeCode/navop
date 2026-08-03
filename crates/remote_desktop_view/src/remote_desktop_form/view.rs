@@ -5,7 +5,7 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Sizable,
+    ActiveTheme, IconName,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -236,28 +236,10 @@ impl Render for RemoteDesktopFormWindow {
                         .child(div().text_sm().text_color(cx.theme().danger).child(error)),
                 )
             })
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .px_6()
-                    .py_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Button::new("cancel-remote-desktop")
-                            .small()
-                            .label(t!("Common.cancel").to_string())
-                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
-                    )
-                    .child(
-                        Button::new("save-remote-desktop")
-                            .small()
-                            .primary()
-                            .label(t!("Common.ok").to_string())
-                            .on_click(cx.listener(|this, _, window, cx| this.on_save(window, cx))),
-                    ),
-            )
+            .when_some(self.connection_test.result().cloned(), |this, result| {
+                this.child(self.render_connection_test_result(result, cx))
+            })
+            .child(self.render_footer(cx))
     }
 }
 

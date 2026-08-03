@@ -1,3 +1,4 @@
+mod connection_test;
 mod inputs;
 mod persistence;
 mod proxy;
@@ -17,6 +18,7 @@ use one_core::storage::{
 };
 use rust_i18n::t;
 
+use self::connection_test::ConnectionTestState;
 use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
 use self::persistence::{emit_saved_connection, persist_connection};
 use self::selects::{WorkspaceSelectItem, create_workspace_select};
@@ -53,6 +55,7 @@ pub struct RemoteDesktopFormWindow {
     proxy_enabled: bool,
     proxy_type: ProxyType,
     sync_enabled: bool,
+    connection_test: ConnectionTestState,
     error: Option<String>,
 }
 
@@ -111,6 +114,7 @@ impl RemoteDesktopFormWindow {
                 .as_ref()
                 .map(|connection| connection.sync_enabled)
                 .unwrap_or(true),
+            connection_test: ConnectionTestState::default(),
             error: None,
         }
     }
@@ -192,6 +196,9 @@ impl RemoteDesktopFormWindow {
     }
 
     fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_test.is_testing() {
+            return;
+        }
         match self
             .build_params(cx)
             .and_then(|params| self.save_connection(params, cx).map_err(|e| e.to_string()))

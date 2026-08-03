@@ -173,6 +173,18 @@ RemoteDesktopForm:
     en: "Invalid proxy field: %{field}"
     zh-CN: "代理配置无效：%{field}"
     zh-HK: "代理設定無效：%{field}"
+  test_connection:
+    en: Test Connection
+    zh-CN: 测试连接
+    zh-HK: 測試連線
+  testing_connection:
+    en: Testing...
+    zh-CN: 正在测试…
+    zh-HK: 正在測試…
+  credentials_valid:
+    en: Credentials are valid
+    zh-CN: 凭据有效
+    zh-HK: 憑據有效
     
 # 连接表单通用字段
 ConnectionForm:

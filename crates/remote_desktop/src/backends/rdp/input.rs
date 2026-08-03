@@ -2,6 +2,9 @@ use super::reconnect::remember_reconnect_state;
 use super::transport::{BackendSignal, write_request};
 use super::*;
 
+const HELPER_CLOSE_GRACE_PERIOD: Duration = Duration::from_millis(500);
+const HELPER_CLOSE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 enum RemoteInputBatch {
     Inputs(Vec<RemoteDesktopInput>),
     Disconnected,
@@ -24,10 +27,14 @@ pub(super) fn handle_backend_signals(
     output_tx: &OutputMailboxSender,
     was_connected: &mut bool,
     protocol: RemoteDesktopProtocol,
+    diagnostic_tx: &Option<std::sync::mpsc::Sender<RemoteDesktopConnectionDiagnostic>>,
 ) -> Option<HelperRunResult> {
     while let Ok(signal) = signal_rx.try_recv() {
         match signal {
-            BackendSignal::Connected => *was_connected = true,
+            BackendSignal::Connected => {
+                *was_connected = true;
+                send_connection_ready(diagnostic_tx);
+            }
             BackendSignal::Disconnected(disconnect) => {
                 close_helper(helper, stdin, output_tx, protocol);
                 return Some(reconnect_result(disconnect, false, *was_connected));
@@ -217,7 +224,56 @@ fn close_helper(
     output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) {
+    close_helper_with_grace_period(
+        helper,
+        stdin,
+        output_tx,
+        protocol,
+        HELPER_CLOSE_GRACE_PERIOD,
+    );
+}
+
+fn close_helper_with_grace_period(
+    helper: &mut std::process::Child,
+    stdin: &mut std::process::ChildStdin,
+    output_tx: &OutputMailboxSender,
+    protocol: RemoteDesktopProtocol,
+    grace_period: Duration,
+) {
     let _ = write_request(stdin, &HelperRequest::Close, output_tx, protocol);
+    let started = std::time::Instant::now();
+    loop {
+        match helper.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {
+                let elapsed = started.elapsed();
+                let Some(remaining) = grace_period.checked_sub(elapsed) else {
+                    break;
+                };
+                std::thread::sleep(HELPER_CLOSE_POLL_INTERVAL.min(remaining));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    protocol = protocol.label(),
+                    ?error,
+                    "failed to poll remote desktop helper while closing"
+                );
+                break;
+            }
+        }
+    }
+    if let Err(error) = helper.kill()
+        && !matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound
+        )
+    {
+        tracing::warn!(
+            protocol = protocol.label(),
+            ?error,
+            "failed to terminate unresponsive remote desktop helper"
+        );
+    }
     if let Err(error) = helper.wait() {
         tracing::warn!(
             protocol = protocol.label(),

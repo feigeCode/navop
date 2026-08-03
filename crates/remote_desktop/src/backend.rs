@@ -43,6 +43,26 @@ pub fn create_backend_with_registry(
     options: RemoteDesktopConnectionOptions,
     registry: &RemoteDesktopProviderRegistry,
 ) -> anyhow::Result<Box<dyn RemoteDesktopBackend>> {
+    create_backend_with_registry_inner(options, registry, None)
+}
+
+pub(crate) fn create_backend_with_registry_and_diagnostics(
+    options: RemoteDesktopConnectionOptions,
+    registry: &RemoteDesktopProviderRegistry,
+    diagnostic_tx: std::sync::mpsc::Sender<
+        crate::connection_test::RemoteDesktopConnectionDiagnostic,
+    >,
+) -> anyhow::Result<Box<dyn RemoteDesktopBackend>> {
+    create_backend_with_registry_inner(options, registry, Some(diagnostic_tx))
+}
+
+fn create_backend_with_registry_inner(
+    options: RemoteDesktopConnectionOptions,
+    registry: &RemoteDesktopProviderRegistry,
+    diagnostic_tx: Option<
+        std::sync::mpsc::Sender<crate::connection_test::RemoteDesktopConnectionDiagnostic>,
+    >,
+) -> anyhow::Result<Box<dyn RemoteDesktopBackend>> {
     let provider = registry.find(options.protocol).ok_or_else(|| {
         anyhow::anyhow!(
             "{} remote desktop provider is not installed",
@@ -51,7 +71,11 @@ pub fn create_backend_with_registry(
     })?;
     validate_provider_requirement(&provider)?;
     let helper = provider_helper_process(&provider);
-    Ok(Box::new(RdpBackend::new_with_helper(options, helper)))
+    Ok(Box::new(RdpBackend::new_with_helper_and_diagnostics(
+        options,
+        helper,
+        diagnostic_tx,
+    )))
 }
 
 pub(crate) fn resolve_proxy_options(

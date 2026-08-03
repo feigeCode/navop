@@ -1,5 +1,22 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn failed_helper_startup_reaps_the_spawned_process() {
+    let mut helper = std::process::Command::new("sleep")
+        .arg("60")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn test helper");
+
+    terminate_failed_helper(&mut helper, RemoteDesktopProtocol::Rdp);
+
+    assert!(
+        helper.try_wait().expect("query helper status").is_some(),
+        "failed helper startup must not leave the process running"
+    );
+}
+
 #[test]
 fn forwarded_frames_keep_only_latest_pending_output() {
     let (output_tx, output_rx) = crate::output_mailbox::output_mailbox();

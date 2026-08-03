@@ -34,6 +34,7 @@ pub(super) fn start_helper_session(
             protocol = protocol.label(),
             "remote desktop helper stdout unavailable"
         );
+        terminate_failed_helper(&mut helper, protocol);
         return Err(());
     };
     let Some(mut stdin) = helper.stdin.take() else {
@@ -41,17 +42,43 @@ pub(super) fn start_helper_session(
             protocol = protocol.label(),
             "remote desktop helper stdin unavailable"
         );
+        terminate_failed_helper(&mut helper, protocol);
         return Err(());
     };
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
     spawn_output_reader(stdout, output_tx.clone(), signal_tx, protocol);
-    write_request(&mut stdin, connect, output_tx, protocol).map_err(|_| ())?;
+    if write_request(&mut stdin, connect, output_tx, protocol).is_err() {
+        terminate_failed_helper(&mut helper, protocol);
+        return Err(());
+    }
     for request in
         reconnect_replay_requests(latest_clipboard_text, latest_clipboard_files, protocol)
     {
         let _ = write_request(&mut stdin, &request, output_tx, protocol);
     }
     Ok((helper, stdin, signal_rx))
+}
+
+fn terminate_failed_helper(helper: &mut std::process::Child, protocol: RemoteDesktopProtocol) {
+    if let Err(error) = helper.kill()
+        && !matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::NotFound
+        )
+    {
+        tracing::warn!(
+            protocol = protocol.label(),
+            ?error,
+            "failed to terminate remote desktop helper after startup failure"
+        );
+    }
+    if let Err(error) = helper.wait() {
+        tracing::warn!(
+            protocol = protocol.label(),
+            ?error,
+            "failed to reap remote desktop helper after startup failure"
+        );
+    }
 }
 
 pub(super) fn reconnect_replay_requests(
