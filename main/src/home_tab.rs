@@ -231,6 +231,7 @@ mod workspace_filter;
 
 use connection_badge::ConnectionTeamBadge;
 pub(crate) use connection_badge::connection_team_badge;
+pub(crate) use connection_filter::connection_matches_query;
 use connection_form_title::{external_driver_id_for_connection_form, non_empty_name};
 #[cfg(test)]
 pub(crate) use connection_grouping::can_manage_connection_with_permissions;

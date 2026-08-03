@@ -1,5 +1,5 @@
 use crate::external_driver_display::external_driver_icon_for_config_with_registry;
-use crate::home_tab::HomePage;
+use crate::home_tab::{HomePage, connection_matches_query};
 use db::ipc::IpcDriverRegistry;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
@@ -48,13 +48,19 @@ impl ConnectionQuickOpenDelegate {
         self.filtered_items = self
             .items
             .iter()
-            .filter(|conn| {
-                conn.name.to_lowercase().contains(&query)
-                    || conn.connection_type.label().to_lowercase().contains(&query)
-            })
+            .filter(|conn| quick_open_matches_connection(conn, &query))
             .cloned()
             .collect();
     }
+}
+
+fn quick_open_matches_connection(connection: &StoredConnection, query: &str) -> bool {
+    connection_matches_query(connection, query)
+        || connection
+            .connection_type
+            .label()
+            .to_lowercase()
+            .contains(query)
 }
 
 fn connection_icon(connection: &StoredConnection, registry: &IpcDriverRegistry) -> Icon {
@@ -171,5 +177,87 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
         window.close_dialog(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_core::storage::{
+        DatabaseType, DbConnectionConfig, RemoteDesktopParams, RemoteDesktopProtocol,
+    };
+
+    #[test]
+    fn quick_open_matches_database_connection_by_ip() {
+        let connection = StoredConnection::new_database(
+            "Production".to_string(),
+            DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::MySQL,
+                name: "Production".to_string(),
+                host: "192.168.10.42".to_string(),
+                port: 3306,
+                username: "root".to_string(),
+                password: String::new(),
+                database: Some("app".to_string()),
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                proxy: None,
+                extra_params: std::collections::HashMap::new(),
+            },
+            None,
+        );
+
+        assert!(quick_open_matches_connection(&connection, "192.168.10.42"));
+        assert!(quick_open_matches_connection(&connection, "168.10"));
+        assert!(!quick_open_matches_connection(&connection, "10.0.0.1"));
+    }
+
+    #[test]
+    fn quick_open_matches_remote_desktop_connections_by_ip() {
+        let rdp = remote_desktop_connection(
+            RemoteDesktopProtocol::Rdp,
+            "rdp-production",
+            "10.0.0.8",
+            Some("administrator"),
+        );
+        let vnc = remote_desktop_connection(
+            RemoteDesktopProtocol::Vnc,
+            "vnc-production",
+            "10.0.0.9",
+            None,
+        );
+
+        assert!(quick_open_matches_connection(&rdp, "10.0.0.8"));
+        assert!(quick_open_matches_connection(
+            &rdp,
+            "administrator@10.0.0.8"
+        ));
+        assert!(quick_open_matches_connection(&vnc, "10.0.0.9"));
+        assert!(quick_open_matches_connection(&vnc, "10.0.0.9:5900"));
+    }
+
+    fn remote_desktop_connection(
+        protocol: RemoteDesktopProtocol,
+        name: &str,
+        host: &str,
+        username: Option<&str>,
+    ) -> StoredConnection {
+        StoredConnection::new_remote_desktop(
+            name.to_string(),
+            RemoteDesktopParams {
+                protocol,
+                host: host.to_string(),
+                port: protocol.default_port(),
+                username: username.map(str::to_string),
+                password: None,
+                domain: None,
+                read_only: false,
+                audio_playback: false,
+                proxy: None,
+            },
+            None,
+        )
     }
 }
