@@ -109,8 +109,9 @@ impl ImageAttachment {
 
 /// 把一批 UI 图片附件转换为受请求体预算约束的模型输入。
 ///
-/// 小图保留原始编码；大图或超大尺寸图片会等比缩放并转为 JPEG。预算按当前批次
-/// 图片数均分，确保单次用户输入不会仅因 base64 膨胀就越过常见的 16 MiB 请求限制。
+/// 小且模型普遍支持的图片保留原始编码；TIFF、BMP、ICO 等其他可解码格式以及
+/// 大图会转为 JPEG，超大尺寸图片还会先等比缩放。预算按当前批次图片数均分，
+/// 确保单次用户输入不会仅因 base64 膨胀就越过常见的 16 MiB 请求限制。
 pub(crate) fn prepare_input_images(images: &[ImageAttachment]) -> Result<Vec<InputImage>> {
     if images.is_empty() {
         return Ok(Vec::new());
@@ -140,20 +141,26 @@ pub(crate) fn prepare_input_images(images: &[ImageAttachment]) -> Result<Vec<Inp
 }
 
 fn prepare_input_image(attachment: &ImageAttachment, raw_budget: usize) -> Result<InputImage> {
-    let decoded = match image::load_from_memory(&attachment.image.bytes) {
-        Ok(decoded) => decoded,
-        Err(_error) if attachment.byte_len() <= raw_budget => {
-            // SVG 等 GPUI 可显示但 image crate 不负责解码的格式，只要体积安全就原样发送。
-            return Ok(attachment.to_input_image());
+    let decoded = image::load_from_memory(&attachment.image.bytes).with_context(|| {
+        if attachment.byte_len() > raw_budget {
+            "图片过大且无法解码压缩".to_string()
+        } else {
+            format!(
+                "图片格式 {} 无法解码并转换为模型支持的格式",
+                attachment.mime()
+            )
         }
-        Err(error) => {
-            return Err(error).context("图片过大且无法解码压缩");
-        }
-    };
+    })?;
 
+    let detected_mime = image::guess_format(&attachment.image.bytes)
+        .context("无法识别图片实际编码格式")?
+        .to_mime_type();
     let longest_edge = decoded.width().max(decoded.height());
-    if attachment.byte_len() <= raw_budget && longest_edge <= MODEL_IMAGE_MAX_DIMENSION {
-        return Ok(attachment.to_input_image());
+    if attachment.byte_len() <= raw_budget
+        && longest_edge <= MODEL_IMAGE_MAX_DIMENSION
+        && model_supports_original_encoding(detected_mime)
+    {
+        return Ok(InputImage::new(detected_mime, attachment.data_base64()));
     }
 
     let mut target_dimension = longest_edge.min(MODEL_IMAGE_MAX_DIMENSION);
@@ -183,6 +190,13 @@ fn prepare_input_image(attachment: &ImageAttachment, raw_budget: usize) -> Resul
     bail!(
         "压缩后仍超过单图安全预算 {:.1} MiB，请减少图片数量或裁剪图片",
         raw_budget as f64 / 1024.0 / 1024.0
+    )
+}
+
+fn model_supports_original_encoding(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
     )
 }
 
@@ -287,6 +301,114 @@ mod tests {
             "prepared image should be bounded: {}x{}",
             prepared.width(),
             prepared.height()
+        );
+    }
+
+    #[test]
+    fn small_tiff_is_reencoded_for_model() {
+        let pixels = ImageBuffer::from_fn(32, 24, |x, y| {
+            Rgb([(x * 7) as u8, (y * 11) as u8, (x + y) as u8])
+        });
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(pixels)
+            .write_to(&mut encoded, image::ImageFormat::Tiff)
+            .expect("test TIFF should encode");
+        let tiff_bytes = encoded.into_inner();
+        assert_eq!(
+            image::guess_format(&tiff_bytes).expect("fixture format should be detectable"),
+            image::ImageFormat::Tiff
+        );
+
+        let attachment = ImageAttachment::new(
+            "small.tiff",
+            Image::from_bytes(ImageFormat::Tiff, tiff_bytes),
+        );
+        assert!(
+            attachment.byte_len() < base64_budget_to_raw_bytes(MODEL_IMAGES_BASE64_BUDGET),
+            "fixture must remain below the size budget"
+        );
+
+        let inputs = prepare_input_images(&[attachment]).expect("TIFF should be prepared");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].mime, "image/jpeg");
+
+        let prepared_bytes = BASE64
+            .decode(inputs[0].data_base64.as_bytes())
+            .expect("prepared image should contain valid base64");
+        assert_eq!(
+            image::guess_format(&prepared_bytes)
+                .expect("declared JPEG output should have JPEG bytes"),
+            image::ImageFormat::Jpeg
+        );
+        let prepared =
+            image::load_from_memory(&prepared_bytes).expect("prepared JPEG should still decode");
+        assert_eq!((prepared.width(), prepared.height()), (32, 24));
+    }
+
+    #[test]
+    fn small_png_keeps_original_encoding_for_model() {
+        let pixels = ImageBuffer::from_pixel(8, 6, Rgb([12, 34, 56]));
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(pixels)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .expect("test PNG should encode");
+        let png_bytes = encoded.into_inner();
+        let attachment = ImageAttachment::new(
+            "small.png",
+            Image::from_bytes(ImageFormat::Png, png_bytes.clone()),
+        );
+
+        let inputs = prepare_input_images(&[attachment]).expect("PNG should be prepared");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].mime, "image/png");
+        assert_eq!(
+            BASE64
+                .decode(inputs[0].data_base64.as_bytes())
+                .expect("prepared image should contain valid base64"),
+            png_bytes
+        );
+    }
+
+    #[test]
+    fn passthrough_uses_detected_mime_instead_of_declared_format() {
+        let pixels = ImageBuffer::from_pixel(8, 6, Rgb([12, 34, 56]));
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(pixels)
+            .write_to(&mut encoded, image::ImageFormat::Jpeg)
+            .expect("test JPEG should encode");
+        let jpeg_bytes = encoded.into_inner();
+        let attachment = ImageAttachment::new(
+            "mislabelled.png",
+            Image::from_bytes(ImageFormat::Png, jpeg_bytes.clone()),
+        );
+
+        let inputs =
+            prepare_input_images(&[attachment]).expect("mislabelled JPEG should be prepared");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].mime, "image/jpeg");
+        assert_eq!(
+            BASE64
+                .decode(inputs[0].data_base64.as_bytes())
+                .expect("prepared image should contain valid base64"),
+            jpeg_bytes
+        );
+    }
+
+    #[test]
+    fn undecodable_svg_is_rejected_before_model_request() {
+        let attachment = ImageAttachment::new(
+            "vector.svg",
+            Image::from_bytes(
+                ImageFormat::Svg,
+                br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"></svg>"#.to_vec(),
+            ),
+        );
+
+        let error =
+            prepare_input_images(&[attachment]).expect_err("SVG should not be sent as model input");
+        assert!(
+            format!("{error:#}").contains("图片格式 image/svg+xml 无法解码并转换为模型支持的格式"),
+            "unexpected error: {error:#}"
         );
     }
 }

@@ -1,0 +1,22 @@
+.DS_Store
+.qoder
+examples/core
+keys.yaml
+.github
+.claude
+.qoder
+target
+CLAUDE.md
+.zed/
+.augment/
+
+# VitePress (www)
+www/node_modules/
+www/.vitepress/dist/
+www/.vitepress/cache/
+www/.vitepress/.temp/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.env

@@ -1,0 +1,15 @@
+{
+  "name": "llm-connector-docs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Documentation site for llm-connector",
+  "scripts": {
+    "dev": "vitepress dev .",
+    "build": "vitepress build .",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "vitepress": "^1.0.0",
+    "vue": "^3.4.0"
+  }
+}

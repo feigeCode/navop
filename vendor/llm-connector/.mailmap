@@ -1,0 +1,11 @@
+# .mailmap - Unified git author names and emails
+# Format: <Proper Name> <Proper Email> <Commit Name> <Commit Email>
+
+lipish <lipeng.sh@qq.com> lipish <lipeng.sh@qq.com>
+lipish <lipeng.sh@qq.com> lipi <lipeng.sh@qq.com>
+lipish <lipeng.sh@qq.com> Claude <lipeng.sh@qq.com>
+lipish <lipeng.sh@qq.com> claude <lipeng.sh@qq.com>
+lipish <lipeng.sh@qq.com> "Claude" <lipeng.sh@qq.com>
+lipish <lipeng.sh@qq.com> "claude code" <lipeng.sh@qq.com>
+# Ensure any system bots are also mapped if they used your email
+lipish <lipeng.sh@qq.com> root <lipeng.sh@qq.com>

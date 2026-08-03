@@ -1,0 +1,179 @@
+/**
+ * Rust / technical style theme for llm-connector
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+:root {
+  --vp-font-family-base: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --vp-font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  --vp-c-brand-1: #dea584;
+  --vp-c-brand-2: #d08770;
+  --vp-c-brand-3: #bf616a;
+  --vp-c-brand-soft: rgba(222, 165, 132, 0.16);
+
+  --vp-button-alt-border-radius: 0;
+  --vp-button-brand-border-radius: 0;
+  --vp-code-block-border-radius: 0;
+  --vp-nav-logo-height: 24px;
+}
+
+.dark {
+  --vp-c-bg: #0b0c0c;
+  --vp-c-bg-alt: #161b22;
+  --vp-c-bg-soft: #1c2128;
+
+  --vp-c-text-1: #e6e6e6;
+  --vp-c-text-2: #a0a0a0;
+
+  --vp-c-border: #30363d;
+  --vp-c-divider: #30363d;
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: -webkit-linear-gradient(120deg, #dea584 30%, #a3be8c);
+}
+
+.VPButton,
+.VPImage,
+.box,
+.custom-block,
+.VPCodeGroup-header,
+.vp-doc pre,
+.VPNavBar {
+  border-radius: 0 !important;
+}
+
+.VPImage,
+.box,
+.custom-block,
+.VPCodeGroup-header,
+.vp-doc pre,
+.VPNavBarSearch {
+  /* 确保搜索框不会因为 flex 挤压而变形 */
+  flex-shrink: 0;
+}
+
+/* Keep navbar layout stable across pages (home vs docs sidebar) */
+.VPNavBar .content {
+  justify-content: flex-start;
+}
+
+/* Ensure the middle area takes remaining space so the right side stays right */
+.VPNavBar .content-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Push the right-side area (search / socials) to the far right */
+.VPNavBar .content-extra {
+  margin-left: auto;
+}
+
+/* Prevent right-side area (search / socials) from shrinking */
+.VPNavBarSearch,
+.VPNavBarExtra,
+.VPNavBar .social-links {
+  flex-shrink: 0;
+}
+
+/* Avoid horizontal layout shift when some pages overflow and some do not */
+html {
+  overflow-y: scroll;
+}
+
+.vp-doc a {
+  text-decoration: none;
+  border-bottom: 1px dashed var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+  transition: all 0.2s;
+}
+
+.vp-doc a:hover {
+  border-bottom-style: solid;
+  color: var(--vp-c-brand-2);
+}
+
+.VPHero .name::after {
+  content: '_';
+  animation: blink 1s step-end infinite;
+  color: var(--vp-c-brand-1);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.vp-doc pre {
+  border: 1px solid var(--vp-c-border);
+}
+
+.dark .vp-doc pre {
+  background-color: #0d1117 !important;
+}
+
+.VPNavBar {
+  border-bottom: none !important;
+  box-shadow: none !important;
+  z-index: 60 !important;
+}
+
+/* Disable any custom underline implementations to avoid duplicated / broken lines */
+.VPNavBar::after {
+  display: none !important;
+}
+
+/* Hide built-in dividers if present */
+.VPNavBar .divider,
+.VPNavBar .divider-line,
+.VPNavBar .VPNavBarDivider {
+  display: none !important;
+}
+
+/* Draw a single, full-width underline below the navbar. This avoids layout layers
+   (sidebar/content) covering the navbar's own border and causing discontinuity. */
+body::before {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--vp-nav-height);
+  height: 1px;
+  background: var(--vp-c-brand-2);
+  z-index: 59;
+  pointer-events: none;
+}
+
+/* Normalize navbar horizontal layout across pages (home vs docs sidebar) */
+.VPNavBar .container {
+  max-width: var(--vp-layout-max-width) !important;
+  margin: 0 auto !important;
+  padding: 0 24px;
+}
+
+.VPNavBar .content {
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Override sidebar-related offset so search doesn't jump */
+.VPNavBar.has-sidebar .content {
+  margin-left: 0 !important;
+}
+
+.dark .VPNavBar {
+  background-color: rgba(11, 12, 12, 0.95) !important;
+}
+
+html:not(.dark) .VPNavBar {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+}

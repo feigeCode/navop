@@ -1,0 +1,77 @@
+[package]
+name = "llm-connector"
+version = "1.4.0"
+edition = "2024"
+authors = ["lipi <lipicoder@qq.com>"]
+description = "Next-generation Rust library for LLM protocol abstraction with native multi-modal support. Supports 12+ providers (OpenAI, Anthropic, Google, Aliyun, Zhipu, Ollama, Tencent, Volcengine, LongCat, Moonshot, DeepSeek, Xiaomi) with clean Protocol/Provider separation, type-safe interface, and universal streaming."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/lipish/llm-connector"
+keywords = ["llm", "ai", "protocol", "openai", "anthropic"]
+categories = ["api-bindings", "web-programming::http-client"]
+
+[lib]
+name = "llm_connector"
+path = "src/lib.rs"
+
+[features]
+default = ["reqwest", "streaming"]
+# HTTP client support
+reqwest = ["dep:reqwest", "dep:tokio", "dep:futures-util", "dep:bytes"]
+# Streaming support
+streaming = ["reqwest", "dep:pin-project-lite"]
+# Configuration support
+config = ["dep:serde_yaml"]
+# YAML configuration support
+yaml = ["config", "dep:serde_yaml"]
+# TOML configuration support (placeholder for future use)
+toml = ["config"]
+# Tencent Cloud API support
+tencent = ["reqwest", "dep:sha2", "dep:hmac", "dep:hex"]
+
+[dependencies]
+# File handling
+base64 = "0.22"
+mime_guess = "2.0"
+
+# Core serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Core dependencies
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+rand = "0.8"
+log = "0.4"
+
+# HTTP client (optional)
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
+tokio = { version = "1.0", features = ["rt"], optional = true }
+futures-util = { version = "0.3", optional = true }
+bytes = { version = "1.0", optional = true }
+
+# Streaming utilities (optional)
+pin-project-lite = { version = "0.2", optional = true }
+
+# Configuration (optional)
+serde_yaml = { version = "0.9", optional = true }
+
+# Cryptography for Tencent Cloud API V3 signature (optional)
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+hex = { version = "0.4", optional = true }
+
+
+
+[dev-dependencies]
+base64 = "0.22.1"
+llm_providers = "0.7.4"
+dotenvy = "0.15"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+http = "1.4.0"
+tokio-test = "0.4"
+wiremock = "0.6"
+serde_yaml = "0.9"
