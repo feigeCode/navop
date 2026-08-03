@@ -111,15 +111,60 @@ impl Drop for LocalDownloadTemp {
 }
 
 /// A remote upload is staged beside its destination and published with one
-/// SFTP rename request. The target is never opened with TRUNCATE.
+/// SFTP rename request when the server supports replacing an existing target.
+/// Servers that reject rename-over-existing use a backup-and-restore fallback.
+/// The target is never opened with TRUNCATE.
 struct RemoteReplaceTemp {
     path: String,
     committed: bool,
     cleaned: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemotePathKind {
+    Directory,
+    Other,
+}
+
+#[async_trait]
+trait RemoteReplaceOps {
+    async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()>;
+    async fn remove_file_if_exists(&self, path: &str) -> Result<()>;
+    async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>>;
+}
+
+#[async_trait]
+impl RemoteReplaceOps for SftpSession {
+    async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()> {
+        self.rename(old_path, new_path)
+            .await
+            .map_err(|error| anyhow!(error))
+    }
+
+    async fn remove_file_if_exists(&self, path: &str) -> Result<()> {
+        match self.remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                Ok(())
+            }
+            Err(error) => Err(anyhow!(error)),
+        }
+    }
+
+    async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>> {
+        match self.symlink_metadata(path).await {
+            Ok(metadata) if metadata.is_dir() => Ok(Some(RemotePathKind::Directory)),
+            Ok(_) => Ok(Some(RemotePathKind::Other)),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                Ok(None)
+            }
+            Err(error) => Err(anyhow!(error)),
+        }
+    }
+}
+
 impl RemoteReplaceTemp {
-    fn path_for(target: &str) -> Result<String> {
+    fn sibling_path_for(target: &str, marker: &str) -> Result<String> {
         if target.is_empty() || target.ends_with('/') || target.contains('\0') {
             return Err(anyhow!(
                 "Remote replace target must be a non-empty file path without a trailing slash"
@@ -138,13 +183,21 @@ impl RemoteReplaceTemp {
                 "Remote replace target must identify a regular file name"
             ));
         }
-        let temporary_name = format!(".{name}.navop-part-{}", uuid::Uuid::new_v4());
+        let temporary_name = format!(".{name}.{marker}-{}", uuid::Uuid::new_v4());
 
         if parent == "/" {
             Ok(format!("/{temporary_name}"))
         } else {
             Ok(format!("{parent}/{temporary_name}"))
         }
+    }
+
+    fn path_for(target: &str) -> Result<String> {
+        Self::sibling_path_for(target, "navop-part")
+    }
+
+    fn backup_path_for(target: &str) -> Result<String> {
+        Self::sibling_path_for(target, "navop-backup")
     }
 
     async fn create(sftp: &SftpSession, target: &str) -> Result<(Self, SftpFile)> {
@@ -173,16 +226,16 @@ impl RemoteReplaceTemp {
         ))
     }
 
-    async fn cleanup(&mut self, sftp: &SftpSession) {
+    async fn cleanup<O>(&mut self, sftp: &O)
+    where
+        O: RemoteReplaceOps + Sync + ?Sized,
+    {
         if self.committed || self.cleaned {
             return;
         }
 
-        match sftp.remove_file(&self.path).await {
+        match sftp.remove_file_if_exists(&self.path).await {
             Ok(()) => self.cleaned = true,
-            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
-                self.cleaned = true;
-            }
             Err(error) => {
                 tracing::debug!(
                     path = %self.path,
@@ -193,19 +246,95 @@ impl RemoteReplaceTemp {
         }
     }
 
-    async fn commit(mut self, sftp: &SftpSession, target: &str) -> Result<()> {
-        match sftp.rename(&self.path, target).await {
+    async fn commit<O>(mut self, sftp: &O, target: &str) -> Result<()>
+    where
+        O: RemoteReplaceOps + Sync + ?Sized,
+    {
+        let initial_error = match sftp.rename_path(&self.path, target).await {
             Ok(()) => {
                 self.committed = true;
-                Ok(())
+                return Ok(());
             }
+            Err(error) => error,
+        };
+
+        match sftp.path_kind(target).await {
+            Ok(Some(RemotePathKind::Other)) => {}
+            Ok(Some(RemotePathKind::Directory)) => {
+                self.cleanup(sftp).await;
+                return Err(anyhow!(
+                    "Failed to replace remote file {} because the existing target is a directory: {}",
+                    target,
+                    initial_error
+                ));
+            }
+            Ok(None) => {
+                self.cleanup(sftp).await;
+                return Err(anyhow!(
+                    "Failed to publish remote file {} and no existing target was found: {}",
+                    target,
+                    initial_error
+                ));
+            }
+            Err(inspect_error) => {
+                self.cleanup(sftp).await;
+                return Err(anyhow!(
+                    "Failed to inspect remote target {} after rename failed ({}): {}",
+                    target,
+                    initial_error,
+                    inspect_error
+                ));
+            }
+        }
+
+        let backup_path = match Self::backup_path_for(target) {
+            Ok(path) => path,
             Err(error) => {
                 self.cleanup(sftp).await;
-                Err(anyhow!(
-                    "Failed to atomically replace remote file {} (the original was not removed): {}",
-                    target,
-                    error
-                ))
+                return Err(error);
+            }
+        };
+
+        if let Err(backup_error) = sftp.rename_path(target, &backup_path).await {
+            self.cleanup(sftp).await;
+            return Err(anyhow!(
+                "Failed to replace remote file {}: the server rejected direct replacement ({}), and the original could not be moved to a backup: {}",
+                target,
+                initial_error,
+                backup_error
+            ));
+        }
+
+        match sftp.rename_path(&self.path, target).await {
+            Ok(()) => {
+                self.committed = true;
+                if let Err(error) = sftp.remove_file_if_exists(&backup_path).await {
+                    tracing::warn!(
+                        path = %backup_path,
+                        error = %error,
+                        "remote file was replaced but its backup could not be removed"
+                    );
+                }
+                Ok(())
+            }
+            Err(publish_error) => {
+                let restore_result = sftp.rename_path(&backup_path, target).await;
+                self.cleanup(sftp).await;
+
+                match restore_result {
+                    Ok(()) => Err(anyhow!(
+                        "Failed to publish replacement for remote file {}; the original file was restored: {}",
+                        target,
+                        publish_error
+                    )),
+                    Err(restore_error) => Err(anyhow!(
+                        "Failed to publish replacement for remote file {}, and the original could not be restored to its original path. The original remains at {}: {}; restore failed: {}",
+                        target,
+                        backup_path,
+                        publish_error,
+                        restore_error
+                    )),
+                }
             }
         }
     }
@@ -2058,6 +2187,83 @@ impl SftpClient for RusshSftpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum FakeRemoteEntry {
+        File(&'static str),
+        Directory,
+    }
+
+    struct FakeRemoteReplaceOps {
+        entries: StdMutex<HashMap<String, FakeRemoteEntry>>,
+        reject_overwrite: bool,
+        fail_staged_publish: bool,
+    }
+
+    impl FakeRemoteReplaceOps {
+        fn new(entries: impl IntoIterator<Item = (String, FakeRemoteEntry)>) -> Self {
+            Self {
+                entries: StdMutex::new(entries.into_iter().collect()),
+                reject_overwrite: true,
+                fail_staged_publish: false,
+            }
+        }
+
+        fn with_failed_staged_publish(mut self) -> Self {
+            self.fail_staged_publish = true;
+            self
+        }
+
+        fn entries(&self) -> HashMap<String, FakeRemoteEntry> {
+            self.entries.lock().expect("fake remote lock").clone()
+        }
+    }
+
+    #[async_trait]
+    impl RemoteReplaceOps for FakeRemoteReplaceOps {
+        async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()> {
+            let mut entries = self.entries.lock().expect("fake remote lock");
+            if self.reject_overwrite && entries.contains_key(new_path) {
+                return Err(anyhow!("server does not overwrite existing rename targets"));
+            }
+            if self.fail_staged_publish
+                && old_path.contains(".navop-part-")
+                && !entries.contains_key(new_path)
+            {
+                return Err(anyhow!("simulated staged publish failure"));
+            }
+
+            let entry = entries
+                .remove(old_path)
+                .ok_or_else(|| anyhow!("missing rename source {old_path}"))?;
+            entries.insert(new_path.to_owned(), entry);
+            Ok(())
+        }
+
+        async fn remove_file_if_exists(&self, path: &str) -> Result<()> {
+            let mut entries = self.entries.lock().expect("fake remote lock");
+            match entries.get(path) {
+                Some(FakeRemoteEntry::Directory) => {
+                    Err(anyhow!("cannot remove directory as a file"))
+                }
+                Some(FakeRemoteEntry::File(_)) => {
+                    entries.remove(path);
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        }
+
+        async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>> {
+            let entries = self.entries.lock().expect("fake remote lock");
+            Ok(entries.get(path).map(|entry| match entry {
+                FakeRemoteEntry::Directory => RemotePathKind::Directory,
+                FakeRemoteEntry::File(_) => RemotePathKind::Other,
+            }))
+        }
+    }
 
     #[test]
     fn sftp_config_promotes_the_known_host_key_algorithm() {
@@ -2203,6 +2409,13 @@ mod tests {
             nested.starts_with("/srv/documents/.notes.txt.navop-part-"),
             "unexpected temporary path: {nested}"
         );
+
+        let backup = RemoteReplaceTemp::backup_path_for("/srv/documents/notes.txt")
+            .expect("backup path must be valid");
+        assert!(
+            backup.starts_with("/srv/documents/.notes.txt.navop-backup-"),
+            "unexpected backup path: {backup}"
+        );
     }
 
     #[test]
@@ -2213,6 +2426,96 @@ mod tests {
                 "{invalid:?} must not be accepted as a remote file target"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn remote_replace_falls_back_when_server_rejects_overwrite_rename() {
+        let target = "/srv/notes.txt";
+        let temporary_path = "/srv/.notes.txt.navop-part-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::File("original content")),
+            (
+                temporary_path.to_owned(),
+                FakeRemoteEntry::File("replacement content"),
+            ),
+        ]);
+        let temporary = RemoteReplaceTemp {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        temporary
+            .commit(&operations, target)
+            .await
+            .expect("backup fallback must publish the replacement");
+
+        let entries = operations.entries();
+        assert_eq!(
+            entries.get(target),
+            Some(&FakeRemoteEntry::File("replacement content"))
+        );
+        assert_eq!(entries.len(), 1, "temporary and backup files must be gone");
+    }
+
+    #[tokio::test]
+    async fn remote_replace_restores_original_when_fallback_publish_fails() {
+        let target = "/srv/notes.txt";
+        let temporary_path = "/srv/.notes.txt.navop-part-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::File("original content")),
+            (
+                temporary_path.to_owned(),
+                FakeRemoteEntry::File("replacement content"),
+            ),
+        ])
+        .with_failed_staged_publish();
+        let temporary = RemoteReplaceTemp {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("failed publish must be reported");
+
+        assert!(error.to_string().contains("original file was restored"));
+        let entries = operations.entries();
+        assert_eq!(
+            entries.get(target),
+            Some(&FakeRemoteEntry::File("original content"))
+        );
+        assert_eq!(entries.len(), 1, "temporary and backup files must be gone");
+    }
+
+    #[tokio::test]
+    async fn remote_replace_does_not_replace_existing_directory() {
+        let target = "/srv/notes.txt";
+        let temporary_path = "/srv/.notes.txt.navop-part-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::Directory),
+            (
+                temporary_path.to_owned(),
+                FakeRemoteEntry::File("replacement content"),
+            ),
+        ]);
+        let temporary = RemoteReplaceTemp {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("directory conflicts must not be replaced as files");
+
+        assert!(error.to_string().contains("existing target is a directory"));
+        let entries = operations.entries();
+        assert_eq!(entries.get(target), Some(&FakeRemoteEntry::Directory));
+        assert_eq!(entries.len(), 1, "temporary file must be cleaned");
     }
 
     #[tokio::test]
