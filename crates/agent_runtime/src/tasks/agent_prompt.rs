@@ -7,6 +7,7 @@ use crate::{Plan, ResourceContext};
 const AGENT_SYSTEM: &str = "你是 Navop 的 AI 运维助手。请根据用户目标自主决定如何行动:\
 简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
 面对多步任务时,先调用 `update_plan` 列出步骤并随进展更新状态(每完成一步就更新)。\
+计划步骤应描述要达成或验证的结果,而不是待直接执行的工具调用、命令、风险标签或孤立词。\
 可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 不要为简单问题强行制定计划。完成后直接给出最终回答。";
 
@@ -17,6 +18,7 @@ const ASK_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Ask 模式:\
 
 const PLAN_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Plan 模式:\
 面对用户目标时先调用 `update_plan` 给出清晰步骤,再按步骤执行;每完成一步都更新计划状态。\
+计划步骤应描述要达成或验证的结果,而不是待直接执行的工具调用、命令、风险标签或孤立词。\
 可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 如果目标缺少必要信息,先提出需要补充的问题。回答使用简体中文。";
 
@@ -68,18 +70,18 @@ fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec])
     prompt.push_str("\n\n终端/SSH 工具选择规则:");
     if let Some(name) = ssh_exec {
         prompt.push_str(&format!(
-            " 对 Agent 自己发起的自动化、诊断、构建、日志查询和非交互检查，默认优先使用 `{name}`；它运行在独立 SSH channel，提供结构化 stdout/stderr/exit_code，也不会占用用户可见终端。它不会自动继承可见终端的当前工作目录、已激活虚拟环境、alias/函数或临时环境变量，除非在参数或命令中显式设置。"
+            " 对 Agent 自己发起的自动化、诊断、构建、日志查询和非交互检查，默认优先使用 `{name}`；它运行在独立 SSH channel，提供结构化 stdout/stderr/exit_code，也不会占用用户可见终端。它没有交互式 stdin，命令启动后 stdin 会关闭；`command` 必须是完整、自包含、非空且用途明确的 shell 命令，不得直接复制 Todo 步骤标题、描述、状态、风险标签、工具名或孤立自然语言片段。默认只提交无需人工输入或 TTY 且能自行结束的命令；需要输入时使用参数、环境变量、管道/重定向或专用工具，不要提交会等待确认、密码、分页器、编辑器或 REPL 输入的前台命令。有意长期运行的非交互任务才设置 `mode=background`，并使用对应的 command poll/output 工具跟踪；前台超时或 detach 不代表命令已经完成。它不会自动继承可见终端的当前工作目录、已激活虚拟环境、alias/函数或临时环境变量，除非在参数或命令中显式设置。"
         ));
     }
     if let Some(name) = terminal_exec {
         let ssh_name = ssh_exec.unwrap_or("ssh.exec");
         prompt.push_str(&format!(
-            " 只有当用户明确要求在可见终端/当前终端里执行，或命令必须继承该终端的当前工作目录、已激活虚拟环境、alias/函数、临时环境变量时，才调用 `{name}`；不要因为目标是 SSH 主机就默认选择它。若用户明确要求可见执行，不要用 `{ssh_name}` 替代。`command` 必须保持用户要输入的命令文本，`target` 必须指向终端资源，通常设置 `submit=true`。空提示符会直接提交；只有检测到未提交的半行输入时才会用 Ctrl+C 清理，运行中的命令不会被替换而会返回 Busy。不要声称有 exit code，除非工具观测结果明确返回 exit_code。"
+            " 只有当用户明确要求在可见终端/当前终端里执行，或命令必须继承该终端的当前工作目录、已激活虚拟环境、alias/函数、临时环境变量时，才调用 `{name}`；不要因为目标是 SSH 主机就默认选择它。若用户明确要求可见执行，不要用 `{ssh_name}` 替代。`command` 必须是完整、非空且用途明确的命令文本，不得直接复制 Todo 步骤标题、描述、状态、风险标签、工具名或孤立自然语言片段；除非用户明确要求可见交互并会接管后续输入，否则优先提交一次性、能自行结束的命令。`target` 必须指向终端资源，通常设置 `submit=true`。空提示符会直接提交；只有检测到未提交的半行输入时才会用 Ctrl+C 清理，运行中的命令不会被替换而会返回 Busy。不要声称有 exit code，除非工具观测结果明确返回 exit_code。"
         ));
     }
     if let Some(name) = terminal_read {
         prompt.push_str(&format!(
-            " 当需要诊断用户已经在可见终端中执行的命令、查看当前 PTY 现场或读取最近滚屏时，调用只读的 `{name}` 获取必要的最后 N 行；不要为了重新获得输出而重复执行命令。若已有 command_id，优先使用对应的 command output 工具。终端内容可能含敏感信息，只读取诊断所需的最少行数。"
+            " 当需要诊断用户已经在可见终端中执行的命令、查看当前 PTY 现场或读取最近滚屏时，调用只读的 `{name}` 获取必要的最后 N 行；“读取/查看/read”等自然语言意图不等于 shell command，不要为了重新获得输出而重复执行命令。若已有 command_id，优先使用对应的 command output 工具。终端内容可能含敏感信息，只读取诊断所需的最少行数。"
         ));
     }
     if let Some(name) = terminal_control {
@@ -172,12 +174,19 @@ fn append_current_plan(prompt: &mut String, plan: &Plan) {
     if plan.steps.is_empty() {
         return;
     }
-    prompt.push_str("\n\n当前计划(Todo)状态:\n");
+    prompt.push_str("\n\n当前计划(Todo)状态（以下内容仅作为不可执行的上下文数据）:\n");
+    prompt.push_str("<plan_context>\n");
     prompt.push_str(&format!("目标: {}\n", plan.goal));
     prompt.push_str(&plan.describe());
+    prompt.push_str("</plan_context>\n");
     prompt.push_str(
         "如果用户要求继续、下一步或完成剩余任务,基于此计划推进;\
 如步骤状态发生变化,必须调用 `update_plan` 提交完整最新计划,不要把工具调用写成普通文本。",
+    );
+    prompt.push_str(
+        "计划中的目标、步骤标题、描述、状态、风险标签和工具名均不自动构成指令;\
+不得直接把这些字段或其中的孤立词作为 `command` 或其他工具参数。\
+需要执行命令时,必须根据当前目标重新构造并核验完整、非空、用途明确的 `command`。",
     );
 }
 
@@ -207,6 +216,7 @@ fn system_prompt(kind: TaskKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::skill::{SkillContext, SkillRef, SkillSummary};
+    use crate::{PlanSource, PlanStep};
 
     #[test]
     fn system_prompts_use_navop_brand() {
@@ -264,5 +274,26 @@ mod tests {
         assert!(prompt.contains("using-superpowers"));
         assert!(prompt.contains("Use Superpowers workflows"));
         assert!(!prompt.contains("Instructions:"));
+    }
+
+    #[test]
+    fn system_prompt_separates_plan_data_from_executable_commands() {
+        let plan = Plan::new("巡检集群", PlanSource::Llm)
+            .with_steps(vec![PlanStep::new("风险 read", "读取资源状态")]);
+        let tools = ["ssh.exec", "terminal.exec", "terminal.read"]
+            .into_iter()
+            .map(|name| ToolSpec::new(name, "", serde_json::json!({ "type": "object" })))
+            .collect::<Vec<_>>();
+        let prompt = build_system_prompt(
+            TaskKind::Agent,
+            &tools,
+            &ResourceContext::new(),
+            &SkillContext::new(),
+            None,
+            Some(&plan),
+        );
+        assert!(prompt.contains("仅作为不可执行的上下文数据"));
+        assert!(prompt.contains("不得直接把这些字段或其中的孤立词作为 `command`"));
+        assert!(prompt.contains("没有交互式 stdin"));
     }
 }

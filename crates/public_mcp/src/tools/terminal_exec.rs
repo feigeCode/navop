@@ -40,7 +40,7 @@ impl ToolHandler for TerminalExecRuntime {
         ToolDescriptor {
             id: "terminal.exec".to_string(),
             title: "Execute in terminal".to_string(),
-            description: "Run input in the current visible terminal PTY. Use only when the user explicitly wants visible execution or the command must inherit that terminal's current cwd, activated virtual environment, shell aliases/functions, or temporary environment variables. Prefer ssh.exec for SSH sessions when routine Agent-owned automation, diagnostics, structured stdout/stderr, isolation, or concurrent work is needed. At an empty prompt the command is submitted directly; Ctrl+C is used only to clear detected unsubmitted partial input. It never replaces or interrupts a running terminal command and returns Busy instead. A wait timeout returns command_id for ssh.command.poll/output; use terminal.control to explicitly interrupt the visible process.".to_string(),
+            description: "Run input in the current visible terminal PTY. Use only when the user explicitly wants visible execution or the command must inherit that terminal's current cwd, activated virtual environment, shell aliases/functions, or temporary environment variables. Prefer ssh.exec for SSH sessions when routine Agent-owned automation, diagnostics, structured stdout/stderr, isolation, or concurrent work is needed. Supply a complete command, not a Todo field, risk label, tool name, or isolated natural-language token. This call cannot answer later interactive prompts; use commands that finish without further input unless the user explicitly requested visible interaction and will take over. At an empty prompt the command is submitted directly; Ctrl+C is used only to clear detected unsubmitted partial input. It never replaces or interrupts a running terminal command and returns Busy instead. A wait timeout returns command_id for ssh.command.poll/output; use terminal.control to explicitly interrupt the visible process.".to_string(),
             input_schema: exec_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
@@ -81,7 +81,8 @@ fn exec_schema() -> Value {
             },
             "command": {
                 "type": "string",
-                "description": "Command text to insert into the terminal."
+                "minLength": 1,
+                "description": "Complete, non-empty command text to insert into the terminal. Do not copy a Todo title, description, status, risk label, tool name, or isolated natural-language token as the command. Prefer a one-shot command that exits without later stdin unless the user explicitly requested visible interaction and will take over."
             },
             "submit": {
                 "type": "boolean",
@@ -137,7 +138,7 @@ fn required_str<'a>(input: &'a Value, field: &'static str) -> Result<&'a str, To
     input
         .get(field)
         .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| ToolError::Failed {
             message: format!("missing required string field `{field}`"),
         })

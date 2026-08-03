@@ -156,8 +156,23 @@ fn ssh_exec_schema_uses_terminal_target_input() {
         "string",
         exec.input_schema["properties"]["session_id"]["type"]
     );
+    assert_eq!(
+        json!(1),
+        exec.input_schema["properties"]["command"]["minLength"]
+    );
+    assert_eq!(
+        json!("foreground"),
+        exec.input_schema["properties"]["mode"]["default"]
+    );
+    assert!(
+        exec.input_schema["properties"]["command"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stdin is closed")
+    );
     assert!(exec.description.contains("default choice"));
     assert!(exec.description.contains("isolated SSH channel"));
+    assert!(exec.description.contains("no interactive stdin"));
     assert!(exec.description.contains("does not inherit"));
     assert!(exec.description.contains("terminal.exec"));
 }
@@ -248,6 +263,22 @@ fn ssh_exec_accepts_target_argument() {
             .unwrap_or_default()
             .contains("ran pwd")
     );
+}
+
+#[test]
+fn ssh_exec_rejects_whitespace_only_command() {
+    let runtime_registry = remote_ops_tool_registry(registry_with_session());
+    let error = futures::executor::block_on(runtime_registry.call(
+        "ssh.exec",
+        json!({
+            "target": "ssh-1",
+            "command": " \t "
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect_err("ssh.exec should reject a whitespace-only command");
+
+    assert!(error.to_string().contains("non-whitespace shell command"));
 }
 
 #[test]

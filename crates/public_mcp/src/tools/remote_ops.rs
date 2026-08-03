@@ -255,7 +255,7 @@ fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.exec",
         title: "Execute remote command",
-        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It does not inherit the current visible terminal's cwd, activated virtual environment, shell aliases/functions, or temporary environment variables unless cwd/env/command setup is supplied explicitly. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel. Use sftp.read/write for file contents.",
+        description: "The default choice for Agent-owned remote automation, diagnostics, builds, and non-interactive checks. Runs on an isolated SSH channel with structured stdout, stderr, and exit_code, so it can execute without occupying the user's visible terminal. It has no interactive stdin: stdin is closed after launch. Supply a complete, self-contained command that does not wait for confirmation, passwords, pagers, editors, REPL input, or other TTY input. Use foreground for bounded commands expected to exit, and background only for intentionally long-running non-interactive work. It does not inherit the current visible terminal's cwd, activated virtual environment, shell aliases/functions, or temporary environment variables unless cwd/env/command setup is supplied explicitly. Use terminal.exec instead only when the command must run in the current visible terminal or inherit that live shell state. Output is incremental; a foreground wait timeout returns command_id for ssh.command.poll/output/cancel and does not prove completion. Use sftp.read/write for file contents.",
         schema: exec_schema_value,
         read_only: false,
         open_world: true,
@@ -317,7 +317,14 @@ fn exec_schema() -> Arc<JsonObject> {
             "description": "Exact `id` of an active terminal resource with the `remote_exec` capability. Call `connections.list_sessions` with capability=\"remote_exec\" and copy an `id` from the result. Do not invent or reuse a stale session id."
         }),
     );
-    props.insert("command".to_string(), string_schema());
+    props.insert(
+        "command".to_string(),
+        json!({
+            "type": "string",
+            "minLength": 1,
+            "description": "Complete, non-empty remote shell command to run without interactive input. Do not copy a Todo title, description, status, risk label, tool name, or isolated natural-language token as the command. stdin is closed after launch, so the command must not wait for user or TTY input and should exit on its own unless mode=background is intentionally selected."
+        }),
+    );
     props.insert("connection".to_string(), string_schema());
     props.insert("connection_id".to_string(), string_schema());
     props.insert("session_id".to_string(), string_schema());
@@ -332,7 +339,12 @@ fn exec_schema() -> Arc<JsonObject> {
     );
     props.insert(
         "mode".to_string(),
-        json!({ "type": "string", "enum": ["foreground", "background"] }),
+        json!({
+            "type": "string",
+            "enum": ["foreground", "background"],
+            "default": "foreground",
+            "description": "Use foreground for bounded commands expected to finish. Use background only for intentionally long-running non-interactive work, then track it with ssh.command.poll/output."
+        }),
     );
     let mut schema = JsonObject::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
@@ -410,7 +422,14 @@ fn parse_exec_args(
     arguments: Option<&JsonObject>,
 ) -> Result<(String, RemoteExecRequest), McpError> {
     let session_id = required_target(arguments)?.to_string();
-    let command = required_string(arguments, "command")?.to_string();
+    let command = required_string(arguments, "command")?;
+    if command.trim().is_empty() {
+        return Err(McpError::invalid_params(
+            "command must contain a non-whitespace shell command",
+            None,
+        ));
+    }
+    let command = command.to_string();
     let cwd = optional_string(arguments, "cwd").map(str::to_string);
     let env = optional_string_map(arguments, "env").unwrap_or_default();
     let timeout_ms = optional_u64(arguments, "timeout_ms");

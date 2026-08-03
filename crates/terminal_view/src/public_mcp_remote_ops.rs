@@ -331,11 +331,32 @@ async fn run_exec_with_cancel(
     entry: &CommandEntry,
 ) -> Result<(RemoteCommandStatus, Option<i32>)> {
     let mut channel = session_manager.open_channel().await?;
+    run_exec_channel_with_cancel(
+        &mut channel,
+        command,
+        env,
+        hard_timeout_ms,
+        cancel_rx,
+        entry,
+    )
+    .await
+}
 
+async fn run_exec_channel_with_cancel<C: SshChannel + ?Sized>(
+    channel: &mut C,
+    command: &str,
+    env: &BTreeMap<String, String>,
+    hard_timeout_ms: Option<u64>,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    entry: &CommandEntry,
+) -> Result<(RemoteCommandStatus, Option<i32>)> {
     for (key, value) in env {
         let _ = channel.set_env(key, value).await;
     }
     channel.exec(command).await?;
+    // `ssh.exec` 不提供 stdin。命令启动后立即发送 EOF，避免 `read`、`cat`
+    // 等从终端读取输入的命令无限等待，同时仍继续接收 stdout/stderr。
+    channel.eof().await?;
 
     let mut exit_code: Option<i32> = None;
     let mut cancelled = false;
@@ -349,8 +370,6 @@ async fn run_exec_with_cancel(
             cancelled_flag = cancel_rx.changed() => {
                 if cancelled_flag.is_ok() && *cancel_rx.borrow() {
                     cancelled = true;
-                    let _ = channel.eof().await;
-                    let _ = channel.close().await;
                     break;
                 }
             }
@@ -362,8 +381,6 @@ async fn run_exec_with_cancel(
                 }
             }, if exit_code.is_none() => {
                 timed_out = true;
-                let _ = channel.eof().await;
-                let _ = channel.close().await;
                 break;
             }
             event = channel.recv() => {
@@ -396,7 +413,6 @@ async fn run_exec_with_cancel(
         }
     }
 
-    let _ = channel.eof().await;
     let _ = channel.close().await;
 
     let status = if cancelled {
@@ -455,6 +471,68 @@ fn shell_quote(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use ssh::PtyConfig;
+    use std::collections::VecDeque;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum ChannelOp {
+        SetEnv(String, String),
+        Exec(String),
+        Recv,
+        Eof,
+        Close,
+    }
+
+    struct FakeSshChannel {
+        ops: Vec<ChannelOp>,
+        events: VecDeque<ChannelEvent>,
+    }
+
+    #[async_trait]
+    impl SshChannel for FakeSshChannel {
+        async fn request_pty(&mut self, _config: &PtyConfig) -> Result<()> {
+            Ok(())
+        }
+
+        async fn exec(&mut self, command: &str) -> Result<()> {
+            self.ops.push(ChannelOp::Exec(command.to_string()));
+            Ok(())
+        }
+
+        async fn request_shell(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn set_env(&mut self, name: &str, value: &str) -> Result<()> {
+            self.ops
+                .push(ChannelOp::SetEnv(name.to_string(), value.to_string()));
+            Ok(())
+        }
+
+        async fn send_data(&mut self, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn resize_pty(&mut self, _width: u32, _height: u32) -> Result<()> {
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Option<ChannelEvent> {
+            self.ops.push(ChannelOp::Recv);
+            self.events.pop_front()
+        }
+
+        async fn eof(&mut self) -> Result<()> {
+            self.ops.push(ChannelOp::Eof);
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            self.ops.push(ChannelOp::Close);
+            Ok(())
+        }
+    }
 
     #[test]
     fn merged_env_allows_caller_override() {
@@ -514,5 +592,60 @@ mod tests {
         assert_eq!(Some(id), result.command_id);
         assert!(result.timed_out);
         assert_eq!("first\n", result.stdout);
+    }
+
+    #[tokio::test]
+    async fn structured_ssh_exec_closes_stdin_before_waiting_for_output() {
+        let store = RemoteCommandStore::default();
+        let (id, entry) = store.register_observed("ssh-1", "read value");
+        let (_cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        let mut channel = FakeSshChannel {
+            ops: Vec::new(),
+            events: VecDeque::from([
+                ChannelEvent::Data(b"done\n".to_vec()),
+                ChannelEvent::ExitStatus(0),
+                ChannelEvent::Eof,
+            ]),
+        };
+
+        let result = run_exec_channel_with_cancel(
+            &mut channel,
+            "read value",
+            &BTreeMap::new(),
+            None,
+            &mut cancel_rx,
+            &entry,
+        )
+        .await
+        .expect("structured ssh exec should complete");
+
+        assert_eq!(
+            (RemoteCommandStatus::Exited, Some(0)),
+            result,
+            "发送 stdin EOF 后仍应收集命令退出状态"
+        );
+        assert_eq!(
+            [
+                ChannelOp::Exec("read value".to_string()),
+                ChannelOp::Eof,
+                ChannelOp::Recv,
+                ChannelOp::Recv,
+                ChannelOp::Recv,
+                ChannelOp::Close,
+            ],
+            channel.ops.as_slice(),
+            "必须在第一次等待远端事件前关闭 stdin"
+        );
+
+        let output = store
+            .output(&RemoteCommandOutputRequest {
+                command_id: id,
+                stdout_offset: 0,
+                stderr_offset: 0,
+                limit_bytes: None,
+            })
+            .expect("command output should be available");
+        assert_eq!("done\n", output.stdout);
+        assert!(output.stderr.is_empty());
     }
 }

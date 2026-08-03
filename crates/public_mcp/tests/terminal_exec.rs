@@ -155,6 +155,10 @@ fn terminal_exec_descriptor_uses_target_and_command_schema() {
     );
     assert_eq!("string", tool.input_schema["properties"]["command"]["type"]);
     assert_eq!(
+        json!(1),
+        tool.input_schema["properties"]["command"]["minLength"]
+    );
+    assert_eq!(
         json!(0),
         tool.input_schema["properties"]["ready_timeout_ms"]["default"]
     );
@@ -239,6 +243,25 @@ fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
             .as_u64()
             .is_some()
     );
+}
+
+#[test]
+fn terminal_exec_rejects_whitespace_only_command() {
+    let (registry, terminal) = registry_with_terminal();
+    let runtime_registry = terminal_exec_tool_registry(registry);
+    let error = futures::executor::block_on(runtime_registry.call(
+        "terminal.exec",
+        json!({
+            "target": "terminal-1",
+            "command": " \t ",
+            "submit": true
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect_err("terminal.exec should reject a whitespace-only command");
+
+    assert!(error.to_string().contains("missing required string field"));
+    assert!(terminal.inserted().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
