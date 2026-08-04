@@ -10,8 +10,11 @@ pub(super) fn render_shortcuts(cx: &gpui::App) -> impl IntoElement {
         .w_full()
         .justify_center()
         .flex_wrap()
-        .gap_4()
-        .pt_1()
+        .gap_5()
+        .mt_6()
+        .pt_4()
+        .border_t_1()
+        .border_color(cx.theme().border)
         .children([
             shortcut_hint(
                 "HOME_QUICK_OPEN",
@@ -58,7 +61,7 @@ fn shortcut_badge(shortcut: String, cx: &gpui::App) -> impl IntoElement {
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
+        .bg(cx.theme().background)
         .text_color(cx.theme().foreground)
         .child(shortcut)
 }

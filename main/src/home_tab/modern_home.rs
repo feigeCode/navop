@@ -14,6 +14,9 @@ use super::{HomePage, modern_home_shortcuts::render_shortcuts};
 use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::connection_import_window::show_connection_import_window;
 
+const START_CENTER_MAX_WIDTH: gpui::Pixels = px(840.0);
+const START_CENTER_CARD_MIN_WIDTH: gpui::Pixels = px(320.0);
+
 impl HomePage {
     pub(super) fn render_modern_home(
         &self,
@@ -44,25 +47,36 @@ impl HomePage {
                     .child(
                         v_flex()
                             .w_full()
-                            .max_w(px(760.0))
-                            .gap_6()
-                            .child(render_brand(cx))
-                            .child(self.render_primary_actions(view, window, cx))
-                            .child(render_account_actions(
-                                syncing, sync_view, key_view, window, cx,
-                            ))
-                            .when_some(
-                                self.render_recent_connections(window, cx),
-                                |this, recent| this.child(recent),
+                            .max_w(START_CENTER_MAX_WIDTH)
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_4()
+                                    .child(render_brand(cx))
+                                    .child(self.render_primary_actions(view, window, cx))
+                                    .child(render_account_actions(
+                                        syncing, sync_view, key_view, window, cx,
+                                    )),
                             )
-                            .child(render_tool_cards(
-                                import_view,
-                                notes_view,
-                                ai_view,
-                                extensions_view,
-                                window,
-                                cx,
-                            ))
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .gap_5()
+                                    .pt_8()
+                                    .when_some(
+                                        self.render_recent_connections(window, cx),
+                                        |this, recent| this.child(recent),
+                                    )
+                                    .child(render_tool_cards(
+                                        import_view,
+                                        notes_view,
+                                        ai_view,
+                                        extensions_view,
+                                        window,
+                                        cx,
+                                    )),
+                            )
                             .child(render_shortcuts(cx)),
                     ),
             )
@@ -73,17 +87,17 @@ impl HomePage {
 fn render_brand(cx: &gpui::App) -> impl IntoElement {
     v_flex()
         .items_center()
-        .gap_1()
+        .gap_2()
         .child(
             div()
-                .text_xl()
+                .text_2xl()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(cx.theme().foreground)
                 .child("Navop"),
         )
         .child(
             div()
-                .text_xs()
+                .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(t!("Home.StartCenter.subtitle")),
         )
@@ -193,14 +207,24 @@ impl HomePage {
 
         let cards: Vec<AnyElement> = recent
             .into_iter()
-            .map(|conn| self.render_recent_connection_card(conn, window, cx))
+            .map(|conn| {
+                start_center_card_slot(self.render_recent_connection_card(conn, window, cx))
+            })
             .collect();
         Some(
             v_flex()
                 .w_full()
-                .gap_2()
+                .gap_3()
                 .child(section_title(t!("Home.StartCenter.recent"), cx))
-                .child(div().grid().grid_cols(2).gap_3().children(cards)),
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .children(cards),
+                ),
         )
     }
 
@@ -215,6 +239,8 @@ impl HomePage {
         let type_label = conn.connection_type.label().to_string();
         let connection_id = conn.id;
         let open_connection = conn.clone();
+        let hover_border = cx.theme().list_active_border;
+        let hover_background = cx.theme().muted;
         h_flex()
             .id(SharedString::from(format!(
                 "recent-conn-{}",
@@ -230,7 +256,12 @@ impl HomePage {
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .cursor_pointer()
-            .hover(|style| style.bg(cx.theme().muted))
+            .hover(move |style| {
+                style
+                    .bg(hover_background)
+                    .border_color(hover_border)
+                    .shadow_sm()
+            })
             .on_double_click(
                 window.listener_for(&cx.entity(), move |home, _, window, cx| {
                     home.open_connection_from_quick(&open_connection, window, cx);
@@ -275,14 +306,16 @@ fn render_tool_cards(
 ) -> impl IntoElement {
     v_flex()
         .w_full()
-        .gap_2()
+        .gap_3()
         .child(section_title(t!("Home.StartCenter.tools"), cx))
         .child(
             div()
-                .grid()
-                .grid_cols(2)
+                .flex()
+                .flex_wrap()
+                .w_full()
+                .min_w_0()
                 .gap_3()
-                .child(tool_card(
+                .child(start_center_card_slot(tool_card(
                     "modern-home-import",
                     IconName::Upload,
                     t!("Home.other_app_import").to_string(),
@@ -293,8 +326,8 @@ fn render_tool_cards(
                         show_connection_import_window(cx.entity(), window.window_handle(), cx);
                     },
                     cx,
-                ))
-                .child(tool_card(
+                )))
+                .child(start_center_card_slot(tool_card(
                     "modern-home-notes",
                     IconName::BookOpen,
                     t!("Home.notes").to_string(),
@@ -305,8 +338,8 @@ fn render_tool_cards(
                         home.add_notes_tab(window, cx);
                     },
                     cx,
-                ))
-                .child(tool_card(
+                )))
+                .child(start_center_card_slot(tool_card(
                     "modern-home-ai",
                     IconName::Bot,
                     t!("Settings.General.Startup.default_page_ai_workbench").to_string(),
@@ -317,8 +350,8 @@ fn render_tool_cards(
                         home.add_ai_workbench_tab(window, cx);
                     },
                     cx,
-                ))
-                .child(tool_card(
+                )))
+                .child(start_center_card_slot(tool_card(
                     "modern-home-extensions",
                     IconName::Apps,
                     t!("Home.extensions").to_string(),
@@ -329,7 +362,7 @@ fn render_tool_cards(
                         home.add_extensions_tab(window, cx);
                     },
                     cx,
-                )),
+                ))),
         )
 }
 
@@ -345,10 +378,11 @@ fn tool_card(
 ) -> impl IntoElement {
     h_flex()
         .id(id)
-        .min_h(px(84.0))
+        .min_h(px(72.0))
         .items_center()
         .gap_3()
-        .p_4()
+        .px_4()
+        .py_3()
         .rounded_lg()
         .border_1()
         .border_color(cx.theme().border)
@@ -358,7 +392,18 @@ fn tool_card(
         .on_click(window.listener_for(&view, move |home, _, window, cx| {
             on_click(home, window, cx);
         }))
-        .child(Icon::new(icon).with_size(IconSize::Medium))
+        .child(
+            div()
+                .flex_none()
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .text_color(cx.theme().secondary_foreground)
+                .child(Icon::new(icon).with_size(IconSize::Small)),
+        )
         .child(
             v_flex()
                 .min_w_0()
@@ -373,10 +418,19 @@ fn tool_card(
         )
 }
 
+fn start_center_card_slot(child: impl IntoElement) -> AnyElement {
+    div()
+        .min_w(START_CENTER_CARD_MIN_WIDTH)
+        .flex_basis(START_CENTER_CARD_MIN_WIDTH)
+        .flex_grow(1.0)
+        .child(child)
+        .into_any_element()
+}
+
 fn section_title(title: impl IntoElement, cx: &gpui::App) -> impl IntoElement {
     div()
-        .text_xs()
+        .text_sm()
         .font_semibold()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(cx.theme().foreground)
         .child(title)
 }
