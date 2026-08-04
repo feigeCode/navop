@@ -276,10 +276,55 @@ pub struct ViewInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     pub return_type: Option<String>,
     pub parameters: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_arguments: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
     pub definition: Option<String>,
     pub comment: Option<String>,
+}
+
+pub const ROUTINE_NAME_METADATA_KEY: &str = "routine_name";
+pub const ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY: &str = "routine_identity_arguments";
+pub const ROUTINE_OBJECT_ID_METADATA_KEY: &str = "routine_object_id";
+
+/// A database routine identity that is sufficient to select overloaded routines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineIdentity {
+    pub database: String,
+    pub schema: Option<String>,
+    pub name: String,
+    pub identity_arguments: Option<String>,
+    pub object_id: Option<String>,
+}
+
+impl RoutineIdentity {
+    pub fn from_node(node: &DbNode) -> Option<Self> {
+        let database = node.get_database_name()?;
+        let schema = node
+            .get_schema_name()
+            .filter(|schema| !schema.trim().is_empty());
+        let name = node
+            .metadata
+            .get(ROUTINE_NAME_METADATA_KEY)
+            .cloned()
+            .unwrap_or_else(|| node.name.clone());
+
+        Some(Self {
+            database,
+            schema,
+            name,
+            identity_arguments: node
+                .metadata
+                .get(ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY)
+                .cloned(),
+            object_id: node.metadata.get(ROUTINE_OBJECT_ID_METADATA_KEY).cloned(),
+        })
+    }
 }
 
 /// Trigger information

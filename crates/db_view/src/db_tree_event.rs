@@ -11,7 +11,7 @@ use crate::{
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
 };
-use db::{DbNode, DbNodeType, GlobalDbState, SqlResult, schema_for_new_query};
+use db::{DbNode, DbNodeType, GlobalDbState, RoutineIdentity, SqlResult, schema_for_new_query};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, ParentElement, PathPromptOptions, Styled,
     Subscription, Window, div, px,
@@ -156,54 +156,6 @@ impl DatabaseEventHandler {
 
     fn function_tab_id(node: &DbNode) -> String {
         format!("function-{}", node.id)
-    }
-
-    fn build_mysql_function_edit_script(function_reference: &str, create_sql: &str) -> String {
-        let create_sql = create_sql.trim();
-        let create_sql = create_sql
-            .strip_suffix(';')
-            .unwrap_or(create_sql)
-            .trim_end();
-
-        format!(
-            concat!(
-                "-- Running this script replaces the existing function.\n",
-                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
-                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
-                "DROP FUNCTION IF EXISTS {function_reference};\n\n",
-                "DELIMITER $$\n",
-                "{create_sql}$$\n",
-                "DELIMITER ;\n\n",
-                "-- Add arguments as needed before running:\n",
-                "-- SELECT {function_reference}();\n"
-            ),
-            function_reference = function_reference,
-            create_sql = create_sql,
-        )
-    }
-
-    fn build_mysql_procedure_edit_script(procedure_reference: &str, create_sql: &str) -> String {
-        let create_sql = create_sql.trim();
-        let create_sql = create_sql
-            .strip_suffix(';')
-            .unwrap_or(create_sql)
-            .trim_end();
-
-        format!(
-            concat!(
-                "-- Running this script replaces the existing procedure.\n",
-                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
-                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
-                "DROP PROCEDURE IF EXISTS {procedure_reference};\n\n",
-                "DELIMITER $$\n",
-                "{create_sql}$$\n",
-                "DELIMITER ;\n\n",
-                "-- Add arguments as needed before running:\n",
-                "-- CALL {procedure_reference}();\n"
-            ),
-            procedure_reference = procedure_reference,
-            create_sql = create_sql,
-        )
     }
 
     fn named_query_title(
@@ -1339,45 +1291,24 @@ impl DatabaseEventHandler {
     ) {
         let connection_id = node.connection_id.clone();
         let function = node.name.clone();
-        let Some(database) = node.get_database_name() else {
+        let Some(routine) = RoutineIdentity::from_node(&node) else {
             Self::show_error(window, t!("Common.error_info").to_string(), cx);
             return;
         };
-        let schema = node.get_schema_name();
+        let database = routine.database.clone();
+        let schema = routine.schema.clone();
         let database_type = node.database_type.clone();
         let tab_id = Self::function_tab_id(&node);
         let tab_metadata = Self::tab_metadata_for_node(&node, TAB_KIND_FUNCTION);
-        let function_reference = match global_state.db_manager.get_plugin(&database_type) {
-            Ok(plugin) => format!(
-                "{}.{}",
-                plugin.quote_identifier(&database),
-                plugin.quote_identifier(&function)
-            ),
-            Err(error) => {
-                Self::show_error(
-                    window,
-                    t!("DbTreeEvent.load_function_failed", error = error).to_string(),
-                    cx,
-                );
-                return;
-            }
-        };
         let window_id = cx.active_window();
 
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let definition = global_state
-                .get_function_definition(
-                    cx,
-                    connection_id.clone(),
-                    database.clone(),
-                    function.clone(),
-                )
+            let edit_script = global_state
+                .get_function_edit_script(cx, connection_id.clone(), routine)
                 .await;
 
-            match definition {
-                Ok(create_sql) => {
-                    let script =
-                        Self::build_mysql_function_edit_script(&function_reference, &create_sql);
+            match edit_script {
+                Ok(script) => {
                     let Some(window_id) = window_id else {
                         return;
                     };
@@ -1448,45 +1379,24 @@ impl DatabaseEventHandler {
     ) {
         let connection_id = node.connection_id.clone();
         let procedure = node.name.clone();
-        let Some(database) = node.get_database_name() else {
+        let Some(routine) = RoutineIdentity::from_node(&node) else {
             Self::show_error(window, t!("Common.error_info").to_string(), cx);
             return;
         };
-        let schema = node.get_schema_name();
+        let database = routine.database.clone();
+        let schema = routine.schema.clone();
         let database_type = node.database_type.clone();
         let tab_id = Self::procedure_tab_id(&node);
         let tab_metadata = Self::tab_metadata_for_node(&node, TAB_KIND_PROCEDURE);
-        let procedure_reference = match global_state.db_manager.get_plugin(&database_type) {
-            Ok(plugin) => format!(
-                "{}.{}",
-                plugin.quote_identifier(&database),
-                plugin.quote_identifier(&procedure)
-            ),
-            Err(error) => {
-                Self::show_error(
-                    window,
-                    t!("DbTreeEvent.load_procedure_failed", error = error).to_string(),
-                    cx,
-                );
-                return;
-            }
-        };
         let window_id = cx.active_window();
 
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let definition = global_state
-                .get_procedure_definition(
-                    cx,
-                    connection_id.clone(),
-                    database.clone(),
-                    procedure.clone(),
-                )
+            let edit_script = global_state
+                .get_procedure_edit_script(cx, connection_id.clone(), routine)
                 .await;
 
-            match definition {
-                Ok(create_sql) => {
-                    let script =
-                        Self::build_mysql_procedure_edit_script(&procedure_reference, &create_sql);
+            match edit_script {
+                Ok(script) => {
                     let Some(window_id) = window_id else {
                         return;
                     };
@@ -4626,42 +4536,6 @@ mod tests {
             DatabaseEventHandler::function_tab_id(&primary),
             DatabaseEventHandler::function_tab_id(&secondary)
         );
-    }
-
-    #[test]
-    fn mysql_function_edit_script_replaces_existing_definition() {
-        let script = DatabaseEventHandler::build_mysql_function_edit_script(
-            "`app``db`.`calculate``total`",
-            "CREATE DEFINER=`root`@`%` FUNCTION `calculate``total`(amount INT) RETURNS INT\nDETERMINISTIC\nBEGIN\n    RETURN amount + 1;\nEND;",
-        );
-
-        assert!(script.contains("DROP FUNCTION IF EXISTS `app``db`.`calculate``total`;"));
-        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
-        assert!(script.contains("RETURN amount + 1;\nEND$$"));
-        assert!(script.contains("\nDELIMITER ;\n"));
-        assert!(script.contains("-- Add arguments as needed before running:"));
-        assert!(script.contains("-- SELECT `app``db`.`calculate``total`();"));
-        assert!(script.contains("non-atomic"));
-        assert!(script.contains("original DEFINER"));
-        assert!(script.ends_with('\n'));
-    }
-
-    #[test]
-    fn mysql_procedure_edit_script_replaces_existing_definition() {
-        let script = DatabaseEventHandler::build_mysql_procedure_edit_script(
-            "`app``db`.`sync``orders`",
-            "CREATE DEFINER=`root`@`%` PROCEDURE `sync``orders`()\nBEGIN\n    SELECT 1;\nEND;",
-        );
-
-        assert!(script.contains("DROP PROCEDURE IF EXISTS `app``db`.`sync``orders`;"));
-        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
-        assert!(script.contains("SELECT 1;\nEND$$"));
-        assert!(script.contains("\nDELIMITER ;\n"));
-        assert!(script.contains("-- Add arguments as needed before running:"));
-        assert!(script.contains("-- CALL `app``db`.`sync``orders`();"));
-        assert!(script.contains("non-atomic"));
-        assert!(script.contains("original DEFINER"));
-        assert!(script.ends_with('\n'));
     }
 
     #[test]

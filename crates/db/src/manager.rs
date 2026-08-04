@@ -2415,6 +2415,19 @@ impl GlobalDbState {
         })
     }
 
+    /// Load a stored function's database-specific edit script.
+    pub async fn get_function_edit_script(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        routine: crate::types::RoutineIdentity,
+    ) -> anyhow::Result<String> {
+        let database = routine.database.clone();
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin.get_function_edit_script(&*conn, &routine).await
+        })
+    }
+
     /// List procedures view
     pub async fn list_procedures_view(
         &self,
@@ -2439,6 +2452,19 @@ impl GlobalDbState {
             plugin
                 .get_procedure_definition(&*conn, &database, &procedure)
                 .await
+        })
+    }
+
+    /// Load a stored procedure's database-specific edit script.
+    pub async fn get_procedure_edit_script(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        routine: crate::types::RoutineIdentity,
+    ) -> anyhow::Result<String> {
+        let database = routine.database.clone();
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin.get_procedure_edit_script(&*conn, &routine).await
         })
     }
 
@@ -2554,12 +2580,14 @@ impl GlobalDbState {
                         .await
                         .ok(),
                     DbNodeType::ViewsFolder => plugin.list_views_view(&*conn, &database).await.ok(),
-                    DbNodeType::FunctionsFolder => {
-                        plugin.list_functions_view(&*conn, &database).await.ok()
-                    }
-                    DbNodeType::ProceduresFolder => {
-                        plugin.list_procedures_view(&*conn, &database).await.ok()
-                    }
+                    DbNodeType::FunctionsFolder => plugin
+                        .list_functions_view_in_schema(&*conn, &database, schema)
+                        .await
+                        .ok(),
+                    DbNodeType::ProceduresFolder => plugin
+                        .list_procedures_view_in_schema(&*conn, &database, schema)
+                        .await
+                        .ok(),
                     DbNodeType::TriggersFolder => {
                         plugin.list_triggers_view(&*conn, &database).await.ok()
                     }

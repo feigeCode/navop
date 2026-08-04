@@ -469,6 +469,20 @@ fn manifest_plugin(
     ManifestDatabaseViewPlugin::new(database_type, plugin.as_ref())
 }
 
+pub(crate) fn supports_database_action_for(
+    database_type: DatabaseType,
+    node_type: DbNodeType,
+    action_id: DatabaseActionId,
+    cx: &impl AppContext,
+) -> bool {
+    manifest_plugin(database_type, cx)
+        .manifest
+        .actions
+        .actions
+        .iter()
+        .any(|action| action.id == action_id && matches_node_type(action, node_type))
+}
+
 fn action_to_context_menu_item(
     action: &DatabaseActionDescriptor,
     node_id: &str,

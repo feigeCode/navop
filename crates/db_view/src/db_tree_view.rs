@@ -30,7 +30,7 @@ use rust_i18n::t;
 use tracing::log::{error, info, trace, warn};
 
 // 3. 当前 crate 导入（按模块分组）
-use crate::database_view_plugin::build_context_menu_for;
+use crate::database_view_plugin::{build_context_menu_for, supports_database_action_for};
 use crate::extension_menu::{
     DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
@@ -41,6 +41,7 @@ use crate::search_shortcut::{
 use db::{
     DbNode, DbNodeType, GlobalDbState,
     ipc::{driver_icon_from_asset_path, driver_icon_from_file_path},
+    plugin_manifest::DatabaseActionId,
 };
 use gpui_component::label::Label;
 use gpui_component::menu::PopupMenu;
@@ -2142,22 +2143,36 @@ impl DbTreeView {
                     });
                 }
                 DbNodeType::Function => {
-                    info!(
-                        "DbTreeView: opening function editor: {}.{}",
-                        database, node.name
-                    );
-                    cx.emit(DbTreeViewEvent::OpenFunction {
-                        node_id: node.id.clone(),
-                    });
+                    if supports_database_action_for(
+                        node.database_type.clone(),
+                        node.node_type,
+                        DatabaseActionId::OpenFunction,
+                        cx,
+                    ) {
+                        info!(
+                            "DbTreeView: opening function editor: {}.{}",
+                            database, node.name
+                        );
+                        cx.emit(DbTreeViewEvent::OpenFunction {
+                            node_id: node.id.clone(),
+                        });
+                    }
                 }
                 DbNodeType::Procedure => {
-                    info!(
-                        "DbTreeView: opening procedure editor: {}.{}",
-                        database, node.name
-                    );
-                    cx.emit(DbTreeViewEvent::OpenProcedure {
-                        node_id: node.id.clone(),
-                    });
+                    if supports_database_action_for(
+                        node.database_type.clone(),
+                        node.node_type,
+                        DatabaseActionId::OpenProcedure,
+                        cx,
+                    ) {
+                        info!(
+                            "DbTreeView: opening procedure editor: {}.{}",
+                            database, node.name
+                        );
+                        cx.emit(DbTreeViewEvent::OpenProcedure {
+                            node_id: node.id.clone(),
+                        });
+                    }
                 }
                 DbNodeType::NamedQuery => {
                     // 打开命名查询

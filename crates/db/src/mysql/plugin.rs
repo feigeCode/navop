@@ -1808,8 +1808,11 @@ impl DatabasePlugin for MySqlPlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: row.get(1).and_then(|v| v.clone()),
                     parameters: Vec::new(),
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: None,
                 })
@@ -1873,6 +1876,39 @@ impl DatabasePlugin for MySqlPlugin {
                 "SHOW CREATE FUNCTION returned an unexpected result type"
             )),
         }
+    }
+
+    fn build_function_edit_script(
+        &self,
+        routine: &RoutineIdentity,
+        create_sql: &str,
+    ) -> Result<String> {
+        let function_reference = format!(
+            "{}.{}",
+            mysql_quote_identifier(&routine.database),
+            mysql_quote_identifier(&routine.name),
+        );
+        let create_sql = create_sql.trim();
+        let create_sql = create_sql
+            .strip_suffix(';')
+            .unwrap_or(create_sql)
+            .trim_end();
+
+        Ok(format!(
+            concat!(
+                "-- Running this script replaces the existing function.\n",
+                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
+                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
+                "DROP FUNCTION IF EXISTS {function_reference};\n\n",
+                "DELIMITER $$\n",
+                "{create_sql}$$\n",
+                "DELIMITER ;\n\n",
+                "-- Add arguments as needed before running:\n",
+                "-- SELECT {function_reference}();\n"
+            ),
+            function_reference = function_reference,
+            create_sql = create_sql,
+        ))
     }
 
     // === Procedure Operations ===
@@ -1973,8 +2009,11 @@ impl DatabasePlugin for MySqlPlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: None,
                     parameters: Vec::new(),
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: None,
                 })
@@ -2030,6 +2069,39 @@ impl DatabasePlugin for MySqlPlugin {
                 "SHOW CREATE PROCEDURE returned an unexpected result type"
             )),
         }
+    }
+
+    fn build_procedure_edit_script(
+        &self,
+        routine: &RoutineIdentity,
+        create_sql: &str,
+    ) -> Result<String> {
+        let procedure_reference = format!(
+            "{}.{}",
+            mysql_quote_identifier(&routine.database),
+            mysql_quote_identifier(&routine.name),
+        );
+        let create_sql = create_sql.trim();
+        let create_sql = create_sql
+            .strip_suffix(';')
+            .unwrap_or(create_sql)
+            .trim_end();
+
+        Ok(format!(
+            concat!(
+                "-- Running this script replaces the existing procedure.\n",
+                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
+                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
+                "DROP PROCEDURE IF EXISTS {procedure_reference};\n\n",
+                "DELIMITER $$\n",
+                "{create_sql}$$\n",
+                "DELIMITER ;\n\n",
+                "-- Add arguments as needed before running:\n",
+                "-- CALL {procedure_reference}();\n"
+            ),
+            procedure_reference = procedure_reference,
+            create_sql = create_sql,
+        ))
     }
 
     async fn list_triggers(
@@ -4490,6 +4562,34 @@ mod tests {
     }
 
     #[test]
+    fn function_edit_script_replaces_existing_definition() {
+        let plugin = create_plugin();
+        let routine = RoutineIdentity {
+            database: "app`db".to_string(),
+            schema: None,
+            name: "calculate`total".to_string(),
+            identity_arguments: None,
+            object_id: None,
+        };
+        let script = plugin
+            .build_function_edit_script(
+                &routine,
+                "CREATE DEFINER=`root`@`%` FUNCTION `calculate``total`(amount INT) RETURNS INT\nDETERMINISTIC\nBEGIN\n    RETURN amount + 1;\nEND;",
+            )
+            .unwrap();
+
+        assert!(script.contains("DROP FUNCTION IF EXISTS `app``db`.`calculate``total`;"));
+        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
+        assert!(script.contains("RETURN amount + 1;\nEND$$"));
+        assert!(script.contains("\nDELIMITER ;\n"));
+        assert!(script.contains("-- Add arguments as needed before running:"));
+        assert!(script.contains("-- SELECT `app``db`.`calculate``total`();"));
+        assert!(script.contains("non-atomic"));
+        assert!(script.contains("original DEFINER"));
+        assert!(script.ends_with('\n'));
+    }
+
+    #[test]
     fn procedure_definition_query_quotes_database_and_procedure_names() {
         assert_eq!(
             "SHOW CREATE PROCEDURE `app``db`.`sync``orders`",
@@ -4527,6 +4627,34 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("SHOW CREATE PROCEDURE"));
+    }
+
+    #[test]
+    fn procedure_edit_script_replaces_existing_definition() {
+        let plugin = create_plugin();
+        let routine = RoutineIdentity {
+            database: "app`db".to_string(),
+            schema: None,
+            name: "sync`orders".to_string(),
+            identity_arguments: None,
+            object_id: None,
+        };
+        let script = plugin
+            .build_procedure_edit_script(
+                &routine,
+                "CREATE DEFINER=`root`@`%` PROCEDURE `sync``orders`()\nBEGIN\n    SELECT 1;\nEND;",
+            )
+            .unwrap();
+
+        assert!(script.contains("DROP PROCEDURE IF EXISTS `app``db`.`sync``orders`;"));
+        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
+        assert!(script.contains("SELECT 1;\nEND$$"));
+        assert!(script.contains("\nDELIMITER ;\n"));
+        assert!(script.contains("-- Add arguments as needed before running:"));
+        assert!(script.contains("-- CALL `app``db`.`sync``orders`();"));
+        assert!(script.contains("non-atomic"));
+        assert!(script.contains("original DEFINER"));
+        assert!(script.ends_with('\n'));
     }
 
     // ==================== Data Types Tests ====================

@@ -181,6 +181,57 @@ impl SqlCompletionInfo {
     }
 }
 
+fn routine_node(
+    routine: FunctionInfo,
+    node_type: DbNodeType,
+    id_prefix: &str,
+    parent_id: &str,
+    connection_id: &str,
+    database_type: DatabaseType,
+    base_metadata: &HashMap<String, String>,
+) -> DbNode {
+    let display_name = match routine.identity_arguments.as_deref() {
+        Some(arguments) => format!("{}({})", routine.name, arguments),
+        None => routine.name.clone(),
+    };
+    let id_component = if let Some(object_id) = routine.object_id.as_deref() {
+        format!("{}#oid:{}", routine.name, object_id)
+    } else if let Some(arguments) = routine.identity_arguments.as_deref() {
+        format!("{}({})", routine.name, arguments)
+    } else {
+        routine.name.clone()
+    };
+
+    let mut metadata = base_metadata.clone();
+    if let Some(schema) = routine
+        .schema
+        .as_ref()
+        .filter(|schema| !schema.trim().is_empty())
+    {
+        metadata.insert("schema".to_string(), schema.clone());
+    }
+    metadata.insert(ROUTINE_NAME_METADATA_KEY.to_string(), routine.name);
+    if let Some(arguments) = routine.identity_arguments {
+        metadata.insert(
+            ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY.to_string(),
+            arguments,
+        );
+    }
+    if let Some(object_id) = routine.object_id {
+        metadata.insert(ROUTINE_OBJECT_ID_METADATA_KEY.to_string(), object_id);
+    }
+
+    DbNode::new(
+        format!("{}:{}", id_prefix, id_component),
+        display_name,
+        node_type,
+        connection_id.to_string(),
+        database_type,
+    )
+    .with_parent_context(parent_id)
+    .with_metadata(metadata)
+}
+
 /// Database plugin trait for supporting multiple database types
 #[async_trait]
 pub trait DatabasePlugin: Send + Sync {
@@ -492,11 +543,31 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<Vec<FunctionInfo>>;
 
+    async fn list_functions_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let _ = schema;
+        self.list_functions(connection, database).await
+    }
+
     async fn list_functions_view(
         &self,
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView>;
+
+    async fn list_functions_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let _ = schema;
+        self.list_functions_view(connection, database).await
+    }
 
     async fn get_function_definition(
         &self,
@@ -505,6 +576,34 @@ pub trait DatabasePlugin: Send + Sync {
         _function: &str,
     ) -> Result<String> {
         bail!("Function definition is not supported")
+    }
+
+    async fn get_function_definition_for_routine(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        self.get_function_definition(connection, &routine.database, &routine.name)
+            .await
+    }
+
+    fn build_function_edit_script(
+        &self,
+        _routine: &RoutineIdentity,
+        create_sql: &str,
+    ) -> Result<String> {
+        Ok(format!("{}\n", create_sql.trim()))
+    }
+
+    async fn get_function_edit_script(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        let definition = self
+            .get_function_definition_for_routine(connection, routine)
+            .await?;
+        self.build_function_edit_script(routine, &definition)
     }
 
     fn capabilities(&self) -> DatabaseCapabilities {
@@ -540,11 +639,31 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<Vec<FunctionInfo>>;
 
+    async fn list_procedures_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let _ = schema;
+        self.list_procedures(connection, database).await
+    }
+
     async fn list_procedures_view(
         &self,
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView>;
+
+    async fn list_procedures_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let _ = schema;
+        self.list_procedures_view(connection, database).await
+    }
 
     async fn get_procedure_definition(
         &self,
@@ -553,6 +672,34 @@ pub trait DatabasePlugin: Send + Sync {
         _procedure: &str,
     ) -> Result<String> {
         bail!("Procedure definition is not supported")
+    }
+
+    async fn get_procedure_definition_for_routine(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        self.get_procedure_definition(connection, &routine.database, &routine.name)
+            .await
+    }
+
+    fn build_procedure_edit_script(
+        &self,
+        _routine: &RoutineIdentity,
+        create_sql: &str,
+    ) -> Result<String> {
+        Ok(format!("{}\n", create_sql.trim()))
+    }
+
+    async fn get_procedure_edit_script(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        let definition = self
+            .get_procedure_definition_for_routine(connection, routine)
+            .await?;
+        self.build_procedure_edit_script(routine, &definition)
     }
 
     // === Trigger Operations ===
@@ -856,7 +1003,7 @@ pub trait DatabasePlugin: Send + Sync {
         // Functions folder
         if capabilities.supports_functions {
             let functions = self
-                .list_functions(connection, database)
+                .list_functions_in_schema(connection, database, schema.clone())
                 .await
                 .unwrap_or_default();
             let function_count = functions.len();
@@ -873,15 +1020,15 @@ pub trait DatabasePlugin: Send + Sync {
                 let children: Vec<DbNode> = functions
                     .into_iter()
                     .map(|func| {
-                        DbNode::new(
-                            format!("{}:functions_folder:{}", id, func.name),
-                            func.name.clone(),
+                        routine_node(
+                            func,
                             DbNodeType::Function,
-                            node.connection_id.clone(),
+                            &format!("{}:functions_folder", id),
+                            &format!("{}:functions_folder", id),
+                            &node.connection_id,
                             node.database_type.clone(),
+                            &metadata,
                         )
-                        .with_parent_context(format!("{}:functions_folder", id))
-                        .with_metadata(metadata.clone())
                     })
                     .collect();
                 functions_folder.set_children(children);
@@ -892,7 +1039,7 @@ pub trait DatabasePlugin: Send + Sync {
         // Procedures folder
         if capabilities.supports_procedures {
             let procedures = self
-                .list_procedures(connection, database)
+                .list_procedures_in_schema(connection, database, schema.clone())
                 .await
                 .unwrap_or_default();
             let procedure_count = procedures.len();
@@ -908,16 +1055,16 @@ pub trait DatabasePlugin: Send + Sync {
             if procedure_count > 0 {
                 let children: Vec<DbNode> = procedures
                     .into_iter()
-                    .map(|proc| {
-                        DbNode::new(
-                            format!("{}:procedures_folder:{}", id, proc.name),
-                            proc.name.clone(),
+                    .map(|procedure| {
+                        routine_node(
+                            procedure,
                             DbNodeType::Procedure,
-                            node.connection_id.clone(),
+                            &format!("{}:procedures_folder", id),
+                            &format!("{}:procedures_folder", id),
+                            &node.connection_id,
                             node.database_type.clone(),
+                            &metadata,
                         )
-                        .with_parent_context(format!("{}:procedures_folder", id))
-                        .with_metadata(metadata.clone())
                     })
                     .collect();
                 procedures_folder.set_children(children);
@@ -1116,41 +1263,41 @@ pub trait DatabasePlugin: Send + Sync {
             }
             DbNodeType::FunctionsFolder => {
                 let functions = self
-                    .list_functions(connection, database)
+                    .list_functions_in_schema(connection, database, schema.clone())
                     .await
                     .unwrap_or_default();
                 Ok(functions
                     .into_iter()
                     .map(|f| {
-                        DbNode::new(
-                            format!("{}:{}", id, f.name),
-                            f.name.clone(),
+                        routine_node(
+                            f,
                             DbNodeType::Function,
-                            node.connection_id.clone(),
+                            id,
+                            id,
+                            &node.connection_id,
                             node.database_type.clone(),
+                            &node.metadata,
                         )
-                        .with_parent_context(id)
-                        .with_metadata(node.metadata.clone())
                     })
                     .collect())
             }
             DbNodeType::ProceduresFolder => {
                 let procedures = self
-                    .list_procedures(connection, database)
+                    .list_procedures_in_schema(connection, database, schema.clone())
                     .await
                     .unwrap_or_default();
                 Ok(procedures
                     .into_iter()
                     .map(|p| {
-                        DbNode::new(
-                            format!("{}:{}", id, p.name),
-                            p.name.clone(),
+                        routine_node(
+                            p,
                             DbNodeType::Procedure,
-                            node.connection_id.clone(),
+                            id,
+                            id,
+                            &node.connection_id,
                             node.database_type.clone(),
+                            &node.metadata,
                         )
-                        .with_parent_context(id)
-                        .with_metadata(node.metadata.clone())
                     })
                     .collect())
             }

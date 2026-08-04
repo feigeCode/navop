@@ -3,7 +3,7 @@ use crate::database_table_columns::{
 };
 use crate::database_view_plugin::{
     ContextMenuEvent, ContextMenuItem, ToolbarButtonType, build_context_menu_for,
-    build_toolbar_buttons_for,
+    build_toolbar_buttons_for, supports_database_action_for,
 };
 use crate::db_tree_view::{DbTreeViewEvent, get_icon_for_node_type};
 use crate::extension_menu::{
@@ -13,7 +13,12 @@ use crate::extension_menu::{
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
 };
-use db::{DbNode, DbNodeType, GlobalDbState, ObjectView, ObjectViewColumn};
+use db::plugin_manifest::DatabaseActionId;
+use db::{
+    DbNode, DbNodeType, GlobalDbState, ObjectView, ObjectViewColumn,
+    ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY, ROUTINE_NAME_METADATA_KEY,
+    ROUTINE_OBJECT_ID_METADATA_KEY,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -403,20 +408,33 @@ impl DatabaseObjects {
         let Some(node) = self.build_node_for_row(row) else {
             return;
         };
+        let database_type = node.database_type.clone();
+        let node_type = node.node_type;
 
-        let Some(event) = Self::event_for_double_click_node(node) else {
+        let Some(event) = Self::event_for_double_click_node(node, |action_id| {
+            supports_database_action_for(database_type.clone(), node_type, action_id, cx)
+        }) else {
             return;
         };
 
         cx.emit(event);
     }
 
-    fn event_for_double_click_node(node: DbNode) -> Option<DatabaseObjectsEvent> {
+    fn event_for_double_click_node(
+        node: DbNode,
+        supports_action: impl Fn(DatabaseActionId) -> bool,
+    ) -> Option<DatabaseObjectsEvent> {
         Some(match node.node_type {
             DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
             DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
-            DbNodeType::Function => DatabaseObjectsEvent::OpenFunction { node },
-            DbNodeType::Procedure => DatabaseObjectsEvent::OpenProcedure { node },
+            DbNodeType::Function if supports_action(DatabaseActionId::OpenFunction) => {
+                DatabaseObjectsEvent::OpenFunction { node }
+            }
+            DbNodeType::Function => return None,
+            DbNodeType::Procedure if supports_action(DatabaseActionId::OpenProcedure) => {
+                DatabaseObjectsEvent::OpenProcedure { node }
+            }
+            DbNodeType::Procedure => return None,
             DbNodeType::NamedQuery => DatabaseObjectsEvent::OpenNamedQuery { node },
             DbNodeType::Database | DbNodeType::Schema => {
                 DatabaseObjectsEvent::AddDatabaseToTree { node }
@@ -625,15 +643,22 @@ impl DatabaseObjects {
         let original_row = self.filtered_rows.get(row_ix).copied()?;
         let row_data = self.rows.get(original_row)?;
 
-        Self::build_node_from_object_row(db_node_type, self.current_node.as_ref(), row_data)
+        Self::build_node_from_object_row(
+            db_node_type,
+            self.current_node.as_ref(),
+            &self.columns,
+            row_data,
+        )
     }
 
     fn build_node_from_object_row(
         db_node_type: DbNodeType,
         current_node: Option<&DbNode>,
+        columns: &[Column],
         row_data: &[String],
     ) -> Option<DbNode> {
         let name = row_data.first().cloned()?;
+        let mut node_name = name.clone();
 
         // 特殊处理：当 current_node 为 None 且显示连接列表时
         if current_node.is_none() && db_node_type == DbNodeType::Connection {
@@ -780,15 +805,36 @@ impl DatabaseObjects {
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
                     metadata.insert("schema".to_string(), schema.clone());
                 }
+                let identity_arguments =
+                    Self::row_value_for_column(columns, row_data, "identity_arguments");
+                let object_id = Self::row_value_for_column(columns, row_data, "object_id")
+                    .filter(|object_id| !object_id.trim().is_empty());
+                metadata.insert(ROUTINE_NAME_METADATA_KEY.to_string(), name.clone());
+                if let Some(identity_arguments) = identity_arguments.as_ref() {
+                    metadata.insert(
+                        ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY.to_string(),
+                        identity_arguments.clone(),
+                    );
+                    node_name = format!("{}({})", name, identity_arguments);
+                }
+                if let Some(object_id) = object_id.as_ref() {
+                    metadata.insert(
+                        ROUTINE_OBJECT_ID_METADATA_KEY.to_string(),
+                        object_id.clone(),
+                    );
+                }
+                let routine_key = object_id
+                    .map(|object_id| format!("{}#oid:{}", name, object_id))
+                    .unwrap_or_else(|| node_name.clone());
                 let node_id = if let Some(schema) =
                     schema.as_ref().filter(|schema| !schema.trim().is_empty())
                 {
                     format!(
                         "{}:{}:{}:functions_folder:{}",
-                        connection_id, db, schema, name
+                        connection_id, db, schema, routine_key
                     )
                 } else {
-                    format!("{}:{}:functions_folder:{}", connection_id, db, name)
+                    format!("{}:{}:functions_folder:{}", connection_id, db, routine_key)
                 };
                 (node_id, DbNodeType::Function)
             }
@@ -803,15 +849,36 @@ impl DatabaseObjects {
                 if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
                     metadata.insert("schema".to_string(), schema.clone());
                 }
+                let identity_arguments =
+                    Self::row_value_for_column(columns, row_data, "identity_arguments");
+                let object_id = Self::row_value_for_column(columns, row_data, "object_id")
+                    .filter(|object_id| !object_id.trim().is_empty());
+                metadata.insert(ROUTINE_NAME_METADATA_KEY.to_string(), name.clone());
+                if let Some(identity_arguments) = identity_arguments.as_ref() {
+                    metadata.insert(
+                        ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY.to_string(),
+                        identity_arguments.clone(),
+                    );
+                    node_name = format!("{}({})", name, identity_arguments);
+                }
+                if let Some(object_id) = object_id.as_ref() {
+                    metadata.insert(
+                        ROUTINE_OBJECT_ID_METADATA_KEY.to_string(),
+                        object_id.clone(),
+                    );
+                }
+                let routine_key = object_id
+                    .map(|object_id| format!("{}#oid:{}", name, object_id))
+                    .unwrap_or_else(|| node_name.clone());
                 let node_id = if let Some(schema) =
                     schema.as_ref().filter(|schema| !schema.trim().is_empty())
                 {
                     format!(
                         "{}:{}:{}:procedures_folder:{}",
-                        connection_id, db, schema, name
+                        connection_id, db, schema, routine_key
                     )
                 } else {
-                    format!("{}:{}:procedures_folder:{}", connection_id, db, name)
+                    format!("{}:{}:procedures_folder:{}", connection_id, db, routine_key)
                 };
                 (node_id, DbNodeType::Procedure)
             }
@@ -838,13 +905,20 @@ impl DatabaseObjects {
         Some(
             DbNode::new(
                 node_id,
-                name,
+                node_name,
                 target_node_type,
                 connection_id,
                 database_type,
             )
             .with_metadata(metadata),
         )
+    }
+
+    fn row_value_for_column(columns: &[Column], row_data: &[String], key: &str) -> Option<String> {
+        let index = columns
+            .iter()
+            .position(|column| column.key.as_ref() == key)?;
+        row_data.get(index).cloned()
     }
 
     fn build_nodes_for_selected_rows(&self) -> Vec<DbNode> {
@@ -1601,6 +1675,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Schema,
             Some(&database_node()),
+            &[],
             &row,
         )
         .expect("schema row should produce a node");
@@ -1625,6 +1700,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Table,
             Some(&schema_node()),
+            &[],
             &row,
         )
         .expect("table row under schema should produce a node");
@@ -1653,6 +1729,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::View,
             Some(&schema_node()),
+            &[],
             &row,
         )
         .expect("view row under schema should produce a node");
@@ -1681,6 +1758,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Procedure,
             Some(&database_node()),
+            &[],
             &row,
         )
         .expect("procedure row should produce a node");
@@ -1701,6 +1779,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Function,
             Some(&database_node()),
+            &[],
             &row,
         )
         .expect("function row should produce a node");
@@ -1721,6 +1800,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Function,
             Some(&schema_node()),
+            &[],
             &row,
         )
         .expect("function row under schema should produce a node");
@@ -1747,6 +1827,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::Procedure,
             Some(&schema_node()),
+            &[],
             &row,
         )
         .expect("procedure row under schema should produce a node");
@@ -1764,6 +1845,70 @@ mod tests {
     }
 
     #[test]
+    fn overloaded_function_rows_build_distinct_routine_nodes() {
+        let columns = vec![
+            Column::new("name", "Name"),
+            Column::new("identity_arguments", "Parameters"),
+            Column::new("return_type", "Return Type"),
+            Column::new("object_id", "Object ID"),
+        ];
+        let integer_row = vec![
+            "calculate_total".to_string(),
+            "integer".to_string(),
+            "integer".to_string(),
+            "101".to_string(),
+        ];
+        let text_row = vec![
+            "calculate_total".to_string(),
+            "text".to_string(),
+            "text".to_string(),
+            "102".to_string(),
+        ];
+
+        let integer_node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Function,
+            Some(&schema_node()),
+            &columns,
+            &integer_row,
+        )
+        .expect("integer overload should produce a node");
+        let text_node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Function,
+            Some(&schema_node()),
+            &columns,
+            &text_row,
+        )
+        .expect("text overload should produce a node");
+
+        assert_eq!("calculate_total(integer)", integer_node.name);
+        assert_eq!("calculate_total(text)", text_node.name);
+        assert_ne!(integer_node.id, text_node.id);
+        assert!(integer_node.id.ends_with("calculate_total#oid:101"));
+        assert!(text_node.id.ends_with("calculate_total#oid:102"));
+        assert_eq!(
+            Some("calculate_total"),
+            integer_node
+                .metadata
+                .get(ROUTINE_NAME_METADATA_KEY)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("integer"),
+            integer_node
+                .metadata
+                .get(ROUTINE_IDENTITY_ARGUMENTS_METADATA_KEY)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some("101"),
+            integer_node
+                .metadata
+                .get(ROUTINE_OBJECT_ID_METADATA_KEY)
+                .map(String::as_str)
+        );
+    }
+
+    #[test]
     fn function_double_click_opens_function_editor() {
         let node = DbNode::new(
             "conn1:app_db:functions_folder:calculate_total",
@@ -1777,7 +1922,7 @@ mod tests {
             "app_db".to_string(),
         )]));
 
-        let event = DatabaseObjects::event_for_double_click_node(node)
+        let event = DatabaseObjects::event_for_double_click_node(node, |_| true)
             .expect("function double click should emit an event");
 
         assert!(matches!(
@@ -1801,7 +1946,7 @@ mod tests {
             "app_db".to_string(),
         )]));
 
-        let event = DatabaseObjects::event_for_double_click_node(node)
+        let event = DatabaseObjects::event_for_double_click_node(node, |_| true)
             .expect("procedure double click should emit an event");
 
         assert!(matches!(
@@ -1812,8 +1957,21 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_routine_double_click_does_not_emit_an_event() {
+        let node = DbNode::new(
+            "conn1:app_db:functions_folder:calculate_total",
+            "calculate_total",
+            DbNodeType::Function,
+            "conn1".to_string(),
+            DatabaseType::PostgreSQL,
+        );
+
+        assert!(DatabaseObjects::event_for_double_click_node(node, |_| false).is_none());
+    }
+
+    #[test]
     fn schema_double_click_adds_node_to_tree() {
-        let event = DatabaseObjects::event_for_double_click_node(schema_node())
+        let event = DatabaseObjects::event_for_double_click_node(schema_node(), |_| false)
             .expect("schema double click should emit an event");
 
         assert!(matches!(
@@ -1849,6 +2007,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::NamedQuery,
             Some(&current_node),
+            &[],
             &row,
         )
         .expect("SQL row should produce a named query");
@@ -1883,6 +2042,7 @@ mod tests {
         let node = DatabaseObjects::build_node_from_object_row(
             DbNodeType::NamedQuery,
             Some(&current_node),
+            &[],
             &row,
         )
         .expect("directory row should produce a query folder");

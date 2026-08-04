@@ -1173,8 +1173,11 @@ impl DatabasePlugin for ClickHousePlugin {
 
                     functions.push(FunctionInfo {
                         name: name.clone(),
+                        schema: None,
                         return_type: None,
                         parameters: Vec::new(),
+                        identity_arguments: None,
+                        object_id: None,
                         definition,
                         comment: None,
                     });

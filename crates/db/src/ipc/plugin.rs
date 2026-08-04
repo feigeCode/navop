@@ -1949,6 +1949,7 @@ fn check_info_from_wire(check: wire_schema::CheckInfo, fallback_table: Option<&s
 fn function_info_from_wire(function: wire_schema::FunctionInfo) -> FunctionInfo {
     FunctionInfo {
         name: function.name,
+        schema: None,
         return_type: function.return_type,
         parameters: function
             .args
@@ -1965,6 +1966,8 @@ fn function_info_from_wire(function: wire_schema::FunctionInfo) -> FunctionInfo 
                 }
             })
             .collect(),
+        identity_arguments: None,
+        object_id: None,
         definition: function.definition,
         comment: empty_to_none(function.comment),
     }

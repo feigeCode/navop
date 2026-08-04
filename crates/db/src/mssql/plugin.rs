@@ -1669,8 +1669,11 @@ impl DatabasePlugin for MsSqlPlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: row.get(2).and_then(|v| v.clone()),
                     parameters: vec![],
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: row.get(3).and_then(|v| v.clone()),
                 })
@@ -1783,8 +1786,11 @@ impl DatabasePlugin for MsSqlPlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: None,
                     parameters: vec![],
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: row.get(2).and_then(|v| v.clone()),
                 })

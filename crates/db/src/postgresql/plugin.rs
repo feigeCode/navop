@@ -205,6 +205,69 @@ impl PostgresPlugin {
 
         format!("{}{}", short_name, suffix)
     }
+
+    async fn get_routine_definition(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+        routine_kind: &str,
+        prokind_predicate: &str,
+    ) -> Result<String> {
+        let schema = routine.schema.as_deref().unwrap_or("public");
+        let identity_arguments = routine.identity_arguments.as_deref().unwrap_or("");
+        let object_id_predicate = routine
+            .object_id
+            .as_deref()
+            .filter(|oid| !oid.is_empty() && oid.bytes().all(|byte| byte.is_ascii_digit()))
+            .map(|oid| format!("AND p.oid = {oid}::oid "))
+            .unwrap_or_default();
+        let sql = format!(
+            "SELECT pg_get_functiondef(p.oid) \
+             FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = {} \
+               AND p.proname = {} \
+               AND pg_get_function_identity_arguments(p.oid) = {} \
+               AND {} \
+               {}\
+             ORDER BY p.oid \
+             LIMIT 1",
+            postgres_routine_string_literal(schema),
+            postgres_routine_string_literal(&routine.name),
+            postgres_routine_string_literal(identity_arguments),
+            prokind_predicate,
+            object_id_predicate,
+        );
+
+        let result = connection.query(&sql).await.map_err(|error| {
+            anyhow::anyhow!("Failed to load {} definition: {}", routine_kind, error)
+        })?;
+
+        match result {
+            SqlResult::Query(query_result) => query_result
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(Clone::clone)
+                .filter(|definition| !definition.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "PostgreSQL returned no CREATE statement for {} {}",
+                        routine_kind,
+                        routine.name
+                    )
+                }),
+            SqlResult::Error(error) => Err(anyhow::anyhow!(
+                "Failed to load {} definition: {}",
+                routine_kind,
+                error.message
+            )),
+            SqlResult::Exec(_) => Err(anyhow::anyhow!(
+                "Loading {} definition returned an unexpected result type",
+                routine_kind
+            )),
+        }
+    }
 }
 
 fn build_postgresql_ui_manifest() -> DatabaseUiManifest {
@@ -241,6 +304,10 @@ fn build_postgresql_ui_manifest() -> DatabaseUiManifest {
 
 fn postgres_string_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+fn postgres_routine_string_literal(value: &str) -> String {
+    format!("E'{}'", value.replace('\\', "\\\\").replace('\'', "''"))
 }
 
 fn postgres_user_password(request: &DatabaseUserOperationRequest) -> &str {
@@ -816,6 +883,20 @@ fn postgresql_action_manifest() -> DatabaseActionManifest {
                 true,
                 Some(DatabaseActionToolbarScope::CurrentNode),
             ),
+            action(
+                DatabaseActionId::OpenFunction,
+                "Function.edit_function",
+                vec![DbNodeType::Function],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::OpenProcedure,
+                "Procedure.edit_procedure",
+                vec![DbNodeType::Procedure],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
             action(
                 DatabaseActionId::CreateNewQuery,
                 "Query.new_query",
@@ -1741,12 +1822,35 @@ impl DatabasePlugin for PostgresPlugin {
     async fn list_functions(
         &self,
         connection: &dyn DbConnection,
-        _database: &str,
+        database: &str,
     ) -> Result<Vec<FunctionInfo>> {
-        let sql = "SELECT routine_name, data_type FROM information_schema.routines WHERE routine_schema = 'public' AND routine_type = 'FUNCTION' ORDER BY routine_name";
+        self.list_functions_in_schema(connection, database, Some("public".to_string()))
+            .await
+    }
 
+    async fn list_functions_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| "public".to_string());
+        let sql = format!(
+            "SELECT \
+                p.proname, \
+                pg_get_function_result(p.oid), \
+                pg_get_function_identity_arguments(p.oid), \
+                p.oid::text, \
+                n.nspname \
+             FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = {} \
+               AND p.prokind IN ('f', 'w') \
+             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
+            postgres_routine_string_literal(&schema),
+        );
         let result = connection
-            .query(sql)
+            .query(&sql)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list functions: {}", e))?;
 
@@ -1754,12 +1858,25 @@ impl DatabasePlugin for PostgresPlugin {
             Ok(query_result
                 .rows
                 .iter()
-                .map(|row| FunctionInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    return_type: row.get(1).and_then(|v| v.clone()),
-                    parameters: Vec::new(),
-                    definition: None,
-                    comment: None,
+                .map(|row| {
+                    let identity_arguments = row.get(2).and_then(Clone::clone);
+                    FunctionInfo {
+                        name: row.first().and_then(Clone::clone).unwrap_or_default(),
+                        schema: row.get(4).and_then(Clone::clone),
+                        return_type: row.get(1).and_then(Clone::clone),
+                        parameters: identity_arguments
+                            .as_deref()
+                            .unwrap_or_default()
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                        identity_arguments,
+                        object_id: row.get(3).and_then(Clone::clone),
+                        definition: None,
+                        comment: None,
+                    }
                 })
                 .collect())
         } else {
@@ -1772,10 +1889,22 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        let functions = self.list_functions(connection, database).await?;
+        self.list_functions_view_in_schema(connection, database, Some("public".to_string()))
+            .await
+    }
 
+    async fn list_functions_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let functions = self
+            .list_functions_in_schema(connection, database, schema)
+            .await?;
         let columns = vec![
             Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::new("identity_arguments", "Parameters").width(240.0),
             Column::localized("return_type", "ObjectView.columns.return_type").width(150.0),
         ];
 
@@ -1784,6 +1913,7 @@ impl DatabasePlugin for PostgresPlugin {
             .map(|func| {
                 vec![
                     func.name.clone(),
+                    func.identity_arguments.clone().unwrap_or_default(),
                     func.return_type.as_deref().unwrap_or("-").to_string(),
                 ]
             })
@@ -1797,17 +1927,48 @@ impl DatabasePlugin for PostgresPlugin {
         })
     }
 
+    async fn get_function_definition_for_routine(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        self.get_routine_definition(connection, routine, "function", "p.prokind IN ('f', 'w')")
+            .await
+    }
+
     // === Procedure Operations ===
 
     async fn list_procedures(
         &self,
         connection: &dyn DbConnection,
-        _database: &str,
+        database: &str,
     ) -> Result<Vec<FunctionInfo>> {
-        let sql = "SELECT routine_name FROM information_schema.routines WHERE routine_schema = 'public' AND routine_type = 'PROCEDURE' ORDER BY routine_name";
+        self.list_procedures_in_schema(connection, database, Some("public".to_string()))
+            .await
+    }
 
+    async fn list_procedures_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        _database: &str,
+        schema: Option<String>,
+    ) -> Result<Vec<FunctionInfo>> {
+        let schema = schema.unwrap_or_else(|| "public".to_string());
+        let sql = format!(
+            "SELECT \
+                p.proname, \
+                pg_get_function_identity_arguments(p.oid), \
+                p.oid::text, \
+                n.nspname \
+             FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = {} \
+               AND p.prokind = 'p' \
+             ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)",
+            postgres_routine_string_literal(&schema),
+        );
         let result = connection
-            .query(sql)
+            .query(&sql)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list procedures: {}", e))?;
 
@@ -1815,12 +1976,25 @@ impl DatabasePlugin for PostgresPlugin {
             Ok(query_result
                 .rows
                 .iter()
-                .map(|row| FunctionInfo {
-                    name: row.first().and_then(|v| v.clone()).unwrap_or_default(),
-                    return_type: None,
-                    parameters: Vec::new(),
-                    definition: None,
-                    comment: None,
+                .map(|row| {
+                    let identity_arguments = row.get(1).and_then(Clone::clone);
+                    FunctionInfo {
+                        name: row.first().and_then(Clone::clone).unwrap_or_default(),
+                        schema: row.get(3).and_then(Clone::clone),
+                        return_type: None,
+                        parameters: identity_arguments
+                            .as_deref()
+                            .unwrap_or_default()
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string)
+                            .collect(),
+                        identity_arguments,
+                        object_id: row.get(2).and_then(Clone::clone),
+                        definition: None,
+                        comment: None,
+                    }
                 })
                 .collect())
         } else {
@@ -1833,13 +2007,32 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        let procedures = self.list_procedures(connection, database).await?;
+        self.list_procedures_view_in_schema(connection, database, Some("public".to_string()))
+            .await
+    }
 
-        let columns = vec![Column::localized("name", "ObjectView.columns.name").width(200.0)];
+    async fn list_procedures_view_in_schema(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+    ) -> Result<ObjectView> {
+        let procedures = self
+            .list_procedures_in_schema(connection, database, schema)
+            .await?;
+        let columns = vec![
+            Column::localized("name", "ObjectView.columns.name").width(200.0),
+            Column::new("identity_arguments", "Parameters").width(240.0),
+        ];
 
         let rows: Vec<Vec<String>> = procedures
             .iter()
-            .map(|proc| vec![proc.name.clone()])
+            .map(|proc| {
+                vec![
+                    proc.name.clone(),
+                    proc.identity_arguments.clone().unwrap_or_default(),
+                ]
+            })
             .collect();
 
         Ok(ObjectView {
@@ -1848,6 +2041,15 @@ impl DatabasePlugin for PostgresPlugin {
             columns,
             rows,
         })
+    }
+
+    async fn get_procedure_definition_for_routine(
+        &self,
+        connection: &dyn DbConnection,
+        routine: &RoutineIdentity,
+    ) -> Result<String> {
+        self.get_routine_definition(connection, routine, "procedure", "p.prokind = 'p'")
+            .await
     }
 
     // === Trigger Operations ===
@@ -2652,6 +2854,38 @@ mod tests {
         queries: Mutex<Vec<String>>,
     }
 
+    struct RoutineMetadataConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl RoutineMetadataConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "routine-metadata".to_string(),
+                    name: "Routine metadata".to_string(),
+                    database_type: DatabaseType::PostgreSQL,
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    username: "postgres".to_string(),
+                    password: String::new(),
+                    database: Some("app".to_string()),
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    proxy: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
     impl CommentMetadataConnection {
         fn new() -> Self {
             Self {
@@ -2731,6 +2965,106 @@ mod tests {
                     Some("nextval('users_id_seq'::regclass)".to_string()),
                     Some("t".to_string()),
                     Some("User identifier".to_string()),
+                ]]
+            } else {
+                vec![]
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl DbConnection for RoutineMetadataConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query(
+                "execute should not be used by routine metadata tests",
+            ))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let rows = if query.contains("pg_get_functiondef") && query.contains("missing_routine")
+            {
+                vec![]
+            } else if query.contains("SELECT pg_get_functiondef") {
+                vec![vec![Some(
+                    "CREATE OR REPLACE FUNCTION public.calculate_total(integer)\nRETURNS integer\nLANGUAGE sql\nAS $$ SELECT $1 + 1 $$;"
+                        .to_string(),
+                )]]
+            } else if query.contains("p.prokind IN ('f', 'w')") {
+                vec![
+                    vec![
+                        Some("calculate_total".to_string()),
+                        Some("integer".to_string()),
+                        Some("integer".to_string()),
+                        Some("101".to_string()),
+                        Some("team's".to_string()),
+                    ],
+                    vec![
+                        Some("calculate_total".to_string()),
+                        Some("text".to_string()),
+                        Some("text".to_string()),
+                        Some("102".to_string()),
+                        Some("team's".to_string()),
+                    ],
+                ]
+            } else if query.contains("p.prokind = 'p'") {
+                vec![vec![
+                    Some("sync_orders".to_string()),
+                    Some("integer, text".to_string()),
+                    Some("201".to_string()),
+                    Some("operations".to_string()),
                 ]]
             } else {
                 vec![]
@@ -2850,6 +3184,221 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn postgres_functions_are_schema_aware_and_preserve_overload_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+
+        let functions = plugin
+            .list_functions_in_schema(&connection, "app", Some("team's".to_string()))
+            .await
+            .expect("list functions");
+
+        assert_eq!(2, functions.len());
+        assert_eq!("calculate_total", functions[0].name);
+        assert_eq!(Some("team's"), functions[0].schema.as_deref());
+        assert_eq!(Some("integer"), functions[0].identity_arguments.as_deref());
+        assert_eq!(Some("101"), functions[0].object_id.as_deref());
+        assert_eq!(vec!["integer"], functions[0].parameters);
+        assert_eq!("calculate_total", functions[1].name);
+        assert_eq!(Some("text"), functions[1].identity_arguments.as_deref());
+        assert_eq!(Some("102"), functions[1].object_id.as_deref());
+        assert_eq!(vec!["text"], functions[1].parameters);
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("p.prokind IN ('f', 'w')"))
+            .expect("function metadata query");
+        assert!(query.contains("n.nspname = E'team''s'"));
+        assert!(query.contains("pg_get_function_identity_arguments"));
+    }
+
+    #[tokio::test]
+    async fn postgres_procedures_preserve_schema_and_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+
+        let procedures = plugin
+            .list_procedures_in_schema(&connection, "app", Some("operations".to_string()))
+            .await
+            .expect("list procedures");
+
+        assert_eq!(1, procedures.len());
+        assert_eq!("sync_orders", procedures[0].name);
+        assert_eq!(Some("operations"), procedures[0].schema.as_deref());
+        assert_eq!(
+            Some("integer, text"),
+            procedures[0].identity_arguments.as_deref()
+        );
+        assert_eq!(Some("201"), procedures[0].object_id.as_deref());
+        assert_eq!(vec!["integer", "text"], procedures[0].parameters);
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .find(|query| query.contains("p.prokind = 'p'"))
+            .expect("procedure metadata query");
+        assert!(query.contains("n.nspname = E'operations'"));
+    }
+
+    #[tokio::test]
+    async fn postgres_function_view_exposes_overload_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+
+        let view = plugin
+            .list_functions_view_in_schema(&connection, "app", Some("team's".to_string()))
+            .await
+            .expect("list function view");
+
+        assert_eq!(
+            vec!["name", "identity_arguments", "return_type"],
+            view.columns
+                .iter()
+                .map(|column| column.key.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(vec!["calculate_total", "integer", "integer"], view.rows[0]);
+        assert_eq!(vec!["calculate_total", "text", "text"], view.rows[1]);
+    }
+
+    #[tokio::test]
+    async fn postgres_function_definition_validates_numeric_oid_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+        let routine = RoutineIdentity {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            name: "calculate_total".to_string(),
+            identity_arguments: Some("integer".to_string()),
+            object_id: Some("101".to_string()),
+        };
+
+        let definition = plugin
+            .get_function_definition_for_routine(&connection, &routine)
+            .await
+            .expect("get function definition");
+
+        assert!(definition.contains("CREATE OR REPLACE FUNCTION"));
+        let queries = connection.queries();
+        assert_eq!(1, queries.len());
+        assert!(queries[0].contains("p.oid = 101::oid"));
+        assert!(queries[0].contains("n.nspname = E'public'"));
+        assert!(queries[0].contains("p.proname = E'calculate_total'"));
+        assert!(queries[0].contains("pg_get_function_identity_arguments(p.oid) = E'integer'"));
+        assert!(queries[0].contains("p.prokind IN ('f', 'w')"));
+    }
+
+    #[tokio::test]
+    async fn postgres_function_definition_fallback_escapes_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+        let routine = RoutineIdentity {
+            database: "app".to_string(),
+            schema: Some("team's".to_string()),
+            name: "calculate'total".to_string(),
+            identity_arguments: Some("integer, text".to_string()),
+            object_id: Some("101; DROP TABLE users".to_string()),
+        };
+
+        plugin
+            .get_function_definition_for_routine(&connection, &routine)
+            .await
+            .expect("get function definition");
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .next()
+            .expect("definition query");
+        assert!(!query.contains("101; DROP TABLE users"));
+        assert!(query.contains("n.nspname = E'team''s'"));
+        assert!(query.contains("p.proname = E'calculate''total'"));
+        assert!(query.contains("pg_get_function_identity_arguments(p.oid) = E'integer, text'"));
+        assert!(query.contains("p.prokind IN ('f', 'w')"));
+    }
+
+    #[tokio::test]
+    async fn postgres_procedure_definition_uses_procedure_identity() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+        let routine = RoutineIdentity {
+            database: "app".to_string(),
+            schema: Some("operations".to_string()),
+            name: "sync_orders".to_string(),
+            identity_arguments: Some("integer, text".to_string()),
+            object_id: None,
+        };
+
+        plugin
+            .get_procedure_definition_for_routine(&connection, &routine)
+            .await
+            .expect("get procedure definition");
+
+        let query = connection
+            .queries()
+            .into_iter()
+            .next()
+            .expect("definition query");
+        assert!(query.contains("n.nspname = E'operations'"));
+        assert!(query.contains("p.proname = E'sync_orders'"));
+        assert!(query.contains("pg_get_function_identity_arguments(p.oid) = E'integer, text'"));
+        assert!(query.contains("p.prokind = 'p'"));
+    }
+
+    #[test]
+    fn postgres_routine_string_literal_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            "E'team''s\\\\archive'",
+            postgres_routine_string_literal("team's\\archive")
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_missing_function_definition_returns_clear_error() {
+        let plugin = create_plugin();
+        let connection = RoutineMetadataConnection::new();
+        let routine = RoutineIdentity {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            name: "missing_routine".to_string(),
+            identity_arguments: Some(String::new()),
+            object_id: None,
+        };
+
+        let error = plugin
+            .get_function_definition_for_routine(&connection, &routine)
+            .await
+            .expect_err("missing definition should fail");
+
+        assert!(error.to_string().contains("no CREATE statement"));
+    }
+
+    #[test]
+    fn postgres_function_edit_script_keeps_create_or_replace() {
+        let plugin = create_plugin();
+        let routine = RoutineIdentity {
+            database: "app".to_string(),
+            schema: Some("public".to_string()),
+            name: "calculate_total".to_string(),
+            identity_arguments: Some("integer".to_string()),
+            object_id: Some("101".to_string()),
+        };
+
+        let script = plugin
+            .build_function_edit_script(
+                &routine,
+                "  CREATE OR REPLACE FUNCTION public.calculate_total(integer)\nRETURNS integer\nLANGUAGE sql\nAS $$ SELECT $1 + 1 $$;  ",
+            )
+            .expect("build function edit script");
+
+        assert!(script.starts_with("CREATE OR REPLACE FUNCTION"));
+        assert!(!script.contains("DROP FUNCTION"));
+        assert!(!script.contains("DELIMITER"));
+        assert!(script.ends_with('\n'));
+    }
+
     #[test]
     fn test_capabilities_support_users() {
         let capabilities = create_plugin().capabilities();
@@ -2886,6 +3435,20 @@ mod tests {
                 .actions
                 .iter()
                 .any(|action| action.id == DatabaseActionId::CreateSchema)
+        );
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::OpenFunction)
+        );
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::OpenProcedure)
         );
     }
 

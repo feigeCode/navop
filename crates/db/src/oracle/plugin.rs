@@ -1917,8 +1917,11 @@ impl DatabasePlugin for OraclePlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: None,
                     parameters: vec![],
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: None,
                 })
@@ -2017,8 +2020,11 @@ impl DatabasePlugin for OraclePlugin {
                 .iter()
                 .map(|row| FunctionInfo {
                     name: row.get(0).and_then(|v| v.clone()).unwrap_or_default(),
+                    schema: None,
                     return_type: None,
                     parameters: vec![],
+                    identity_arguments: None,
+                    object_id: None,
                     definition: None,
                     comment: None,
                 })
