@@ -6,7 +6,7 @@ use gpui::{
     Styled, UniformListScrollHandle, Window,
 };
 use gpui_component::{
-    h_flex,
+    ActiveTheme as _, h_flex,
     input::{InputEvent, InputState},
 };
 use terminal_view::TerminalColors;
@@ -38,6 +38,9 @@ pub(super) struct SidebarPalette {
     pub rail_background: Hsla,
     pub foreground: Hsla,
     pub muted: Hsla,
+    pub hover: Hsla,
+    pub selected: Hsla,
+    pub selected_border: Hsla,
     pub muted_foreground: Hsla,
     pub border: Hsla,
     pub accent: Hsla,
@@ -53,6 +56,9 @@ impl SidebarPalette {
             rail_background: shade(background, cx.theme().is_dark()),
             foreground: cx.theme().sidebar_foreground,
             muted: cx.theme().sidebar_accent,
+            hover: cx.theme().sidebar_accent,
+            selected: cx.theme().list_active,
+            selected_border: cx.theme().list_active_border,
             muted_foreground: cx.theme().muted_foreground,
             border: cx.theme().sidebar_border,
             accent: cx.theme().sidebar_primary,
@@ -67,6 +73,12 @@ impl From<&TerminalColors> for SidebarPalette {
             rail_background: shade(colors.background, true),
             foreground: colors.foreground,
             muted: colors.muted,
+            hover: colors.muted,
+            selected: Hsla {
+                a: 0.18,
+                ..colors.accent
+            },
+            selected_border: colors.accent,
             muted_foreground: colors.muted_foreground,
             border: colors.border,
             accent: colors.accent,
@@ -127,7 +139,7 @@ impl PersistentConnectionSidebar {
             collapsed_workspaces: HashSet::new(),
             unassigned_collapsed: false,
             search_input,
-            tree_width: resize::CONNECTION_TREE_DEFAULT_WIDTH,
+            tree_width: cx.theme().geometry.layout.context_sidebar_default,
             terminal_colors: None,
             tree_scroll_handle: UniformListScrollHandle::new(),
         }

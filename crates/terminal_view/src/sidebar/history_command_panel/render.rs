@@ -4,8 +4,8 @@ use gpui::{
     Render, SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants},
+    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size,
+    button::{Button, ButtonVariants, IconButton, IconButtonRole},
     h_flex,
     input::Input,
     tooltip::Tooltip,
@@ -214,23 +214,24 @@ impl HistoryCommandPanel {
         favorite_color: gpui::Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        Button::new(SharedString::from(format!("history-favorite-{index}")))
-            .icon(if favorite {
+        IconButton::new(
+            SharedString::from(format!("history-favorite-{index}")),
+            FunctionalIcon::new(if favorite {
                 IconName::StarOff
             } else {
                 IconName::Star
-            })
-            .ghost()
-            .xsmall()
-            .tooltip(if favorite {
-                t!("HistoryCommand.unfavorite").to_string()
-            } else {
-                t!("HistoryCommand.favorite").to_string()
-            })
-            .when(favorite, |button| button.text_color(favorite_color))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_favorite(id, cx);
-            }))
+            }),
+        )
+        .role(IconButtonRole::Compact)
+        .tooltip(if favorite {
+            t!("HistoryCommand.unfavorite").to_string()
+        } else {
+            t!("HistoryCommand.favorite").to_string()
+        })
+        .when(favorite, |button| button.text_color(favorite_color))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_favorite(id, cx);
+        }))
     }
 
     fn render_paste_button(
@@ -239,14 +240,15 @@ impl HistoryCommandPanel {
         command: String,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        Button::new(SharedString::from(format!("history-paste-{index}")))
-            .icon(IconName::Paste)
-            .ghost()
-            .xsmall()
-            .tooltip(t!("HistoryCommand.paste").to_string())
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.paste_command(command.clone(), cx);
-            }))
+        IconButton::new(
+            SharedString::from(format!("history-paste-{index}")),
+            FunctionalIcon::new(IconName::Paste),
+        )
+        .role(IconButtonRole::Compact)
+        .tooltip(t!("HistoryCommand.paste").to_string())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.paste_command(command.clone(), cx);
+        }))
     }
 
     fn render_delete_button(
@@ -255,14 +257,16 @@ impl HistoryCommandPanel {
         id: i64,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        Button::new(SharedString::from(format!("history-delete-{index}")))
-            .icon(IconName::Delete)
-            .ghost()
-            .xsmall()
-            .tooltip(t!("HistoryCommand.delete").to_string())
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.delete_command(id, cx);
-            }))
+        IconButton::new(
+            SharedString::from(format!("history-delete-{index}")),
+            FunctionalIcon::new(IconName::Delete),
+        )
+        .role(IconButtonRole::Compact)
+        .text_color(cx.theme().danger)
+        .tooltip(t!("HistoryCommand.delete").to_string())
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.delete_command(id, cx);
+        }))
     }
 
     fn render_empty_state(&self) -> impl IntoElement {

@@ -8,7 +8,9 @@ use gpui::{
     InteractiveElement, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_component::{ActiveTheme, ElementExt as _, Icon, IconName, Sizable, Size, h_flex};
+use gpui_component::{
+    ActiveTheme, BrandIcon, ElementExt as _, Icon, IconName, IconSize, ObjectIcon, Sizable, h_flex,
+};
 use one_core::gpui_tokio::Tokio;
 use one_core::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
@@ -293,9 +295,17 @@ impl TabContent for MongoTabView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         if self.workspace.is_some() {
-            Some(IconName::AppsColor.color().with_size(Size::Medium))
+            Some(
+                ObjectIcon::new(IconName::AppsColor)
+                    .with_size(IconSize::Medium)
+                    .into_icon(),
+            )
         } else {
-            Some(Icon::new(IconName::MongoDB).color().with_size(Size::Medium))
+            Some(
+                BrandIcon::new(IconName::MongoDB)
+                    .with_size(IconSize::Medium)
+                    .into_icon(),
+            )
         }
     }
 

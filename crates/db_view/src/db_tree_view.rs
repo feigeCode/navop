@@ -12,10 +12,12 @@ use gpui::{
     Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size as ComponentSize,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Selectable, Sizable,
+    Size as ComponentSize,
+    button::{Button, ButtonVariants as _, IconButton},
     checkbox::Checkbox,
     clipboard::Clipboard,
+    content_state::ContentState,
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListDelegate, ListState},
@@ -154,11 +156,13 @@ fn connection_node_icon(node: &DbNode) -> Icon {
     if let Some(path) = node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA) {
         let file_path = std::path::Path::new(path);
         if file_path.is_absolute() {
-            return driver_icon_from_file_path(file_path.to_path_buf(), ComponentSize::Large);
+            return driver_icon_from_file_path(file_path.to_path_buf(), IconSize::Default);
         }
-        return driver_icon_from_asset_path(path.clone(), ComponentSize::Large);
+        return driver_icon_from_asset_path(path.clone(), IconSize::Default);
     }
-    node.database_type.as_node_icon()
+    node.database_type
+        .as_node_icon()
+        .with_size(IconSize::Default)
 }
 
 fn apply_connection_node_config(
@@ -494,25 +498,29 @@ pub enum DbTreeViewEvent {
 /// 根据节点类型获取图标（公共函数，可被其他模块复用）
 pub fn get_icon_for_node_type(node_type: &DbNodeType, _theme: &gpui_component::Theme) -> Icon {
     match node_type {
-        DbNodeType::Connection => IconName::MySQLLineColor
-            .color()
-            .with_size(ComponentSize::Large),
-        DbNodeType::Schema => IconName::Schema.color(),
-        DbNodeType::Database => Icon::from(IconName::Database)
-            .color()
-            .with_size(ComponentSize::Size(px(20.))),
-        DbNodeType::Table => Icon::from(IconName::Table).color(),
-        DbNodeType::View => Icon::from(IconName::View).color(),
-        DbNodeType::Function => Icon::from(IconName::Function).color(),
-        DbNodeType::Procedure => Icon::from(IconName::Procedure).color(),
-        DbNodeType::Column => Icon::from(IconName::Column).color(),
-        DbNodeType::Index => Icon::from(IconName::Index).color(),
-        DbNodeType::Trigger => Icon::from(IconName::Trigger).color(),
-        DbNodeType::Sequence => Icon::from(IconName::Sequence).color(),
-        DbNodeType::QueryFolder => IconName::QueryFolderColor.color(),
-        DbNodeType::NamedQuery => Icon::from(IconName::Query).color(),
-        _ => IconName::File.color(),
+        // A type-only caller has no database identity. The live tree path uses
+        // `connection_node_icon`, which preserves built-in and external brands.
+        DbNodeType::Connection => object_icon(IconName::Database),
+        DbNodeType::Schema => object_icon(IconName::Schema),
+        DbNodeType::Database => object_icon(IconName::Database),
+        DbNodeType::Table => object_icon(IconName::Table),
+        DbNodeType::View => object_icon(IconName::View),
+        DbNodeType::Function => object_icon(IconName::Function),
+        DbNodeType::Procedure => object_icon(IconName::Procedure),
+        DbNodeType::Column => object_icon(IconName::Column),
+        DbNodeType::Index => object_icon(IconName::Index),
+        DbNodeType::Trigger => object_icon(IconName::Trigger),
+        DbNodeType::Sequence => object_icon(IconName::Sequence),
+        DbNodeType::QueryFolder => object_icon(IconName::QueryFolderColor),
+        DbNodeType::NamedQuery => object_icon(IconName::Query),
+        _ => object_icon(IconName::File),
     }
+}
+
+fn object_icon(name: IconName) -> Icon {
+    ObjectIcon::new(name)
+        .with_size(IconSize::Default)
+        .into_icon()
 }
 
 // ============================================================================
@@ -1618,6 +1626,7 @@ impl DbTreeView {
         );
 
         // 标记为正在加载
+        self.error_nodes.remove(&node_id);
         self.loading_nodes.insert(node_id.clone());
         cx.notify();
 
@@ -2005,106 +2014,54 @@ impl DbTreeView {
                 if let Some(n) = node {
                     connection_node_icon(n)
                 } else {
-                    IconName::Database.color().with_size(ComponentSize::Large)
+                    object_icon(IconName::Database)
                 }
             }
-            Some(DbNodeType::Database) => Icon::from(IconName::Database)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Schema) => Icon::from(IconName::Schema)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
+            Some(DbNodeType::Database) => object_icon(IconName::Database),
+            Some(DbNodeType::Schema) => object_icon(IconName::Schema),
 
-            Some(DbNodeType::TablesFolder) => Icon::from(IconName::FolderTables)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::ViewsFolder) => Icon::from(IconName::FolderViews)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::FunctionsFolder) => Icon::from(IconName::FolderFunctions)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::ProceduresFolder) => Icon::from(IconName::FolderProcedures)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::TriggersFolder) => Icon::from(IconName::FolderTriggers)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::ForeignKeysFolder) => Icon::from(IconName::FolderForeignKeys)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::ChecksFolder) => Icon::from(IconName::FolderCheckConstraints)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::QueriesFolder) => Icon::from(IconName::FolderQueries)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
+            Some(DbNodeType::TablesFolder) => object_icon(IconName::FolderTables),
+            Some(DbNodeType::ViewsFolder) => object_icon(IconName::FolderViews),
+            Some(DbNodeType::FunctionsFolder) => object_icon(IconName::FolderFunctions),
+            Some(DbNodeType::ProceduresFolder) => object_icon(IconName::FolderProcedures),
+            Some(DbNodeType::TriggersFolder) => object_icon(IconName::FolderTriggers),
+            Some(DbNodeType::ForeignKeysFolder) => object_icon(IconName::FolderForeignKeys),
+            Some(DbNodeType::ChecksFolder) => object_icon(IconName::FolderCheckConstraints),
+            Some(DbNodeType::QueriesFolder) => object_icon(IconName::FolderQueries),
             Some(DbNodeType::QueryFolder) => {
                 let icon = if is_expanded {
                     IconName::QueryFolderOpenColor
                 } else {
                     IconName::QueryFolderColor
                 };
-                Icon::from(icon)
-                    .color()
-                    .with_size(ComponentSize::Size(px(20.)))
+                object_icon(icon)
             }
-            Some(DbNodeType::ColumnsFolder) => Icon::from(IconName::FolderColumns)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::IndexesFolder) => Icon::from(IconName::FolderIndexes)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::SequencesFolder) => Icon::from(IconName::FolderSequences)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
+            Some(DbNodeType::ColumnsFolder) => object_icon(IconName::FolderColumns),
+            Some(DbNodeType::IndexesFolder) => object_icon(IconName::FolderIndexes),
+            Some(DbNodeType::SequencesFolder) => object_icon(IconName::FolderSequences),
 
-            Some(DbNodeType::Table) => Icon::from(IconName::Table)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::View) => Icon::from(IconName::View)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Function) => Icon::from(IconName::Function)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Procedure) => Icon::from(IconName::Procedure)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
+            Some(DbNodeType::Table) => object_icon(IconName::Table),
+            Some(DbNodeType::View) => object_icon(IconName::View),
+            Some(DbNodeType::Function) => object_icon(IconName::Function),
+            Some(DbNodeType::Procedure) => object_icon(IconName::Procedure),
             Some(DbNodeType::Column) => {
                 let is_primary_key = node
                     .and_then(|n| n.metadata.get("is_primary_key"))
                     .map(|v| v == "true")
                     .unwrap_or(false);
                 if is_primary_key {
-                    Icon::from(IconName::PrimaryKey)
-                        .color()
-                        .with_size(ComponentSize::Size(px(20.)))
+                    object_icon(IconName::PrimaryKey)
                 } else {
-                    Icon::from(IconName::Column)
-                        .color()
-                        .with_size(ComponentSize::Size(px(20.)))
+                    object_icon(IconName::Column)
                 }
             }
-            Some(DbNodeType::Index) => Icon::from(IconName::Index)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::ForeignKey) => Icon::from(IconName::GoldKey)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Trigger) => Icon::from(IconName::Trigger)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Sequence) => Icon::from(IconName::Sequence)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::Check) => Icon::from(IconName::CheckConstraint)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            Some(DbNodeType::NamedQuery) => Icon::from(IconName::Query)
-                .color()
-                .with_size(ComponentSize::Size(px(20.))),
-            _ => Icon::from(IconName::Loader).with_size(ComponentSize::Size(px(14.))),
+            Some(DbNodeType::Index) => object_icon(IconName::Index),
+            Some(DbNodeType::ForeignKey) => object_icon(IconName::GoldKey),
+            Some(DbNodeType::Trigger) => object_icon(IconName::Trigger),
+            Some(DbNodeType::Sequence) => object_icon(IconName::Sequence),
+            Some(DbNodeType::Check) => object_icon(IconName::CheckConstraint),
+            Some(DbNodeType::NamedQuery) => object_icon(IconName::Query),
+            _ => Icon::from(IconName::Loader).with_size(IconSize::Small),
         }
     }
 
@@ -2545,10 +2502,8 @@ impl Render for DbTreeView {
                         ),
                     )
                     .child(
-                        Button::new("locate-active-tab")
-                            .icon(IconName::LocateActiveTab)
-                            .ghost()
-                            .small()
+                        IconButton::new("locate-active-tab", IconName::LocateActiveTab)
+                            .glyph_size(IconSize::Small)
                             .tooltip(t!("DbTreeView.locate_active_tab"))
                             .on_click(move |_, _, cx| {
                                 view_for_locate.update(cx, |_this, cx| {
@@ -2557,10 +2512,8 @@ impl Render for DbTreeView {
                             }),
                     )
                     .child(
-                        Button::new("collapse-all")
-                            .icon(IconName::ChevronsUpDown)
-                            .ghost()
-                            .small()
+                        IconButton::new("collapse-all", IconName::ChevronsUpDown)
+                            .glyph_size(IconSize::Small)
                             .tooltip(t!("Common.collapse_all"))
                             .on_click(move |_, _, cx| {
                                 view_for_collapse.update(cx, |this, cx| {
@@ -2583,23 +2536,16 @@ impl Render for DbTreeView {
                             .p_2()
                             .map(|this| {
                                 if entries_len == 0 && !self.search_query.is_empty() {
-                                    // 搜索无结果时显示空状态
                                     this.child(
-                                        v_flex()
-                                            .size_full()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap_3()
-                                            .child(
-                                                Icon::new(IconName::Search)
-                                                    .with_size(ComponentSize::Large)
-                                                    .text_color(cx.theme().muted_foreground),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(t!("Common.not_found").to_string()),
-                                            ),
+                                        ContentState::empty(t!("Common.not_found").to_string())
+                                            .icon(IconName::Search)
+                                            .compact(),
+                                    )
+                                } else if entries_len == 0 {
+                                    this.child(
+                                        ContentState::empty(t!("DbTreeView.empty").to_string())
+                                            .icon(object_icon(IconName::Database))
+                                            .compact(),
                                     )
                                 } else {
                                     this.child(self.render_tree_list(window, cx))
@@ -2672,12 +2618,14 @@ impl DbTreeView {
         let node = self.db_nodes.get(&node_id).cloned();
         let is_expanded = self.expanded_nodes.contains(&node_id);
         let is_loading = self.loading_nodes.contains(&node_id);
-        let error_msg = self.error_nodes.get(&node_id).cloned();
+        let error_msg = (!is_loading)
+            .then(|| self.error_nodes.get(&node_id).cloned())
+            .flatten();
         let has_children = self.node_has_children(&node_id);
         let search_query = self.search_query.clone();
 
         // 获取图标
-        let icon = self.get_icon_for_node(&node_id, is_expanded, cx).color();
+        let icon = self.get_icon_for_node(&node_id, is_expanded, cx);
 
         // 获取节点名称和备注
         let (label_text, label_comment) = node
@@ -2753,7 +2701,8 @@ impl DbTreeView {
         let hover_bg = cx.theme().secondary;
         let folder_text_color = cx.theme().muted_foreground;
         let foreground_color = cx.theme().sidebar_foreground;
-        let indent = px(8.) + px(16.) * depth as f32;
+        let tree = cx.theme().geometry.tree;
+        let indent = tree.base_padding + tree.indent * depth;
 
         // 箭头
         let view_for_arrow = view.clone();
@@ -2766,14 +2715,14 @@ impl DbTreeView {
             };
             div()
                 .id(SharedString::from(format!("arrow-{}", ix)))
-                .w(px(18.))
-                .h(px(18.))
+                .w(tree.disclosure_size)
+                .h(tree.disclosure_size)
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(
                     Icon::new(arrow_icon)
-                        .with_size(ComponentSize::XSmall)
+                        .with_size(IconSize::Small)
                         .text_color(cx.theme().muted_foreground),
                 )
                 .cursor_pointer()
@@ -2791,7 +2740,7 @@ impl DbTreeView {
                 })
                 .into_any_element()
         } else {
-            div().w(px(18.)).into_any_element()
+            div().w(tree.disclosure_size).into_any_element()
         };
 
         // 克隆用于事件处理
@@ -2808,7 +2757,7 @@ impl DbTreeView {
         div()
             .id(SharedString::from(format!("tree-item-{}", ix)))
             .w_full()
-            .h(px(26.))
+            .h(tree.row_height)
             .relative()
             .flex()
             .items_center()
@@ -2983,7 +2932,7 @@ impl DbTreeView {
                     .when(is_loading, |this| {
                         this.child(
                             Spinner::new()
-                                .with_size(ComponentSize::Small)
+                                .with_size(IconSize::Small)
                                 .color(cx.theme().muted_foreground),
                         )
                     })
@@ -2992,11 +2941,14 @@ impl DbTreeView {
                         this.child(
                             Popover::new(SharedString::from(format!("error-popover-{}", ix)))
                                 .trigger(
-                                    Button::new(SharedString::from(format!("error-btn-{}", ix)))
-                                        .ghost()
-                                        .icon(IconName::TriangleAlert)
-                                        .xsmall()
-                                        .text_color(cx.theme().warning),
+                                    IconButton::new(
+                                        SharedString::from(format!("error-btn-{}", ix)),
+                                        IconName::TriangleAlert,
+                                    )
+                                    .hit_size(ComponentSize::XSmall)
+                                    .glyph_size(IconSize::Small)
+                                    .tooltip(t!("Common.error_info").to_string())
+                                    .text_color(cx.theme().warning),
                                 )
                                 .content(move |_state, _window, cx| {
                                     let error_for_copy = error_for_copy.clone();
@@ -3012,7 +2964,7 @@ impl DbTreeView {
                                                         .gap_1()
                                                         .child(
                                                             Icon::new(IconName::TriangleAlert)
-                                                                .with_size(ComponentSize::Small)
+                                                                .with_size(IconSize::Small)
                                                                 .text_color(cx.theme().warning),
                                                         )
                                                         .child(t!("Common.error_info").to_string()),

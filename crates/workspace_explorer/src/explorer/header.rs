@@ -6,10 +6,11 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Icon, IconName, Sizable as _, Size, StyledExt as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Icon, IconName, IconSize, Sizable as _, Size, StyledExt as _,
+    button::{Button, ButtonVariants as _, IconButton},
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    panel_header::{PanelHeader, PanelHeaderVariant},
     popover::Popover,
 };
 use rust_i18n::t;
@@ -39,29 +40,9 @@ impl WorkspaceExplorer {
             .as_ref()
             .and_then(|repository| repository.branch.clone());
         let branch_manager = self.branch_manager.clone();
-        h_flex()
+        let trailing = h_flex()
+            .flex_shrink_0()
             .items_center()
-            .gap_1()
-            .h(px(34.0))
-            .pl_2()
-            .pr_1()
-            .border_b_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.muted)
-            .child(
-                Icon::new(IconName::FolderOpen)
-                    .with_size(Size::Small)
-                    .text_color(self.theme.foreground),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .font_semibold()
-                    .child(label),
-            )
             .when_some(branch.zip(branch_manager), |this, (branch, manager)| {
                 let search_focus = manager.read(cx).search_input().focus_handle(cx);
                 this.child(
@@ -81,7 +62,26 @@ impl WorkspaceExplorer {
                         .content(move |_, _, _| manager.clone()),
                 )
             })
-            .child(self.render_header_actions(cx))
+            .child(self.render_header_actions(cx));
+
+        PanelHeader::new("workspace-root-header")
+            .variant(PanelHeaderVariant::Panel)
+            .background(self.theme.muted)
+            .border_color(self.theme.border)
+            .leading(
+                Icon::new(IconName::FolderOpen)
+                    .with_size(IconSize::Small)
+                    .text_color(self.theme.foreground),
+            )
+            .title(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .font_semibold()
+                    .child(label),
+            )
+            .trailing(trailing)
     }
 
     fn render_header_actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -89,18 +89,12 @@ impl WorkspaceExplorer {
             .flex_shrink_0()
             .items_center()
             .child(
-                Button::new("workspace-refresh")
-                    .icon(IconName::Refresh)
-                    .ghost()
-                    .compact()
+                IconButton::new("workspace-refresh", IconName::Refresh)
                     .tooltip(t!("WorkspaceExplorer.tooltip.refresh"))
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
             .child(
-                Button::new("workspace-collapse-all")
-                    .icon(IconName::ChevronsUpDown)
-                    .ghost()
-                    .compact()
+                IconButton::new("workspace-collapse-all", IconName::ChevronsUpDown)
                     .tooltip(t!("WorkspaceExplorer.tooltip.collapse_folders"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.expanded.clear();
@@ -118,10 +112,7 @@ impl WorkspaceExplorer {
         let placement = self.frame_placement;
         let show_hidden = self.show_hidden;
         let show_ignored = self.show_ignored;
-        Button::new("workspace-frame-options")
-            .icon(IconName::Ellipsis)
-            .ghost()
-            .compact()
+        IconButton::new("workspace-frame-options", IconName::Ellipsis)
             .tooltip(t!("WorkspaceExplorer.frame.options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_frame_options_menu(
@@ -137,10 +128,7 @@ impl WorkspaceExplorer {
     }
 
     fn render_frame_close_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        Button::new("workspace-frame-close")
-            .icon(IconName::Close)
-            .ghost()
-            .compact()
+        IconButton::new("workspace-frame-close", IconName::Close)
             .tooltip(t!("WorkspaceExplorer.frame.close").to_string())
             .on_click(cx.listener(|_this, _, _, cx| {
                 cx.emit(WorkspaceExplorerEvent::Close);
@@ -157,7 +145,7 @@ impl WorkspaceExplorer {
             .id(id)
             .items_center()
             .gap_1()
-            .h(px(28.0))
+            .h(cx.theme().geometry.layout.list_header)
             .px_2()
             .cursor_pointer()
             .bg(self.theme.muted.opacity(0.55))

@@ -34,13 +34,14 @@ use ai_chat_view::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription, Window, div,
 };
 use gpui_component::{
-    Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    ActiveTheme, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon, Selectable, Sizable, Size,
+    button::{IconButton, IconButtonRole},
+    h_flex,
+    panel_header::{PanelHeader, PanelHeaderVariant},
+    v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -59,7 +60,10 @@ use workspace_explorer::{
     WorkspaceExplorerEvent, WorkspaceTheme,
 };
 
-pub(crate) fn workspace_theme_from_terminal_colors(colors: &TerminalColors) -> WorkspaceTheme {
+pub(crate) fn workspace_theme_from_terminal_colors(
+    colors: &TerminalColors,
+    application_theme: &gpui_component::Theme,
+) -> WorkspaceTheme {
     WorkspaceTheme {
         background: colors.background,
         foreground: colors.foreground,
@@ -68,9 +72,9 @@ pub(crate) fn workspace_theme_from_terminal_colors(colors: &TerminalColors) -> W
         border: colors.border,
         accent: colors.accent,
         accent_foreground: colors.accent_foreground,
-        danger: gpui::rgb(0xef4444).into(),
-        warning: gpui::rgb(0xf59e0b).into(),
-        success: gpui::rgb(0x22c55e).into(),
+        danger: application_theme.danger,
+        warning: application_theme.warning,
+        success: application_theme.success,
     }
 }
 
@@ -281,45 +285,33 @@ impl SidebarPanel {
         }
     }
 
-    pub fn icon_name(&self) -> IconName {
-        match self {
-            SidebarPanel::FileExplorer => IconName::TerminalFileManagerColor,
-            SidebarPanel::Settings => IconName::Settings,
-            SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor,
-            SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor,
-            SidebarPanel::AiChat => IconName::AI,
-            SidebarPanel::BroadcastInput => IconName::TerminalBroadcastColor,
-            SidebarPanel::FileManager => IconName::TerminalFileManagerColor,
-            SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor,
-        }
-    }
-
-    /// 获取面板图标
+    /// Returns the semantic monochrome icon shared by rail and panel headers.
     pub fn icon(&self) -> Icon {
         match self {
-            SidebarPanel::FileExplorer => IconName::TerminalFileManagerColor.color(),
-            SidebarPanel::Settings => IconName::SettingColor.color(),
-            SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor.color(),
-            SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor.color(),
-            SidebarPanel::AiChat => IconName::AI.color(),
-            SidebarPanel::BroadcastInput => IconName::TerminalBroadcastColor.color(),
-            SidebarPanel::FileManager => IconName::TerminalFileManagerColor.color(),
-            SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor.color(),
+            SidebarPanel::FileExplorer => ObjectIcon::new(IconName::FolderOpen).into_icon(),
+            SidebarPanel::Settings => FunctionalIcon::new(IconName::Settings).into_icon(),
+            SidebarPanel::QuickCommand => FunctionalIcon::new(IconName::SquareTerminal).into_icon(),
+            SidebarPanel::HistoryCommand => FunctionalIcon::new(IconName::BookOpen).into_icon(),
+            SidebarPanel::AiChat => ObjectIcon::new(IconName::AILine).into_icon(),
+            SidebarPanel::BroadcastInput => ObjectIcon::new(IconName::Network).into_icon(),
+            SidebarPanel::FileManager => ObjectIcon::new(IconName::Folder).into_icon(),
+            SidebarPanel::ServerMonitor => ObjectIcon::new(IconName::Monitor).into_icon(),
         }
     }
 
     /// 获取面板标题
-    pub fn title(&self) -> &'static str {
+    pub fn title(&self) -> SharedString {
         match self {
-            SidebarPanel::FileExplorer => "File Explorer",
-            SidebarPanel::Settings => "Settings",
-            SidebarPanel::QuickCommand => "Quick Commands",
-            SidebarPanel::HistoryCommand => "History Commands",
-            SidebarPanel::AiChat => "AI Chat",
-            SidebarPanel::BroadcastInput => "Broadcast Input",
-            SidebarPanel::FileManager => "File Manager",
-            SidebarPanel::ServerMonitor => "Server Monitor",
+            SidebarPanel::FileExplorer => t!("TerminalSidebar.file_explorer"),
+            SidebarPanel::Settings => t!("TerminalSidebar.settings"),
+            SidebarPanel::QuickCommand => t!("TerminalSidebar.quick_commands"),
+            SidebarPanel::HistoryCommand => t!("TerminalSidebar.history_commands"),
+            SidebarPanel::AiChat => t!("TerminalSidebar.ai_chat"),
+            SidebarPanel::BroadcastInput => t!("TerminalSidebar.broadcast_input"),
+            SidebarPanel::FileManager => t!("TerminalSidebar.file_manager"),
+            SidebarPanel::ServerMonitor => t!("TerminalSidebar.server_monitor"),
         }
+        .into()
     }
 
     pub(crate) fn needs_internal_tool_frame_header(&self) -> bool {
@@ -328,6 +320,19 @@ impl SidebarPanel {
             SidebarPanel::AiChat | SidebarPanel::FileExplorer | SidebarPanel::FileManager
         )
     }
+}
+
+fn terminal_toolbar_icon_button(
+    id: SharedString,
+    panel: SidebarPanel,
+    selected: bool,
+    item_size: Size,
+) -> IconButton {
+    IconButton::new(id, panel.icon())
+        .hit_size(item_size)
+        .glyph_size(IconSize::Medium)
+        .selected(selected)
+        .tooltip(panel.title())
 }
 
 fn terminal_sidebar_available_panels(
@@ -681,7 +686,7 @@ impl TerminalSidebar {
                 });
         let file_explorer_panel = local_workspace.map(|workspace| {
             let LocalWorkspaceSidebar { root, editor } = workspace;
-            let theme = workspace_theme_from_terminal_colors(&colors);
+            let theme = workspace_theme_from_terminal_colors(&colors, cx.theme());
             cx.new(|cx| {
                 WorkspaceExplorer::new(
                     WorkspaceExplorerConfig {
@@ -1137,7 +1142,7 @@ impl TerminalSidebar {
             });
         }
         if let Some(ref explorer) = self.file_explorer_panel {
-            let theme = workspace_theme_from_terminal_colors(&self.colors);
+            let theme = workspace_theme_from_terminal_colors(&self.colors, cx.theme());
             explorer.update(cx, |explorer, cx| explorer.set_theme(theme, cx));
         }
         if let Some(ref monitor_panel) = self.server_monitor_panel {
@@ -1346,30 +1351,17 @@ impl TerminalSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.tool_dock.is_tool_open(panel);
-        let accent_color = self.colors.accent;
-        let accent_fg = self.colors.accent_foreground;
-        let muted_fg = self.colors.muted_foreground;
-        let muted_bg = self.colors.muted;
+        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
 
-        div()
-            .id(SharedString::from(format!("toolbar-btn-{:?}", panel)))
-            .w(px(36.0))
-            .h(px(36.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .when(is_active, |this| this.bg(accent_color))
-            .when(!is_active, |this| this.hover(|s| s.bg(muted_bg)))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toggle_panel(panel, cx);
-            }))
-            .child(
-                Icon::new(panel.icon())
-                    .with_size(Size::Large)
-                    .text_color(if is_active { accent_fg } else { muted_fg }),
-            )
+        terminal_toolbar_icon_button(
+            SharedString::from(format!("terminal-sidebar-toolbar-btn-{panel:?}")),
+            panel,
+            is_active,
+            item_size,
+        )
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.toggle_panel(panel, cx);
+        }))
     }
 
     /// 渲染工具栏
@@ -1434,51 +1426,35 @@ impl TerminalSidebar {
         let border = self.colors.border;
         let header_bg = self.colors.muted;
         let text = self.colors.foreground;
-        let title: SharedString = match panel {
-            SidebarPanel::Settings => t!("Settings.title").to_string().into(),
-            _ => panel.title().into(),
-        };
+        let title = panel.title();
 
-        h_flex()
-            .flex_shrink_0()
-            .w_full()
-            .h(px(40.0))
-            .px_3()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(border)
-            .bg(header_bg)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Icon::new(panel.icon_name())
-                            .with_size(Size::Small)
-                            .text_color(text),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(text)
-                            .child(title),
-                    ),
+        PanelHeader::new(SharedString::from(format!(
+            "terminal-embedded-panel-header-{}",
+            panel.local_id()
+        )))
+        .variant(PanelHeaderVariant::Embedded)
+        .border_color(border)
+        .background(header_bg)
+        .leading(panel.icon().with_size(IconSize::Small).text_color(text))
+        .title(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(text)
+                .child(title),
+        )
+        .trailing(
+            IconButton::new(
+                SharedString::from(format!("close-terminal-sidebar-panel-{}", panel.local_id())),
+                IconName::Close,
             )
-            .child(
-                Button::new(SharedString::from(format!(
-                    "close-terminal-sidebar-panel-{}",
-                    panel.local_id()
-                )))
-                .icon(IconName::Close)
-                .ghost()
-                .xsmall()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.close_tool(panel, cx);
-                })),
-            )
-            .into_any_element()
+            .role(IconButtonRole::Compact)
+            .tooltip(t!("Common.close").to_string())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.close_tool(panel, cx);
+            })),
+        )
+        .into_any_element()
     }
 }
 
@@ -1506,41 +1482,29 @@ impl TerminalSidebarToolbar {
     fn render_button(
         &self,
         button: TerminalToolbarButtonSnapshot,
-        colors: TerminalColors,
+        item_size: Size,
     ) -> impl IntoElement {
         let sidebar = self.sidebar.clone();
         let panel = button.panel;
-        let accent_color = colors.accent;
-        let accent_fg = colors.accent_foreground;
-        let muted_fg = colors.muted_foreground;
-        let muted_bg = colors.muted;
-        div()
-            .id(SharedString::from(format!("toolbar-btn-{:?}", panel)))
-            .w(px(36.0))
-            .h(px(36.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .when(button.open, |this| this.bg(accent_color))
-            .when(!button.open, |this| this.hover(move |s| s.bg(muted_bg)))
-            .on_click(move |_, _window, cx| {
-                sidebar.update(cx, |sidebar, cx| {
-                    sidebar.toggle_panel(panel, cx);
-                });
-            })
-            .child(
-                Icon::new(panel.icon())
-                    .with_size(Size::Large)
-                    .text_color(if button.open { accent_fg } else { muted_fg }),
-            )
+
+        terminal_toolbar_icon_button(
+            SharedString::from(format!("terminal-detached-toolbar-btn-{panel:?}")),
+            panel,
+            button.open,
+            item_size,
+        )
+        .on_click(move |_, _window, cx| {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.toggle_panel(panel, cx);
+            });
+        })
     }
 }
 
 impl Render for TerminalSidebarToolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.sidebar.read(cx).toolbar_snapshot();
+        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
 
         v_flex()
             .flex_shrink_0()
@@ -1555,7 +1519,7 @@ impl Render for TerminalSidebarToolbar {
                         .buttons
                         .iter()
                         .copied()
-                        .map(|button| self.render_button(button, snapshot.colors.clone())),
+                        .map(|button| self.render_button(button, item_size)),
                 ),
             )
     }
@@ -1622,10 +1586,11 @@ mod tests {
     use super::{
         SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
         build_live_terminal_ai_context, build_terminal_ai_context, terminal_ai_system_instruction,
-        terminal_sidebar_available_panels,
+        terminal_sidebar_available_panels, workspace_theme_from_terminal_colors,
     };
-    use crate::theme::TerminalTheme;
+    use crate::theme::{TerminalColors, TerminalTheme};
     use agent_runtime::{ResourceCapability, ResourceKind, ResourceRef};
+    use gpui::rgb;
     use gpui_component::{Theme, ThemeColor};
     use one_core::sidebar_contribution::SidebarPlacement;
     use one_core::storage::{ConnectionType, StoredConnection};
@@ -1726,6 +1691,13 @@ mod tests {
     }
 
     #[test]
+    fn every_sidebar_panel_has_a_valid_semantic_icon() {
+        for panel in SidebarPanel::all() {
+            let _ = panel.icon();
+        }
+    }
+
+    #[test]
     fn history_command_panel_is_available_for_local_terminals() {
         let panels = terminal_sidebar_available_panels(true, false, false, true, false);
 
@@ -1783,6 +1755,33 @@ mod tests {
         );
         assert_eq!(Some(agent_theme.table_header), markdown_style.table_header);
         assert_eq!(Some(agent_theme.quote_border), markdown_style.quote_border);
+    }
+
+    #[test]
+    fn workspace_theme_maps_terminal_palette_and_application_semantic_colors() {
+        let colors = TerminalColors {
+            background: rgb(0x101010).into(),
+            foreground: rgb(0xf0f0f0).into(),
+            muted: rgb(0x202020).into(),
+            muted_foreground: rgb(0x909090).into(),
+            border: rgb(0x303030).into(),
+            accent: rgb(0x3366ff).into(),
+            accent_foreground: rgb(0xffffff).into(),
+        };
+        let application_theme = Theme::from(ThemeColor::dark().as_ref());
+
+        let theme = workspace_theme_from_terminal_colors(&colors, &application_theme);
+
+        assert_eq!(theme.background, colors.background);
+        assert_eq!(theme.foreground, colors.foreground);
+        assert_eq!(theme.muted, colors.muted);
+        assert_eq!(theme.muted_foreground, colors.muted_foreground);
+        assert_eq!(theme.border, colors.border);
+        assert_eq!(theme.accent, colors.accent);
+        assert_eq!(theme.accent_foreground, colors.accent_foreground);
+        assert_eq!(theme.danger, application_theme.danger);
+        assert_eq!(theme.warning, application_theme.warning);
+        assert_eq!(theme.success, application_theme.success);
     }
 
     #[test]

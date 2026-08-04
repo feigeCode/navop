@@ -336,7 +336,20 @@ impl PopupMenu {
         cx: &mut App,
         f: impl FnOnce(Self, &mut Window, &mut Context<PopupMenu>) -> Self,
     ) -> Entity<Self> {
-        cx.new(|cx| f(Self::new(cx), window, cx))
+        cx.new(|cx| {
+            let menu = f(Self::new(cx), window, cx);
+            let parent_menu = cx.entity().downgrade();
+
+            for item in &menu.menu_items {
+                if let PopupMenuItem::Submenu { menu, .. } = item {
+                    menu.update(cx, |submenu, _| {
+                        submenu.parent_menu = Some(parent_menu.clone());
+                    });
+                }
+            }
+
+            menu
+        })
     }
 
     /// Set the focus handle of Entity to handle actions.
@@ -1397,5 +1410,81 @@ impl Render for PopupMenu {
                 // TODO: When the menu is limited by `overflow_y_scroll`, the sub-menu will cannot be displayed.
                 this.vertical_scrollbar(&self.scroll_handle)
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use gpui::TestAppContext;
+    use std::{cell::Cell, rc::Rc};
+
+    struct TestRoot {
+        menu: Entity<PopupMenu>,
+        submenu: Entity<PopupMenu>,
+        dismiss_count: Rc<Cell<usize>>,
+    }
+
+    impl Render for TestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.menu.clone()
+        }
+    }
+
+    #[gpui::test]
+    fn dismissing_prebuilt_submenu_dismisses_parent(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_global(crate::Theme::default()));
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let submenu = PopupMenu::build(window, cx, |menu, _, _| {
+                menu.item(PopupMenuItem::new("CSV"))
+            });
+            let submenu_for_menu = submenu.clone();
+            let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+                menu.item(PopupMenuItem::submenu("Copy As", submenu_for_menu))
+            });
+            let dismiss_count = Rc::new(Cell::new(0));
+            window
+                .subscribe(&menu, cx, {
+                    let dismiss_count = dismiss_count.clone();
+                    move |_, _: &DismissEvent, _, _| {
+                        dismiss_count.set(dismiss_count.get() + 1);
+                    }
+                })
+                .detach();
+
+            TestRoot {
+                menu,
+                submenu,
+                dismiss_count,
+            }
+        });
+
+        let (menu_id, parent_id) = root.read_with(cx, |root, cx| {
+            let parent_id = root
+                .submenu
+                .read(cx)
+                .parent_menu
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .map(|parent| parent.entity_id());
+            (root.menu.entity_id(), parent_id)
+        });
+
+        assert_eq!(parent_id, Some(menu_id));
+
+        root.update_in(cx, |root, window, cx| {
+            root.menu.update(cx, |menu, _| {
+                menu.selected_index = Some(0);
+            });
+            root.submenu.update(cx, |submenu, cx| {
+                submenu.dismiss(&Cancel, window, cx);
+            });
+        });
+
+        root.read_with(cx, |root, cx| {
+            assert_eq!(root.dismiss_count.get(), 1);
+            assert_eq!(root.menu.read(cx).selected_index, None);
+        });
     }
 }

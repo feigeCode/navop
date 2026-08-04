@@ -43,13 +43,16 @@ impl HomePage {
         let has_conflicts = conflict_count > 0;
 
         let legacy = self.home_page_style == HomePageStyle::Legacy;
+        let geometry = cx.theme().geometry.clone();
 
         h_flex()
             .w_full()
             .min_w_0()
+            .min_h(geometry.layout.command_bar)
             .flex_wrap()
-            .when(legacy, |toolbar| toolbar.gap_3().px_4().py_2())
-            .when(!legacy, |toolbar| toolbar.gap_2().px_3().py_1())
+            .gap(geometry.spacing.space_2)
+            .px(geometry.spacing.space_3)
+            .py(geometry.spacing.space_1)
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -91,7 +94,13 @@ impl HomePage {
                             }),
                     )
                     // 分隔线
-                    .child(div().h(px(20.0)).w(px(1.0)).bg(cx.theme().border).mx_1())
+                    .child(
+                        div()
+                            .h(geometry.spacing.space_5)
+                            .w(geometry.border.hairline)
+                            .bg(cx.theme().border)
+                            .mx(geometry.spacing.space_1),
+                    )
                     // 同步按钮
                     .child(
                         Button::new("sync-button")
@@ -235,13 +244,14 @@ impl HomePage {
                         } else {
                             t!("Home.card_view").to_string()
                         };
-                        Button::new("layout-toggle")
-                            .icon(if is_card {
+                        IconButton::new(
+                            "layout-toggle",
+                            if is_card {
                                 IconName::LayoutDashboard
                             } else {
                                 IconName::Menu
-                            })
-                            .ghost()
+                            },
+                        )
                             .tooltip(tooltip)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.connection_layout = this.connection_layout.toggle();
@@ -254,9 +264,7 @@ impl HomePage {
                     })
                     // 刷新按钮
                     .child(
-                        Button::new("refresh-button")
-                            .icon(IconName::Refresh)
-                            .ghost()
+                        IconButton::new("refresh-button", IconName::Refresh)
                             .tooltip(t!("Home.refresh"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.refresh_local_home_data(cx);

@@ -273,6 +273,10 @@ Pagination:
     en: Next
     zh-CN: 下一页
     zh-HK: 下一頁
+  select_hidden_page:
+    en: Select a hidden page
+    zh-CN: 选择隐藏页码
+    zh-HK: 選擇隱藏頁碼
 
 Text:
   failed_to_parse:

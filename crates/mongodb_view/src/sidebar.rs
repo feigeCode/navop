@@ -5,24 +5,19 @@ use ai_chat_view::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, IconName, IconSize, ObjectIcon, Selectable, Size, button::IconButton, h_flex,
+    v_flex,
+};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
+use rust_i18n::t;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPanel {
     AiChat,
-}
-
-impl SidebarPanel {
-    pub fn icon(&self) -> Icon {
-        match self {
-            SidebarPanel::AiChat => IconName::AI.color(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -140,33 +135,19 @@ impl MongoSidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_active = self.active_panel == Some(panel);
-        let accent_color = cx.theme().accent;
-        let accent_fg = cx.theme().accent_foreground;
-        let muted_fg = cx.theme().muted_foreground;
-        let muted_bg = cx.theme().muted;
+        let item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
 
-        div()
-            .id(SharedString::from(format!(
-                "mongodb-sidebar-btn-{:?}",
-                panel
-            )))
-            .w(px(36.0))
-            .h(px(36.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_md()
-            .cursor_pointer()
-            .when(is_active, |this| this.bg(accent_color))
-            .when(!is_active, |this| this.hover(|s| s.bg(muted_bg)))
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.toggle_panel(panel, cx);
-            }))
-            .child(
-                Icon::new(panel.icon())
-                    .with_size(Size::Medium)
-                    .text_color(if is_active { accent_fg } else { muted_fg }),
-            )
+        IconButton::new(
+            format!("mongodb-sidebar-btn-{panel:?}"),
+            ObjectIcon::new(IconName::AI),
+        )
+        .hit_size(item_size)
+        .glyph_size(IconSize::Medium)
+        .selected(is_active)
+        .tooltip(t!("MongoSidebar.ai_chat").to_string())
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.toggle_panel(panel, cx);
+        }))
     }
 
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

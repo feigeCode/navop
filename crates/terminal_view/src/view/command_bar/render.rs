@@ -7,7 +7,7 @@ use gpui::{
     prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
+    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, LocalInputStyle},
@@ -18,6 +18,9 @@ const COMMAND_BAR_COLLAPSED_HEIGHT: f32 = 30.0;
 const COMMAND_BAR_INPUT_MIN_HEIGHT: f32 = 80.0;
 const COMMAND_BAR_INPUT_MAX_HEIGHT: f32 = 400.0;
 const COMMAND_BAR_RESIZE_HANDLE_HEIGHT: f32 = 6.0;
+const COMMAND_BAR_RESIZE_GRIP_WIDTH: f32 = 32.0;
+const COMMAND_BAR_RESIZE_GRIP_HOVER_WIDTH: f32 = 48.0;
+const COMMAND_BAR_RESIZE_GRIP_HEIGHT: f32 = 2.0;
 const COMMAND_BAR_POPOVER_GAP: f32 = 8.0;
 
 #[derive(Clone)]
@@ -68,12 +71,14 @@ impl TerminalCommandBar {
             )
             .child(
                 div()
-                    .w(px(32.0))
-                    .h(px(2.0))
+                    .w(px(COMMAND_BAR_RESIZE_GRIP_WIDTH))
+                    .h(px(COMMAND_BAR_RESIZE_GRIP_HEIGHT))
                     .rounded_full()
                     .bg(self.colors.border)
                     .group_hover("terminal-command-resize-handle", |handle| {
-                        handle.w(px(48.0)).h(px(3.0)).bg(cx.theme().drag_border)
+                        handle
+                            .w(px(COMMAND_BAR_RESIZE_GRIP_HOVER_WIDTH))
+                            .bg(cx.theme().drag_border)
                     }),
             )
             .into_any_element()
@@ -158,7 +163,7 @@ impl TerminalCommandBar {
 
     fn render_quick_command_button(&self, cx: &mut Context<Self>) -> AnyElement {
         Button::new("terminal-command-quick")
-            .icon(Icon::new(IconName::TerminalQuickCommandColor).color())
+            .icon(FunctionalIcon::new(IconName::SquareTerminal))
             .label(format!(
                 "{} · {}",
                 t!("TerminalCommandBar.quick_commands"),
@@ -169,7 +174,11 @@ impl TerminalCommandBar {
             .when(self.quick_commands_open, |button| {
                 button.bg(self.colors.muted)
             })
-            .tooltip(t!("TerminalCommandBar.open_quick_commands").to_string())
+            .tooltip(if self.quick_commands_open {
+                t!("TerminalCommandBar.close_quick_commands").to_string()
+            } else {
+                t!("TerminalCommandBar.open_quick_commands").to_string()
+            })
             .on_click(cx.listener(|this, _, window, cx| {
                 this.toggle_quick_commands(window, cx);
             }))

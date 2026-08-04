@@ -4,10 +4,12 @@ use gpui::{
     Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    Disableable as _, IconName, Selectable as _, Sizable as _, Size,
-    button::{Button, ButtonVariants as _},
+    Disableable as _, IconName, IconSize, Selectable as _, Sizable as _, Size,
+    button::{Button, ButtonVariants as _, IconButton},
+    content_state::ContentState,
     h_flex,
     input::{Input, LocalInputStyle},
+    status_bar::{StatusBar, StatusPresentation},
     tab::{Tab, TabBar},
     v_flex,
 };
@@ -42,14 +44,17 @@ impl WorkspaceEditor {
             };
             tabs = tabs.child(
                 Tab::new().label(label).suffix(
-                    Button::new(SharedString::from(format!("workspace-close-tab-{index}")))
-                        .label("×")
-                        .with_size(Size::XSmall)
-                        .custom(self.theme.button_style(cx))
-                        .disabled(tab.saving)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.request_close_tab(index, window, cx);
-                        })),
+                    IconButton::new(
+                        SharedString::from(format!("workspace-close-tab-{index}")),
+                        IconName::Close,
+                    )
+                    .hit_size(Size::Small)
+                    .glyph_size(IconSize::Small)
+                    .tooltip(t!("WorkspaceExplorer.tooltip.close_tab"))
+                    .disabled(tab.saving)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.request_close_tab(index, window, cx);
+                    })),
                 ),
             );
         }
@@ -98,10 +103,7 @@ impl WorkspaceEditor {
                     })),
             )
             .child(
-                Button::new("workspace-diff-previous")
-                    .icon(IconName::ArrowUp)
-                    .ghost()
-                    .compact()
+                IconButton::new("workspace-diff-previous", IconName::ArrowUp)
                     .tooltip(t!("WorkspaceExplorer.action.previous_change"))
                     .disabled(unavailable || !side_by_side || !has_diff_changes)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -109,10 +111,7 @@ impl WorkspaceEditor {
                     })),
             )
             .child(
-                Button::new("workspace-diff-next")
-                    .icon(IconName::ArrowDown)
-                    .ghost()
-                    .compact()
+                IconButton::new("workspace-diff-next", IconName::ArrowDown)
                     .tooltip(t!("WorkspaceExplorer.action.next_change"))
                     .disabled(unavailable || !side_by_side || !has_diff_changes)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -189,15 +188,11 @@ impl WorkspaceEditor {
 
     fn render_body(&self) -> AnyElement {
         let Some(tab) = self.active_tab() else {
-            return v_flex().size_full().into_any_element();
+            return ContentState::empty(t!("WorkspaceExplorer.body.empty").to_string())
+                .into_any_element();
         };
         if tab.loading {
-            return v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .text_color(self.theme.muted_foreground)
-                .child(t!("WorkspaceExplorer.body.loading"))
+            return ContentState::loading(t!("WorkspaceExplorer.body.loading").to_string())
                 .into_any_element();
         }
         if let Some(error) = tab.load_error.as_ref() {
@@ -212,12 +207,7 @@ impl WorkspaceEditor {
                 .into_any_element();
         }
         if matches!(tab.policy, DocumentPolicy::Diff) && tab.saved_text.trim().is_empty() {
-            return v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .text_color(self.theme.muted_foreground)
-                .child(t!("WorkspaceExplorer.diff.empty"))
+            return ContentState::empty(t!("WorkspaceExplorer.diff.empty").to_string())
                 .into_any_element();
         }
         if tab.diff_side_by_side {
@@ -323,65 +313,60 @@ impl WorkspaceEditor {
     }
 
     fn render_load_error(&self, error: &str) -> gpui::AnyElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_base()
-                    .child(t!("WorkspaceExplorer.body.unable_to_open")),
-            )
-            .child(
-                div()
-                    .max_w(px(640.0))
-                    .text_sm()
-                    .text_color(self.theme.danger)
-                    .child(error.to_string()),
-            )
+        ContentState::error(t!("WorkspaceExplorer.body.unable_to_open").to_string())
+            .detail(error.to_string())
             .into_any_element()
     }
 
     fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.active_tab();
         let dirty = tab.is_some_and(|tab| tab.is_dirty(cx));
-        h_flex()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .py_1()
-            .border_t_1()
-            .border_color(self.theme.border)
-            .bg(self.theme.background)
-            .child(
+        let presentation = tab.map_or(StatusPresentation::Neutral, |tab| {
+            if matches!(
+                tab.status_presentation,
+                StatusPresentation::Progress | StatusPresentation::Error
+            ) {
+                tab.status_presentation
+            } else if dirty {
+                StatusPresentation::Warning
+            } else {
+                tab.status_presentation
+            }
+        });
+        let status_message = tab
+            .map(|tab| {
+                if dirty
+                    && !matches!(
+                        tab.status_presentation,
+                        StatusPresentation::Progress | StatusPresentation::Error
+                    )
+                {
+                    t!("WorkspaceExplorer.status.unsaved").to_string()
+                } else {
+                    tab.status_message.clone()
+                }
+            })
+            .unwrap_or_default();
+
+        StatusBar::new("workspace-editor-status")
+            .presentation(presentation)
+            .leading(
                 div()
-                    .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_sm()
                     .text_color(self.theme.muted_foreground)
                     .child(tab.map(|tab| tab.key.display_path()).unwrap_or_default()),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(self.theme.muted_foreground)
-                    .child(format_size(tab.map_or(0, |tab| tab.file_size))),
+            .trailing(
+                h_flex().gap_2().child(
+                    div()
+                        .text_sm()
+                        .text_color(self.theme.muted_foreground)
+                        .child(format_size(tab.map_or(0, |tab| tab.file_size))),
+                ),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(if dirty {
-                        self.theme.warning
-                    } else {
-                        self.theme.muted_foreground
-                    })
-                    .child(
-                        tab.map(|tab| tab.status_message.clone())
-                            .unwrap_or_default(),
-                    ),
-            )
+            .status(div().text_sm().child(status_message))
     }
 }
 

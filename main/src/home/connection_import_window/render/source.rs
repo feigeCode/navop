@@ -2,12 +2,13 @@ use connection_import_protocol::{ImportRecordKind, ImporterAvailability};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, button::Button, checkbox::Checkbox,
-    h_flex, v_flex,
+    ActiveTheme, Disableable, IconName, Sizable, button::Button, checkbox::Checkbox, h_flex, v_flex,
 };
+use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
 use super::super::ConnectionImportWindow;
+use crate::connection_visuals::{ConnectionVisualSize, connection_type_icon};
 use crate::home::connection_import_model::ImportSourceState;
 
 pub(super) fn render_source_row(
@@ -41,11 +42,10 @@ pub(super) fn render_source_row(
                     cx.notify();
                 })),
         )
-        .child(
-            Icon::new(source_icon_name(source))
-                .color()
-                .with_size(Size::Small),
-        )
+        .child(connection_type_icon(
+            source_connection_type(source),
+            ConnectionVisualSize::Tree,
+        ))
         .child(
             v_flex()
                 .flex_1()
@@ -88,19 +88,21 @@ pub(super) fn render_source_row(
         .into_any_element()
 }
 
-fn source_icon_name(source: &ImportSourceState) -> IconName {
+fn source_connection_type(source: &ImportSourceState) -> ConnectionType {
     if source
         .descriptor
         .output_kinds
         .contains(&ImportRecordKind::Ssh)
-        || source
-            .descriptor
-            .output_kinds
-            .contains(&ImportRecordKind::PortForwarding)
     {
-        IconName::TerminalColor
+        ConnectionType::SshSftp
+    } else if source
+        .descriptor
+        .output_kinds
+        .contains(&ImportRecordKind::PortForwarding)
+    {
+        ConnectionType::PortForwarding
     } else {
-        IconName::Database
+        ConnectionType::Database
     }
 }
 

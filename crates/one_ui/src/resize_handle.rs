@@ -7,7 +7,12 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 
+/// Legacy default resize-handle edge padding.
+#[deprecated(note = "Use cx.theme().geometry.resize.edge_padding")]
 pub const HANDLE_PADDING: Pixels = px(4.);
+
+/// Legacy default resize-handle visible line size.
+#[deprecated(note = "Use cx.theme().geometry.resize.visible_line")]
 pub const HANDLE_SIZE: Pixels = px(1.);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,11 +117,14 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let neg_offset = -HANDLE_PADDING;
         let axis = self.axis;
 
         window.with_element_state(id.unwrap(), |state, window| {
             let state = state.unwrap_or(ResizeHandleState::default());
+            let resize = cx.theme().geometry.resize;
+            let handle_padding = resize.edge_padding;
+            let handle_size = resize.visible_line;
+            let neg_offset = -handle_padding;
 
             let bg_color = if state.is_active() {
                 cx.theme().drag_border
@@ -144,39 +152,39 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                         .top_0()
                         .right(px(1.))
                         .h_full()
-                        .w(HANDLE_SIZE)
-                        .pl(HANDLE_PADDING),
+                        .w(handle_size)
+                        .pl(handle_padding),
                     Some(HandlePlacement::Right) => this
                         .cursor_col_resize()
                         .top_0()
                         .left(px(1.))
                         .h_full()
-                        .w(HANDLE_SIZE)
-                        .pr(HANDLE_PADDING),
+                        .w(handle_size)
+                        .pr(handle_padding),
                     None => this
                         .when(is_horizontal, |this| {
                             this.cursor_col_resize()
                                 .top_0()
                                 .left(neg_offset)
                                 .h_full()
-                                .w(HANDLE_SIZE)
-                                .px(HANDLE_PADDING)
+                                .w(handle_size)
+                                .px(handle_padding)
                         })
                         .when(!is_horizontal, |this| {
                             this.cursor_row_resize()
                                 .top(neg_offset)
                                 .left_0()
                                 .w_full()
-                                .h(HANDLE_SIZE)
-                                .py(HANDLE_PADDING)
+                                .h(handle_size)
+                                .py(handle_padding)
                         }),
                 })
                 .child(
                     div()
                         .bg(bg_color)
                         .group_hover("handle", |this| this.bg(cx.theme().drag_border))
-                        .when(is_horizontal, |this| this.h_full().w(HANDLE_SIZE))
-                        .when(!is_horizontal, |this| this.w_full().h(HANDLE_SIZE)),
+                        .when(is_horizontal, |this| this.h_full().w(handle_size))
+                        .when(!is_horizontal, |this| this.w_full().h(handle_size)),
                 )
                 .into_any_element();
 

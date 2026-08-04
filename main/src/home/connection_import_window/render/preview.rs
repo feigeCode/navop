@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
+    ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex, v_flex,
@@ -9,6 +9,7 @@ use gpui_component::{
 use rust_i18n::t;
 
 use super::super::{ConnectionImportWindow, is_save_candidate};
+use crate::connection_visuals::{ConnectionVisualSize, connection_type_icon};
 use crate::home::connection_import_draft::{EditableImportDraft, ImportDraftKind};
 use crate::home::connection_import_model::{ImportPreviewRow, ImportRowSaveStatus};
 
@@ -36,11 +37,10 @@ pub(super) fn render_preview_row(
                     }
                 })),
         )
-        .child(
-            Icon::new(row_icon_name(&row.draft))
-                .color()
-                .with_size(Size::Small),
-        )
+        .child(connection_type_icon(
+            row.draft.visual_connection_type(),
+            ConnectionVisualSize::Tree,
+        ))
         .child(render_row_text(row, cx))
         .child(render_row_status(row, cx))
         .child(render_row_actions(row, &record_id, cx))
@@ -160,13 +160,6 @@ fn render_row_status(
         .text_xs()
         .text_color(status_color(&row.save_status, cx))
         .child(status_text(&row.save_status))
-}
-
-fn row_icon_name(draft: &EditableImportDraft) -> IconName {
-    match draft.kind() {
-        ImportDraftKind::Database => IconName::Database,
-        ImportDraftKind::Ssh | ImportDraftKind::Unsupported => IconName::TerminalColor,
-    }
 }
 
 fn kind_text(kind: ImportDraftKind) -> String {

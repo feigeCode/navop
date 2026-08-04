@@ -1,10 +1,10 @@
-use crate::external_driver_display::{
-    external_driver_icon_from_file_path, external_driver_icon_from_path,
+use crate::connection_visuals::{
+    ConnectionVisualSize, connection_type_icon, database_type_icon,
+    external_driver_icon_from_sources,
 };
 use db::ipc::IpcDriverRegistry;
-use gpui::{Styled, px};
 use gpui_component::{Icon, IconName, Sizable};
-use one_core::storage::DatabaseType;
+use one_core::storage::{ConnectionType, DatabaseType};
 use rust_i18n::t;
 use std::path::PathBuf;
 
@@ -42,9 +42,8 @@ impl NewConnectionCategory {
 
     pub(super) fn icon(self) -> IconName {
         match self {
-            Self::All => IconName::AppsColor,
-            Self::Database => IconName::Database,
-            Self::DomesticDatabase => IconName::Database,
+            Self::All => IconName::LayoutDashboard,
+            Self::Database | Self::DomesticDatabase => IconName::DatabaseLine,
             Self::NoSql => IconName::Server,
             Self::Terminal => IconName::Terminal,
         }
@@ -144,31 +143,35 @@ impl NewConnectionKind {
 
     pub(super) fn icon(&self) -> Icon {
         match self {
-            Self::Ssh => IconName::TerminalColor.color().with_size(px(40.0)),
-            Self::Rdp => IconName::Rdp.color().with_size(px(40.0)),
-            Self::Vnc => IconName::Vnc.color().with_size(px(40.0)),
-            Self::Redis => IconName::Redis.color().with_size(px(40.0)),
-            Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
-            Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
-            Self::PortForwarding => IconName::PortForwardingColor.color().with_size(px(40.0)),
+            Self::Ssh => connection_type_icon(ConnectionType::SshSftp, ConnectionVisualSize::Hero),
+            Self::Rdp => connection_type_icon(ConnectionType::Rdp, ConnectionVisualSize::Hero),
+            Self::Vnc => connection_type_icon(ConnectionType::Vnc, ConnectionVisualSize::Hero),
+            Self::Redis => connection_type_icon(ConnectionType::Redis, ConnectionVisualSize::Hero),
+            Self::MongoDB => {
+                connection_type_icon(ConnectionType::MongoDB, ConnectionVisualSize::Hero)
+            }
+            Self::Serial => {
+                connection_type_icon(ConnectionType::Serial, ConnectionVisualSize::Hero)
+            }
+            Self::PortForwarding => {
+                connection_type_icon(ConnectionType::PortForwarding, ConnectionVisualSize::Hero)
+            }
             Self::MoreConnections => IconName::Plus
                 .mono()
-                .text_color(gpui::rgb(0x16a34a))
-                .with_size(px(40.0)),
-            Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
+                .with_size(ConnectionVisualSize::Hero.icon_size()),
+            Self::Database(db_type) => database_type_icon(db_type, ConnectionVisualSize::Hero),
             Self::ExternalDatabase {
                 icon_asset_path,
                 icon_file_path,
                 ..
-            } => {
-                if let Some(path) = icon_file_path {
-                    return external_driver_icon_from_file_path(path, px(40.0));
-                }
-                icon_asset_path
-                    .as_deref()
-                    .map(|path| external_driver_icon_from_path(path, px(40.0)))
-                    .unwrap_or_else(|| IconName::Database.color().with_size(px(40.0)))
-            }
+            } => external_driver_icon_from_sources(
+                icon_asset_path.as_deref(),
+                icon_file_path.as_deref(),
+                ConnectionVisualSize::Hero,
+            )
+            .unwrap_or_else(|| {
+                connection_type_icon(ConnectionType::Database, ConnectionVisualSize::Hero)
+            }),
         }
     }
 }

@@ -26,11 +26,12 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    panel_header::{PanelHeader, PanelHeaderVariant},
     popover::Popover,
     spinner::Spinner,
     v_flex,
@@ -3284,7 +3285,7 @@ impl AgentChatView {
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.sidebar_collapsed {
             return v_flex()
-                .w(px(48.0))
+                .w(cx.theme().geometry.layout.compact_rail)
                 .h_full()
                 .flex_shrink_0()
                 .border_r_1()
@@ -3294,17 +3295,15 @@ impl AgentChatView {
                 .py_2()
                 .gap_2()
                 .child(
-                    Button::new("agent-expand")
-                        .icon(IconName::PanelLeftOpen)
-                        .ghost()
-                        .small()
+                    IconButton::new("agent-expand", IconName::PanelLeftOpen)
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("AgentUi.open_sidebar").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
                 )
                 .child(
-                    Button::new("agent-new-collapsed")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .small()
+                    IconButton::new("agent-new-collapsed", IconName::Plus)
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("AgentUi.new_task").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                 )
                 .into_any_element();
@@ -3340,7 +3339,7 @@ impl AgentChatView {
         };
 
         v_flex()
-            .w(px(260.0))
+            .w(cx.theme().geometry.layout.context_sidebar_default)
             .h_full()
             .min_h_0()
             .flex_shrink_0()
@@ -3354,49 +3353,41 @@ impl AgentChatView {
 
     fn render_sidebar_header(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let title = agent_history_title(self.show_archived);
-        h_flex()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .py_2()
-            .border_b_1()
+        PanelHeader::new("agent-sidebar-header")
+            .variant(PanelHeaderVariant::Sidebar)
+            .background(cx.theme().muted)
             .border_color(cx.theme().border)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Button::new("agent-collapse")
-                            .icon(IconName::PanelLeftClose)
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    ),
+            .leading(
+                IconButton::new("agent-collapse", IconName::PanelLeftClose)
+                    .role(IconButtonRole::Compact)
+                    .tooltip(t!("AgentUi.close_sidebar").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
             )
-            .child(
+            .title(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+            .trailing(
                 h_flex()
                     .gap_1()
                     .items_center()
                     .child(
-                        Button::new("agent-toggle-archived")
-                            .icon(IconName::Inbox)
-                            .ghost()
-                            .small()
+                        IconButton::new("agent-toggle-archived", IconName::Inbox)
+                            .role(IconButtonRole::Compact)
                             .selected(self.show_archived)
+                            .tooltip(t!("AgentUi.archived").to_string())
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_archived(cx))),
                     )
                     .child(
-                        Button::new("agent-new")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
+                        IconButton::new("agent-new", IconName::Plus)
+                            .role(IconButtonRole::Compact)
+                            .tooltip(t!("AgentUi.new_conversation").to_string())
                             .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                     ),
             )
@@ -3412,26 +3403,18 @@ impl AgentChatView {
         // 仅在打开时构建列表,避免每帧渲染全部会话行。
         let history_list = history_open.then(|| self.render_history_list(cx));
 
-        h_flex()
-            .flex_shrink_0()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .py_2()
-            .border_b_1()
+        PanelHeader::new("agent-sidebar-mode-header")
+            .variant(PanelHeaderVariant::Sidebar)
             .border_color(border)
-            .bg(muted)
-            .child(self.render_agent_switcher(cx))
-            .child(
+            .background(muted)
+            .title(self.render_agent_switcher(cx))
+            .trailing(
                 h_flex()
                     .gap_1()
                     .items_center()
                     .child(
-                        Button::new("agent-sidebar-new")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
+                        IconButton::new("agent-sidebar-new", IconName::Plus)
+                            .role(IconButtonRole::Compact)
                             .tooltip(t!("AgentUi.new_task").to_string())
                             .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                     )
@@ -3448,10 +3431,8 @@ impl AgentChatView {
                                 cx.notify();
                             }))
                             .trigger(
-                                Button::new("agent-sidebar-history-btn")
-                                    .icon(IconName::BookOpen)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("agent-sidebar-history-btn", IconName::BookOpen)
+                                    .role(IconButtonRole::Compact)
                                     .tooltip(t!("AgentUi.history_tasks").to_string()),
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
@@ -3460,10 +3441,8 @@ impl AgentChatView {
                         this.child(self.render_sidebar_frame_options(cx))
                     })
                     .child(
-                        Button::new("agent-sidebar-close")
-                            .icon(IconName::Close)
-                            .ghost()
-                            .small()
+                        IconButton::new("agent-sidebar-close", IconName::Close)
+                            .role(IconButtonRole::Compact)
                             .tooltip(t!("AgentUi.close_panel").to_string())
                             .on_click(cx.listener(|_this, _, _, cx| {
                                 cx.emit(AgentChatViewEvent::Close);
@@ -3527,29 +3506,24 @@ impl AgentChatView {
             .bg(theme.background)
             .text_color(theme.foreground)
             .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .px_2()
-                    .py_1p5()
-                    .border_b_1()
+                PanelHeader::new("agent-history-header")
+                    .variant(PanelHeaderVariant::Sidebar)
+                    .horizontal_padding(cx.theme().geometry.spacing.space_2)
+                    .background(theme.background)
                     .border_color(border)
-                    .child(
+                    .title(
                         div()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(title),
                     )
-                    .child(
+                    .trailing(
                         h_flex()
                             .gap_1()
                             .items_center()
                             .child(
-                                Button::new("agent-history-archived")
-                                    .icon(IconName::Inbox)
-                                    .ghost()
-                                    .xsmall()
+                                IconButton::new("agent-history-archived", IconName::Inbox)
+                                    .role(IconButtonRole::Compact)
                                     .selected(show_archived)
                                     .tooltip(t!("AgentUi.archived").to_string())
                                     .on_click(
@@ -3557,10 +3531,8 @@ impl AgentChatView {
                                     ),
                             )
                             .child(
-                                Button::new("agent-history-new")
-                                    .icon(IconName::Plus)
-                                    .ghost()
-                                    .xsmall()
+                                IconButton::new("agent-history-new", IconName::Plus)
+                                    .role(IconButtonRole::Compact)
                                     .tooltip(t!("AgentUi.new_conversation").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             ),
@@ -3592,25 +3564,21 @@ impl AgentChatView {
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        h_flex()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(self.render_agent_switcher(cx))
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        PanelHeader::new("agent-chat-toolbar")
+            .variant(PanelHeaderVariant::Toolbar)
+            .horizontal_padding(cx.theme().geometry.spacing.space_4)
+            .background(theme.background)
+            .border_color(theme.border)
+            .title(self.render_agent_switcher(cx))
             .into_any_element()
     }
 
     fn render_sidebar_frame_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let placement = self.sidebar_frame_placement;
-        Button::new("agent-sidebar-frame-options")
-            .icon(IconName::Ellipsis)
-            .ghost()
-            .small()
+        IconButton::new("agent-sidebar-frame-options", IconName::Ellipsis)
+            .role(IconButtonRole::Compact)
             .tooltip(t!("AgentUi.panel_options").to_string())
             .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
                 build_sidebar_frame_options_menu(menu, view.clone(), placement, window, cx)

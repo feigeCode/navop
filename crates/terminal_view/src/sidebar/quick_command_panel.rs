@@ -9,8 +9,8 @@ use gpui::{
     SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
-    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants},
+    ActiveTheme, FunctionalIcon, Icon, IconName, Sizable, Size, WindowExt,
+    button::{Button, ButtonCustomVariant, ButtonVariant, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState, LocalInputStyle},
@@ -1065,10 +1065,8 @@ impl QuickCommandPanel {
                 ),
             )
             .child(
-                Button::new("add-command")
-                    .icon(IconName::Plus)
-                    .ghost()
-                    .xsmall()
+                IconButton::new("add-command", FunctionalIcon::new(IconName::Plus))
+                    .role(IconButtonRole::Compact)
                     .tooltip(t!("QuickCommand.add_tooltip").to_string())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_command_editor(None, None, window, cx);
@@ -1254,64 +1252,89 @@ impl QuickCommandPanel {
                             .group_hover(item_group, |style| style.visible())
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
-                                Button::new(SharedString::from(format!("pin-{index}")))
-                                    .icon(if is_pinned {
+                                IconButton::new(
+                                    SharedString::from(format!("pin-{index}")),
+                                    FunctionalIcon::new(if is_pinned {
                                         IconName::StarOff
                                     } else {
                                         IconName::Star
-                                    })
-                                    .ghost()
-                                    .xsmall()
-                                    .when(is_pinned, |this| this.text_color(pin_color))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    }),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(if is_pinned {
+                                    t!("QuickCommand.unpin_tooltip").to_string()
+                                } else {
+                                    t!("QuickCommand.pin_tooltip").to_string()
+                                })
+                                .when(is_pinned, |this| this.text_color(pin_color))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.toggle_pin(id, cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("edit-{index}")))
-                                    .icon(IconName::Edit)
-                                    .ghost()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                IconButton::new(
+                                    SharedString::from(format!("edit-{index}")),
+                                    FunctionalIcon::new(IconName::Edit),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("QuickCommand.edit_tooltip").to_string())
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         this.open_command_editor(
                                             Some(existing_for_edit.clone()),
                                             None,
                                             window,
                                             cx,
                                         );
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("copy-{index}")))
-                                    .icon(IconName::Copy)
-                                    .ghost()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                IconButton::new(
+                                    SharedString::from(format!("copy-{index}")),
+                                    FunctionalIcon::new(IconName::Copy),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("QuickCommand.copy_tooltip").to_string())
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         this.copy_command(&value_for_copy, window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("delete-{index}")))
-                                    .icon(IconName::Remove)
-                                    .danger()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                IconButton::new(
+                                    SharedString::from(format!("delete-{index}")),
+                                    FunctionalIcon::new(IconName::Remove),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .text_color(cx.theme().danger)
+                                .tooltip(t!("QuickCommand.delete_tooltip").to_string())
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
                                         this.confirm_delete_command(
                                             id,
                                             value_for_delete.clone(),
                                             window,
                                             cx,
                                         );
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("paste-{index}")))
-                                    .icon(IconName::Paste)
-                                    .ghost()
-                                    .xsmall()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                IconButton::new(
+                                    SharedString::from(format!("paste-{index}")),
+                                    FunctionalIcon::new(IconName::Paste),
+                                )
+                                .role(IconButtonRole::Compact)
+                                .tooltip(t!("QuickCommand.paste_tooltip").to_string())
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
                                         this.paste_command(value_for_paste.clone(), cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             )

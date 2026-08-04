@@ -1,15 +1,4 @@
-use gpui::{
-    AnyElement, App, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div, px,
-};
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size};
-
-pub(super) const WORKSPACE_TOOLBAR_HEIGHT: Pixels = px(72.0);
-pub(super) const WORKSPACE_TOOLBAR_ITEM_WIDTH: Pixels = px(76.0);
-pub(super) const WORKSPACE_TOOLBAR_ITEM_HEIGHT: Pixels = px(58.0);
-pub(super) const WORKSPACE_TOOLBAR_ICON_SIZE: Pixels = px(34.0);
-pub(super) const WORKSPACE_TOOLBAR_ITEM_RADIUS: Pixels = px(8.0);
-pub(super) const WORKSPACE_TOOLBAR_HOVER_ALPHA: f32 = 0.55;
-pub(super) const WORKSPACE_TOOLBAR_ICON_BG_ALPHA: f32 = 0.12;
+use gpui_component::IconName;
 
 #[derive(Clone, Copy)]
 pub(super) enum DatabaseToolbarAction {
@@ -25,21 +14,12 @@ pub(super) enum DatabaseToolbarAction {
     Bi,
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum DatabaseToolbarTone {
-    Primary,
-    Success,
-    Warning,
-    Info,
-}
-
 #[derive(Clone)]
 pub(super) struct DatabaseToolbarItem {
     pub id: &'static str,
     pub label_i18n_key: &'static str,
     pub icon: IconName,
     pub action: DatabaseToolbarAction,
-    pub tone: DatabaseToolbarTone,
 }
 
 pub(super) fn database_toolbar_items() -> Vec<DatabaseToolbarItem> {
@@ -49,72 +29,72 @@ pub(super) fn database_toolbar_items() -> Vec<DatabaseToolbarItem> {
             "DatabaseToolbar.show_objects",
             IconName::Eye,
             DatabaseToolbarAction::ShowObjects,
-            DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-query",
             "DatabaseToolbar.create_query",
             IconName::Query,
             DatabaseToolbarAction::CreateQuery,
-            DatabaseToolbarTone::Info,
         ),
         toolbar_item(
             "db-toolbar-users",
             "DatabaseToolbar.users",
             IconName::User,
             DatabaseToolbarAction::Users,
-            DatabaseToolbarTone::Warning,
         ),
         toolbar_item(
             "db-toolbar-schema-compare",
             "DatabaseToolbar.compare_schema",
             IconName::SchemaCompare,
             DatabaseToolbarAction::CompareSchema,
-            DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-data-compare",
             "DatabaseToolbar.compare_data",
             IconName::Sync,
             DatabaseToolbarAction::CompareData,
-            DatabaseToolbarTone::Success,
         ),
         toolbar_item(
             "db-toolbar-data-generator",
             "DatabaseToolbar.data_generator",
             IconName::TableDesignTool,
             DatabaseToolbarAction::DataGenerator,
-            DatabaseToolbarTone::Warning,
         ),
         toolbar_item(
             "db-toolbar-backup",
             "DatabaseToolbar.backup",
             IconName::Export,
             DatabaseToolbarAction::Backup,
-            DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-automation",
             "DatabaseToolbar.automation",
             IconName::Play,
             DatabaseToolbarAction::Automation,
-            DatabaseToolbarTone::Success,
         ),
         toolbar_item(
             "db-toolbar-model",
             "DatabaseToolbar.model",
             IconName::DataModel,
             DatabaseToolbarAction::Model,
-            DatabaseToolbarTone::Info,
         ),
         toolbar_item(
             "db-toolbar-bi",
             "DatabaseToolbar.bi",
             IconName::ChartPie,
             DatabaseToolbarAction::Bi,
-            DatabaseToolbarTone::Primary,
         ),
     ]
+}
+
+const PRIMARY_TOOLBAR_ITEM_COUNT: usize = 2;
+
+pub(super) fn split_toolbar_items(
+    items: Vec<DatabaseToolbarItem>,
+) -> (Vec<DatabaseToolbarItem>, Vec<DatabaseToolbarItem>) {
+    let mut visible = items;
+    let overflow = visible.split_off(visible.len().min(PRIMARY_TOOLBAR_ITEM_COUNT));
+    (visible, overflow)
 }
 
 fn toolbar_item(
@@ -122,47 +102,100 @@ fn toolbar_item(
     label_i18n_key: &'static str,
     icon: IconName,
     action: DatabaseToolbarAction,
-    tone: DatabaseToolbarTone,
 ) -> DatabaseToolbarItem {
     DatabaseToolbarItem {
         id,
         label_i18n_key,
         icon,
         action,
-        tone,
     }
 }
 
-pub(super) fn toolbar_tone_color(tone: DatabaseToolbarTone, cx: &App) -> Hsla {
-    match tone {
-        DatabaseToolbarTone::Primary => cx.theme().primary,
-        DatabaseToolbarTone::Success => cx.theme().success,
-        DatabaseToolbarTone::Warning => cx.theme().warning,
-        DatabaseToolbarTone::Info => cx.theme().info,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_bar_items_keep_stable_order_and_ids() {
+        let items = database_toolbar_items();
+
+        assert_eq!(items.len(), 10);
+        assert_eq!(
+            items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![
+                "db-toolbar-show",
+                "db-toolbar-query",
+                "db-toolbar-users",
+                "db-toolbar-schema-compare",
+                "db-toolbar-data-compare",
+                "db-toolbar-data-generator",
+                "db-toolbar-backup",
+                "db-toolbar-automation",
+                "db-toolbar-model",
+                "db-toolbar-bi",
+            ]
+        );
     }
-}
 
-pub(super) fn toolbar_item_icon(icon: IconName, color: Hsla) -> AnyElement {
-    div()
-        .w(WORKSPACE_TOOLBAR_ICON_SIZE)
-        .h(WORKSPACE_TOOLBAR_ICON_SIZE)
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(WORKSPACE_TOOLBAR_ITEM_RADIUS)
-        .bg(color.opacity(WORKSPACE_TOOLBAR_ICON_BG_ALPHA))
-        .child(Icon::new(icon).with_size(Size::Large).text_color(color))
-        .into_any_element()
-}
+    #[test]
+    fn command_bar_split_keeps_two_visible_actions_and_stable_overflow_order() {
+        let all_items = database_toolbar_items();
+        let all_ids = all_items.iter().map(|item| item.id).collect::<Vec<_>>();
+        let (visible, overflow) = split_toolbar_items(all_items);
 
-pub(super) fn toolbar_item_label(label: String, cx: &App) -> AnyElement {
-    div()
-        .w_full()
-        .text_center()
-        .text_xs()
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(cx.theme().foreground)
-        .whitespace_nowrap()
-        .child(label)
-        .into_any_element()
+        assert_eq!(
+            visible.iter().map(|item| item.id).collect::<Vec<_>>(),
+            &all_ids[..2]
+        );
+        assert_eq!(
+            overflow.iter().map(|item| item.id).collect::<Vec<_>>(),
+            &all_ids[2..]
+        );
+        assert_eq!(visible.len() + overflow.len(), all_ids.len());
+    }
+
+    #[test]
+    fn command_bar_split_handles_short_inputs_without_duplicates() {
+        for len in 0..=3 {
+            let items = database_toolbar_items()
+                .into_iter()
+                .take(len)
+                .collect::<Vec<_>>();
+            let expected_ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
+            let (visible, overflow) = split_toolbar_items(items);
+            let actual_ids = visible
+                .iter()
+                .chain(overflow.iter())
+                .map(|item| item.id)
+                .collect::<Vec<_>>();
+
+            assert_eq!(visible.len(), len.min(PRIMARY_TOOLBAR_ITEM_COUNT));
+            assert_eq!(
+                overflow.len(),
+                len.saturating_sub(PRIMARY_TOOLBAR_ITEM_COUNT)
+            );
+            assert_eq!(actual_ids, expected_ids);
+        }
+    }
+
+    #[test]
+    fn command_bar_split_preserves_order_after_capability_filtering() {
+        let filtered = database_toolbar_items()
+            .into_iter()
+            .filter(|item| !matches!(item.action, DatabaseToolbarAction::Users))
+            .collect::<Vec<_>>();
+        let expected_ids = filtered.iter().map(|item| item.id).collect::<Vec<_>>();
+        let (visible, overflow) = split_toolbar_items(filtered);
+        let actual_ids = visible
+            .iter()
+            .chain(overflow.iter())
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_ids, expected_ids);
+        assert_eq!(
+            visible.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec!["db-toolbar-show", "db-toolbar-query"]
+        );
+    }
 }

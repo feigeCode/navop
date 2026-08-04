@@ -5,7 +5,7 @@ use gpui_component::{WindowExt, notification::Notification};
 use rust_i18n::t;
 
 use crate::state::{
-    apply_installed_reload_success, apply_marketplace_load_result,
+    MarketplaceLoadState, apply_installed_reload_success, apply_marketplace_load_result,
     marketplace_manifest_url_from_query, should_auto_load_marketplace,
 };
 use crate::status_message::{format_notification_error, format_status_error};
@@ -19,7 +19,6 @@ impl ExtensionManagerView {
         match self.host.list_installed() {
             Ok(installed) => self.set_installed(installed),
             Err(err) => {
-                self.installed.clear();
                 self.status = t!("Extension.read_installed_failed", error = err.to_string())
                     .to_string()
                     .into();
@@ -29,11 +28,11 @@ impl ExtensionManagerView {
     }
 
     pub(crate) fn load_marketplace(&mut self, cx: &mut Context<Self>) {
-        if self.loading {
+        if self.marketplace_load_state.is_loading() {
             return;
         }
         self.marketplace_load_attempted = true;
-        self.loading = true;
+        self.marketplace_load_state = MarketplaceLoadState::Loading;
         self.status = t!("Extension.loading_marketplace").to_string().into();
         let http_client = cx.http_client();
         let manifest_url = self.marketplace_manifest_url(cx);
@@ -214,7 +213,7 @@ impl ExtensionManagerView {
             self.mode,
             self.marketplace_entries.is_empty(),
             self.marketplace_load_attempted,
-            self.loading,
+            self.marketplace_load_state.is_loading(),
         ) {
             self.load_marketplace(cx);
         }
@@ -320,7 +319,7 @@ fn finish_marketplace_load(
             entity.update(cx, |view, cx| {
                 let notification = apply_marketplace_load_result(
                     &mut view.marketplace_entries,
-                    &mut view.loading,
+                    &mut view.marketplace_load_state,
                     &mut view.status,
                     outcome,
                 );
@@ -344,7 +343,7 @@ fn update_marketplace_load_without_notification(
     entity.update(cx, |view, cx| {
         apply_marketplace_load_result(
             &mut view.marketplace_entries,
-            &mut view.loading,
+            &mut view.marketplace_load_state,
             &mut view.status,
             outcome,
         );

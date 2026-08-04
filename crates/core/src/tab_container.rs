@@ -22,10 +22,11 @@ use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_component::panel_header::{PanelHeader, PanelHeaderVariant};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{
-    ActiveTheme, Disableable, ElementExt as _, Icon, IconName, InteractiveElementExt as _, Sizable,
-    Size, h_flex, v_flex,
+    ActiveTheme, Disableable, ElementExt as _, Icon, IconName, IconSize,
+    InteractiveElementExt as _, LayoutSizeTokens, Sizable, Size, h_flex, v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -33,12 +34,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-const SIDEBAR_PANEL_MIN_SIZE: Pixels = px(120.0);
-const SIDEBAR_CENTER_MIN_SIZE: Pixels = px(160.0);
-const SIDEBAR_SIDE_DEFAULT_WIDTH: Pixels = px(320.0);
-const SIDEBAR_BOTTOM_DEFAULT_HEIGHT: Pixels = px(260.0);
-const SIDEBAR_HANDLE_PADDING: Pixels = px(4.0);
-const SIDEBAR_HANDLE_SIZE: Pixels = px(1.0);
 const TAB_MIN_WIDTH: Pixels = px(60.0);
 const TAB_RENAME_MIN_WIDTH: Pixels = px(280.0);
 const TAB_CONTAINER_CONTEXT: &str = "TabContainer";
@@ -2228,7 +2223,11 @@ impl TabContainer {
             .collect()
     }
 
-    fn sidebar_panel_side_width(&self, contribution: &SidebarContribution) -> Pixels {
+    fn sidebar_panel_side_width(
+        &self,
+        contribution: &SidebarContribution,
+        layout: LayoutSizeTokens,
+    ) -> Pixels {
         if !sidebar_panel_allows_size_override(contribution.size.side_width) {
             return contribution.size.side_width.unwrap_or(TOOLBAR_WIDTH);
         }
@@ -2237,10 +2236,14 @@ impl TabContainer {
             .get(&contribution.id)
             .and_then(|size| size.side_width)
             .or(contribution.size.side_width)
-            .unwrap_or(SIDEBAR_SIDE_DEFAULT_WIDTH)
+            .unwrap_or(layout.utility_panel_default)
     }
 
-    fn sidebar_panel_bottom_height(&self, contribution: &SidebarContribution) -> Pixels {
+    fn sidebar_panel_bottom_height(
+        &self,
+        contribution: &SidebarContribution,
+        layout: LayoutSizeTokens,
+    ) -> Pixels {
         if !sidebar_panel_allows_size_override(contribution.size.bottom_height) {
             return contribution.size.bottom_height.unwrap_or(TOOLBAR_WIDTH);
         }
@@ -2249,22 +2252,30 @@ impl TabContainer {
             .get(&contribution.id)
             .and_then(|size| size.bottom_height)
             .or(contribution.size.bottom_height)
-            .unwrap_or(SIDEBAR_BOTTOM_DEFAULT_HEIGHT)
+            .unwrap_or(layout.sidebar_bottom_default)
     }
 
-    fn sidebar_side_width(&self, panels: &[ResolvedSidebarContribution]) -> Pixels {
+    fn sidebar_side_width(
+        &self,
+        panels: &[ResolvedSidebarContribution],
+        layout: LayoutSizeTokens,
+    ) -> Pixels {
         panels
             .iter()
-            .map(|panel| self.sidebar_panel_side_width(&panel.contribution))
+            .map(|panel| self.sidebar_panel_side_width(&panel.contribution, layout))
             .fold(px(0.0), |total, width| total + width)
     }
 
-    fn sidebar_bottom_height(&self, panels: &[ResolvedSidebarContribution]) -> Pixels {
+    fn sidebar_bottom_height(
+        &self,
+        panels: &[ResolvedSidebarContribution],
+        layout: LayoutSizeTokens,
+    ) -> Pixels {
         panels
             .iter()
-            .map(|panel| self.sidebar_panel_bottom_height(&panel.contribution))
+            .map(|panel| self.sidebar_panel_bottom_height(&panel.contribution, layout))
             .max_by(|left, right| f32::from(*left).total_cmp(&f32::from(*right)))
-            .unwrap_or(SIDEBAR_BOTTOM_DEFAULT_HEIGHT)
+            .unwrap_or(layout.sidebar_bottom_default)
     }
 
     fn render_sidebar_dock(
@@ -2298,8 +2309,9 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let contribution = panel.contribution;
-        let side_width = self.sidebar_panel_side_width(&contribution);
-        let bottom_height = self.sidebar_panel_bottom_height(&contribution);
+        let layout = cx.theme().geometry.layout;
+        let side_width = self.sidebar_panel_side_width(&contribution, layout);
+        let bottom_height = self.sidebar_panel_bottom_height(&contribution, layout);
         let can_resize = match placement {
             SidebarPlacement::Left | SidebarPlacement::Right => {
                 sidebar_panel_allows_resize(contribution.chrome, Some(side_width), None)
@@ -2315,7 +2327,7 @@ impl TabContainer {
             .flex_shrink_0()
             .map(|this| match placement {
                 SidebarPlacement::Left | SidebarPlacement::Right => this.w(side_width),
-                SidebarPlacement::Bottom => this.flex_1().min_w(SIDEBAR_PANEL_MIN_SIZE),
+                SidebarPlacement::Bottom => this.flex_1().min_w(layout.sidebar_panel_min),
             })
             .child(self.render_sidebar_panel_frame(contribution.clone(), cx))
             .when(can_resize, |this| {
@@ -2335,7 +2347,9 @@ impl TabContainer {
             "tab-sidebar-resize-{placement:?}-{}-{}",
             id.owner, id.local_id
         ));
-        let neg_offset = -SIDEBAR_HANDLE_PADDING;
+        let resize = cx.theme().geometry.resize;
+        let hit_area = resize.hit_area();
+        let line_size = resize.visible_line;
         let drag_border = cx.theme().drag_border;
         let border = cx.theme().border;
 
@@ -2349,24 +2363,25 @@ impl TabContainer {
                 SidebarPlacement::Left => this
                     .cursor_col_resize()
                     .top_0()
-                    .right(px(1.0))
+                    .right_0()
                     .h_full()
-                    .w(SIDEBAR_HANDLE_SIZE)
-                    .pl(SIDEBAR_HANDLE_PADDING),
+                    .w(hit_area)
+                    .flex()
+                    .justify_end(),
                 SidebarPlacement::Right => this
                     .cursor_col_resize()
                     .top_0()
-                    .left(px(1.0))
+                    .left_0()
                     .h_full()
-                    .w(SIDEBAR_HANDLE_SIZE)
-                    .pr(SIDEBAR_HANDLE_PADDING),
+                    .w(hit_area)
+                    .flex(),
                 SidebarPlacement::Bottom => this
                     .cursor_row_resize()
-                    .top(neg_offset)
+                    .top_0()
                     .left_0()
                     .w_full()
-                    .h(SIDEBAR_HANDLE_SIZE)
-                    .py(SIDEBAR_HANDLE_PADDING),
+                    .h(hit_area)
+                    .flex(),
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.prevent_default();
@@ -2387,9 +2402,9 @@ impl TabContainer {
                     })
                     .map(|this| match placement {
                         SidebarPlacement::Left | SidebarPlacement::Right => {
-                            this.h_full().w(SIDEBAR_HANDLE_SIZE)
+                            this.h_full().w(line_size)
                         }
-                        SidebarPlacement::Bottom => this.w_full().h(SIDEBAR_HANDLE_SIZE),
+                        SidebarPlacement::Bottom => this.w_full().h(line_size),
                     }),
             )
             .into_any_element()
@@ -2453,26 +2468,23 @@ impl TabContainer {
                 .unwrap_or(cx.theme().background)
         });
         let text_color = contribution.style.text.unwrap_or(cx.theme().foreground);
-        h_flex()
-            .id(SharedString::from(format!(
-                "tab-sidebar-header-{}-{}",
-                contribution.id.owner, contribution.id.local_id
-            )))
-            .h(px(34.0))
-            .px_2()
-            .gap_2()
-            .items_center()
-            .bg(header_background)
-            .border_b_1()
+        let header_id = SharedString::from(format!(
+            "tab-sidebar-header-{}-{}",
+            contribution.id.owner, contribution.id.local_id
+        ));
+        let controls = self.render_sidebar_panel_controls(contribution.clone(), cx);
+
+        PanelHeader::new(header_id)
+            .variant(PanelHeaderVariant::Sidebar)
+            .background(header_background)
             .border_color(border)
-            .child(
+            .leading(
                 Icon::new(contribution.icon.clone())
-                    .with_size(Size::Small)
+                    .with_size(IconSize::Default)
                     .text_color(text_color),
             )
-            .child(
+            .title(
                 div()
-                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
@@ -2481,7 +2493,7 @@ impl TabContainer {
                     .text_color(text_color)
                     .child(contribution.title.clone()),
             )
-            .children(self.render_sidebar_panel_controls(contribution, cx))
+            .trailing(h_flex().children(controls))
             .into_any_element()
     }
 
@@ -2682,13 +2694,14 @@ impl TabContainer {
                 self.resize_side_sidebar_panel(target, mouse_position, cx);
             }
             SidebarPlacement::Bottom => {
-                self.resize_bottom_sidebar_panel(target, mouse_position);
+                self.resize_bottom_sidebar_panel(target, mouse_position, cx);
             }
         }
         cx.notify();
     }
 
     fn sidebar_resize_target_active(&self, target: &SidebarResizeTarget, cx: &App) -> bool {
+        let layout = cx.theme().geometry.layout;
         self.resolved_sidebar_panels(cx)
             .into_iter()
             .find(|panel| panel.visible && panel.contribution.id == target.id)
@@ -2701,14 +2714,14 @@ impl TabContainer {
                     SidebarPlacement::Left | SidebarPlacement::Right => {
                         sidebar_panel_allows_resize(
                             panel.contribution.chrome,
-                            Some(self.sidebar_panel_side_width(&panel.contribution)),
+                            Some(self.sidebar_panel_side_width(&panel.contribution, layout)),
                             None,
                         )
                     }
                     SidebarPlacement::Bottom => sidebar_panel_allows_resize(
                         panel.contribution.chrome,
                         None,
-                        Some(self.sidebar_panel_bottom_height(&panel.contribution)),
+                        Some(self.sidebar_panel_bottom_height(&panel.contribution, layout)),
                     ),
                 }
             })
@@ -2720,6 +2733,10 @@ impl TabContainer {
         mouse_position: Point<Pixels>,
         cx: &App,
     ) {
+        let layout = cx.theme().geometry.layout;
+        let panel_min = layout.utility_panel_min;
+        let panel_max = layout.utility_panel_max;
+        let center_min = layout.sidebar_center_min;
         let panels = self.resolved_sidebar_panels(cx);
         let same_side = Self::sidebar_panels_for(&panels, target.placement);
         let Some(target_ix) = same_side
@@ -2731,7 +2748,7 @@ impl TabContainer {
 
         let widths = same_side
             .iter()
-            .map(|panel| self.sidebar_panel_side_width(&panel.contribution))
+            .map(|panel| self.sidebar_panel_side_width(&panel.contribution, layout))
             .collect::<Vec<_>>();
         let before = widths
             .iter()
@@ -2744,28 +2761,29 @@ impl TabContainer {
         let after_min = same_side
             .iter()
             .skip(target_ix + 1)
-            .fold(px(0.0), |total, _| total + SIDEBAR_PANEL_MIN_SIZE);
+            .fold(px(0.0), |total, _| total + panel_min);
         let opposite_width = match target.placement {
             SidebarPlacement::Left => {
                 let right = Self::sidebar_panels_for(&panels, SidebarPlacement::Right);
-                self.sidebar_side_width(&right)
+                self.sidebar_side_width(&right, layout)
             }
             SidebarPlacement::Right => {
                 let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
-                self.sidebar_side_width(&left)
+                self.sidebar_side_width(&left, layout)
             }
             SidebarPlacement::Bottom => px(0.0),
         };
         let max_dock_width =
-            (self.sidebar_bounds.size.width - SIDEBAR_CENTER_MIN_SIZE - opposite_width)
-                .max(SIDEBAR_PANEL_MIN_SIZE);
-        let max_width = (max_dock_width - before - after_min).max(SIDEBAR_PANEL_MIN_SIZE);
+            (self.sidebar_bounds.size.width - center_min - opposite_width).max(panel_min);
+        let max_width = (max_dock_width - before - after_min)
+            .min(panel_max)
+            .max(panel_min);
         let raw_width = match target.placement {
             SidebarPlacement::Left => mouse_position.x - self.sidebar_bounds.left() - before,
             SidebarPlacement::Right => self.sidebar_bounds.right() - after - mouse_position.x,
             SidebarPlacement::Bottom => unreachable!(),
         };
-        let width = raw_width.clamp(SIDEBAR_PANEL_MIN_SIZE, max_width);
+        let width = raw_width.clamp(panel_min, max_width);
         self.set_sidebar_side_width(target.id, width);
     }
 
@@ -2773,11 +2791,13 @@ impl TabContainer {
         &mut self,
         target: SidebarResizeTarget,
         mouse_position: Point<Pixels>,
+        cx: &App,
     ) {
-        let max_height =
-            (self.sidebar_bounds.size.height - SIDEBAR_CENTER_MIN_SIZE).max(SIDEBAR_PANEL_MIN_SIZE);
-        let height = (self.sidebar_bounds.bottom() - mouse_position.y)
-            .clamp(SIDEBAR_PANEL_MIN_SIZE, max_height);
+        let layout = cx.theme().geometry.layout;
+        let panel_min = layout.sidebar_panel_min;
+        let center_min = layout.sidebar_center_min;
+        let max_height = (self.sidebar_bounds.size.height - center_min).max(panel_min);
+        let height = (self.sidebar_bounds.bottom() - mouse_position.y).clamp(panel_min, max_height);
         self.set_sidebar_bottom_height(target.id, height);
     }
 
@@ -2805,6 +2825,7 @@ impl TabContainer {
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let layout = cx.theme().geometry.layout;
         let panels = self.resolved_sidebar_panels(cx);
         let left = Self::sidebar_panels_for(&panels, SidebarPlacement::Left);
         let right = Self::sidebar_panels_for(&panels, SidebarPlacement::Right);
@@ -2844,7 +2865,7 @@ impl TabContainer {
                     div()
                         .relative()
                         .w_full()
-                        .h(self.sidebar_bottom_height(&bottom))
+                        .h(self.sidebar_bottom_height(&bottom, layout))
                         .flex_shrink_0()
                         .overflow_hidden()
                         .child(self.render_sidebar_dock(SidebarPlacement::Bottom, bottom, cx)),
@@ -2872,7 +2893,7 @@ impl TabContainer {
                 div()
                     .relative()
                     .h_full()
-                    .w(self.sidebar_side_width(&left))
+                    .w(self.sidebar_side_width(&left, layout))
                     .flex_shrink_0()
                     .overflow_hidden()
                     .child(self.render_sidebar_dock(SidebarPlacement::Left, left, cx)),
@@ -2892,7 +2913,7 @@ impl TabContainer {
                 div()
                     .relative()
                     .h_full()
-                    .w(self.sidebar_side_width(&right))
+                    .w(self.sidebar_side_width(&right, layout))
                     .flex_shrink_0()
                     .overflow_hidden()
                     .child(self.render_sidebar_dock(SidebarPlacement::Right, right, cx)),
@@ -2990,6 +3011,8 @@ impl TabContainer {
         let close_btn_color = self
             .tab_close_button_color
             .unwrap_or(theme.muted_foreground);
+        let close_btn_hover_color = theme.secondary_hover;
+        let activity_color = theme.success;
         let inactive_tab_border_color = border_color.opacity(0.65);
         let active_tab_border_color = theme.primary.opacity(0.85);
         let drag_border_color = theme.drag_border;
@@ -2998,11 +3021,14 @@ impl TabContainer {
         let pinned_tab_count = self.pinned_tabs.len();
         let navigation_sidebar_expanded = self.navigation_sidebar_expanded;
         let titlebar_platform = self.titlebar_platform();
+        let layout = theme.geometry.layout;
+        let tab_bar_height = layout.tab_bar;
+        let tab_item_height = layout.tab_item;
 
         // When the application navigation sidebar is fully hidden on macOS,
         // reserve the title-bar area occupied by the traffic-light controls.
         if titlebar_platform.is_macos && navigation_sidebar_expanded == Some(false) {
-            left_padding = px(36.0);
+            left_padding = layout.macos_compact_title_bar_content_padding;
         }
 
         // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
@@ -3024,7 +3050,7 @@ impl TabContainer {
             .right_0()
             .w_full()
             .min_w_0()
-            .h(px(40.0))
+            .h(tab_bar_height)
             .flex_shrink_0()
             .self_stretch()
             .bg(bg_color)
@@ -3130,7 +3156,7 @@ impl TabContainer {
                             .overflow_hidden()
                             .items_center()
                             .gap_2()
-                            .h(px(32.0))
+                            .h(tab_item_height)
                             .px_3()
                             .when(!is_macos && pinned_index == 0, |el| el.ml(left_padding))
                             .when(pinned_index + 1 < pinned_tab_count, |el| el.mr_1())
@@ -3280,7 +3306,7 @@ impl TabContainer {
                             .overflow_hidden()
                             .items_center()
                             .gap_2()
-                            .h(px(32.0))
+                            .h(tab_item_height)
                             .text_ellipsis()
                             .min_w(tab_min_width)
                             .max_w(tab_max_width)
@@ -3310,7 +3336,7 @@ impl TabContainer {
                                         .left(px(6.0))
                                         .size(px(7.0))
                                         .rounded_full()
-                                        .bg(gpui::rgb(0x22c55e)),
+                                        .bg(activity_color),
                                 )
                             })
                             .map(|el| {
@@ -3405,8 +3431,8 @@ impl TabContainer {
                                         .rounded(px(2.0))
                                         .cursor_pointer()
                                         .text_color(close_btn_color)
-                                        .hover(|style| {
-                                            style.bg(gpui::rgb(0x5a5a5a)).text_color(text_color)
+                                        .hover(move |style| {
+                                            style.bg(close_btn_hover_color).text_color(text_color)
                                         })
                                         .on_mouse_down(
                                             MouseButton::Left,
@@ -3564,6 +3590,7 @@ impl TabContainer {
                     .icon(IconName::ChevronDown)
                     .ghost()
                     .compact()
+                    .tooltip(t!("TabSwitcher.show_all").to_string())
                     .disabled(self.pinned_tabs.is_empty() && self.tabs.is_empty())
                     .on_click({
                         let view = view.clone();
@@ -3663,12 +3690,13 @@ impl TabContainer {
         } else {
             foreground
         };
+        let control_width = cx.theme().geometry.layout.window_control_width;
 
         div()
             .id(id)
             .debug_selector(move || id.to_owned())
             .flex()
-            .w(px(34.0))
+            .w(control_width)
             .h_full()
             .flex_shrink_0()
             .justify_center()
@@ -3716,28 +3744,39 @@ impl TabContainer {
         is_active: bool,
         cx: &App,
     ) -> impl IntoElement {
-        // 置顶激活时用琥珀色高亮，提示当前窗口已置顶
         let icon_color: gpui::Hsla = if is_active {
-            gpui::rgb(0xfbbf24).into()
+            cx.theme().primary
         } else {
             cx.theme().foreground
         };
+        let background = if is_active {
+            cx.theme()
+                .primary
+                .opacity(cx.theme().geometry.opacity.subtle)
+        } else {
+            gpui::transparent_black()
+        };
         let hover_background = cx.theme().secondary_hover;
         let active_background = cx.theme().secondary_active;
+        let control_width = cx.theme().geometry.layout.window_control_width;
 
         div()
             .id("always-on-top")
             .debug_selector(|| "always-on-top".to_owned())
             .flex()
-            .w(px(34.0))
+            .w(control_width)
             .h_full()
             .flex_shrink_0()
             .justify_center()
             .content_center()
             .items_center()
+            .bg(background)
             .text_color(icon_color)
             .hover(move |style| style.bg(hover_background).text_color(icon_color))
             .active(move |style| style.bg(active_background).text_color(icon_color))
+            .tooltip(|window, cx| {
+                Tooltip::new(t!("Window.always_on_top").to_string()).build(window, cx)
+            })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.prevent_default();
                 cx.stop_propagation();
@@ -3856,6 +3895,7 @@ impl Focusable for TabContainer {
 impl Render for TabContainer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle(cx);
+        let tab_bar_height = cx.theme().geometry.layout.tab_bar;
 
         div()
             .id("tab-container")
@@ -3898,7 +3938,7 @@ impl Render for TabContainer {
             .child(
                 v_flex()
                     .absolute()
-                    .top(px(40.0))
+                    .top(tab_bar_height)
                     .right_0()
                     .bottom_0()
                     .left_0()
@@ -4151,7 +4191,7 @@ mod tests {
     fn collapsed_navigation_sidebar_reserves_macos_titlebar_controls() {
         let source = include_str!("tab_container.rs");
         assert!(source.contains("navigation_sidebar_expanded == Some(false)"));
-        assert!(source.contains("left_padding = px(36.0)"));
+        assert!(source.contains("left_padding = layout.macos_compact_title_bar_content_padding"));
     }
 
     #[test]

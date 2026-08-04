@@ -18,13 +18,13 @@ pub use file_list_panel::{
 
 use gpui::{
     AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
-    Focusable, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
-    Styled, WeakEntity, Window, actions, div, prelude::*, px,
+    Focusable, FontWeight, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
+    WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -4230,9 +4230,9 @@ impl SftpView {
             .inset_0()
             .m_4()
             .border_2()
-            .border_color(cx.theme().link)
+            .border_color(cx.theme().drag_border)
             .rounded_lg()
-            .bg(gpui::rgba(0x3b82f610))
+            .bg(cx.theme().drop_target)
             .flex()
             .flex_col()
             .items_center()
@@ -5063,12 +5063,7 @@ impl SftpView {
             .flex()
             .items_center()
             .justify_center()
-            .bg(Hsla {
-                h: 0.,
-                s: 0.,
-                l: 0.,
-                a: 0.7,
-            })
+            .bg(gpui::black().alpha(cx.theme().geometry.opacity.scrim))
             .child(
                 v_flex()
                     .gap_4()
@@ -5088,7 +5083,7 @@ impl SftpView {
                                 Spinner::new().into_any_element()
                             } else {
                                 Icon::new(IconName::CircleX)
-                                    .with_size(px(24.))
+                                    .with_size(IconSize::Large)
                                     .text_color(cx.theme().danger)
                                     .into_any_element()
                             })
@@ -5561,6 +5556,7 @@ impl SftpView {
     }
 
     fn render_local_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let is_left_remote = self.left_remote.is_some();
         let breadcrumb = if is_left_remote {
             self.render_left_remote_breadcrumb(cx)
@@ -5602,9 +5598,9 @@ impl SftpView {
             .border_color(cx.theme().border)
             .child(
                 h_flex()
-                    .h_10()
-                    .px_2()
-                    .gap_1()
+                    .h(geometry.layout.command_bar)
+                    .px(geometry.spacing.space_2)
+                    .gap(geometry.spacing.space_1)
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
@@ -5639,10 +5635,9 @@ impl SftpView {
                         h_flex()
                             .gap_1()
                             .child(
-                                Button::new("back")
-                                    .icon(IconName::ChevronLeft)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("back", IconName::ChevronLeft)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Navigation.back"))
                                     .disabled(!can_go_back)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         if this.left_remote.is_some() {
@@ -5653,10 +5648,9 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("forward")
-                                    .icon(IconName::ChevronRight)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("forward", IconName::ChevronRight)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Navigation.forward"))
                                     .disabled(!can_go_forward)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         if this.left_remote.is_some() {
@@ -5671,11 +5665,11 @@ impl SftpView {
                         h_flex()
                             .flex_1()
                             .min_w(px(0.))
-                            .h_7()
+                            .h(geometry.control.small)
                             .px_2()
                             .items_center()
                             .bg(cx.theme().secondary)
-                            .rounded_md()
+                            .rounded(geometry.radius.sm)
                             .child(
                                 Input::new(&local_path_input)
                                     .small()
@@ -5689,11 +5683,11 @@ impl SftpView {
                             .id("local-path-bar")
                             .flex_1()
                             .min_w(px(0.))
-                            .h_7()
+                            .h(geometry.control.small)
                             .px_2()
                             .items_center()
                             .bg(cx.theme().secondary)
-                            .rounded_md()
+                            .rounded(geometry.radius.sm)
                             .cursor_text()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_local_path_editing(window, cx);
@@ -5705,30 +5699,32 @@ impl SftpView {
                         h_flex()
                             .gap_1()
                             .child(
-                                Button::new("local_toggle_favorite")
-                                    .icon(if is_favorite {
+                                IconButton::new(
+                                    "local_toggle_favorite",
+                                    if is_favorite {
                                         IconName::StarFill
                                     } else {
                                         IconName::Star
-                                    })
-                                    .ghost()
-                                    .small()
-                                    .tooltip(if is_favorite {
-                                        t!("FavoritePath.remove_current").to_string()
-                                    } else {
-                                        t!("FavoritePath.add_current").to_string()
-                                    })
-                                    .disabled(is_left_remote)
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    },
+                                )
+                                .role(IconButtonRole::Toolbar)
+                                .tooltip(if is_favorite {
+                                    t!("FavoritePath.remove_current").to_string()
+                                } else {
+                                    t!("FavoritePath.add_current").to_string()
+                                })
+                                .disabled(is_left_remote)
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.toggle_current_local_favorite(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(self.render_local_favorites_menu(favorite_paths, cx))
                             .child(
-                                Button::new("refresh_local")
-                                    .icon(IconName::Refresh)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("refresh_local", IconName::Refresh)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Common.refresh"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if this.left_remote.is_some() {
                                             this.refresh_left_remote_dir(cx);
@@ -5738,20 +5734,17 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("local_upload")
-                                    .icon(IconName::Upload)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("local_upload", IconName::Upload)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Common.upload"))
                                     .disabled(!has_selection || !left_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.transfer_left_selection_to_right(window, cx);
                                     })),
                             )
                             .child(
-                                Button::new("local_new_file")
-                                    .icon(IconName::File)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("local_new_file", IconName::File)
+                                    .role(IconButtonRole::Toolbar)
                                     .disabled(is_left_remote)
                                     .tooltip(t!("File.new_file"))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -5759,20 +5752,18 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("local_new_folder")
-                                    .icon(IconName::NewFolder)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("local_new_folder", IconName::NewFolder)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("File.new_folder"))
                                     .disabled(is_left_remote)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.show_new_folder_dialog(PanelSide::Local, window, cx);
                                     })),
                             )
                             .child(
-                                Button::new("local_delete")
-                                    .icon(IconName::Remove)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("local_delete", IconName::Remove)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Common.delete"))
                                     .disabled(is_left_remote || !has_selection)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.delete_local_selected(window, cx);
@@ -5785,8 +5776,8 @@ impl SftpView {
                     .id("local-drop-zone")
                     .flex_1()
                     .relative()
-                    .drag_over::<ExternalPaths>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
-                    .drag_over::<DraggedFileItems>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
+                    .drag_over::<ExternalPaths>(|el, _, _, cx| el.bg(cx.theme().drop_target))
+                    .drag_over::<DraggedFileItems>(|el, _, _, cx| el.bg(cx.theme().drop_target))
                     .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                         this.is_dragging_over_local = false;
                         if this.left_remote.is_some() {
@@ -5816,7 +5807,8 @@ impl SftpView {
                                         div()
                                             .absolute()
                                             .inset_0()
-                                            .bg(gpui::rgba(0x00000040))
+                                            .bg(gpui::black()
+                                                .alpha(cx.theme().geometry.opacity.loading_scrim))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -5839,7 +5831,7 @@ impl SftpView {
                                 .gap_2()
                                 .child(
                                     Icon::new(IconName::CircleX)
-                                        .with_size(px(18.))
+                                        .with_size(IconSize::Medium)
                                         .text_color(cx.theme().danger),
                                 )
                                 .child(t!("Connection.disconnected").to_string())
@@ -5857,6 +5849,7 @@ impl SftpView {
     }
 
     fn render_remote_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let breadcrumb = self.render_remote_breadcrumb(cx);
         let selected_count = self.get_remote_selected_count(cx);
         let has_selection = selected_count > 0;
@@ -5879,9 +5872,9 @@ impl SftpView {
             .h_full()
             .child(
                 h_flex()
-                    .h_10()
-                    .px_2()
-                    .gap_1()
+                    .h(geometry.layout.command_bar)
+                    .px(geometry.spacing.space_2)
+                    .gap(geometry.spacing.space_1)
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
@@ -5889,20 +5882,18 @@ impl SftpView {
                         h_flex()
                             .gap_1()
                             .child(
-                                Button::new("remote_back")
-                                    .icon(IconName::ChevronLeft)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("remote_back", IconName::ChevronLeft)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Navigation.back"))
                                     .disabled(!can_go_back)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.go_back_remote(cx);
                                     })),
                             )
                             .child(
-                                Button::new("remote_forward")
-                                    .icon(IconName::ChevronRight)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("remote_forward", IconName::ChevronRight)
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Navigation.forward"))
                                     .disabled(!can_go_forward)
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.go_forward_remote(cx);
@@ -5913,11 +5904,11 @@ impl SftpView {
                         h_flex()
                             .flex_1()
                             .min_w(px(0.))
-                            .h_7()
+                            .h(geometry.control.small)
                             .px_2()
                             .items_center()
                             .bg(cx.theme().secondary)
-                            .rounded_md()
+                            .rounded(geometry.radius.sm)
                             .child(
                                 Input::new(&remote_path_input)
                                     .small()
@@ -5931,11 +5922,11 @@ impl SftpView {
                             .id("remote-path-bar")
                             .flex_1()
                             .min_w(px(0.))
-                            .h_7()
+                            .h(geometry.control.small)
                             .px_2()
                             .items_center()
                             .bg(cx.theme().secondary)
-                            .rounded_md()
+                            .rounded(geometry.radius.sm)
                             .cursor_text()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.start_remote_path_editing(window, cx);
@@ -5947,23 +5938,26 @@ impl SftpView {
                         h_flex()
                             .gap_1()
                             .child(
-                                Button::new("remote_toggle_favorite")
-                                    .icon(if is_favorite {
+                                IconButton::new(
+                                    "remote_toggle_favorite",
+                                    if is_favorite {
                                         IconName::StarFill
                                     } else {
                                         IconName::Star
-                                    })
-                                    .ghost()
-                                    .small()
-                                    .tooltip(if is_favorite {
-                                        t!("FavoritePath.remove_current").to_string()
-                                    } else {
-                                        t!("FavoritePath.add_current").to_string()
-                                    })
-                                    .disabled(!is_connected)
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    },
+                                )
+                                .role(IconButtonRole::Toolbar)
+                                .tooltip(if is_favorite {
+                                    t!("FavoritePath.remove_current").to_string()
+                                } else {
+                                    t!("FavoritePath.add_current").to_string()
+                                })
+                                .disabled(!is_connected)
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.toggle_current_remote_favorite(window, cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(self.render_remote_favorites_menu(
                                 favorite_paths,
@@ -5971,10 +5965,8 @@ impl SftpView {
                                 cx,
                             ))
                             .child(
-                                Button::new("refresh_remote")
-                                    .icon(IconName::Refresh)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("refresh_remote", IconName::Refresh)
+                                    .role(IconButtonRole::Toolbar)
                                     .disabled(!is_connected)
                                     .tooltip(t!("Common.refresh"))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -5982,10 +5974,8 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("remote_download")
-                                    .icon(IconName::ArrowDown)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("remote_download", IconName::ArrowDown)
+                                    .role(IconButtonRole::Toolbar)
                                     .tooltip(t!("Common.download"))
                                     .disabled(!has_selection || !is_connected || !left_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -5997,10 +5987,8 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("remote_new_file")
-                                    .icon(IconName::File)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("remote_new_file", IconName::File)
+                                    .role(IconButtonRole::Toolbar)
                                     .tooltip(t!("File.new_file"))
                                     .disabled(!is_connected)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -6008,10 +5996,8 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("remote_new_folder")
-                                    .icon(IconName::NewFolder)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("remote_new_folder", IconName::NewFolder)
+                                    .role(IconButtonRole::Toolbar)
                                     .tooltip(t!("File.new_folder"))
                                     .disabled(!is_connected)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -6019,11 +6005,9 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                Button::new("remote_delete")
-                                    .icon(IconName::Remove)
+                                IconButton::new("remote_delete", IconName::Remove)
+                                    .role(IconButtonRole::Toolbar)
                                     .tooltip(t!("Common.delete"))
-                                    .ghost()
-                                    .small()
                                     .disabled(!has_selection || !is_connected)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.delete_remote_selected(window, cx);
@@ -6037,9 +6021,9 @@ impl SftpView {
                     .flex_1()
                     .relative()
                     .when(is_connected, |el| {
-                        el.drag_over::<ExternalPaths>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
-                            .drag_over::<DraggedFileItems>(|el, _, _, _cx| {
-                                el.bg(gpui::rgba(0x3b82f620))
+                        el.drag_over::<ExternalPaths>(|el, _, _, cx| el.bg(cx.theme().drop_target))
+                            .drag_over::<DraggedFileItems>(|el, _, _, cx| {
+                                el.bg(cx.theme().drop_target)
                             })
                             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                                 this.is_dragging_over_remote = false;
@@ -6060,7 +6044,8 @@ impl SftpView {
                                     div()
                                         .absolute()
                                         .inset_0()
-                                        .bg(gpui::rgba(0x00000040))
+                                        .bg(gpui::black()
+                                            .alpha(cx.theme().geometry.opacity.loading_scrim))
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -6086,7 +6071,7 @@ impl SftpView {
                             .items_center()
                             .child(
                                 Icon::new(IconName::CircleX)
-                                    .with_size(px(18.))
+                                    .with_size(IconSize::Medium)
                                     .text_color(cx.theme().danger),
                             )
                             .child(
@@ -6319,7 +6304,11 @@ impl TabContent for SftpView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(Icon::new(IconName::Folder1).color().with_size(Size::Medium))
+        Some(
+            ObjectIcon::new(IconName::Folder1)
+                .with_size(IconSize::Default)
+                .into_icon(),
+        )
     }
 
     fn closeable(&self, _cx: &App) -> bool {

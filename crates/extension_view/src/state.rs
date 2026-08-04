@@ -7,6 +7,21 @@ use crate::{ExtensionManagerMode, ExtensionSummary, MarketplaceEntry};
 const MANIFEST_JSON_SUFFIX: &str = ".json";
 const INSTALL_PROGRESS_VALUE: f32 = 28.0;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum MarketplaceLoadState {
+    #[default]
+    NotLoaded,
+    Loading,
+    Loaded,
+    Failed(SharedString),
+}
+
+impl MarketplaceLoadState {
+    pub(crate) fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading)
+    }
+}
+
 pub(crate) fn should_auto_load_marketplace(
     mode: ExtensionManagerMode,
     marketplace_entries_empty: bool,
@@ -21,14 +36,14 @@ pub(crate) fn should_auto_load_marketplace(
 
 pub(crate) fn apply_marketplace_load_result(
     marketplace_entries: &mut Vec<MarketplaceEntry>,
-    loading: &mut bool,
+    load_state: &mut MarketplaceLoadState,
     status: &mut SharedString,
     outcome: anyhow::Result<Vec<MarketplaceEntry>>,
 ) -> Option<String> {
-    *loading = false;
     match outcome {
         Ok(entries) => {
             *marketplace_entries = entries;
+            *load_state = MarketplaceLoadState::Loaded;
             *status = t!(
                 "Extension.loaded_marketplace",
                 count = marketplace_entries.len()
@@ -38,6 +53,7 @@ pub(crate) fn apply_marketplace_load_result(
             None
         }
         Err(err) => {
+            *load_state = MarketplaceLoadState::Failed(format!("{err:#}").into());
             *status = t!("Extension.load_marketplace_failed").to_string().into();
             Some(format_notification_error(
                 &t!("Extension.load_marketplace_failed").to_string(),
@@ -116,19 +132,19 @@ mod tests {
     }
 
     #[test]
-    fn marketplace_load_success_replaces_entries_and_clears_loading() {
+    fn marketplace_load_success_replaces_entries_and_marks_loaded() {
         let mut entries = vec![marketplace_entry("old")];
-        let mut loading = true;
+        let mut load_state = MarketplaceLoadState::Loading;
         let mut status = SharedString::from(t!("Extension.loading_marketplace").to_string());
 
         apply_marketplace_load_result(
             &mut entries,
-            &mut loading,
+            &mut load_state,
             &mut status,
             Ok(vec![marketplace_entry("rust"), marketplace_entry("sql")]),
         );
 
-        assert!(!loading);
+        assert_eq!(MarketplaceLoadState::Loaded, load_state);
         assert_eq!(
             ["rust", "sql"],
             [entries[0].id.as_str(), entries[1].id.as_str()]
@@ -140,20 +156,24 @@ mod tests {
     }
 
     #[test]
-    fn marketplace_load_failure_clears_loading_and_keeps_existing_entries() {
+    fn marketplace_load_failure_marks_failed_and_keeps_existing_entries() {
         let mut entries = vec![marketplace_entry("installed")];
-        let mut loading = true;
+        let mut load_state = MarketplaceLoadState::Loading;
         let mut status = SharedString::from(t!("Extension.loading_marketplace").to_string());
 
         let notification = apply_marketplace_load_result(
             &mut entries,
-            &mut loading,
+            &mut load_state,
             &mut status,
             Err(anyhow::anyhow!("network down")
                 .context("fetch release manifest from https://example.test/manifest.json")),
         );
 
-        assert!(!loading);
+        let MarketplaceLoadState::Failed(detail) = &load_state else {
+            panic!("failed marketplace load should retain an error detail");
+        };
+        assert!(detail.contains("https://example.test/manifest.json"));
+        assert!(detail.contains("network down"));
         assert_eq!(["installed"], [entries[0].id.as_str()]);
         assert_eq!(
             t!("Extension.load_marketplace_failed").to_string(),

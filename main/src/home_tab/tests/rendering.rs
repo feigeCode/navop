@@ -123,14 +123,76 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(!card.contains(".shadow_sm()\n            .group"));
     assert!(render.contains("self.render_modern_home(window, cx)"));
     assert!(modern_home.contains("modern-home-start-center"));
+    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0)"));
+    assert!(modern_home.contains(".max_w(START_CENTER_MAX_WIDTH)"));
+    assert!(modern_home.contains("modern-home-hero"));
+    assert!(modern_home.contains("modern-home-recent-column"));
+    assert!(modern_home.contains("modern-home-side-column"));
     assert!(!modern_home.contains("render_connection_card"));
     assert!(!modern_home.contains("view.update(cx, |home"));
     assert!(modern_home.contains("modern-home-sync"));
     assert!(modern_home.contains("modern-home-keys"));
+    assert!(modern_home.contains(
+        ".size_full()\n            .overflow_y_scroll()\n            .scrollbar_width(px(0.0))"
+    ));
+    assert!(!modern_home.contains(".min_h_full()"));
     assert!(modern_home.contains("self.render_local_terminal_button(window, cx)"));
     assert!(!modern_home.contains("modern-home-local-terminal"));
     assert!(!modern_home.contains("IconName::Terminal).with_size(px(42.0))"));
     assert!(!modern_home.contains(".read(cx)"));
+}
+
+#[test]
+fn modern_start_center_separates_primary_work_from_supporting_tools() {
+    let modern_home = include_str!("../modern_home.rs");
+
+    for stable_id in [
+        "modern-home-hero",
+        "modern-home-recent-panel",
+        "modern-home-create-panel",
+        "modern-home-tools-panel",
+        "modern-home-status-panel",
+        "modern-home-sync",
+        "modern-home-keys",
+    ] {
+        assert!(modern_home.contains(stable_id));
+    }
+    assert!(modern_home.contains(".flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)"));
+    assert!(modern_home.contains(".flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)"));
+    assert!(modern_home.contains(".flex_grow(2.0)"));
+    assert!(modern_home.contains(".flex_grow(1.0)"));
+    assert!(modern_home.contains("render_recent_connections_panel"));
+    assert!(modern_home.contains("render_create_panel"));
+    assert!(modern_home.contains("render_workspace_tools"));
+    assert!(modern_home.contains("render_status_panel"));
+    assert!(!modern_home.contains("start_center_card_slot"));
+    assert!(modern_home.contains(".filter(|conn| conn.last_used_at.is_some())"));
+    assert!(
+        modern_home.contains("recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at))")
+    );
+    assert!(modern_home.contains("recent.truncate(5)"));
+    assert!(modern_home.contains(".min_h(px(50.0))"));
+    assert!(modern_home.contains(".min_h(px(140.0))"));
+    assert!(!modern_home.contains(".min_h(px(210.0))"));
+    assert!(modern_home.contains("home.open_connection_from_quick(&open_connection, window, cx)"));
+    assert!(!modern_home.contains(".on_double_click("));
+}
+
+#[test]
+fn modern_start_center_shortcuts_are_attached_to_their_actions() {
+    let modern_home = include_str!("../modern_home.rs");
+    let shortcuts = include_str!("../modern_home_shortcuts.rs");
+
+    assert!(modern_home.contains("new_connection_shortcut(cx)"));
+    assert!(modern_home.contains("terminal_shortcut(cx)"));
+    assert!(modern_home.contains("quick_open_shortcut(cx)"));
+    assert!(!modern_home.contains("render_shortcuts(cx)"));
+    assert!(shortcuts.contains("fn shortcut_badge_for"));
+    assert!(shortcuts.contains("action_id::HOME_QUICK_OPEN"));
+    assert!(shortcuts.contains("action_id::HOME_NEW_CONNECTION"));
+    assert!(shortcuts.contains("action_id::HOME_OPEN_LOCAL_TERMINAL"));
+    assert!(shortcuts.contains("shortcuts_for(cx, action, &[fallback])"));
+    assert!(shortcuts.contains("unwrap_or_else(|| fallback.to_string())"));
 }
 
 #[test]
@@ -176,7 +238,7 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar.contains("IconName::UserColor"));
+    assert!(sidebar.contains("ObjectIcon::new(IconName::User)"));
 }
 
 #[test]
@@ -224,15 +286,18 @@ fn team_key_settings_tab_has_feature_guard() {
 fn home_render_uses_cached_external_driver_registry() {
     let home = include_str!("../../home_tab.rs");
     let icon = include_str!("../connection_icon.rs");
+    let visuals = include_str!("../../connection_visuals.rs");
     let list_item = include_str!("../connection_list.rs");
     let card = include_str!("../connection_card_content.rs");
     let quick_open = include_str!("../../home/home_connection_quick_open.rs");
 
     assert!(home.contains("external_driver_registry: IpcDriverRegistry"));
-    assert!(icon.contains("external_driver_icon_for_config_with_registry"));
+    assert!(icon.contains("stored_connection_icon"));
+    assert!(visuals.contains("external_driver_icon_for_config_with_registry"));
+    assert!(visuals.contains("external_driver_icon_from_sources"));
     assert!(list_item.contains("connection_icon"));
     assert!(card.contains("connection_icon"));
-    assert!(quick_open.contains("external_driver_icon_for_config_with_registry"));
+    assert!(quick_open.contains("stored_connection_icon"));
     assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(!icon.contains("IpcDriverRegistry::load_default()"));
     assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));

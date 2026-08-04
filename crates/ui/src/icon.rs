@@ -7,6 +7,15 @@ use gpui::{
 // use gpui_component_macros::icon_named;
 use std::path::PathBuf;
 
+mod metadata;
+mod size;
+mod typed;
+
+pub use metadata::{IconKind, IconMetadata};
+pub use size::IconSize;
+use size::{resolve_icon_size, should_apply_resolved_size};
+pub use typed::{BrandIcon, FunctionalIcon, IconKindMismatch, ObjectIcon};
+
 /// Types implementing this trait can automatically be converted to [`Icon`].
 ///
 /// This allows you to implement a custom version of [`IconName`] that functions as a drop-in
@@ -34,7 +43,7 @@ pub enum IconColorMode {
 }
 
 /// The name of an icon in the asset bundle.
-#[derive(IntoElement, Clone)]
+#[derive(IntoElement, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IconName {
     ALargeSmall,
     AlignCenter,
@@ -258,6 +267,229 @@ pub enum IconName {
 }
 
 impl IconName {
+    /// All icons exposed by the embedded asset registry, in stable declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::ALargeSmall,
+        Self::AlignCenter,
+        Self::AlignLeft,
+        Self::AlignRight,
+        Self::ArrowDown,
+        Self::ArrowLeft,
+        Self::ArrowRight,
+        Self::ArrowUp,
+        Self::Asterisk,
+        Self::Battery,
+        Self::BatteryCharging,
+        Self::BatteryFull,
+        Self::BatteryLow,
+        Self::BatteryMedium,
+        Self::BatteryWarning,
+        Self::Bell,
+        Self::BookOpen,
+        Self::NotesColor,
+        Self::Bot,
+        Self::Building2,
+        Self::TeamColor,
+        Self::Calendar,
+        Self::CaseSensitive,
+        Self::ChartPie,
+        Self::Check,
+        Self::ChevronDown,
+        Self::ChevronLeft,
+        Self::ChevronRight,
+        Self::ChevronsUpDown,
+        Self::ChevronUp,
+        Self::CircleCheck,
+        Self::CircleUser,
+        Self::CircleX,
+        Self::Close,
+        Self::Copy,
+        Self::Paste,
+        Self::Cpu,
+        Self::Dash,
+        Self::Delete,
+        Self::Ellipsis,
+        Self::EllipsisVertical,
+        Self::ExternalLink,
+        Self::Eye,
+        Self::EyeOff,
+        Self::File,
+        Self::MarkdownColor,
+        Self::RichTextColor,
+        Self::Unarchive,
+        Self::Folder,
+        Self::FolderClosed,
+        Self::FolderOpen,
+        Self::FolderOpenColor,
+        Self::QueryFolderColor,
+        Self::QueryFolderOpenColor,
+        Self::TerminalFileManagerColor,
+        Self::Frame,
+        Self::GalleryVerticalEnd,
+        Self::ExtensionsColor,
+        Self::GitHub,
+        Self::Globe,
+        Self::HardDrive,
+        Self::Heart,
+        Self::HeartOff,
+        Self::Inbox,
+        Self::Info,
+        Self::Inspector,
+        Self::LayoutDashboard,
+        Self::Loader,
+        Self::LoaderCircle,
+        Self::LocateActiveTab,
+        Self::Map,
+        Self::Maximize,
+        Self::MemoryStick,
+        Self::Menu,
+        Self::Minimize,
+        Self::Minus,
+        Self::Moon,
+        Self::Network,
+        Self::Palette,
+        Self::PanelBottom,
+        Self::PanelBottomOpen,
+        Self::PanelLeft,
+        Self::PanelLeftClose,
+        Self::PanelLeftOpen,
+        Self::PanelRight,
+        Self::PanelRightClose,
+        Self::PanelRightOpen,
+        Self::Pause,
+        Self::Pin,
+        Self::Play,
+        Self::Plus,
+        Self::Redo,
+        Self::Redo2,
+        Self::Replace,
+        Self::ResizeCorner,
+        Self::Search,
+        Self::Settings,
+        Self::Settings2,
+        Self::SortAscending,
+        Self::SortDescending,
+        Self::SquareTerminal,
+        Self::SquareTerminalColor,
+        Self::TerminalQuickCommandColor,
+        Self::Star,
+        Self::StarFill,
+        Self::StarOff,
+        Self::Sun,
+        Self::ThumbsDown,
+        Self::ThumbsUp,
+        Self::TriangleAlert,
+        Self::Undo,
+        Self::Undo2,
+        Self::User,
+        Self::UserColor,
+        Self::WindowClose,
+        Self::WindowMaximize,
+        Self::WindowMinimize,
+        Self::WindowRestore,
+        Self::Database,
+        Self::Table,
+        Self::Column,
+        Self::Key,
+        Self::View,
+        Self::Function,
+        Self::Schema,
+        Self::GoldKey,
+        Self::PrimaryKey,
+        Self::Procedure,
+        Self::Trigger,
+        Self::FolderViews,
+        Self::FolderQueries,
+        Self::FolderFunctions,
+        Self::FolderIndexes,
+        Self::FolderTables,
+        Self::FolderSchema,
+        Self::FolderColumns,
+        Self::FolderTriggers,
+        Self::FolderProcedures,
+        Self::FolderForeignKeys,
+        Self::FolderCheckConstraints,
+        Self::FolderSequences,
+        Self::CheckConstraint,
+        Self::Sequence,
+        Self::Query,
+        Self::Index,
+        Self::Redis,
+        Self::Terminal,
+        Self::TerminalColor,
+        Self::LinuxPenguinColor,
+        Self::UbuntuColor,
+        Self::RedhatColor,
+        Self::CentosColor,
+        Self::DebianColor,
+        Self::AlmalinuxColor,
+        Self::OpensuseColor,
+        Self::MacosColor,
+        Self::WindowsColor,
+        Self::DockerColor,
+        Self::TerminalHistoryColor,
+        Self::TerminalBroadcastColor,
+        Self::RichInputColor,
+        Self::Apps,
+        Self::AppsColor,
+        Self::MongoDB,
+        Self::MySQLColor,
+        Self::MySQLLineColor,
+        Self::SQLiteColor,
+        Self::SQLiteLineColor,
+        Self::PostgreSQLColor,
+        Self::PostgreSQLLineColor,
+        Self::MSSQLColor,
+        Self::MSSQLLineColor,
+        Self::OracleColor,
+        Self::OracleLineColor,
+        Self::ClickHouseColor,
+        Self::ClickHouseLineColor,
+        Self::Workspace,
+        Self::RedisColor,
+        Self::All,
+        Self::Edit,
+        Self::Filter,
+        Self::Refresh,
+        Self::Sync,
+        Self::Upload,
+        Self::NewFolder,
+        Self::EditBorder,
+        Self::Folder1,
+        Self::FolderOpen1,
+        Self::Remove,
+        Self::TableData,
+        Self::TableDesign,
+        Self::TableDesignTool,
+        Self::SchemaCompare,
+        Self::DataModel,
+        Self::Server,
+        Self::Export,
+        Self::AI,
+        Self::Home,
+        Self::SettingColor,
+        Self::SerialPort,
+        Self::Monitor,
+        Self::TerminalServerMonitorColor,
+        Self::PortForwardingColor,
+        Self::Rdp,
+        Self::Vnc,
+        Self::DuckDB,
+        Self::ServerLine,
+        Self::TerminalLine,
+        Self::DatabaseLine,
+        Self::RedisLine,
+        Self::MongoDBLine,
+        Self::SerialLine,
+        Self::PortForwardingLine,
+        Self::RdpLine,
+        Self::VncLine,
+        Self::AILine,
+        Self::TeamLine,
+        Self::NotesLine,
+        Self::ExtensionsLine,
+    ];
+
     /// Return the icon as a Entity<Icon>
     pub fn view(self, cx: &mut App) -> Entity<Icon> {
         Icon::build(self).view(cx)
@@ -642,8 +874,9 @@ impl Sizable for Icon {
 
 impl RenderOnce for Icon {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let text_size = window.text_style().font_size.to_pixels(window.rem_size());
         let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
+        let apply_resolved_size = should_apply_resolved_size(self.size, has_base_size);
+        let resolved_size = resolve_icon_size(self.size);
 
         match self.color_mode {
             IconColorMode::Mono => {
@@ -653,31 +886,16 @@ impl RenderOnce for Icon {
 
                 base.flex_shrink_0()
                     .text_color(text_color)
-                    .when(!has_base_size, |this| this.size(text_size))
-                    .when_some(self.size, |this, size| match size {
-                        Size::Size(px) => this.size(px),
-                        Size::XSmall => this.size_3(),
-                        Size::Small => this.size_3p5(),
-                        Size::Medium => this.size_4(),
-                        Size::Large => this.size_6(),
-                    })
+                    .when(apply_resolved_size, |this| this.size(resolved_size))
                     .path(self.path)
                     .into_any_element()
             }
             IconColorMode::Color => {
-                let size = self.size.unwrap_or(Size::Medium);
-                let (w, h) = match size {
-                    Size::Size(px) => (px, px),
-                    Size::XSmall => (gpui::px(12.), gpui::px(12.)),
-                    Size::Small => (gpui::px(14.), gpui::px(14.)),
-                    Size::Medium => (gpui::px(16.), gpui::px(16.)),
-                    Size::Large => (gpui::px(24.), gpui::px(24.)),
-                };
+                let mut base = div();
+                *base.style() = self.style;
 
-                div()
-                    .flex_shrink_0()
-                    .w(w)
-                    .h(h)
+                base.flex_shrink_0()
+                    .when(apply_resolved_size, |this| this.size(resolved_size))
                     .child(
                         img(self
                             .image_source
@@ -697,9 +915,10 @@ impl From<Icon> for AnyElement {
 }
 
 impl Render for Icon {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let text_size = window.text_style().font_size.to_pixels(window.rem_size());
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
+        let apply_resolved_size = should_apply_resolved_size(self.size, has_base_size);
+        let resolved_size = resolve_icon_size(self.size);
 
         match self.color_mode {
             IconColorMode::Mono => {
@@ -709,14 +928,7 @@ impl Render for Icon {
 
                 base.flex_shrink_0()
                     .text_color(text_color)
-                    .when(!has_base_size, |this| this.size(text_size))
-                    .when_some(self.size, |this, size| match size {
-                        Size::Size(px) => this.size(px),
-                        Size::XSmall => this.size_3(),
-                        Size::Small => this.size_3p5(),
-                        Size::Medium => this.size_4(),
-                        Size::Large => this.size_6(),
-                    })
+                    .when(apply_resolved_size, |this| this.size(resolved_size))
                     .path(self.path.clone())
                     .when_some(self.rotation, |this, rotation| {
                         this.with_transformation(Transformation::rotate(rotation))
@@ -724,19 +936,11 @@ impl Render for Icon {
                     .into_any_element()
             }
             IconColorMode::Color => {
-                let size = self.size.unwrap_or(Size::Medium);
-                let (w, h) = match size {
-                    Size::Size(px) => (px, px),
-                    Size::XSmall => (gpui::px(12.), gpui::px(12.)),
-                    Size::Small => (gpui::px(14.), gpui::px(14.)),
-                    Size::Medium => (gpui::px(16.), gpui::px(16.)),
-                    Size::Large => (gpui::px(24.), gpui::px(24.)),
-                };
+                let mut base = div();
+                *base.style() = self.style.clone();
 
-                div()
-                    .flex_shrink_0()
-                    .w(w)
-                    .h(h)
+                base.flex_shrink_0()
+                    .when(apply_resolved_size, |this| this.size(resolved_size))
                     .child(
                         img(self
                             .image_source

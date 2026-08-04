@@ -5,9 +5,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable,
-    button::{Button, ButtonVariants},
+    ActiveTheme,
+    button::{IconButton, IconButtonRole},
     h_flex,
+    panel_header::{PanelHeader, PanelHeaderVariant},
     scroll::ScrollableElement,
     v_flex,
 };
@@ -51,30 +52,27 @@ impl TerminalCommandBar {
     }
 
     fn render_quick_sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .h(px(48.0))
-            .flex_shrink_0()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .border_b_1()
+        PanelHeader::new("terminal-quick-command-sidebar-header")
+            .variant(PanelHeaderVariant::Sidebar)
+            .background(self.colors.muted)
             .border_color(self.colors.border)
-            .child(
+            .title(
                 div()
                     .text_xs()
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(self.colors.muted_foreground)
                     .child(t!("TerminalCommandBar.quick_commands").to_string()),
             )
-            .child(
-                Button::new("terminal-command-quick-close")
-                    .icon(gpui_component::IconName::Close)
-                    .ghost()
-                    .xsmall()
-                    .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_quick_commands(window, cx);
-                    })),
+            .trailing(
+                IconButton::new(
+                    "terminal-command-quick-close",
+                    gpui_component::IconName::Close,
+                )
+                .role(IconButtonRole::Compact)
+                .tooltip(t!("TerminalCommandBar.close_quick_commands").to_string())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_quick_commands(window, cx);
+                })),
             )
             .into_any_element()
     }

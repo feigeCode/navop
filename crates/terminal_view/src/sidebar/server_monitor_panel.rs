@@ -9,8 +9,8 @@ use gpui::{
     Window, div, linear_color_stop, linear_gradient, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, StyledExt,
-    button::{Button, ButtonVariants},
+    ActiveTheme, Disableable, FunctionalIcon, IconName, Sizable, StyledExt,
+    button::{Button, IconButton, IconButtonRole},
     chart::{AreaChart, LineChart, PieChart},
     h_flex,
     progress::Progress,
@@ -733,15 +733,16 @@ impl ServerMonitorPanel {
             }))
             .child(
                 h_flex().gap_1().child(
-                    Button::new("server-monitor-refresh")
-                        .ghost()
-                        .small()
-                        .icon(IconName::Refresh)
-                        .disabled(!self.monitor_enabled || self.preparing)
-                        .tooltip(t!("ServerMonitor.refresh"))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.refresh_now(cx);
-                        })),
+                    IconButton::new(
+                        "server-monitor-refresh",
+                        FunctionalIcon::new(IconName::Refresh),
+                    )
+                    .role(IconButtonRole::Compact)
+                    .disabled(!self.monitor_enabled || self.preparing)
+                    .tooltip(t!("ServerMonitor.refresh"))
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.refresh_now(cx);
+                    })),
                 ),
             )
     }

@@ -17,6 +17,7 @@ impl HomePage {
             should_show_team_management_entry(is_feature_enabled(Feature::TeamManagement, cx));
         let show_ai_workbench =
             AppSettings::current(cx).startup_default_page == StartupDefaultPage::Home;
+        let rail_item_size = Size::Size(cx.theme().geometry.layout.global_rail_item);
 
         v_flex()
             .relative()
@@ -35,15 +36,26 @@ impl HomePage {
                     .when(collapsed, |sidebar| sidebar.items_center())
                     .children(ConnectionType::all().into_iter().map(|filter| {
                         let selected = self.selected_filter == filter;
+                        let icon = if collapsed {
+                            connection_type_rail_icon(filter)
+                        } else {
+                            connection_type_navigation_icon(filter, ConnectionVisualSize::List)
+                        };
                         div()
                             .id(filter.label())
                             .flex()
                             .items_center()
                             .gap_3()
                             .w_full()
-                            .when(collapsed, |row| row.justify_center().px_0())
-                            .when(!collapsed, |row| row.px_3())
                             .py_2()
+                            .when(collapsed, |row| {
+                                row.justify_center().px_0().py_0().h(cx
+                                    .theme()
+                                    .geometry
+                                    .layout
+                                    .global_rail_item)
+                            })
+                            .when(!collapsed, |row| row.px_3())
                             .cursor_pointer()
                             .rounded_lg()
                             .overflow_hidden()
@@ -58,7 +70,7 @@ impl HomePage {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.set_selected_filter(filter, cx);
                             }))
-                            .child(Icon::new(filter.icon()).color().with_size(Size::Large))
+                            .child(icon)
                             .when(!collapsed, |row| {
                                 row.child(
                                     div()
@@ -136,19 +148,23 @@ impl HomePage {
                             .border_color(cx.theme().border)
                             .when(collapsed, |footer| {
                                 footer.items_center().child(
-                                    Button::new("legacy-home-user")
-                                        .icon(Icon::new(IconName::UserColor).color())
-                                        .ghost()
-                                        .large()
-                                        .tooltip(
-                                            user.map(UserInfo::resolved_display_name)
-                                                .unwrap_or_else(|| t!("Auth.login").to_string()),
-                                        )
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    IconButton::new(
+                                        "legacy-home-user",
+                                        ObjectIcon::new(IconName::User),
+                                    )
+                                    .hit_size(rail_item_size)
+                                    .glyph_size(IconSize::Medium)
+                                    .tooltip(
+                                        user.map(UserInfo::resolved_display_name)
+                                            .unwrap_or_else(|| t!("Auth.login").to_string()),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             if this.current_user.is_none() {
                                                 this.show_login_dialog(window, cx);
                                             }
-                                        })),
+                                        },
+                                    )),
                                 )
                             })
                             .when(!collapsed, |footer| {
@@ -220,14 +236,24 @@ impl HomePage {
         collapsed: bool,
         on_click: impl Fn(&mut HomePage, &mut Window, &mut Context<HomePage>) + 'static,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        Button::new(id)
-            .icon(Icon::new(icon).color())
-            .tooltip(label.clone())
-            .when(collapsed, |button| button.ghost().large())
-            .when(!collapsed, |button| {
-                button.label(label).w_full().justify_start()
-            })
-            .on_click(cx.listener(move |home, _, window, cx| on_click(home, window, cx)))
+    ) -> AnyElement {
+        let listener = cx.listener(move |home, _, window, cx| on_click(home, window, cx));
+
+        if collapsed {
+            IconButton::new(id, ObjectIcon::new(icon))
+                .hit_size(Size::Size(cx.theme().geometry.layout.global_rail_item))
+                .glyph_size(IconSize::Medium)
+                .tooltip(label)
+                .on_click(listener)
+                .into_any_element()
+        } else {
+            Button::new(id)
+                .icon(ObjectIcon::new(icon))
+                .label(label)
+                .w_full()
+                .justify_start()
+                .on_click(listener)
+                .into_any_element()
+        }
     }
 }

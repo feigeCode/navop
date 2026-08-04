@@ -59,6 +59,16 @@ Common:
     zh-CN: 编辑
     zh-HK: 編輯
 
+Navigation:
+  back:
+    en: Back
+    zh-CN: 后退
+    zh-HK: 後退
+  forward:
+    en: Forward
+    zh-CN: 前进
+    zh-HK: 前進
+
 Endpoint:
   local:
     en: Local
@@ -91,10 +101,50 @@ Endpoint:
 
 # 文件操作
 File:
+  column_name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  column_modified:
+    en: Date Modified
+    zh-CN: 修改日期
+    zh-HK: 修改日期
+  column_size:
+    en: Size
+    zh-CN: 大小
+    zh-HK: 大小
+  column_kind:
+    en: Kind
+    zh-CN: 类型
+    zh-HK: 類型
   items_count:
     en: "%{count} items"
     zh-CN: "%{count} 个项目"
     zh-HK: "%{count} 個項目"
+  empty_directory:
+    en: This folder is empty
+    zh-CN: 此文件夹为空
+    zh-HK: 此文件夾為空
+  empty_directory_detail:
+    en: Drop files here or create a new folder.
+    zh-CN: 将文件拖放到这里，或新建一个文件夹。
+    zh-HK: 將檔案拖放到這裡，或新建一個文件夾。
+  no_results:
+    en: No matching files
+    zh-CN: 没有匹配的文件
+    zh-HK: 沒有匹配的檔案
+  no_results_detail:
+    en: Try a different search.
+    zh-CN: 请尝试其他搜索内容。
+    zh-HK: 請嘗試其他搜尋內容。
+  no_visible_files:
+    en: No visible files
+    zh-CN: 没有可见文件
+    zh-HK: 沒有可見檔案
+  no_visible_files_detail:
+    en: Hidden files are excluded from this view.
+    zh-CN: 当前视图已隐藏隐藏文件。
+    zh-HK: 目前檢視已隱藏隱藏檔案。
   drop_files_here:
     en: Drop files here
     zh-CN: 将文件拖放到这里

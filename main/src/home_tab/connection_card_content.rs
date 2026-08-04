@@ -23,7 +23,7 @@ impl HomePage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self.connection_icon(conn, if legacy { px(40.0) } else { px(34.0) })),
+                    .child(self.connection_icon(conn, ConnectionVisualSize::Card)),
             )
             .child(
                 v_flex()

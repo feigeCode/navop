@@ -54,6 +54,22 @@ jobs:
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
+  icon-audit:
+    name: Icon audit (Linux)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+      - name: Test icon-audit
+        run: cargo test --locked -p icon-audit
+      - name: Check icon assets
+        run: cargo run --locked -p icon-audit -- check
+
   test:
     name: Test (${{ matrix.platform }}, ${{ matrix.target }})
     needs: prepare

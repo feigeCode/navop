@@ -9,8 +9,10 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, BrandIcon, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable, Size,
+    StyledExt, WindowExt as _,
+    button::{Button, ButtonVariants as _, IconButton},
+    content_state::ContentState,
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -2112,19 +2114,20 @@ impl CollectionView {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let title = match (&self.database_name, &self.collection_name) {
             (Some(database), Some(collection)) => format!("{} / {}", database, collection),
             _ => t!("MongoCollection.select_collection").to_string(),
         };
 
         h_flex()
+            .min_h(geometry.layout.panel_header)
             .items_center()
-            .gap_2()
+            .gap(geometry.spacing.space_2)
             .child(
-                Icon::new(IconName::MongoDB)
-                    .color()
-                    .with_size(Size::Small)
-                    .text_color(cx.theme().muted_foreground),
+                BrandIcon::new(IconName::MongoDB)
+                    .with_size(IconSize::Medium)
+                    .into_icon(),
             )
             .child(
                 div()
@@ -2156,9 +2159,11 @@ impl CollectionView {
     }
 
     fn render_query_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let is_loading = self.is_loading;
         h_flex()
-            .gap_2()
+            .min_h(geometry.layout.command_bar)
+            .gap(geometry.spacing.space_2)
             .items_center()
             .child(Input::new(&self.filter_input).w(px(320.0)))
             .child(
@@ -2220,12 +2225,13 @@ impl CollectionView {
             return div().into_any_element();
         }
 
+        let geometry = cx.theme().geometry.clone();
         v_flex()
-            .gap_2()
-            .p_2()
-            .border_1()
+            .gap(geometry.spacing.space_2)
+            .p(geometry.spacing.space_2)
+            .border(geometry.border.hairline)
             .border_color(cx.theme().border)
-            .rounded(px(6.0))
+            .rounded(geometry.radius.sm)
             .child(
                 h_flex()
                     .gap_2()
@@ -2263,11 +2269,13 @@ impl CollectionView {
     }
 
     fn render_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let has_selection = self.selected_index.is_some();
         let is_loading = self.is_loading;
         let has_table_changes = self.document_table.read(cx).delegate().has_changes();
         h_flex()
-            .gap_2()
+            .min_h(geometry.layout.command_bar)
+            .gap(geometry.spacing.space_2)
             .items_center()
             .child(
                 Button::new("mongo-add")
@@ -2676,21 +2684,13 @@ impl CollectionView {
 
     fn render_validation_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let body = if self.validation_loading {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Spinner::new())
+            ContentState::loading(t!("MongoCollection.loading_validation").to_string())
+                .compact()
                 .into_any_element()
         } else if let Some(error) = &self.validation_error {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(cx.theme().danger)
-                .child(error.clone())
+            ContentState::error(t!("MongoCollection.validation_load_failed").to_string())
+                .detail(error.clone())
+                .compact()
                 .into_any_element()
         } else {
             div()
@@ -2699,13 +2699,15 @@ impl CollectionView {
                 .into_any_element()
         };
 
+        let geometry = cx.theme().geometry.clone();
         v_flex()
             .flex_1()
             .min_h_0()
-            .gap_2()
+            .gap(geometry.spacing.space_2)
             .child(
                 h_flex()
-                    .gap_2()
+                    .min_h(geometry.layout.command_bar)
+                    .gap(geometry.spacing.space_2)
                     .items_center()
                     .child(
                         Button::new("mongo-validation-refresh")
@@ -2742,45 +2744,29 @@ impl CollectionView {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .border_1()
+                    .border(geometry.border.hairline)
                     .border_color(cx.theme().border)
-                    .rounded(px(6.0))
-                    .p_2()
+                    .rounded(geometry.radius.sm)
+                    .p(geometry.spacing.space_2)
                     .child(body),
             )
     }
 
-    fn render_empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .child(message.to_string())
-            .into_any_element()
-    }
-
     fn render_document_table(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let body = if self.is_loading {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Spinner::new())
+            ContentState::loading(t!("MongoCollection.loading_documents").to_string())
+                .compact()
                 .into_any_element()
         } else if let Some(error) = &self.error_message {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(cx.theme().danger)
-                .child(error.clone())
+            ContentState::error(t!("MongoCollection.document_load_failed").to_string())
+                .detail(error.clone())
+                .compact()
                 .into_any_element()
         } else if self.documents.is_empty() {
-            self.render_empty_state(t!("MongoCollection.no_documents").as_ref(), cx)
+            ContentState::empty(t!("MongoCollection.no_documents").to_string())
+                .icon(ObjectIcon::new(IconName::Table).with_size(IconSize::Large))
+                .compact()
+                .into_any_element()
         } else {
             EditTable::new(&self.document_table).into_any_element()
         };
@@ -2796,19 +2782,19 @@ impl CollectionView {
     }
 
     fn render_collapsed_detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         v_flex()
             .h_full()
-            .w(px(32.0))
+            .w(geometry.control.default)
             .flex_shrink_0()
             .items_center()
-            .py_1()
-            .border_l_1()
+            .py(geometry.spacing.space_1)
+            .border_l(geometry.border.hairline)
             .border_color(cx.theme().border)
             .child(
-                Button::new("mongo-expand-preview")
-                    .xsmall()
-                    .ghost()
-                    .icon(IconName::ChevronLeft)
+                IconButton::new("mongo-expand-preview", IconName::ChevronLeft)
+                    .hit_size(Size::XSmall)
+                    .glyph_size(IconSize::Small)
                     .tooltip(t!("MongoCollection.expand_preview").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.toggle_detail_panel(cx);
@@ -2860,9 +2846,13 @@ impl CollectionView {
                 )
                 .into_any_element()
         } else {
-            self.render_empty_state(t!("MongoCollection.select_document").as_ref(), cx)
+            ContentState::empty(t!("MongoCollection.select_document").to_string())
+                .icon(ObjectIcon::new(IconName::File).with_size(IconSize::Large))
+                .compact()
+                .into_any_element()
         };
 
+        let geometry = cx.theme().geometry.clone();
         h_flex()
             .flex_1()
             .h_full()
@@ -2873,17 +2863,16 @@ impl CollectionView {
             .child(
                 v_flex()
                     .h_full()
-                    .w(px(32.0))
+                    .w(geometry.control.default)
                     .flex_shrink_0()
                     .items_center()
-                    .py_1()
-                    .border_r_1()
+                    .py(geometry.spacing.space_1)
+                    .border_r(geometry.border.hairline)
                     .border_color(cx.theme().border)
                     .child(
-                        Button::new("mongo-collapse-preview")
-                            .xsmall()
-                            .ghost()
-                            .icon(IconName::ChevronRight)
+                        IconButton::new("mongo-collapse-preview", IconName::ChevronRight)
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
                             .tooltip(t!("MongoCollection.collapse_preview").to_string())
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.toggle_detail_panel(cx);
@@ -2955,6 +2944,7 @@ impl CollectionView {
     }
 
     fn render_pagination_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let geometry = cx.theme().geometry.clone();
         let inputs = self.read_query_inputs_or_default(cx);
         let page_size = inputs.page_size;
         let skip_base = inputs.skip_base;
@@ -2987,11 +2977,11 @@ impl CollectionView {
         };
 
         h_flex()
+            .min_h(geometry.layout.status_bar)
             .items_center()
             .justify_between()
-            .px_2()
-            .py_1()
-            .border_t_1()
+            .px(geometry.spacing.space_2)
+            .border_t(geometry.border.hairline)
             .border_color(cx.theme().border)
             .child(
                 div()
@@ -3013,13 +3003,14 @@ impl CollectionView {
             )
             .child(
                 h_flex()
-                    .gap_2()
+                    .gap(geometry.spacing.space_2)
                     .items_center()
                     .child(
-                        Button::new("mongo-prev")
-                            .xsmall()
+                        IconButton::new("mongo-prev", IconName::ChevronLeft)
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
                             .outline()
-                            .icon(IconName::ChevronLeft)
+                            .tooltip(t!("MongoCollection.previous_page").to_string())
                             .disabled(!can_prev)
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 if this.page_index > 0 {
@@ -3046,10 +3037,11 @@ impl CollectionView {
                             ),
                     )
                     .child(
-                        Button::new("mongo-next")
-                            .xsmall()
+                        IconButton::new("mongo-next", IconName::ChevronRight)
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
                             .outline()
-                            .icon(IconName::ChevronRight)
+                            .tooltip(t!("MongoCollection.next_page").to_string())
                             .disabled(!can_next)
                             .on_click(cx.listener(|this, _, _window, cx| {
                                 this.page_index += 1;
@@ -3078,7 +3070,11 @@ impl TabContent for CollectionView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(Icon::new(IconName::Table).color().with_size(Size::Medium))
+        Some(
+            ObjectIcon::new(IconName::Table)
+                .with_size(IconSize::Default)
+                .into_icon(),
+        )
     }
 
     fn closeable(&self, _cx: &App) -> bool {
@@ -3139,7 +3135,11 @@ impl TabContent for CollectionTabView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(Icon::new(IconName::Table).color().with_size(Size::Medium))
+        Some(
+            ObjectIcon::new(IconName::Table)
+                .with_size(IconSize::Default)
+                .into_icon(),
+        )
     }
 
     fn closeable(&self, _cx: &App) -> bool {
@@ -3164,7 +3164,8 @@ impl Render for CollectionView {
         self.apply_pending_reload(cx);
 
         let body = if self.collection_name.is_none() {
-            self.render_empty_state(t!("MongoCollection.select_collection_prompt").as_ref(), cx)
+            ContentState::empty(t!("MongoCollection.select_collection_prompt").to_string())
+                .icon(BrandIcon::new(IconName::MongoDB).with_size(IconSize::Large))
                 .into_any_element()
         } else {
             match self.active_tab {

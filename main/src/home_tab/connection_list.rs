@@ -65,7 +65,10 @@ impl HomePage {
                         .bg(cx.theme().success),
                 )
             })
-            .child(self.connection_icon(&conn, px(24.0)).flex_shrink_0())
+            .child(
+                self.connection_icon(&conn, ConnectionVisualSize::List)
+                    .flex_shrink_0(),
+            )
             .child(
                 v_flex()
                     .flex_1()

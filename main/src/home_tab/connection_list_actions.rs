@@ -26,13 +26,11 @@ impl HomePage {
             .opacity(0.0)
             .when(conn.connection_type == ConnectionType::SshSftp, |this| {
                 this.child(
-                    Button::new(SharedString::from(format!(
-                        "sftp-list-conn-{}",
-                        conn.id.unwrap_or(0)
-                    )))
-                    .icon(IconName::Folder1.color())
-                    .with_size(Size::Small)
-                    .primary()
+                    IconButton::new(
+                        SharedString::from(format!("sftp-list-conn-{}", conn.id.unwrap_or(0))),
+                        ObjectIcon::new(IconName::FolderOpen),
+                    )
+                    .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.open_sftp"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -42,13 +40,11 @@ impl HomePage {
             })
             .when(can_edit, |this| {
                 this.child(
-                    Button::new(SharedString::from(format!(
-                        "duplicate-list-conn-{}",
-                        conn.id.unwrap_or(0)
-                    )))
-                    .icon(IconName::Copy)
-                    .with_size(Size::Small)
-                    .primary()
+                    IconButton::new(
+                        SharedString::from(format!("duplicate-list-conn-{}", conn.id.unwrap_or(0))),
+                        FunctionalIcon::new(IconName::Copy),
+                    )
+                    .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.duplicate_connection"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -56,13 +52,11 @@ impl HomePage {
                     })),
                 )
                 .child(
-                    Button::new(SharedString::from(format!(
-                        "edit-list-conn-{}",
-                        conn.id.unwrap_or(0)
-                    )))
-                    .icon(IconName::Edit)
-                    .with_size(Size::Small)
-                    .primary()
+                    IconButton::new(
+                        SharedString::from(format!("edit-list-conn-{}", conn.id.unwrap_or(0))),
+                        FunctionalIcon::new(IconName::Edit),
+                    )
+                    .role(IconButtonRole::Compact)
                     .tooltip(t!("Home.edit_connection"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();
@@ -70,13 +64,12 @@ impl HomePage {
                     })),
                 )
                 .child(
-                    Button::new(SharedString::from(format!(
-                        "delete-list-conn-{}",
-                        conn.id.unwrap_or(0)
-                    )))
-                    .icon(IconName::Remove)
-                    .with_size(Size::Small)
-                    .danger()
+                    IconButton::new(
+                        SharedString::from(format!("delete-list-conn-{}", conn.id.unwrap_or(0))),
+                        FunctionalIcon::new(IconName::Remove),
+                    )
+                    .role(IconButtonRole::Compact)
+                    .text_color(cx.theme().danger)
                     .tooltip(t!("Home.delete_connection"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         cx.stop_propagation();

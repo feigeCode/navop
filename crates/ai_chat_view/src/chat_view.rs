@@ -2,14 +2,16 @@ use crate::message_view::render_messages;
 use crate::session_sidebar::{self, SessionSummary};
 use crate::{ChatMessageUI, ChatViewState};
 use gpui::{
-    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Sizable,
-    button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    ActiveTheme, IconName,
+    button::{IconButton, IconButtonRole},
+    h_flex,
+    panel_header::{PanelHeader, PanelHeaderVariant},
+    v_flex,
 };
 use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -151,7 +153,7 @@ impl ChatView {
 
         if self.sidebar_collapsed {
             return v_flex()
-                .w(px(48.0))
+                .w(cx.theme().geometry.layout.compact_rail)
                 .h_full()
                 .flex_shrink_0()
                 .border_r_1()
@@ -161,17 +163,15 @@ impl ChatView {
                 .py_2()
                 .gap_2()
                 .child(
-                    Button::new("ai-chat-expand-sidebar")
-                        .icon(IconName::PanelLeftOpen)
-                        .ghost()
-                        .small()
+                    IconButton::new("ai-chat-expand-sidebar", IconName::PanelLeftOpen)
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("AgentUi.open_sidebar").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
                 )
                 .child(
-                    Button::new("ai-chat-new-session-collapsed")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .small()
+                    IconButton::new("ai-chat-new-session-collapsed", IconName::Plus)
+                        .role(IconButtonRole::Compact)
+                        .tooltip(t!("AgentUi.new_task").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                 )
                 .into_any_element();
@@ -195,7 +195,7 @@ impl ChatView {
         }
 
         v_flex()
-            .w(px(260.0))
+            .w(cx.theme().geometry.layout.context_sidebar_default)
             .h_full()
             .min_h_0()
             .flex_shrink_0()
@@ -203,51 +203,30 @@ impl ChatView {
             .border_color(border)
             .bg(muted)
             .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
+                PanelHeader::new("ai-chat-sidebar-header")
+                    .variant(PanelHeaderVariant::Sidebar)
+                    .background(muted)
                     .border_color(border)
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Button::new("ai-chat-collapse-sidebar")
-                                    .icon(IconName::PanelLeftClose)
-                                    .ghost()
-                                    .small()
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(chat_task_sidebar_title()),
-                            ),
+                    .leading(
+                        IconButton::new("ai-chat-collapse-sidebar", IconName::PanelLeftClose)
+                            .role(IconButtonRole::Compact)
+                            .tooltip(t!("AgentUi.close_sidebar").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx))),
                     )
-                    .child(
+                    .title_text(chat_task_sidebar_title())
+                    .trailing(
                         h_flex()
                             .gap_1()
                             .items_center()
                             .child(
-                                Button::new("ai-chat-new-session")
-                                    .icon(IconName::Plus)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("ai-chat-new-session", IconName::Plus)
+                                    .role(IconButtonRole::Compact)
                                     .tooltip(t!("AgentUi.new_task").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             )
                             .child(
-                                Button::new("ai-chat-close-sidebar")
-                                    .icon(IconName::Close)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("ai-chat-close-sidebar", IconName::Close)
+                                    .role(IconButtonRole::Compact)
                                     .tooltip(t!("AgentUi.close_sidebar").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_sidebar_hidden(true, cx)
@@ -288,10 +267,8 @@ impl Render for ChatView {
                     .when(self.sidebar_hidden, |this| {
                         this.child(
                             div().absolute().top_2().left_2().child(
-                                Button::new("ai-chat-open-sidebar")
-                                    .icon(IconName::PanelLeftOpen)
-                                    .ghost()
-                                    .small()
+                                IconButton::new("ai-chat-open-sidebar", IconName::PanelLeftOpen)
+                                    .role(IconButtonRole::Compact)
                                     .tooltip(t!("AgentUi.open_sidebar").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.set_sidebar_hidden(false, cx)

@@ -7,7 +7,7 @@ use gpui::{
     Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -146,7 +146,11 @@ impl Render for DragWorkspace {
             .border_color(cx.theme().border)
             .bg(cx.theme().popover)
             .shadow_md()
-            .child(IconName::AppsColor.color().with_size(px(18.0)))
+            .child(
+                ObjectIcon::new(IconName::AppsColor)
+                    .with_size(IconSize::Medium)
+                    .into_icon(),
+            )
             .child(
                 div()
                     .flex_1()

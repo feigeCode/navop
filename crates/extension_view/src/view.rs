@@ -5,10 +5,11 @@ use gpui::{
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::{ActiveTheme, Icon, IconName, v_flex};
+use gpui_component::{ActiveTheme, Icon, IconName, IconSize, ObjectIcon, Sizable, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
+use crate::state::MarketplaceLoadState;
 use crate::{ExtensionKind, ExtensionSummary, ExtensionViewHost, MarketplaceEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +27,7 @@ pub struct ExtensionManagerView {
     pub(crate) installed: Vec<ExtensionSummary>,
     pub(crate) marketplace_entries: Vec<MarketplaceEntry>,
     pub(crate) marketplace_load_attempted: bool,
-    pub(crate) loading: bool,
+    pub(crate) marketplace_load_state: MarketplaceLoadState,
     pub(crate) busy: Option<String>,
     pub(crate) status: SharedString,
     pub(crate) _subscriptions: Vec<Subscription>,
@@ -95,7 +96,7 @@ impl ExtensionManagerView {
             installed: Vec::new(),
             marketplace_entries: Vec::new(),
             marketplace_load_attempted: false,
-            loading: false,
+            marketplace_load_state: MarketplaceLoadState::NotLoaded,
             busy: None,
             status: SharedString::from(""),
             _subscriptions: vec![search_sub],
@@ -125,7 +126,11 @@ impl TabContent for ExtensionManagerView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::ExtensionsColor.color())
+        Some(
+            ObjectIcon::new(IconName::ExtensionsColor)
+                .with_size(IconSize::Medium)
+                .into_icon(),
+        )
     }
 }
 
@@ -134,11 +139,15 @@ impl Render for ExtensionManagerView {
         div().track_focus(&self.focus_handle).size_full().child(
             v_flex()
                 .size_full()
-                .gap_4()
-                .p_4()
                 .bg(cx.theme().background)
                 .child(self.render_toolbar(window, cx))
-                .child(div().flex_1().min_h_0().child(self.render_body(window, cx))),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_4()
+                        .child(self.render_body(window, cx)),
+                ),
         )
     }
 }

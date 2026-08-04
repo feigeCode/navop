@@ -9,7 +9,10 @@ use crate::file_system::LoadedFile;
 use crate::git::{GitChange, GitRepository};
 use crate::theme::WorkspaceTheme;
 use gpui::{App, Context, Entity, EventEmitter, ScrollHandle, Subscription};
-use gpui_component::input::{InputLineDecoration, InputState};
+use gpui_component::{
+    input::{InputLineDecoration, InputState},
+    status_bar::StatusPresentation,
+};
 use notes::NotesView;
 use remote_file_editor::EditorMode;
 use std::path::{Path, PathBuf};
@@ -141,6 +144,7 @@ pub(super) struct EditorTab {
     soft_wrap: bool,
     read_only: bool,
     status_message: String,
+    status_presentation: StatusPresentation,
     load_error: Option<String>,
     load_request: LoadRequest,
 }
@@ -167,6 +171,7 @@ impl EditorTab {
             soft_wrap: false,
             read_only: false,
             status_message: rust_i18n::t!("WorkspaceExplorer.status.loading").to_string(),
+            status_presentation: StatusPresentation::Progress,
             load_error: None,
             load_request: document.load_request,
         }

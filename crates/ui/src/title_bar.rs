@@ -11,11 +11,9 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
+/// Compatibility default for callers that need a title-bar offset before an
+/// application context exists. Runtime rendering uses `ThemeGeometry`.
 pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
-#[cfg(target_os = "macos")]
-const TITLE_BAR_LEFT_PADDING: Pixels = px(80.);
-#[cfg(not(target_os = "macos"))]
-const TITLE_BAR_LEFT_PADDING: Pixels = px(12.);
 
 /// TitleBar used to customize the appearance of the title bar.
 ///
@@ -163,11 +161,12 @@ impl RenderOnce for ControlIcon {
         };
         let fullscreen_icon = icon.clone();
         let fullscreen_on_close_window = on_close_window.clone();
+        let control_width = cx.theme().geometry.layout.window_control_width;
 
         div()
             .id(self.id())
             .flex()
-            .w(TITLE_BAR_HEIGHT)
+            .w(control_width)
             .h_full()
             .flex_shrink_0()
             .justify_center()
@@ -278,6 +277,13 @@ impl RenderOnce for TitleBar {
         let is_web = cfg!(target_family = "wasm");
         let is_linux = cfg!(target_os = "linux");
         let is_macos = cfg!(target_os = "macos");
+        let layout = cx.theme().geometry.layout;
+        let title_bar_height = layout.title_bar;
+        let title_bar_left_padding = if is_macos {
+            layout.macos_title_bar_content_padding
+        } else {
+            layout.title_bar_content_padding
+        };
 
         let state = window.use_state(cx, |_, _| TitleBarState { should_move: false });
 
@@ -288,8 +294,8 @@ impl RenderOnce for TitleBar {
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .h(TITLE_BAR_HEIGHT)
-                .pl(TITLE_BAR_LEFT_PADDING)
+                .h(title_bar_height)
+                .pl(title_bar_left_padding)
                 .border_b_1()
                 .border_color(cx.theme().title_bar_border)
                 .bg(cx.theme().title_bar)

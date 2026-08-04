@@ -9,7 +9,7 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt as _,
+    ActiveTheme, BrandIcon, Icon, IconName, IconSize, ObjectIcon, Sizable, Size, WindowExt as _,
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -25,6 +25,8 @@ use rust_i18n::t;
 use tracing::{error, info, warn};
 
 use crate::{GlobalMongoState, MongoError, MongoManager, MongoNode, MongoNodeType};
+
+const MONGO_TREE_INDENT: gpui::Pixels = px(12.0);
 
 /// 树形视图事件
 #[derive(Clone, Debug)]
@@ -1261,13 +1263,19 @@ impl MongoTreeView {
         let show_arrow = self.should_show_arrow(&node_id);
 
         let icon = match node.node_type {
-            MongoNodeType::Connection => IconName::MongoDB,
-            MongoNodeType::Database => IconName::Database,
-            MongoNodeType::Collection => IconName::Table,
-        }
-        .color();
+            MongoNodeType::Connection => BrandIcon::new(IconName::MongoDB)
+                .with_size(IconSize::Default)
+                .into_icon(),
+            MongoNodeType::Database => ObjectIcon::new(IconName::Database)
+                .with_size(IconSize::Default)
+                .into_icon(),
+            MongoNodeType::Collection => ObjectIcon::new(IconName::Table)
+                .with_size(IconSize::Default)
+                .into_icon(),
+        };
 
-        let indent = px((entry.depth as f32) * 12.0);
+        let indent = MONGO_TREE_INDENT * entry.depth;
+        let tree = cx.theme().geometry.tree;
         let click_node_id = node_id.clone();
         let view_for_click = cx.entity().clone();
         let view_for_double_click = cx.entity().clone();
@@ -1282,8 +1290,8 @@ impl MongoTreeView {
             .gap_2()
             .items_center()
             .w_full()
-            .min_h(px(28.0))
-            .px_2()
+            .min_h(tree.row_height)
+            .px(tree.base_padding)
             .py_1()
             .cursor_pointer()
             .when(is_selected, |this| this.bg(cx.theme().list_active))
@@ -1308,8 +1316,8 @@ impl MongoTreeView {
             .child(div().w(indent))
             .child(
                 div()
-                    .w(px(16.0))
-                    .h(px(16.0))
+                    .w(tree.disclosure_size)
+                    .h(tree.disclosure_size)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1336,7 +1344,7 @@ impl MongoTreeView {
                             )
                     }),
             )
-            .child(Icon::new(icon).with_size(Size::Small))
+            .child(icon)
             .child(
                 div()
                     .flex_1()

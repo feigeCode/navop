@@ -6,19 +6,14 @@ use gpui::{
     ParentElement, Pixels, RenderOnce, StyleRefinement, Styled, Window, WindowControlArea,
     anchored, div, point, prelude::FluentBuilder as _, px,
 };
+use rust_i18n::t;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActiveTheme, FocusTrapElement as _, IconName, Placement, Sizable, StyledExt as _,
-    WindowExt as _,
-    actions::Cancel,
-    button::{Button, ButtonVariants as _},
-    dialog::overlay_color,
-    h_flex,
-    scroll::ScrollableElement as _,
-    title_bar::TITLE_BAR_HEIGHT,
-    v_flex,
+    ActiveTheme, FocusTrapElement as _, IconName, IconSize, Placement, Size, StyledExt as _,
+    WindowExt as _, actions::Cancel, button::IconButton, dialog::overlay_color, h_flex,
+    scroll::ScrollableElement as _, title_bar::TITLE_BAR_HEIGHT, v_flex,
 };
 
 const CONTEXT: &str = "Sheet";
@@ -235,10 +230,10 @@ impl RenderOnce for Sheet {
                                     .font_semibold()
                                     .child(self.title.unwrap_or(div().into_any_element()))
                                     .child(
-                                        Button::new("close")
-                                            .small()
-                                            .ghost()
-                                            .icon(IconName::Close)
+                                        IconButton::new("close", IconName::Close)
+                                            .hit_size(Size::Small)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("Dock.Close"))
                                             .on_click(move |_, window, cx| {
                                                 window.close_sheet(cx);
                                                 on_close(&ClickEvent::default(), window, cx);

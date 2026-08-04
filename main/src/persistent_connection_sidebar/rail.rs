@@ -1,10 +1,9 @@
 #[cfg(target_os = "macos")]
 use gpui::div;
 use gpui::prelude::FluentBuilder as _;
-use gpui::{AnyElement, Entity, Hsla, IntoElement, ParentElement, Styled, px, rgb};
+use gpui::{AnyElement, Entity, IntoElement, ParentElement, Styled};
 use gpui_component::{
-    Icon, IconName, Selectable, Sizable, Size,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Icon, IconName, IconSize, Selectable, Sizable, Size, button::IconButton,
     v_flex,
 };
 use one_core::license::Feature;
@@ -13,33 +12,9 @@ use one_core::storage::ConnectionType;
 use rust_i18n::t;
 
 use super::{PersistentConnectionSidebar, PersistentConnectionSidebarEvent, SidebarPalette};
+use crate::connection_visuals::connection_type_rail_icon;
 use crate::home_tab::{HomePage, should_show_team_management_entry};
 use crate::license::is_feature_enabled;
-
-#[cfg(target_os = "macos")]
-const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(44.0);
-#[cfg(target_os = "windows")]
-const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(56.0);
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const NAVIGATION_RAIL_WIDTH: gpui::Pixels = px(48.0);
-#[cfg(target_os = "macos")]
-const MACOS_TITLE_BAR_HEIGHT: gpui::Pixels = px(40.0);
-
-fn navigation_rail_button_size() -> Size {
-    if cfg!(target_os = "windows") {
-        Size::Size(px(40.0))
-    } else {
-        Size::Large
-    }
-}
-
-fn navigation_rail_icon_size() -> Size {
-    if cfg!(target_os = "windows") {
-        Size::Size(px(28.0))
-    } else {
-        Size::Large
-    }
-}
 
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
@@ -47,6 +22,9 @@ pub(super) fn render_navigation_rail(
     palette: SidebarPalette,
     cx: &gpui::App,
 ) -> AnyElement {
+    let layout = cx.theme().geometry.layout;
+    let rail_width = layout.global_rail;
+    let rail_item_size = Size::Size(layout.global_rail_item);
     let home = home_page.read(cx);
     let selected_filter = home.selected_filter;
     let show_team =
@@ -60,7 +38,7 @@ pub(super) fn render_navigation_rail(
         .unwrap_or_else(|| t!("Auth.login").to_string());
 
     v_flex()
-        .w(NAVIGATION_RAIL_WIDTH)
+        .w(rail_width)
         .h_full()
         .flex_shrink_0()
         .items_center()
@@ -78,7 +56,7 @@ pub(super) fn render_navigation_rail(
                 this.child(
                     div()
                         .w_full()
-                        .h(MACOS_TITLE_BAR_HEIGHT)
+                        .h(layout.macos_rail_title_bar_height)
                         .flex_shrink_0()
                         .bg(palette.rail_background),
                 )
@@ -100,6 +78,7 @@ pub(super) fn render_navigation_rail(
                     sidebar,
                     selected_filter,
                     palette,
+                    rail_item_size,
                 ))
                 .child(
                     v_flex()
@@ -117,6 +96,7 @@ pub(super) fn render_navigation_rail(
                                     .to_string(),
                                 palette,
                                 home_page,
+                                rail_item_size,
                                 |home, window, cx| home.add_ai_workbench_tab(window, cx),
                             ))
                         })
@@ -127,6 +107,7 @@ pub(super) fn render_navigation_rail(
                                 t!("TeamManagement.title").to_string(),
                                 palette,
                                 home_page,
+                                rail_item_size,
                                 |home, window, cx| home.open_team_management(window, cx),
                             ))
                         })
@@ -136,6 +117,7 @@ pub(super) fn render_navigation_rail(
                             t!("Home.notes").to_string(),
                             palette,
                             home_page,
+                            rail_item_size,
                             |home, window, cx| home.add_notes_tab(window, cx),
                         ))
                         .child(rail_button(
@@ -144,6 +126,7 @@ pub(super) fn render_navigation_rail(
                             t!("Home.extensions").to_string(),
                             palette,
                             home_page,
+                            rail_item_size,
                             |home, window, cx| home.add_extensions_tab(window, cx),
                         ))
                         .child(rail_button(
@@ -152,6 +135,7 @@ pub(super) fn render_navigation_rail(
                             t!("Common.settings").to_string(),
                             palette,
                             home_page,
+                            rail_item_size,
                             |home, window, cx| home.add_settings_tab(window, cx),
                         ))
                         .child(rail_button(
@@ -160,6 +144,7 @@ pub(super) fn render_navigation_rail(
                             user_tooltip,
                             palette,
                             home_page,
+                            rail_item_size,
                             |home, window, cx| {
                                 if GlobalCurrentUser::get_user(cx).is_none() {
                                     home.current_user = None;
@@ -177,6 +162,7 @@ fn render_filter_buttons(
     sidebar: Entity<PersistentConnectionSidebar>,
     selected_filter: ConnectionType,
     palette: SidebarPalette,
+    rail_item_size: Size,
 ) -> AnyElement {
     let mut filters = v_flex().flex_1().w_full().items_center().gap_1().p_1();
     for filter in ConnectionType::all() {
@@ -184,34 +170,33 @@ fn render_filter_buttons(
         let sidebar = sidebar.clone();
         let selected = selected_filter == filter;
         filters = filters.child(
-            Button::new(format!("persistent-filter-{}", filter.label()))
-                .icon(
-                    Icon::new(filter_line_icon(filter))
-                        .text_color(filter_icon_color(filter, selected))
-                        .with_size(navigation_rail_icon_size()),
-                )
-                .ghost()
-                .with_size(navigation_rail_button_size())
-                .selected(selected)
-                .text_color(palette.foreground)
-                // Keep the protocol identity color visible. A full primary
-                // fill made the blue database icon disappear on Windows and
-                // looked disproportionately bright in dark themes.
-                .when(selected, |button| button.bg(palette.muted))
-                .tooltip(filter.label())
-                .on_click(move |_, _, cx| {
-                    if !selected {
-                        home.update(cx, |home, cx| home.set_selected_filter(filter, cx));
-                    }
-                    sidebar.update(cx, |sidebar, cx| {
-                        let expanded =
-                            next_tree_expanded_after_filter_click(selected, sidebar.tree_expanded);
-                        sidebar.set_tree_expanded(expanded, cx);
-                        cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged {
-                            expanded,
-                        });
-                    });
+            IconButton::new(
+                format!("persistent-filter-{}", filter.label()),
+                connection_type_rail_icon(filter).text_color(if selected {
+                    palette.foreground
+                } else {
+                    palette.muted_foreground
                 }),
+            )
+            .hit_size(rail_item_size)
+            .glyph_size(IconSize::Medium)
+            .selected(selected)
+            .text_color(palette.foreground)
+            // Selection is expressed by the container and foreground
+            // hierarchy; protocol colors are reserved for content identity.
+            .when(selected, |button| button.bg(palette.selected))
+            .tooltip(filter.label())
+            .on_click(move |_, _, cx| {
+                if !selected {
+                    home.update(cx, |home, cx| home.set_selected_filter(filter, cx));
+                }
+                sidebar.update(cx, |sidebar, cx| {
+                    let expanded =
+                        next_tree_expanded_after_filter_click(selected, sidebar.tree_expanded);
+                    sidebar.set_tree_expanded(expanded, cx);
+                    cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded });
+                });
+            }),
         );
     }
     filters.into_any_element()
@@ -221,61 +206,28 @@ fn next_tree_expanded_after_filter_click(selected: bool, tree_expanded: bool) ->
     if selected { !tree_expanded } else { true }
 }
 
-/// Unified line-style icon for each connection filter, replacing the previous
-/// mix of brand SVGs and filled backplate icons.
-fn filter_line_icon(filter: ConnectionType) -> IconName {
-    match filter {
-        ConnectionType::All => IconName::ServerLine,
-        ConnectionType::Database => IconName::DatabaseLine,
-        ConnectionType::SshSftp => IconName::TerminalLine,
-        ConnectionType::Redis => IconName::RedisLine,
-        ConnectionType::MongoDB => IconName::MongoDBLine,
-        ConnectionType::Serial => IconName::SerialLine,
-        ConnectionType::PortForwarding => IconName::PortForwardingLine,
-        ConnectionType::Rdp => IconName::RdpLine,
-        ConnectionType::Vnc => IconName::VncLine,
-    }
-}
-
-/// Harmonized identity colors for the filter icons (consistent saturation and
-/// lightness). Unselected icons are dimmed; the selected one keeps full color.
-fn filter_icon_color(filter: ConnectionType, selected: bool) -> Hsla {
-    let base = match filter {
-        ConnectionType::All => 0x64748B,
-        ConnectionType::SshSftp => 0xF97316,
-        ConnectionType::Database => 0x3B82F6,
-        ConnectionType::Redis => 0xEF4444,
-        ConnectionType::MongoDB => 0x22C55E,
-        ConnectionType::Serial => 0x8B5CF6,
-        ConnectionType::PortForwarding => 0x0EA5E9,
-        ConnectionType::Rdp => 0x6366F1,
-        ConnectionType::Vnc => 0x10B981,
-    };
-    let color: Hsla = rgb(base).into();
-    if selected { color } else { color.opacity(0.72) }
-}
-
 fn rail_button(
     id: &'static str,
     icon: IconName,
     tooltip: String,
     palette: SidebarPalette,
     home_page: &Entity<HomePage>,
+    rail_item_size: Size,
     on_click: impl Fn(&mut HomePage, &mut gpui::Window, &mut gpui::Context<HomePage>) + 'static,
 ) -> impl IntoElement {
     let home = home_page.clone();
-    Button::new(id)
-        .icon(
-            Icon::new(icon)
-                .text_color(palette.muted_foreground)
-                .with_size(navigation_rail_icon_size()),
-        )
-        .ghost()
-        .with_size(navigation_rail_button_size())
-        .tooltip(tooltip)
-        .on_click(move |_, window, cx| {
-            home.update(cx, |home, cx| on_click(home, window, cx));
-        })
+    IconButton::new(
+        id,
+        Icon::new(icon)
+            .text_color(palette.muted_foreground)
+            .with_size(IconSize::Medium),
+    )
+    .hit_size(rail_item_size)
+    .glyph_size(IconSize::Medium)
+    .tooltip(tooltip)
+    .on_click(move |_, window, cx| {
+        home.update(cx, |home, cx| on_click(home, window, cx));
+    })
 }
 
 #[cfg(test)]

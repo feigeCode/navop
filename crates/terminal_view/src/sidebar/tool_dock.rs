@@ -5,10 +5,11 @@ use gpui::{
     SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants},
+    IconName, IconSize, Sizable,
+    button::IconButton,
     h_flex,
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    panel_header::PanelHeader,
     v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
@@ -59,6 +60,7 @@ pub(crate) fn render_internal_tool_panel_frame(
     placement: SidebarPlacement,
     content: impl IntoElement,
     colors: TerminalColors,
+    panel_header: Pixels,
 ) -> AnyElement {
     let needs_header = panel.needs_internal_tool_frame_header();
 
@@ -74,14 +76,18 @@ pub(crate) fn render_internal_tool_panel_frame(
         .border_color(colors.border)
         .when(needs_header, |this| {
             this.child(render_internal_tool_panel_header(
-                sidebar, panel, placement, colors,
+                sidebar,
+                panel,
+                placement,
+                colors,
+                panel_header,
             ))
         })
         .child(
             div()
                 .debug_selector(|| "terminal-tool-panel-content".to_string())
                 .flex_1()
-                .when(needs_header, |this| this.pt(px(34.0)))
+                .when(needs_header, |this| this.pt(panel_header))
                 .min_h_0()
                 .min_w_0()
                 .overflow_hidden()
@@ -95,44 +101,41 @@ fn render_internal_tool_panel_header(
     panel: SidebarPanel,
     placement: SidebarPlacement,
     colors: TerminalColors,
+    panel_header: Pixels,
 ) -> AnyElement {
-    let title: SharedString = panel.title().into();
-    h_flex()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .h(px(34.0))
-        .min_h(px(34.0))
-        .max_h(px(34.0))
-        .flex_shrink_0()
-        .items_center()
-        .gap_2()
-        .px_2()
-        .bg(colors.muted)
-        .border_b_1()
-        .border_color(colors.border)
-        .child(
-            Icon::new(panel.icon_name())
-                .with_size(Size::Small)
-                .flex_shrink_0()
-                .text_color(colors.foreground),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(colors.foreground)
-                .child(title),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .child(options_button(sidebar.clone(), panel, placement)),
-        )
-        .child(div().flex_shrink_0().child(close_button(sidebar, panel)))
-        .into_any_element()
+    let title = panel.title();
+    PanelHeader::new(SharedString::from(format!(
+        "terminal-tool-header-{}",
+        panel.local_id()
+    )))
+    .absolute()
+    .top_0()
+    .left_0()
+    .right_0()
+    .height(panel_header)
+    .background(colors.muted)
+    .border_color(colors.border)
+    .leading(
+        panel
+            .icon()
+            .with_size(IconSize::Small)
+            .flex_shrink_0()
+            .text_color(colors.foreground),
+    )
+    .title(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(colors.foreground)
+            .child(title),
+    )
+    .trailing(
+        h_flex()
+            .child(options_button(sidebar.clone(), panel, placement))
+            .child(close_button(sidebar, panel)),
+    )
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,12 +158,13 @@ fn tool_panel_move_menu_options(current: SidebarPlacement) -> Vec<ToolPanelMoveM
     .collect()
 }
 
-fn placement_label(placement: SidebarPlacement) -> &'static str {
+fn placement_label(placement: SidebarPlacement) -> SharedString {
     match placement {
-        SidebarPlacement::Left => "Left",
-        SidebarPlacement::Right => "Right",
-        SidebarPlacement::Bottom => "Bottom",
+        SidebarPlacement::Left => t!("Sidebar.placement_left"),
+        SidebarPlacement::Right => t!("Sidebar.placement_right"),
+        SidebarPlacement::Bottom => t!("Sidebar.placement_bottom"),
     }
+    .into()
 }
 
 fn placement_icon(placement: SidebarPlacement) -> IconName {
@@ -176,26 +180,22 @@ fn options_button(
     panel: SidebarPanel,
     placement: SidebarPlacement,
 ) -> impl IntoElement {
-    Button::new(SharedString::from(format!(
-        "terminal-tool-options-{}",
-        panel.local_id()
-    )))
-    .icon(IconName::Ellipsis)
-    .ghost()
-    .compact()
+    IconButton::new(
+        SharedString::from(format!("terminal-tool-options-{}", panel.local_id())),
+        IconName::Ellipsis,
+    )
+    .tooltip(t!("Sidebar.panel_options").to_string())
     .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
         build_options_menu(menu, sidebar.clone(), panel, placement, window, cx)
     })
 }
 
-fn close_button(sidebar: Entity<TerminalSidebar>, panel: SidebarPanel) -> Button {
-    Button::new(SharedString::from(format!(
-        "terminal-tool-close-{}",
-        panel.local_id()
-    )))
-    .icon(IconName::Close)
-    .ghost()
-    .compact()
+fn close_button(sidebar: Entity<TerminalSidebar>, panel: SidebarPanel) -> IconButton {
+    IconButton::new(
+        SharedString::from(format!("terminal-tool-close-{}", panel.local_id())),
+        IconName::Close,
+    )
+    .tooltip(t!("Sidebar.close_panel").to_string())
     .on_click(move |_, _window, cx| {
         sidebar.update(cx, |sidebar, cx| sidebar.close_tool(panel, cx));
     })
@@ -215,7 +215,7 @@ fn build_options_menu(
     menu.min_w(px(220.0))
         .submenu_with_icon(
             Some(IconName::PanelRight.into()),
-            "Move to",
+            t!("Sidebar.move_to").to_string(),
             window,
             cx,
             move |submenu, _window, _cx| {
@@ -318,6 +318,26 @@ mod tests {
                 .iter()
                 .map(|option| (option.placement, option.disabled))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn internal_tool_panel_title_claims_remaining_header_width() {
+        let source = include_str!("tool_dock.rs");
+        let header_start = source
+            .find("fn render_internal_tool_panel_header")
+            .expect("internal tool panel header renderer");
+        let options_start = source[header_start..]
+            .find("fn options_button")
+            .map(|offset| header_start + offset)
+            .expect("tool panel options button");
+        let header_source = &source[header_start..options_start];
+
+        assert!(
+            header_source.contains(
+                ".title(\n        div()\n            .flex_1()\n            .min_w_0()\n            .truncate()"
+            ),
+            "rich panel titles must claim the remaining header width before truncating"
         );
     }
 }

@@ -75,7 +75,7 @@ impl ConnectionSelector {
                     .p_2()
                     .rounded_md()
                     .bg(cx.theme().muted.opacity(0.3))
-                    .child(Icon::new(icon).small().text_color(cx.theme().foreground))
+                    .child(icon.small().text_color(cx.theme().foreground))
                     .child(
                         v_flex()
                             .gap_0p5()
@@ -118,15 +118,16 @@ impl Render for ConnectionSelector {
 }
 
 /// 获取连接类型的图标
-fn connection_type_icon(conn_type: &ConnectionType) -> IconName {
+fn connection_type_icon(conn_type: &ConnectionType) -> Icon {
     match conn_type {
-        ConnectionType::Database => IconName::Database,
-        ConnectionType::Redis => IconName::Database,
-        ConnectionType::MongoDB => IconName::Database,
-        ConnectionType::SshSftp => IconName::Terminal,
-        ConnectionType::Serial => IconName::SquareTerminal,
-        ConnectionType::PortForwarding => IconName::Network,
-        ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor,
-        ConnectionType::All => IconName::GalleryVerticalEnd,
+        ConnectionType::Rdp => IconName::Rdp.color(),
+        ConnectionType::Vnc => IconName::Vnc.color(),
+        ConnectionType::Database => IconName::Database.mono(),
+        ConnectionType::Redis => IconName::Database.mono(),
+        ConnectionType::MongoDB => IconName::Database.mono(),
+        ConnectionType::SshSftp => IconName::Terminal.mono(),
+        ConnectionType::Serial => IconName::SquareTerminal.mono(),
+        ConnectionType::PortForwarding => IconName::Network.mono(),
+        ConnectionType::All => IconName::GalleryVerticalEnd.mono(),
     }
 }
