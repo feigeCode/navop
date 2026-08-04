@@ -68,6 +68,22 @@ fn portable_flag_uses_sibling_data_directories() {
 }
 
 #[test]
+fn portable_master_key_storage_is_kept_under_the_data_state_directory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let overrides = AppPathOverrides {
+        portable: true,
+        data_dir: None,
+    };
+    let paths = resolve_app_paths(&overrides, &context(&temp)).expect("resolve paths");
+    let data_dir = paths.data_dir().expect("portable data dir");
+
+    assert_eq!(
+        temp.path().join("data/state/key_storage"),
+        crate::key_storage::key_storage_path_for_data_dir(data_dir)
+    );
+}
+
+#[test]
 fn marker_file_enables_portable_mode() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(temp.path().join(PORTABLE_MARKER_FILE), "").expect("write marker");
@@ -178,7 +194,7 @@ fn installed_mode_keeps_persistent_master_key_support() {
 }
 
 #[test]
-fn portable_mode_disables_persistent_master_key_support() {
+fn portable_mode_allows_opt_in_persistent_master_key_support() {
     let temp = tempfile::tempdir().expect("tempdir");
     let overrides = AppPathOverrides {
         portable: true,
@@ -187,6 +203,29 @@ fn portable_mode_disables_persistent_master_key_support() {
 
     let paths = resolve_app_paths(&overrides, &context(&temp)).expect("resolve paths");
 
-    assert!(!paths.allows_persistent_master_key());
-    assert!(paths.requires_master_key_on_startup(false));
+    assert!(paths.allows_persistent_master_key());
+}
+
+#[test]
+fn portable_mode_requires_startup_unlock_until_persistence_is_enabled() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let overrides = AppPathOverrides {
+        portable: true,
+        data_dir: None,
+    };
+
+    let paths = resolve_app_paths(&overrides, &context(&temp)).expect("resolve paths");
+
+    assert!(paths.requires_master_key_on_startup(false, false));
+    assert!(!paths.requires_master_key_on_startup(false, true));
+}
+
+#[test]
+fn installed_mode_uses_the_existing_startup_lock_setting() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let paths =
+        resolve_app_paths(&AppPathOverrides::default(), &context(&temp)).expect("resolve paths");
+
+    assert!(!paths.requires_master_key_on_startup(false, false));
+    assert!(paths.requires_master_key_on_startup(true, false));
 }

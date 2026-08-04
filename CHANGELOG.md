@@ -11,7 +11,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### 更新内容
 
 - Windows 新增 EXE 安装包，与 MSI 共用同一套当前用户安装流程；使用默认安装位置时无需管理员权限，并提供开始菜单、桌面快捷方式和文件关联。
-- Windows 普通免安装 ZIP 与便携 ZIP 现已明确拆分：普通 `navop-x86_64-pc-windows-msvc.zip` 使用标准 Windows 用户数据目录并支持记住主密钥，`navop-x86_64-pc-windows-msvc-portable.zip` 则将数据保存在程序旁，并在每次启动时要求输入主密钥。
+- Windows 普通免安装 ZIP 与便携 ZIP 现已明确拆分：普通 `navop-x86_64-pc-windows-msvc.zip` 使用标准 Windows 用户数据目录并支持记住主密钥；`navop-x86_64-pc-windows-msvc-portable.zip` 将数据保存在程序旁，默认每次启动时要求输入主密钥，也允许用户在明确接受风险后选择将可自动恢复的加密副本保存到 `data/state/key_storage`。该副本使用程序内置密钥而非设备绑定保护，同时获得应用程序和完整 `data` 目录的人可能恢复主密钥。
 - SSH 连接新增“允许旧版 SSH 算法”兼容选项，默认关闭；需要连接旧服务器时可按连接启用，并覆盖 SSH、SFTP、跳板机和连接复用场景。
 
 #### Windows ZIP 用户升级提示
@@ -34,7 +34,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### What's New
 
 - Added a Windows EXE installer that uses the same per-user installation flow as the MSI. The default installation location does not require administrator privileges and provides Start menu shortcuts, a desktop shortcut, and file associations.
-- Clearly separated the standard Windows no-install ZIP from the portable ZIP. The standard `navop-x86_64-pc-windows-msvc.zip` uses the normal Windows user data directories and supports remembered master-key unlock, while `navop-x86_64-pc-windows-msvc-portable.zip` keeps data beside the executable and asks for the master key on every start.
+- Clearly separated the standard Windows no-install ZIP from the portable ZIP. The standard `navop-x86_64-pc-windows-msvc.zip` uses the normal Windows user data directories and supports remembered master-key unlock. The portable `navop-x86_64-pc-windows-msvc-portable.zip` keeps data beside the executable and asks for the master key on every start by default, but users who explicitly accept the risk may store an encrypted, automatically recoverable copy under `data/state/key_storage`. This copy uses a key embedded in the application instead of device-bound protection, so anyone who obtains both the application and the complete `data` directory may be able to recover the master key.
 - Added an opt-in “Allow Legacy SSH Algorithms” compatibility setting for individual SSH connections. It is disabled by default and applies to SSH, SFTP, jump hosts, and connection reuse when explicitly enabled for legacy servers.
 
 #### Upgrade Notice for Windows ZIP Users

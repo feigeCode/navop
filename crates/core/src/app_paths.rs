@@ -41,11 +41,19 @@ impl AppPaths {
     }
 
     pub fn allows_persistent_master_key(&self) -> bool {
-        !self.is_portable()
+        true
     }
 
-    pub fn requires_master_key_on_startup(&self, configured: bool) -> bool {
-        configured || self.is_portable()
+    pub fn requires_master_key_on_startup(
+        &self,
+        configured: bool,
+        portable_remember_master_key: bool,
+    ) -> bool {
+        if self.is_portable() {
+            !portable_remember_master_key
+        } else {
+            configured
+        }
     }
 }
 
@@ -168,9 +176,12 @@ pub fn is_portable() -> bool {
     initialized_paths().is_some_and(AppPaths::is_portable)
 }
 
-pub fn master_key_on_startup_required(configured: bool) -> bool {
+pub fn master_key_on_startup_required(
+    configured: bool,
+    portable_remember_master_key: bool,
+) -> bool {
     initialized_paths().map_or(configured, |paths| {
-        paths.requires_master_key_on_startup(configured)
+        paths.requires_master_key_on_startup(configured, portable_remember_master_key)
     })
 }
 

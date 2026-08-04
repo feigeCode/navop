@@ -80,7 +80,9 @@ The portable directory must be writable. Do not put it under `Program Files`, in
 
 ### Data directory and master key
 
-The portable edition stores configuration, application state, and cache under `data/config`, `data/state`, and `data/cache`. This makes the application and its data easy to move or back up together. However, **portable mode never persists the master key locally, so you must enter the master key on every launch**. Copying `data`, extracting the ZIP again, or reinstalling Navop cannot recover a forgotten master key.
+The portable edition stores configuration, application state, and cache under `data/config`, `data/state`, and `data/cache`. This makes the application and its data easy to move or back up together. **By default, portable mode does not persist the master key, so you must enter it on every launch.** In Settings, you may explicitly choose to store an encrypted, automatically recoverable copy at `data/state/key_storage`.
+
+This option has a significant security risk: the file is encrypted with a key embedded in the application, not with device-bound protection. Anyone who obtains both the application and the complete `data` directory may be able to recover the master key. Enable it only if you understand and accept this risk. A forgotten master key still cannot be recovered merely by downloading or reinstalling Navop; automatic recovery is possible only when the option was enabled and a matching complete application and `data` copy was preserved.
 
 Keep the master key separately; do not store it as plain text in the portable directory or on the same USB drive. The `data` directory may contain connection configuration, state, extensions, and caches. Do not publish it, commit it to Git, or place it in an untrusted cloud-synchronized folder.
 
@@ -165,4 +167,4 @@ Do not open a production database file that another process is actively writing.
 
 Removing the application may leave local settings, encrypted connections, Notes, and extension caches in the user data directory. Preserve that directory for a reinstall. For a complete removal, export required material, stop sync, hand over team responsibilities, and then remove both the app and user data.
 
-Reinstallation cannot recover a forgotten master key. Confirm master-key and team-key recovery arrangements before deleting local data.
+Reinstallation alone cannot recover a forgotten master key. If portable master-key persistence was enabled, automatic recovery also requires the matching application and complete `data` directory, including `data/state/key_storage`. Confirm master-key and team-key recovery arrangements before deleting local data.

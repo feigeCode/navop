@@ -365,6 +365,35 @@ pub(crate) fn build_app_http_client(
     }
 }
 
+fn master_key_setting_enabled(settings: &AppSettings, is_portable: bool) -> bool {
+    if is_portable {
+        settings.portable_remember_master_key
+    } else {
+        settings.require_master_key_on_startup
+    }
+}
+
+fn update_master_key_setting(is_portable: bool, enabled: bool, cx: &mut App) {
+    let should_remember = if is_portable { enabled } else { !enabled };
+    let result = if should_remember {
+        crypto::remember_master_key_for_future_startups()
+    } else {
+        crypto::forget_persisted_master_key()
+    };
+    if let Err(error) = result {
+        // 当前没有内存主密钥时仍保留用户选择；下次成功设置或解锁后会再次尝试保存。
+        tracing::warn!("更新自动解锁主密钥失败，设置会在后续主密钥操作时重试: {error}");
+    }
+
+    AppSettings::update_and_save(cx, |settings| {
+        if is_portable {
+            settings.portable_remember_master_key = enabled;
+        } else {
+            settings.require_master_key_on_startup = enabled;
+        }
+    });
+}
+
 pub struct SettingsPanel {
     focus_handle: FocusHandle,
     llm_providers_view: Entity<LlmProvidersView>,
@@ -423,6 +452,18 @@ impl SettingsPanel {
         let default_system_hotkey = AppSettings::default().current_system_hotkey().to_string();
         let app_font_options = app_font_options(cx);
         let font_options = self.cached_monospace_font_options(cx);
+        let is_portable = one_core::app_paths::is_portable();
+        let master_key_setting_title = if is_portable {
+            t!("Settings.General.Startup.remember_portable_master_key").to_string()
+        } else {
+            t!("Settings.General.Startup.require_master_key").to_string()
+        };
+        let master_key_setting_description = if is_portable {
+            t!("Settings.General.Startup.remember_portable_master_key_desc").to_string()
+        } else {
+            t!("Settings.General.Startup.require_master_key_desc").to_string()
+        };
+        let default_master_key_setting = master_key_setting_enabled(&default_settings, is_portable);
 
         let mut pages = vec![
             SettingPage::new(t!("Settings.General.title"))
@@ -508,40 +549,21 @@ impl SettingsPanel {
                                 t!("Settings.General.Startup.default_page_desc").to_string(),
                             ),
                             SettingItem::new(
-                                t!("Settings.General.Startup.require_master_key"),
+                                master_key_setting_title,
                                 SettingField::switch(
-                                    |cx: &App| {
-                                        one_core::app_paths::master_key_on_startup_required(
-                                            AppSettings::global(cx).require_master_key_on_startup,
+                                    move |cx: &App| {
+                                        master_key_setting_enabled(
+                                            AppSettings::global(cx),
+                                            is_portable,
                                         )
                                     },
-                                    |val: bool, cx: &mut App| {
-                                        let val = val || one_core::app_paths::is_portable();
-                                        if val {
-                                            if let Err(error) = crypto::forget_persisted_master_key()
-                                            {
-                                                tracing::warn!(
-                                                    "删除自动解锁主密钥失败，启动锁会在下次启动时重试: {error}"
-                                                );
-                                            }
-                                        } else if let Err(error) =
-                                            crypto::remember_master_key_for_future_startups()
-                                        {
-                                            tracing::warn!(
-                                                "保存自动解锁主密钥失败，后续启动仍可能要求输入主密钥: {error}"
-                                            );
-                                        }
-                                        AppSettings::update_and_save(cx, |settings| {
-                                            settings.require_master_key_on_startup = val;
-                                        });
+                                    move |val: bool, cx: &mut App| {
+                                        update_master_key_setting(is_portable, val, cx);
                                     },
                                 )
-                                .default_value(default_settings.require_master_key_on_startup),
+                                .default_value(default_master_key_setting),
                             )
-                            .description(
-                                t!("Settings.General.Startup.require_master_key_desc")
-                                    .to_string(),
-                            ),
+                            .description(master_key_setting_description),
                         ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.ConnectionDisplay.group_title"))
@@ -3640,14 +3662,41 @@ mod tests {
     use super::{
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, LocalTerminalProfileKind,
         ProxyType, build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
-        local_terminal_profile_options, merge_font_options_with_custom_fonts, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_change_completed, team_key_refresh_success_message,
-        team_key_rotation_inputs_valid,
+        local_terminal_profile_options, master_key_setting_enabled,
+        merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
+        personal_sync_status_label, personal_sync_status_view_model, team_key_change_completed,
+        team_key_refresh_success_message, team_key_rotation_inputs_valid,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn master_key_setting_uses_a_safe_portable_default_and_preserves_installed_behavior() {
+        let mut settings = AppSettings::default();
+
+        assert!(!master_key_setting_enabled(&settings, true));
+        assert!(!master_key_setting_enabled(&settings, false));
+
+        settings.portable_remember_master_key = true;
+        assert!(master_key_setting_enabled(&settings, true));
+
+        settings.require_master_key_on_startup = true;
+        assert!(master_key_setting_enabled(&settings, false));
+    }
+
+    #[test]
+    fn portable_master_key_setting_explicitly_describes_the_recovery_risk() {
+        let source = include_str!("setting_tab.rs");
+        let locales = include_str!("../locales/main.yml");
+
+        assert!(source.contains("remember_portable_master_key"));
+        assert!(source.contains("remember_portable_master_key_desc"));
+        assert!(!source.contains("let val = val || one_core::app_paths::is_portable()"));
+        assert!(locales.contains("anyone who obtains both the application"));
+        assert!(locales.contains("任何同时获得应用程序和完整 data 目录的人"));
+        assert!(locales.contains("任何同時取得應用程式和完整 data 目錄的人"));
+    }
 
     #[test]
     fn team_key_rotation_allows_same_passphrase() {

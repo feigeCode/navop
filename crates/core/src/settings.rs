@@ -785,6 +785,9 @@ pub struct AppSettings {
     /// 是否要求每次启动时输入主密钥后才能访问已保存的连接
     #[serde(default)]
     pub require_master_key_on_startup: bool,
+    /// 便携模式下是否在数据目录保存可自动恢复的主密钥副本
+    #[serde(default)]
+    pub portable_remember_master_key: bool,
     #[serde(default)]
     pub home_connection_layout: HomeConnectionLayout,
     #[serde(default)]
@@ -1112,6 +1115,7 @@ impl Default for AppSettings {
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
             require_master_key_on_startup: false,
+            portable_remember_master_key: false,
             home_connection_layout: HomeConnectionLayout::default(),
             home_page_style: HomePageStyle::default(),
             connection_sidebar_expanded: true,
@@ -1147,6 +1151,13 @@ impl AppSettings {
     pub const DEFAULT_TERMINAL_SCROLLBACK_LINES: usize = 100_000;
     pub const MIN_TERMINAL_SCROLLBACK_LINES: usize = 1_000;
     pub const MAX_TERMINAL_SCROLLBACK_LINES: usize = 1_000_000;
+
+    pub fn master_key_on_startup_required(&self) -> bool {
+        crate::app_paths::master_key_on_startup_required(
+            self.require_master_key_on_startup,
+            self.portable_remember_master_key,
+        )
+    }
 
     fn migrate_legacy_mcp_toolsets(&mut self) {
         let Some(toolsets) = self.mcp.legacy_toolsets.take() else {
@@ -1586,6 +1597,31 @@ mod tests {
         .expect("require_master_key_on_startup 应能读取");
 
         assert!(settings.require_master_key_on_startup);
+    }
+
+    #[test]
+    fn app_settings_does_not_remember_portable_master_key_by_default() {
+        assert!(!AppSettings::default().portable_remember_master_key);
+    }
+
+    #[test]
+    fn legacy_settings_keep_portable_master_key_persistence_disabled() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "require_master_key_on_startup": false
+        }))
+        .expect("旧设置应能安全迁移");
+
+        assert!(!settings.portable_remember_master_key);
+    }
+
+    #[test]
+    fn app_settings_deserializes_portable_master_key_persistence_choice() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "portable_remember_master_key": true
+        }))
+        .expect("portable_remember_master_key 应能读取");
+
+        assert!(settings.portable_remember_master_key);
     }
 
     #[test]

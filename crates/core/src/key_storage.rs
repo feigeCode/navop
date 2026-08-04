@@ -11,11 +11,12 @@ use aes_gcm::{
 use rand::RngCore;
 use rand::rngs::OsRng;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 /// 本地加密密钥文件名
 const KEY_STORAGE_FILE: &str = "key_storage";
+const NONCE_LENGTH: usize = 12;
 
 /// 本地文件存储使用的固定加密密钥（用于加密本地保存的主密钥）
 const LOCAL_STORAGE_FIXED_KEY: &[u8; 32] = b"onehub-local-dev-key-2025-fixed!";
@@ -61,32 +62,10 @@ impl KeyStorage for LocalFileStorage {
 
     fn save(&self, master_key: &str) -> Result<(), String> {
         if !persistent_storage_allowed() {
-            return Err("便携模式不允许持久化主密钥".to_string());
+            return Err("当前运行模式不允许持久化主密钥".to_string());
         }
         let path = get_key_storage_path().ok_or_else(|| "无法获取密钥存储路径".to_string())?;
-
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-
-        let cipher = Aes256Gcm::new_from_slice(LOCAL_STORAGE_FIXED_KEY)
-            .map_err(|e| format!("创建加密器失败: {}", e))?;
-
-        let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let ciphertext = cipher
-            .encrypt(nonce, master_key.as_bytes())
-            .map_err(|e| format!("加密密钥失败: {}", e))?;
-
-        let mut data = nonce_bytes.to_vec();
-        data.extend(ciphertext);
-
-        fs::write(&path, &data).map_err(|e| format!("写入密钥文件失败: {}", e))?;
-
-        tracing::info!("[本地文件] 主密钥已保存");
-        Ok(())
+        save_master_key_to_path(&path, master_key)
     }
 
     fn load(&self) -> Option<String> {
@@ -94,33 +73,12 @@ impl KeyStorage for LocalFileStorage {
             return None;
         }
         let path = get_key_storage_path()?;
-
-        if !path.exists() {
-            return None;
-        }
-
-        let data = fs::read(&path).ok()?;
-        if data.len() < 12 {
-            tracing::warn!("[本地文件] 密钥文件格式无效");
-            return None;
-        }
-
-        let nonce = Nonce::from_slice(&data[..12]);
-        let ciphertext = &data[12..];
-
-        let cipher = Aes256Gcm::new_from_slice(LOCAL_STORAGE_FIXED_KEY).ok()?;
-        let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
-        let master_key = String::from_utf8(plaintext).ok()?;
-
-        tracing::info!("[本地文件] 成功读取密钥");
-        Some(master_key)
+        load_master_key_from_path(&path)
     }
 
     fn delete(&self) -> Result<(), String> {
         if let Some(path) = get_key_storage_path() {
-            if path.exists() {
-                fs::remove_file(&path).map_err(|e| format!("删除密钥文件失败: {}", e))?;
-            }
+            delete_master_key_at_path(&path)?;
         }
         Ok(())
     }
@@ -167,9 +125,106 @@ fn get_data_dir() -> Option<PathBuf> {
 
 /// 获取本地密钥存储文件路径
 fn get_key_storage_path() -> Option<PathBuf> {
-    get_data_dir().map(|p| p.join(KEY_STORAGE_FILE))
+    get_data_dir().map(|data_dir| key_storage_path_for_data_dir(&data_dir))
+}
+
+pub(crate) fn key_storage_path_for_data_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join(KEY_STORAGE_FILE)
+}
+
+fn save_master_key_to_path(path: &Path, master_key: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建密钥目录失败: {e}"))?;
+    }
+
+    let cipher = Aes256Gcm::new_from_slice(LOCAL_STORAGE_FIXED_KEY)
+        .map_err(|e| format!("创建加密器失败: {e}"))?;
+    let mut nonce_bytes = [0u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), master_key.as_bytes())
+        .map_err(|e| format!("加密密钥失败: {e}"))?;
+    let data = [nonce_bytes.as_slice(), ciphertext.as_slice()].concat();
+
+    fs::write(path, data).map_err(|e| format!("写入密钥文件失败: {e}"))?;
+    tracing::info!("[本地文件] 主密钥已保存");
+    Ok(())
+}
+
+fn load_master_key_from_path(path: &Path) -> Option<String> {
+    let data = fs::read(path).ok()?;
+    if data.len() < NONCE_LENGTH {
+        tracing::warn!("[本地文件] 密钥文件格式无效");
+        return None;
+    }
+
+    let cipher = Aes256Gcm::new_from_slice(LOCAL_STORAGE_FIXED_KEY).ok()?;
+    let plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(&data[..NONCE_LENGTH]),
+            &data[NONCE_LENGTH..],
+        )
+        .ok()?;
+    let master_key = String::from_utf8(plaintext).ok()?;
+
+    tracing::info!("[本地文件] 成功读取密钥");
+    Some(master_key)
+}
+
+fn delete_master_key_at_path(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| format!("删除密钥文件失败: {e}"))?;
+    }
+    Ok(())
 }
 
 fn persistent_storage_allowed() -> bool {
     crate::app_paths::initialized_paths().is_none_or(|paths| paths.allows_persistent_master_key())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{delete_master_key_at_path, load_master_key_from_path, save_master_key_to_path};
+
+    #[test]
+    fn local_file_storage_round_trips_without_writing_plaintext() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+        let master_key = "portable-master-key";
+
+        save_master_key_to_path(&path, master_key).expect("保存主密钥");
+
+        let stored = std::fs::read(&path).expect("读取密钥文件");
+        assert!(
+            !stored
+                .windows(master_key.len())
+                .any(|bytes| bytes == master_key.as_bytes())
+        );
+        assert_eq!(
+            Some(master_key.to_string()),
+            load_master_key_from_path(&path)
+        );
+    }
+
+    #[test]
+    fn local_file_storage_rejects_corrupted_data() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+        std::fs::write(&path, b"corrupted").expect("写入损坏数据");
+
+        assert_eq!(None, load_master_key_from_path(&path));
+    }
+
+    #[test]
+    fn local_file_storage_delete_removes_the_persisted_copy() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("key_storage");
+        save_master_key_to_path(&path, "portable-master-key").expect("保存主密钥");
+        assert!(path.exists());
+
+        delete_master_key_at_path(&path).expect("删除主密钥");
+        assert!(!path.exists());
+
+        delete_master_key_at_path(&path).expect("重复删除应保持幂等");
+    }
 }

@@ -1658,6 +1658,14 @@ Settings:
         en: Do not restore the master key automatically; saved connections remain unavailable until you unlock them.
         zh-CN: 不自动恢复主密钥；解锁前无法使用已保存的连接。
         zh-HK: 不自動恢復主密鑰；解鎖前無法使用已保存的連線。
+      remember_portable_master_key:
+        en: Remember master key in portable data
+        zh-CN: 在便携数据目录中记住主密钥
+        zh-HK: 在便攜資料目錄中記住主密鑰
+      remember_portable_master_key_desc:
+        en: "Security risk: Navop stores an encrypted, automatically recoverable copy in data/state/key_storage using a key embedded in the application, not device-bound protection. Anyone who obtains both the application and the complete data directory may be able to recover the master key. Enable only if you understand and accept this risk."
+        zh-CN: "安全风险：Navop 会把可自动恢复的主密钥副本加密保存到 data/state/key_storage；该加密使用程序内置密钥，不提供设备绑定保护。任何同时获得应用程序和完整 data 目录的人都可能恢复主密钥。仅在理解并接受此风险时启用。"
+        zh-HK: "安全風險：Navop 會把可自動復原的主密鑰副本加密儲存到 data/state/key_storage；該加密使用程式內置密鑰，不提供裝置綁定保護。任何同時取得應用程式和完整 data 目錄的人都可能復原主密鑰。僅在理解並接受此風險時啟用。"
 
     # 连接显示设置
     ConnectionDisplay:

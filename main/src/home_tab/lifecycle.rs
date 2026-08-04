@@ -11,8 +11,6 @@ pub(super) fn startup_master_key_policy(
     require_master_key_on_startup: bool,
     has_repo_password: bool,
 ) -> StartupMasterKeyPolicy {
-    let require_master_key_on_startup =
-        one_core::app_paths::master_key_on_startup_required(require_master_key_on_startup);
     if require_master_key_on_startup {
         StartupMasterKeyPolicy {
             restore_from_storage: false,
@@ -103,10 +101,9 @@ impl HomePage {
         page.load_workspaces(cx);
 
         let has_repo_password = crypto::has_repo_password_set();
-        let master_key_policy = startup_master_key_policy(
-            AppSettings::current(cx).require_master_key_on_startup,
-            has_repo_password,
-        );
+        let settings = AppSettings::current(cx);
+        let master_key_policy =
+            startup_master_key_policy(settings.master_key_on_startup_required(), has_repo_password);
         if master_key_policy.forget_persisted_key
             && let Err(error) = crypto::forget_persisted_master_key()
         {
