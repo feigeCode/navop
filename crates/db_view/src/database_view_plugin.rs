@@ -542,6 +542,10 @@ fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usiz
             DatabaseActionId::DeleteView => 20,
             _ => 900,
         },
+        DbNodeType::Procedure => match action_id {
+            DatabaseActionId::OpenProcedure => 10,
+            _ => 900,
+        },
         DbNodeType::TablesFolder => match action_id {
             DatabaseActionId::DesignTable => 10,
             _ => 900,
@@ -627,6 +631,10 @@ fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) 
             DbNodeType::View => match action.id {
                 DatabaseActionId::OpenViewData => Some("open"),
                 DatabaseActionId::DeleteView => Some("view"),
+                _ => None,
+            },
+            DbNodeType::Procedure => match action.id {
+                DatabaseActionId::OpenProcedure => Some("open"),
                 _ => None,
             },
             DbNodeType::TablesFolder => Some("create"),
@@ -1231,6 +1239,7 @@ fn map_tree_event(action_id: DatabaseActionId, node_id: &str) -> Option<DbTreeVi
         DatabaseActionId::DeleteTable => DbTreeViewEvent::DeleteTable { node_id },
         DatabaseActionId::OpenViewData => DbTreeViewEvent::OpenViewData { node_id },
         DatabaseActionId::DeleteView => DbTreeViewEvent::DeleteView { node_id },
+        DatabaseActionId::OpenProcedure => DbTreeViewEvent::OpenProcedure { node_id },
         DatabaseActionId::CreateNewQuery => DbTreeViewEvent::CreateNewQuery { node_id },
         DatabaseActionId::OpenNamedQuery => DbTreeViewEvent::OpenNamedQuery { node_id },
         DatabaseActionId::RenameQuery => DbTreeViewEvent::RenameQuery { node_id },
@@ -1282,6 +1291,9 @@ fn map_objects_event(
         DatabaseActionId::DeleteTable => Some(|node| DatabaseObjectsEvent::DeleteTable { node }),
         DatabaseActionId::OpenViewData => Some(|node| DatabaseObjectsEvent::OpenViewData { node }),
         DatabaseActionId::DeleteView => Some(|node| DatabaseObjectsEvent::DeleteView { node }),
+        DatabaseActionId::OpenProcedure => {
+            Some(|node| DatabaseObjectsEvent::OpenProcedure { node })
+        }
         DatabaseActionId::CreateNewQuery => {
             Some(|node| DatabaseObjectsEvent::CreateNewQuery { node })
         }
@@ -1315,7 +1327,9 @@ fn toolbar_icon(action: &DatabaseActionDescriptor) -> IconName {
         | DatabaseActionId::DeleteTable
         | DatabaseActionId::DeleteView
         | DatabaseActionId::DeleteQuery => IconName::Minus,
-        DatabaseActionId::EditDatabase | DatabaseActionId::RenameQuery => IconName::Edit,
+        DatabaseActionId::EditDatabase
+        | DatabaseActionId::OpenProcedure
+        | DatabaseActionId::RenameQuery => IconName::Edit,
         DatabaseActionId::RevealQueryInFileManager => IconName::FolderOpen,
         DatabaseActionId::OpenTableData
         | DatabaseActionId::OpenViewData
@@ -1358,6 +1372,7 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
         DatabaseActionId::DeleteTable => "delete-table",
         DatabaseActionId::OpenViewData => "open-view-data",
         DatabaseActionId::DeleteView => "delete-view",
+        DatabaseActionId::OpenProcedure => "open-procedure",
         DatabaseActionId::CreateNewQuery => "create-query",
         DatabaseActionId::OpenNamedQuery => "open-query",
         DatabaseActionId::RenameQuery => "rename-query",
@@ -1624,6 +1639,36 @@ driver:
 
         assert_eq!(toolbar_icon(&action).path(), IconName::Eye.path());
         assert_ne!(toolbar_icon(&action).path(), IconName::Edit.path());
+    }
+
+    #[test]
+    fn open_procedure_maps_to_tree_and_object_events() {
+        assert!(matches!(
+            map_tree_event(DatabaseActionId::OpenProcedure, "procedure-1"),
+            Some(DbTreeViewEvent::OpenProcedure { node_id }) if node_id == "procedure-1"
+        ));
+
+        let mapper = map_objects_event(DatabaseActionId::OpenProcedure)
+            .expect("procedure action should map to an object event");
+        let node = db::DbNode::new(
+            "procedure-1",
+            "sync_orders",
+            DbNodeType::Procedure,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+        assert!(matches!(
+            mapper(node),
+            DatabaseObjectsEvent::OpenProcedure { node } if node.id == "procedure-1"
+        ));
+    }
+
+    #[test]
+    fn open_procedure_uses_edit_icon_and_stable_action_id() {
+        let action = action_descriptor(DatabaseActionId::OpenProcedure);
+
+        assert_eq!(toolbar_icon(&action).path(), IconName::Edit.path());
+        assert_eq!("open-procedure", action_id(&action));
     }
 
     #[test]

@@ -2412,6 +2412,21 @@ impl GlobalDbState {
         })
     }
 
+    /// Load a stored procedure's CREATE statement
+    pub async fn get_procedure_definition(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        procedure: String,
+    ) -> anyhow::Result<String> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin
+                .get_procedure_definition(&*conn, &database, &procedure)
+                .await
+        })
+    }
+
     /// List triggers view
     pub async fn list_triggers_view(
         &self,

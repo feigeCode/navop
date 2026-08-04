@@ -218,6 +218,9 @@ pub enum DatabaseObjectsEvent {
     /// 打开视图数据
     OpenViewData { node: DbNode },
 
+    /// 打开存储过程编辑器
+    OpenProcedure { node: DbNode },
+
     /// 删除视图
     DeleteView { node: DbNode },
 
@@ -409,6 +412,7 @@ impl DatabaseObjects {
         Some(match node.node_type {
             DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
             DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
+            DbNodeType::Procedure => DatabaseObjectsEvent::OpenProcedure { node },
             DbNodeType::NamedQuery => DatabaseObjectsEvent::OpenNamedQuery { node },
             DbNodeType::Database | DbNodeType::Schema => {
                 DatabaseObjectsEvent::AddDatabaseToTree { node }
@@ -431,6 +435,8 @@ impl DatabaseObjects {
             | DbNodeType::Table
             | DbNodeType::ViewsFolder
             | DbNodeType::View
+            | DbNodeType::ProceduresFolder
+            | DbNodeType::Procedure
             | DbNodeType::QueriesFolder
             | DbNodeType::QueryFolder
             | DbNodeType::NamedQuery => {}
@@ -756,6 +762,18 @@ impl DatabaseObjects {
                     format!("{}:{}:views_folder:{}", connection_id, db, name)
                 };
                 (node_id, DbNodeType::View)
+            }
+            DbNodeType::ProceduresFolder | DbNodeType::Procedure => {
+                let db = if database.is_empty() {
+                    current_node.name.clone()
+                } else {
+                    database.clone()
+                };
+                metadata.insert("database".to_string(), db.clone());
+                (
+                    format!("{}:{}:procedure:{}", connection_id, db, name),
+                    DbNodeType::Procedure,
+                )
             }
             DbNodeType::QueriesFolder | DbNodeType::QueryFolder | DbNodeType::NamedQuery => {
                 let path = row_data.get(QUERY_ROW_PATH_INDEX)?.clone();
@@ -1614,6 +1632,50 @@ mod tests {
             node.metadata.get("view").map(String::as_str)
         );
         assert_eq!("conn1:app_db:public:views_folder:active_users", node.id);
+    }
+
+    #[test]
+    fn database_object_procedure_row_builds_procedure_node() {
+        let row = vec!["sync_orders".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Procedure,
+            Some(&database_node()),
+            &row,
+        )
+        .expect("procedure row should produce a node");
+
+        assert_eq!(DbNodeType::Procedure, node.node_type);
+        assert_eq!("sync_orders", node.name);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!("conn1:app_db:procedure:sync_orders", node.id);
+    }
+
+    #[test]
+    fn procedure_double_click_opens_procedure_editor() {
+        let node = DbNode::new(
+            "conn1:app_db:procedure:sync_orders",
+            "sync_orders",
+            DbNodeType::Procedure,
+            "conn1".to_string(),
+            DatabaseType::MySQL,
+        )
+        .with_metadata(HashMap::from([(
+            "database".to_string(),
+            "app_db".to_string(),
+        )]));
+
+        let event = DatabaseObjects::event_for_double_click_node(node)
+            .expect("procedure double click should emit an event");
+
+        assert!(matches!(
+            event,
+            DatabaseObjectsEvent::OpenProcedure { node }
+                if node.node_type == DbNodeType::Procedure && node.name == "sync_orders"
+        ));
     }
 
     #[test]

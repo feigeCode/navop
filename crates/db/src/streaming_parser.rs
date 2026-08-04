@@ -723,6 +723,48 @@ mod test {
     }
 
     #[test]
+    fn test_mysql_procedure_replacement_script() {
+        let sql = r#"-- Running this script replaces the existing procedure.
+-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.
+DROP PROCEDURE IF EXISTS `app_db`.`sync_orders`;
+
+DELIMITER $$
+CREATE DEFINER=`root`@`%` PROCEDURE `sync_orders`()
+BEGIN
+  SELECT 'value;inside';
+  BEGIN
+    SELECT 2;
+  END;
+END$$
+DELIMITER ;
+
+-- Add arguments as needed before running:
+-- CALL `app_db`.`sync_orders`();
+"#;
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[0],
+            "DROP PROCEDURE IF EXISTS `app_db`.`sync_orders`"
+        );
+        assert!(statements[1].starts_with("CREATE DEFINER="));
+        assert!(statements[1].contains("SELECT 'value;inside';"));
+        assert!(statements[1].contains("BEGIN\n    SELECT 2;\n  END;"));
+        assert!(statements[1].ends_with("END"));
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("DELIMITER"))
+        );
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("CALL"))
+        );
+    }
+
+    #[test]
     fn test_begin_end_block() {
         let sql = "BEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\nSELECT 3;";
         let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);

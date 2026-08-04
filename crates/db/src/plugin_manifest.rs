@@ -233,6 +233,7 @@ pub enum DatabaseActionId {
     DeleteTable,
     OpenViewData,
     DeleteView,
+    OpenProcedure,
     CreateNewQuery,
     OpenNamedQuery,
     RenameQuery,

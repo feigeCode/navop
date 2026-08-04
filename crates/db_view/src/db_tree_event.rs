@@ -43,6 +43,7 @@ const TAB_KIND_TABLE_DATA: &str = "table_data";
 const TAB_KIND_VIEW_DATA: &str = "view_data";
 const TAB_KIND_TABLE_DESIGNER: &str = "table_designer";
 const TAB_KIND_NAMED_QUERY: &str = "named_query";
+const TAB_KIND_PROCEDURE: &str = "procedure";
 
 // Event handler for database tree view events
 pub struct DatabaseEventHandler {
@@ -146,6 +147,33 @@ impl DatabaseEventHandler {
 
     fn named_query_tab_id(node: &DbNode) -> String {
         format!("query-{}", node.id)
+    }
+
+    fn procedure_tab_id(node: &DbNode) -> String {
+        format!("procedure-{}", node.id)
+    }
+
+    fn build_mysql_procedure_edit_script(procedure_reference: &str, create_sql: &str) -> String {
+        let create_sql = create_sql.trim();
+        let create_sql = create_sql
+            .strip_suffix(';')
+            .unwrap_or(create_sql)
+            .trim_end();
+
+        format!(
+            concat!(
+                "-- Running this script replaces the existing procedure.\n",
+                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
+                "DROP PROCEDURE IF EXISTS {procedure_reference};\n\n",
+                "DELIMITER $$\n",
+                "{create_sql}$$\n",
+                "DELIMITER ;\n\n",
+                "-- Add arguments as needed before running:\n",
+                "-- CALL {procedure_reference}();\n"
+            ),
+            procedure_reference = procedure_reference,
+            create_sql = create_sql,
+        )
     }
 
     fn named_query_title(
@@ -254,6 +282,17 @@ impl DatabaseEventHandler {
                     DbTreeViewEvent::OpenViewData { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_open_view_data(node, tab_container, window, cx);
+                        }
+                    }
+                    DbTreeViewEvent::OpenProcedure { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_open_procedure(
+                                node,
+                                tab_container,
+                                global_state,
+                                window,
+                                cx,
+                            );
                         }
                     }
                     DbTreeViewEvent::DesignTable { node_id } => {
@@ -601,6 +640,15 @@ impl DatabaseEventHandler {
                     }
                     DatabaseObjectsEvent::OpenViewData { node } => {
                         Self::handle_open_view_data(node.clone(), tab_container, window, cx);
+                    }
+                    DatabaseObjectsEvent::OpenProcedure { node } => {
+                        Self::handle_open_procedure(
+                            node.clone(),
+                            tab_container,
+                            global_state,
+                            window,
+                            cx,
+                        );
                     }
                     DatabaseObjectsEvent::DeleteView { node } => {
                         Self::handle_delete_view(
@@ -1229,6 +1277,115 @@ impl DatabaseEventHandler {
                 cx,
             );
         });
+    }
+
+    /// 加载存储过程定义并在 SQL 编辑器中打开可替换脚本
+    fn handle_open_procedure(
+        node: DbNode,
+        tab_container: Entity<TabContainer>,
+        global_state: GlobalDbState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let connection_id = node.connection_id.clone();
+        let procedure = node.name.clone();
+        let Some(database) = node.get_database_name() else {
+            Self::show_error(window, t!("Common.error_info").to_string(), cx);
+            return;
+        };
+        let schema = node.get_schema_name();
+        let database_type = node.database_type.clone();
+        let tab_id = Self::procedure_tab_id(&node);
+        let tab_metadata = Self::tab_metadata_for_node(&node, TAB_KIND_PROCEDURE);
+        let procedure_reference = match global_state.db_manager.get_plugin(&database_type) {
+            Ok(plugin) => format!(
+                "{}.{}",
+                plugin.quote_identifier(&database),
+                plugin.quote_identifier(&procedure)
+            ),
+            Err(error) => {
+                Self::show_error(
+                    window,
+                    t!("DbTreeEvent.load_procedure_failed", error = error).to_string(),
+                    cx,
+                );
+                return;
+            }
+        };
+        let window_id = cx.active_window();
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let definition = global_state
+                .get_procedure_definition(
+                    cx,
+                    connection_id.clone(),
+                    database.clone(),
+                    procedure.clone(),
+                )
+                .await;
+
+            match definition {
+                Ok(create_sql) => {
+                    let script =
+                        Self::build_mysql_procedure_edit_script(&procedure_reference, &create_sql);
+                    let Some(window_id) = window_id else {
+                        return;
+                    };
+
+                    cx.update_window(window_id, |_entity, window, cx| {
+                        let tab_id_for_item = tab_id.clone();
+                        let connection_id_for_item = connection_id.clone();
+                        let tab_metadata = tab_metadata.clone();
+                        tab_container.update(cx, |container, cx| {
+                            container.activate_or_add_tab_lazy(
+                                tab_id.clone(),
+                                move |window, cx| {
+                                    let sql_editor = cx.new(|cx| {
+                                        let editor = SqlEditorTab::new_with_config(
+                                            crate::sql_editor_view::SqlEditorTabConfig {
+                                                title: format!("{} - Procedure", procedure).into(),
+                                                connection_id: connection_id.clone(),
+                                                database_type,
+                                                file_path: None,
+                                                new_file_directory: None,
+                                                initial_database: Some(database.clone()),
+                                                initial_schema: schema.clone(),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                        editor.set_sql(script, window, cx);
+                                        editor
+                                    });
+                                    TabItem::new(
+                                        tab_id_for_item,
+                                        connection_id_for_item,
+                                        sql_editor,
+                                    )
+                                    .with_metadata(tab_metadata)
+                                },
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    if let Some(window_id) = window_id {
+                        cx.update_window(window_id, |_entity, window, cx| {
+                            Self::show_error(
+                                window,
+                                t!("DbTreeEvent.load_procedure_failed", error = error).to_string(),
+                                cx,
+                            );
+                        })
+                        .ok();
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     /// 处理设计表事件（新建或编辑表结构）
@@ -4256,6 +4413,50 @@ mod tests {
             "查询1 · 同业-主1 / rating_report",
             DatabaseEventHandler::named_query_title("查询1", "同业-主1", Some("rating_report"))
         );
+    }
+
+    #[test]
+    fn procedure_tabs_are_stable_and_connection_scoped() {
+        let primary = DbNode::new(
+            "conn-1:app:procedure:sync_orders",
+            "sync_orders",
+            DbNodeType::Procedure,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+        let secondary = DbNode::new(
+            "conn-2:app:procedure:sync_orders",
+            "sync_orders",
+            DbNodeType::Procedure,
+            "conn-2".to_string(),
+            DatabaseType::MySQL,
+        );
+
+        assert_eq!(
+            DatabaseEventHandler::procedure_tab_id(&primary),
+            DatabaseEventHandler::procedure_tab_id(&primary)
+        );
+        assert_ne!(
+            DatabaseEventHandler::procedure_tab_id(&primary),
+            DatabaseEventHandler::procedure_tab_id(&secondary)
+        );
+    }
+
+    #[test]
+    fn mysql_procedure_edit_script_replaces_existing_definition() {
+        let script = DatabaseEventHandler::build_mysql_procedure_edit_script(
+            "`app``db`.`sync``orders`",
+            "CREATE DEFINER=`root`@`%` PROCEDURE `sync``orders`()\nBEGIN\n    SELECT 1;\nEND;",
+        );
+
+        assert!(script.contains("DROP PROCEDURE IF EXISTS `app``db`.`sync``orders`;"));
+        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
+        assert!(script.contains("SELECT 1;\nEND$$"));
+        assert!(script.contains("\nDELIMITER ;\n"));
+        assert!(script.contains("-- Add arguments as needed before running:"));
+        assert!(script.contains("-- CALL `app``db`.`sync``orders`();"));
+        assert!(script.contains("non-atomic"));
+        assert!(script.ends_with('\n'));
     }
 
     #[test]

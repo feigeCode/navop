@@ -537,6 +537,15 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<ObjectView>;
 
+    async fn get_procedure_definition(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _procedure: &str,
+    ) -> Result<String> {
+        bail!("Procedure definition is not supported")
+    }
+
     // === Trigger Operations ===
     async fn list_triggers(
         &self,

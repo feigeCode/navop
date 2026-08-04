@@ -281,6 +281,26 @@ fn mysql_string_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn mysql_quote_identifier(identifier: &str) -> String {
+    format!("`{}`", identifier.replace('`', "``"))
+}
+
+fn mysql_procedure_definition_query(database: &str, procedure: &str) -> String {
+    format!(
+        "SHOW CREATE PROCEDURE {}.{}",
+        mysql_quote_identifier(database),
+        mysql_quote_identifier(procedure)
+    )
+}
+
+fn mysql_procedure_definition_from_rows(rows: &[Vec<Option<String>>]) -> Result<String> {
+    rows.first()
+        .and_then(|row| row.get(2))
+        .and_then(Clone::clone)
+        .filter(|definition| !definition.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SHOW CREATE PROCEDURE returned no CREATE statement"))
+}
+
 fn mysql_user_host(request: &DatabaseUserOperationRequest) -> &str {
     request
         .field_values
@@ -831,6 +851,13 @@ fn mysql_action_manifest() -> DatabaseActionManifest {
                 Some(DatabaseActionToolbarScope::CurrentNode),
             ),
             action(
+                DatabaseActionId::OpenProcedure,
+                "Procedure.edit_procedure",
+                vec![DbNodeType::Procedure],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
                 DatabaseActionId::CreateNewQuery,
                 "Query.new_query",
                 vec![DbNodeType::Database, DbNodeType::QueriesFolder],
@@ -1077,7 +1104,7 @@ impl DatabasePlugin for MySqlPlugin {
     }
 
     fn quote_identifier(&self, identifier: &str) -> String {
-        format!("`{}`", identifier.replace("`", "``"))
+        mysql_quote_identifier(identifier)
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -1928,6 +1955,32 @@ impl DatabasePlugin for MySqlPlugin {
             columns,
             rows,
         })
+    }
+
+    async fn get_procedure_definition(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        procedure: &str,
+    ) -> Result<String> {
+        let sql = mysql_procedure_definition_query(database, procedure);
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to load procedure definition: {}", error))?;
+
+        match result {
+            SqlResult::Query(query_result) => {
+                mysql_procedure_definition_from_rows(&query_result.rows)
+            }
+            SqlResult::Error(error) => Err(anyhow::anyhow!(
+                "SHOW CREATE PROCEDURE failed: {}",
+                error.message
+            )),
+            SqlResult::Exec(_) => Err(anyhow::anyhow!(
+                "SHOW CREATE PROCEDURE returned an unexpected result type"
+            )),
+        }
     }
 
     async fn list_triggers(
@@ -4294,6 +4347,7 @@ mod tests {
             DatabaseActionId::ExportData,
             DatabaseActionId::OpenViewData,
             DatabaseActionId::DeleteView,
+            DatabaseActionId::OpenProcedure,
             DatabaseActionId::CreateNewQuery,
             DatabaseActionId::OpenNamedQuery,
             DatabaseActionId::RenameQuery,
@@ -4309,6 +4363,63 @@ mod tests {
                 action_id
             );
         }
+
+        let open_procedure = manifest
+            .actions
+            .actions
+            .iter()
+            .find(|action| action.id == DatabaseActionId::OpenProcedure)
+            .expect("MySQL should expose the procedure editor action");
+        assert_eq!("Procedure.edit_procedure", open_procedure.label_i18n_key);
+        assert_eq!(DatabaseActionPlacement::Both, open_procedure.placement);
+        assert_eq!(
+            vec![DbNodeType::Procedure],
+            open_procedure
+                .targets
+                .iter()
+                .map(|target| target.node_type)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn procedure_definition_query_quotes_database_and_procedure_names() {
+        assert_eq!(
+            "SHOW CREATE PROCEDURE `app``db`.`sync``orders`",
+            mysql_procedure_definition_query("app`db", "sync`orders")
+        );
+    }
+
+    #[test]
+    fn procedure_definition_from_rows_reads_show_create_column() {
+        let rows = vec![vec![
+            Some("sync_orders".to_string()),
+            Some("STRICT_TRANS_TABLES".to_string()),
+            Some(
+                "CREATE DEFINER=`root`@`%` PROCEDURE `sync_orders`()\nBEGIN\nSELECT 1;\nEND"
+                    .to_string(),
+            ),
+            Some("utf8mb4".to_string()),
+            Some("utf8mb4_0900_ai_ci".to_string()),
+            Some("utf8mb4_0900_ai_ci".to_string()),
+        ]];
+
+        assert_eq!(
+            "CREATE DEFINER=`root`@`%` PROCEDURE `sync_orders`()\nBEGIN\nSELECT 1;\nEND",
+            mysql_procedure_definition_from_rows(&rows).unwrap()
+        );
+    }
+
+    #[test]
+    fn procedure_definition_from_rows_rejects_missing_create_sql() {
+        let error = mysql_procedure_definition_from_rows(&[vec![
+            Some("sync_orders".to_string()),
+            Some("STRICT_TRANS_TABLES".to_string()),
+            None,
+        ]])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SHOW CREATE PROCEDURE"));
     }
 
     // ==================== Data Types Tests ====================

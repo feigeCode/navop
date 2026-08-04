@@ -422,6 +422,8 @@ pub enum DbTreeViewEvent {
     OpenTableData { node_id: String },
     /// 打开视图数据标签页
     OpenViewData { node_id: String },
+    /// 打开存储过程编辑器
+    OpenProcedure { node_id: String },
     /// 设计表（新建或编辑）
     DesignTable { node_id: String },
     /// 为指定数据库创建新查询
@@ -2134,6 +2136,15 @@ impl DbTreeView {
                         database, node.name
                     );
                     cx.emit(DbTreeViewEvent::OpenViewData {
+                        node_id: node.id.clone(),
+                    });
+                }
+                DbNodeType::Procedure => {
+                    info!(
+                        "DbTreeView: opening procedure editor: {}.{}",
+                        database, node.name
+                    );
+                    cx.emit(DbTreeViewEvent::OpenProcedure {
                         node_id: node.id.clone(),
                     });
                 }

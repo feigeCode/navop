@@ -1091,6 +1091,13 @@ Schema:
     zh-CN: 模式
     zh-HK: 模式
 
+# 存储过程操作
+Procedure:
+  edit_procedure:
+    en: Edit Procedure
+    zh-CN: 编辑存储过程
+    zh-HK: 編輯預存程序
+
 # 查询操作
 Query:
   compress:
@@ -1814,6 +1821,10 @@ DbTree:
     zh-HK: 檢查約束
 
 DbTreeEvent:
+  load_procedure_failed:
+    en: "Failed to load procedure: %{error}"
+    zh-CN: "加载存储过程失败：%{error}"
+    zh-HK: "載入預存程序失敗：%{error}"
   design_table_title:
     en: "Design Table: %{table}"
     zh-CN: "设计表: %{table}"
