@@ -12,11 +12,13 @@ use std::{
 };
 
 mod color;
+mod geometry;
 mod registry;
 mod schema;
 mod theme_color;
 
 pub use color::*;
+pub use geometry::*;
 pub use registry::*;
 pub use schema::*;
 pub use theme_color::*;
@@ -47,6 +49,9 @@ pub struct Theme {
     pub highlight_theme: Arc<HighlightTheme>,
     pub light_theme: Rc<ThemeConfig>,
     pub dark_theme: Rc<ThemeConfig>,
+    /// Shared geometry tokens for application shell, components, and pages.
+    #[serde(default)]
+    pub geometry: ThemeGeometry,
 
     pub mode: ThemeMode,
     /// The font family for the application, default is `.SystemUIFont`.
@@ -232,6 +237,7 @@ impl From<&ThemeColor> for Theme {
             light_theme: Rc::new(ThemeConfig::default()),
             dark_theme: Rc::new(ThemeConfig::default()),
             highlight_theme: HighlightTheme::default_light(),
+            geometry: ThemeGeometry::default(),
             sheet: SheetSettings::default(),
         }
     }
@@ -279,5 +285,41 @@ impl From<WindowAppearance> for ThemeMode {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
             WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_theme_uses_default_geometry() {
+        assert_eq!(Theme::default().geometry, ThemeGeometry::default());
+    }
+
+    #[test]
+    fn theme_geometry_survives_serialization_round_trip() {
+        let mut theme = Theme::default();
+        theme.geometry.layout.global_rail = px(56.);
+
+        let encoded = serde_json::to_value(&theme).expect("theme should serialize");
+        let decoded: Theme =
+            serde_json::from_value(encoded).expect("serialized theme should deserialize");
+
+        assert_eq!(decoded.geometry.layout.global_rail, px(56.));
+    }
+
+    #[test]
+    fn historic_theme_without_geometry_uses_default_tokens() {
+        let mut encoded = serde_json::to_value(Theme::default()).expect("theme should serialize");
+        encoded
+            .as_object_mut()
+            .expect("theme should serialize as an object")
+            .remove("geometry");
+
+        let decoded: Theme =
+            serde_json::from_value(encoded).expect("historic theme should deserialize");
+
+        assert_eq!(decoded.geometry, ThemeGeometry::default());
     }
 }

@@ -13,11 +13,11 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, BrandIcon, Icon, IconName, IconSize, ObjectIcon, Sizable, Size,
+    button::{Button, ButtonVariants as _, IconButton},
+    content_state::ContentState,
     h_flex,
     input::Input,
-    spinner::Spinner,
     switch::Switch,
     table::DataTable,
     tag::Tag,
@@ -41,15 +41,16 @@ impl RedisToolView {
         let view = cx.entity().clone();
         let auto_view = cx.entity().clone();
         let reset_view = cx.entity().clone();
+        let geometry = cx.theme().geometry.clone();
         h_flex()
             .w_full()
-            .h(px(44.0))
-            .px_3()
-            .gap_2()
+            .h(geometry.layout.command_bar)
+            .px(geometry.spacing.space_3)
+            .gap(geometry.spacing.space_2)
             .items_center()
-            .border_b_1()
+            .border_b(geometry.border.hairline)
             .border_color(cx.theme().border)
-            .child(Icon::new(self.icon_name()).with_size(Size::Small))
+            .child(Icon::new(self.icon_name()).with_size(IconSize::Medium))
             .child(
                 div()
                     .font_weight(gpui::FontWeight::BOLD)
@@ -76,20 +77,20 @@ impl RedisToolView {
             )
             .when(self.kind == RedisToolKind::SlowLog, |this| {
                 this.child(
-                    Button::new("redis-slowlog-reset")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Delete)
+                    IconButton::new("redis-slowlog-reset", IconName::Delete)
+                        .hit_size(Size::XSmall)
+                        .glyph_size(IconSize::Small)
+                        .tooltip(t!("RedisTool.clear_slowlog").to_string())
                         .on_click(move |_, _, cx| {
                             reset_view.update(cx, |view, cx| view.reset_slowlog(cx));
                         }),
                 )
             })
             .child(
-                Button::new("redis-tool-refresh")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Refresh)
+                IconButton::new("redis-tool-refresh", IconName::Refresh)
+                    .hit_size(Size::XSmall)
+                    .glyph_size(IconSize::Small)
+                    .tooltip(t!("Common.refresh").to_string())
                     .on_click(move |_, _, cx| {
                         view.update(cx, |view, cx| view.refresh(cx));
                     }),
@@ -238,10 +239,10 @@ impl RedisToolView {
             if is_pattern { "p" } else { "c" },
             name
         );
-        let close_button = Button::new(SharedString::from(close_id))
-            .ghost()
-            .xsmall()
-            .icon(IconName::Close)
+        let close_button = IconButton::new(SharedString::from(close_id), IconName::Close)
+            .hit_size(Size::XSmall)
+            .glyph_size(IconSize::Small)
+            .tooltip(t!("RedisPubSub.unsubscribe_one").to_string())
             .on_click(move |_, _, cx| {
                 let name_inner = name_owned.clone();
                 view.update(cx, move |view, cx| {
@@ -321,38 +322,20 @@ impl RedisToolView {
 
     pub(crate) fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
         match &self.load_state {
-            LoadState::Empty => empty_connection(cx),
-            LoadState::Loading => loading(),
+            LoadState::Empty => {
+                ContentState::empty(t!("RedisTool.connection_required").to_string())
+                    .icon(BrandIcon::new(IconName::Redis).with_size(IconSize::Large))
+                    .into_any_element()
+            }
+            LoadState::Loading => {
+                ContentState::loading(t!("RedisTool.loading").to_string()).into_any_element()
+            }
             LoadState::Loaded(_) => loaded_body(self, cx),
-            LoadState::Error(error) => div()
-                .flex_1()
-                .p_4()
-                .text_color(cx.theme().danger)
-                .child(error.clone())
+            LoadState::Error(error) => ContentState::error(t!("RedisTool.load_failed").to_string())
+                .detail(error.clone())
                 .into_any_element(),
         }
     }
-}
-
-fn empty_connection(cx: &mut Context<RedisToolView>) -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(cx.theme().muted_foreground)
-        .child(t!("RedisTool.connection_required").to_string())
-        .into_any_element()
-}
-
-fn loading() -> AnyElement {
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(Spinner::new().with_size(Size::Medium))
-        .into_any_element()
 }
 
 fn loaded_body(view: &RedisToolView, cx: &mut Context<RedisToolView>) -> AnyElement {
@@ -496,24 +479,10 @@ fn render_pubsub_channels(view: &RedisToolView, cx: &mut Context<RedisToolView>)
 
 fn render_received_messages(view: &RedisToolView, cx: &mut Context<RedisToolView>) -> AnyElement {
     if view.received_messages.is_empty() {
-        return v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("RedisPubSub.messages_empty_title").to_string()),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground.opacity(0.7))
-                    .child(t!("RedisPubSub.messages_empty_detail").to_string()),
-            )
+        return ContentState::empty(t!("RedisPubSub.messages_empty_title").to_string())
+            .detail(t!("RedisPubSub.messages_empty_detail").to_string())
+            .icon(ObjectIcon::new(IconName::Network).with_size(IconSize::Large))
+            .compact()
             .into_any_element();
     }
 

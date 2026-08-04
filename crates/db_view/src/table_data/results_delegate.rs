@@ -21,6 +21,7 @@ use gpui_component::{
     ActiveTheme, IconName, Sizable as _, Size, WindowExt,
     button::{Button, ButtonVariants},
     h_flex,
+    notification::Notification,
 };
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
@@ -991,16 +992,25 @@ impl EditTableDelegate for EditorTableDelegate {
         fn copy_with_format(
             table: &gpui::Entity<EditTableState<EditorTableDelegate>>,
             format: CopyFormat,
+            window: &mut Window,
             cx: &mut App,
         ) {
             table.update(cx, |state, cx| {
                 let Some(data) = state.get_optional_selection_data(cx) else {
+                    window.push_notification(
+                        Notification::warning(t!("TableData.select_cell").to_string()),
+                        cx,
+                    );
                     return;
                 };
                 let columns = state.get_selection_columns(cx);
                 let metadata = state.delegate().get_table_metadata();
                 let text = CopyFormatter::format(format, &data, &columns, &metadata);
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
+                window.push_notification(
+                    Notification::success(t!("TableData.copy_success").to_string()),
+                    cx,
+                );
             });
         }
 
@@ -1175,46 +1185,46 @@ impl EditTableDelegate for EditorTableDelegate {
                 submenu
                     .item(PopupMenuItem::new("CSV").on_click({
                         let t = table_csv.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::Csv, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::Csv, window, cx);
                         }
                     }))
                     .item(PopupMenuItem::new("JSON").on_click({
                         let t = table_json.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::Json, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::Json, window, cx);
                         }
                     }))
                     .item(PopupMenuItem::new("Markdown").on_click({
                         let t = table_md.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::Markdown, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::Markdown, window, cx);
                         }
                     }))
                     .separator()
                     .item(PopupMenuItem::new("INSERT").on_click({
                         let t = table_insert.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::SqlInsert, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::SqlInsert, window, cx);
                         }
                     }))
                     .item(PopupMenuItem::new("UPDATE").on_click({
                         let t = table_update.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::SqlUpdate, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::SqlUpdate, window, cx);
                         }
                     }))
                     .item(PopupMenuItem::new("DELETE").on_click({
                         let t = table_delete.clone();
-                        move |_, _window, cx| {
-                            copy_with_format(&t, CopyFormat::SqlDelete, cx);
+                        move |_, window, cx| {
+                            copy_with_format(&t, CopyFormat::SqlDelete, window, cx);
                         }
                     }))
                     .item(
                         PopupMenuItem::new(t!("TableData.sql_in_clause").to_string()).on_click({
                             let t = table_in.clone();
-                            move |_, _window, cx| {
-                                copy_with_format(&t, CopyFormat::SqlIn, cx);
+                            move |_, window, cx| {
+                                copy_with_format(&t, CopyFormat::SqlIn, window, cx);
                             }
                         }),
                     )
@@ -1329,15 +1339,15 @@ impl EditTableDelegate for EditorTableDelegate {
         .item(
             PopupMenuItem::new(t!("TableData.copy").to_string()).on_click({
                 let t = table_tsv.clone();
-                move |_, _window, cx| {
-                    copy_with_format(&t, CopyFormat::Tsv, cx);
+                move |_, window, cx| {
+                    copy_with_format(&t, CopyFormat::Tsv, window, cx);
                 }
             }),
         )
         .item(
             PopupMenuItem::new(t!("TableData.copy_column_name").to_string()).on_click({
                 let table = table_copy_columns.clone();
-                move |_, _window, cx| {
+                move |_, window, cx| {
                     table.update(cx, |state, cx| {
                         let mut columns = state.get_selection_columns(cx);
                         if columns.is_empty() {
@@ -1357,6 +1367,10 @@ impl EditTableDelegate for EditorTableDelegate {
                         }
 
                         if columns.is_empty() {
+                            window.push_notification(
+                                Notification::warning(t!("TableData.select_cell").to_string()),
+                                cx,
+                            );
                             return;
                         }
 
@@ -1366,6 +1380,10 @@ impl EditTableDelegate for EditorTableDelegate {
                             .collect::<Vec<_>>()
                             .join("\t");
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        window.push_notification(
+                            Notification::success(t!("TableData.copy_success").to_string()),
+                            cx,
+                        );
                     });
                 }
             }),
@@ -2366,12 +2384,15 @@ impl EditTableDelegate for EditorTableDelegate {
 
     fn on_copy(
         &mut self,
-        _data: Vec<Vec<Option<String>>>,
-        _window: &mut Window,
-        _cx: &mut Context<EditTableState<Self>>,
+        data: Vec<Vec<Option<String>>>,
+        window: &mut Window,
+        cx: &mut Context<EditTableState<Self>>,
     ) {
-        // 可以在这里添加复制成功的通知等
-        tracing::debug!("Copied {} rows of data", _data.len());
+        tracing::debug!("Copied {} rows of data", data.len());
+        window.push_notification(
+            Notification::success(t!("TableData.copy_success").to_string()),
+            cx,
+        );
     }
 
     fn on_paste(

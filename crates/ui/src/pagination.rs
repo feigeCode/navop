@@ -7,12 +7,14 @@ use gpui::{
 use rust_i18n::t;
 
 use crate::{
-    Disableable, Icon, Sizable, Size, StyledExt,
+    Disableable, Icon, Selectable, Sizable, Size, StyledExt,
     button::{Button, ButtonVariants},
     h_flex,
     icon::IconName,
     menu::{DropdownMenu as _, PopupMenuItem},
 };
+
+const MIN_VISIBLE_PAGES: usize = 5;
 
 /// Pagination with page navigation, next and previous links.
 #[derive(IntoElement)]
@@ -52,18 +54,14 @@ impl Pagination {
 
     /// Set the current page number (1-based).
     ///
-    /// The value will be clamped between 1 and total_pages when total_pages is set.
     pub fn current_page(mut self, page: usize) -> Self {
-        self.current_page = page.max(1);
+        self.current_page = page;
         self
     }
 
     /// Set the total number of pages.
     pub fn total_pages(mut self, pages: usize) -> Self {
-        self.total_pages = pages.max(1);
-        if self.current_page > self.total_pages {
-            self.current_page = self.total_pages;
-        }
+        self.total_pages = pages;
         self
     }
 
@@ -96,31 +94,39 @@ impl Pagination {
 
     /// Set viewable maximum number of page buttons, default
     pub fn visible_pages(mut self, max: usize) -> Self {
-        self.visible_pages = max;
+        self.visible_pages = max.max(MIN_VISIBLE_PAGES);
         self
     }
 
-    fn render_nav_button(&self, is_prev: bool) -> Button {
+    fn normalized_total_pages(&self) -> usize {
+        self.total_pages.max(1)
+    }
+
+    fn normalized_current_page(&self) -> usize {
+        self.current_page.clamp(1, self.normalized_total_pages())
+    }
+
+    fn render_nav_button(&self, is_prev: bool, current_page: usize, total_pages: usize) -> Button {
         let (id, label, icon, disabled) = if is_prev {
             (
                 "prev",
                 t!("Pagination.previous"),
                 IconName::ChevronLeft,
-                self.current_page <= 1,
+                current_page <= 1,
             )
         } else {
             (
                 "next",
                 t!("Pagination.next"),
                 IconName::ChevronRight,
-                self.current_page >= self.total_pages,
+                current_page >= total_pages,
             )
         };
 
         let target_page = if is_prev {
-            self.current_page.saturating_sub(1)
+            current_page.saturating_sub(1).max(1)
         } else {
-            self.current_page.saturating_add(1)
+            current_page.saturating_add(1).min(total_pages)
         };
 
         Button::new(id)
@@ -129,7 +135,7 @@ impl Pagination {
             .with_size(self.size)
             .disabled(self.disabled || disabled)
             .tooltip(label.clone())
-            .when(self.compact, |this| this.icon(icon.clone()))
+            .when(self.compact, |this| this.icon(icon))
             .when(!self.compact, |this| {
                 this.child(
                     h_flex()
@@ -171,13 +177,14 @@ impl Styled for Pagination {
 
 impl RenderOnce for Pagination {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let current_page = self.normalized_current_page();
+        let total_pages = self.normalized_total_pages();
         let page_numbers = if !self.compact {
-            calculate_page_range(self.current_page, self.total_pages, self.visible_pages)
+            calculate_page_range(current_page, total_pages, self.visible_pages)
         } else {
             vec![]
         };
 
-        let current_page = self.current_page;
         let is_disabled = self.disabled;
         let on_click = self.on_click.clone();
 
@@ -188,7 +195,7 @@ impl RenderOnce for Pagination {
             .gap_1()
             .items_center()
             .refine_style(&self.style)
-            .child(self.render_nav_button(true))
+            .child(self.render_nav_button(true, current_page, total_pages))
             .children({
                 page_numbers.into_iter().map(|item| match item {
                     PageItem::Page(page) => {
@@ -196,6 +203,7 @@ impl RenderOnce for Pagination {
 
                         Button::new(page)
                             .with_size(self.size)
+                            .selected(is_selected)
                             .map(|this| {
                                 if is_selected {
                                     this.outline()
@@ -223,6 +231,7 @@ impl RenderOnce for Pagination {
                     .with_size(self.size)
                     .compact()
                     .disabled(self.disabled)
+                    .tooltip(t!("Pagination.select_hidden_page"))
                     .icon(IconName::Ellipsis)
                     .dropdown_menu({
                         let on_click = on_click.clone();
@@ -248,16 +257,19 @@ impl RenderOnce for Pagination {
                     .into_any_element(),
                 })
             })
-            .child(self.render_nav_button(false))
+            .child(self.render_nav_button(false, current_page, total_pages))
     }
 }
 
 fn calculate_page_range(current: usize, total: usize, max_visible: usize) -> Vec<PageItem> {
+    let total = total.max(1);
+    let current = current.clamp(1, total);
+
     if total <= 1 {
         return vec![];
     }
 
-    let max_visible = max_visible.max(5);
+    let max_visible = max_visible.max(MIN_VISIBLE_PAGES);
 
     if total <= max_visible {
         return (1..=total).map(PageItem::Page).collect();
@@ -303,10 +315,10 @@ fn calculate_page_range(current: usize, total: usize, max_visible: usize) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use super::{MIN_VISIBLE_PAGES, PageItem, Pagination, calculate_page_range};
+
     #[test]
     fn test_calculate_page_range() {
-        use super::{PageItem, calculate_page_range};
-
         let result = calculate_page_range(1, 10, 7);
         let expected = vec![
             PageItem::Page(1),
@@ -342,5 +354,41 @@ mod tests {
             PageItem::Page(10),
         ];
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn pagination_normalization_is_builder_order_independent() {
+        let current_then_total = Pagination::new("a").current_page(10).total_pages(3);
+        let total_then_current = Pagination::new("b").total_pages(3).current_page(10);
+
+        assert_eq!(current_then_total.normalized_total_pages(), 3);
+        assert_eq!(current_then_total.normalized_current_page(), 3);
+        assert_eq!(total_then_current.normalized_total_pages(), 3);
+        assert_eq!(total_then_current.normalized_current_page(), 3);
+    }
+
+    #[test]
+    fn pagination_normalizes_zero_values_and_visible_page_floor() {
+        let pagination = Pagination::new("zero")
+            .current_page(0)
+            .total_pages(0)
+            .visible_pages(0);
+
+        assert_eq!(pagination.normalized_total_pages(), 1);
+        assert_eq!(pagination.normalized_current_page(), 1);
+        assert_eq!(pagination.visible_pages, MIN_VISIBLE_PAGES);
+        assert!(calculate_page_range(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn calculate_page_range_clamps_out_of_range_current_pages() {
+        assert_eq!(
+            calculate_page_range(usize::MAX, 3, 1),
+            vec![PageItem::Page(1), PageItem::Page(2), PageItem::Page(3)]
+        );
+        assert_eq!(
+            calculate_page_range(0, 3, 4),
+            vec![PageItem::Page(1), PageItem::Page(2), PageItem::Page(3)]
+        );
     }
 }

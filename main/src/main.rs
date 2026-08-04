@@ -6,8 +6,8 @@ mod auth;
 
 mod ai_chat_acp;
 mod app_init;
+mod connection_visuals;
 mod env_file;
-mod external_driver_display;
 mod file_association;
 mod file_open;
 mod home;

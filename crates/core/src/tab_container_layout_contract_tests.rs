@@ -218,3 +218,26 @@ fn sidebar_resize_uses_tab_container_bounds_instead_of_window_bounds() {
     let handler = &source[handler_start..];
     assert!(!handler.contains("let bounds = window.bounds();"));
 }
+
+#[test]
+fn sidebar_shell_uses_shared_header_geometry_and_resize_tokens() {
+    let source = include_str!("tab_container.rs");
+
+    assert!(source.contains("PanelHeader::new(header_id)"));
+    assert!(source.contains(".variant(PanelHeaderVariant::Sidebar)"));
+    assert!(source.contains(".with_size(IconSize::Default)"));
+
+    assert!(source.contains("layout.utility_panel_default"));
+    assert!(source.contains("layout.utility_panel_min"));
+    assert!(source.contains("layout.utility_panel_max"));
+    assert!(source.contains("layout.sidebar_panel_min"));
+    assert!(source.contains("layout.sidebar_center_min"));
+    assert!(source.contains("layout.sidebar_bottom_default"));
+    assert!(source.contains("resize.hit_area()"));
+
+    assert!(!source.contains("SIDEBAR_SIDE_DEFAULT_WIDTH"));
+    assert!(!source.contains("SIDEBAR_PANEL_MIN_SIZE"));
+    assert!(!source.contains("SIDEBAR_CENTER_MIN_SIZE"));
+    assert!(!source.contains("SIDEBAR_BOTTOM_DEFAULT_HEIGHT"));
+    assert!(!source.contains(".h(px(34.0))"));
+}

@@ -176,7 +176,7 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar.contains("IconName::UserColor"));
+    assert!(sidebar.contains("ObjectIcon::new(IconName::User)"));
 }
 
 #[test]
@@ -224,15 +224,18 @@ fn team_key_settings_tab_has_feature_guard() {
 fn home_render_uses_cached_external_driver_registry() {
     let home = include_str!("../../home_tab.rs");
     let icon = include_str!("../connection_icon.rs");
+    let visuals = include_str!("../../connection_visuals.rs");
     let list_item = include_str!("../connection_list.rs");
     let card = include_str!("../connection_card_content.rs");
     let quick_open = include_str!("../../home/home_connection_quick_open.rs");
 
     assert!(home.contains("external_driver_registry: IpcDriverRegistry"));
-    assert!(icon.contains("external_driver_icon_for_config_with_registry"));
+    assert!(icon.contains("stored_connection_icon"));
+    assert!(visuals.contains("external_driver_icon_for_config_with_registry"));
+    assert!(visuals.contains("external_driver_icon_from_sources"));
     assert!(list_item.contains("connection_icon"));
     assert!(card.contains("connection_icon"));
-    assert!(quick_open.contains("external_driver_icon_for_config_with_registry"));
+    assert!(quick_open.contains("stored_connection_icon"));
     assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
     assert!(!icon.contains("IpcDriverRegistry::load_default()"));
     assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));

@@ -8,6 +8,13 @@ fn workspace_source(file: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+fn sidebar_source(file: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/sidebar")
+        .join(file);
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
 #[test]
 fn terminal_pane_uses_a_floating_tool_instead_of_a_layout_header() {
     let modules = workspace_source("mod.rs");
@@ -53,6 +60,20 @@ fn terminal_tab_drop_region_renders_direct_zones_above_terminal_content() {
     assert!(tab_drag.contains("self.render_tab_drop_zone"));
     assert!(tab_drag.contains(".drag_over::<DragTab>"));
     assert!(tab_drag.contains("show_drop_highlight"));
+}
+
+#[test]
+fn file_manager_drop_overlay_follows_gpui_drag_over_lifecycle() {
+    let file_manager = sidebar_source("file_manager_panel.rs");
+
+    assert!(file_manager.contains(".child(render_file_drop_overlay("));
+    assert!(file_manager.contains(".invisible()"));
+    assert!(file_manager.contains(".drag_over::<ExternalPaths>(|style, _, _, _| style.visible())"));
+    assert!(file_manager.contains("cx.theme().drop_target"));
+    assert!(file_manager.contains("cx.theme().drag_border"));
+    assert!(file_manager.contains("this.prepare_uploads(file_paths"));
+    assert!(!file_manager.contains("is_dragging_over"));
+    assert!(!file_manager.contains("gpui::rgba(0x3b82f6"));
 }
 
 #[test]

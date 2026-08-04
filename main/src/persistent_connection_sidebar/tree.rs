@@ -1,12 +1,10 @@
 use std::ops::Range;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui::{
-    AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, px, uniform_list,
-};
+use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
 use gpui_component::{
-    Icon, IconName, Sizable, Size, StyledExt,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt,
+    button::{IconButton, IconButtonRole},
     h_flex,
     input::{Input, LocalInputStyle},
     v_flex,
@@ -135,7 +133,7 @@ impl PersistentConnectionSidebar {
             .border_color(palette.border)
             .child(
                 Icon::new(IconName::Search)
-                    .with_size(Size::XSmall)
+                    .with_size(IconSize::Micro)
                     .text_color(palette.muted_foreground),
             )
             .child(
@@ -168,15 +166,18 @@ impl PersistentConnectionSidebar {
                 .count()
         };
         let view = cx.entity();
+        let layout = cx.theme().geometry.layout;
         h_flex()
             .w_full()
-            .h(px(40.0))
+            .h(layout.embedded_panel_header)
             .flex_shrink_0()
             .pr_2()
             // Leave a full control-sized gap after the macOS traffic lights;
             // the narrower padding made the title look attached to the green
             // window button even though the bounds did not overlap.
-            .when(cfg!(target_os = "macos"), |this| this.pl(px(36.0)))
+            .when(cfg!(target_os = "macos"), |this| {
+                this.pl(layout.macos_compact_title_bar_content_padding)
+            })
             .when(!cfg!(target_os = "macos"), |this| this.pl_2())
             .items_center()
             .justify_between()
@@ -216,10 +217,8 @@ impl PersistentConnectionSidebar {
                 h_flex()
                     .gap_1()
                     .child(
-                        Button::new("persistent-collapse-all-groups")
-                            .icon(IconName::ChevronsUpDown)
-                            .ghost()
-                            .xsmall()
+                        IconButton::new("persistent-collapse-all-groups", IconName::ChevronsUpDown)
+                            .role(IconButtonRole::Compact)
                             .text_color(palette.foreground)
                             .tooltip(t!("Connection.collapse_all"))
                             .on_click(move |_, _, cx| {
@@ -227,10 +226,8 @@ impl PersistentConnectionSidebar {
                             }),
                     )
                     .child(
-                        Button::new("persistent-new-root-group")
-                            .icon(IconName::FolderOpen)
-                            .ghost()
-                            .xsmall()
+                        IconButton::new("persistent-new-root-group", IconName::FolderOpen)
+                            .role(IconButtonRole::Compact)
                             .text_color(palette.foreground)
                             .tooltip(t!("Workspace.new"))
                             .on_click(move |_, window, cx| {
@@ -247,10 +244,8 @@ impl PersistentConnectionSidebar {
                             }),
                     )
                     .child(
-                        Button::new("persistent-refresh-connections")
-                            .icon(IconName::Refresh)
-                            .ghost()
-                            .xsmall()
+                        IconButton::new("persistent-refresh-connections", IconName::Refresh)
+                            .role(IconButtonRole::Compact)
                             .text_color(palette.foreground)
                             .tooltip(t!("Home.refresh"))
                             .on_click(move |_, _, cx| {
@@ -280,6 +275,7 @@ mod tests {
     #[test]
     fn macos_connection_header_clears_the_traffic_lights() {
         let source = include_str!("tree.rs");
-        assert!(source.contains("cfg!(target_os = \"macos\"), |this| this.pl(px(36.0))"));
+        assert!(source.contains("cfg!(target_os = \"macos\")"));
+        assert!(source.contains("layout.macos_compact_title_bar_content_padding"));
     }
 }

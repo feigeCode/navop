@@ -72,8 +72,10 @@ impl TerminalView {
         });
 
         let workspace_editor = is_local_terminal.then(|| {
-            let theme =
-                crate::sidebar::workspace_theme_from_terminal_colors(&default_theme.colors());
+            let theme = crate::sidebar::workspace_theme_from_terminal_colors(
+                &default_theme.colors(),
+                cx.theme(),
+            );
             cx.new(|_| WorkspaceEditor::new(theme))
         });
         let local_workspace = local_working_dir

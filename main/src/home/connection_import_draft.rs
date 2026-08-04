@@ -1,5 +1,5 @@
 use connection_import_protocol::{ImportRecord, ImportRecordKind, PasswordImportStatus};
-use one_core::storage::StoredConnection;
+use one_core::storage::{ConnectionType, StoredConnection};
 use rust_i18n::t;
 
 use super::connection_import_draft_conversion::{
@@ -138,6 +138,16 @@ impl EditableImportDraft {
                 ImportRecordKind::Database => ImportDraftKind::Database,
                 ImportRecordKind::Ssh => ImportDraftKind::Ssh,
                 ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
+            },
+        }
+    }
+
+    pub(crate) fn visual_connection_type(&self) -> ConnectionType {
+        match &self.payload {
+            ImportDraftPayload::Record(record) => match record.kind {
+                ImportRecordKind::Database => ConnectionType::Database,
+                ImportRecordKind::Ssh => ConnectionType::SshSftp,
+                ImportRecordKind::PortForwarding => ConnectionType::PortForwarding,
             },
         }
     }

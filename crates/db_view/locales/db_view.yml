@@ -2304,6 +2304,10 @@ TableData:
     en: Copy
     zh-CN: 复制
     zh-HK: 複製
+  copy_success:
+    en: Copied to clipboard
+    zh-CN: 已复制到剪贴板
+    zh-HK: 已複製到剪貼簿
   copy_column_name:
     en: Copy Column Name
     zh-CN: 复制字段名称
@@ -2661,6 +2665,10 @@ SqlEditorView:
     zh-CN: "自动保存SQL文件失败 %{path}: %{error}"
     zh-HK: "自動儲存SQL檔案失敗 %{path}: %{error}"
 DbTreeView:
+  empty:
+    en: No database objects to display
+    zh-CN: 暂无可显示的数据库对象
+    zh-HK: 暫無可顯示的資料庫物件
   parse_connection_config_failed:
     en: "Failed to parse connection config %{id}: %{error}"
     zh-CN: "无法解析连接配置 %{id}: %{error}"
@@ -2719,6 +2727,10 @@ DatabaseToolbar:
     en: BI
     zh-CN: BI
     zh-HK: BI
+  more:
+    en: More actions
+    zh-CN: 更多操作
+    zh-HK: 更多操作
 DatabaseUsers:
   title:
     en: Users
@@ -3539,3 +3551,9 @@ Compare:
     en: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | Total: %{total}"
     zh-CN: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 总计: %{total}"
     zh-HK: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 總計: %{total}"
+
+DatabaseSidebar:
+  ai_chat:
+    en: AI Chat
+    zh-CN: AI 对话
+    zh-HK: AI 對話

@@ -1,7 +1,7 @@
 use super::{DocumentKey, WorkspaceEditor, WorkspaceEditorEvent};
 use crate::file_system::save_file;
 use gpui::{AppContext as _, AsyncApp, Context, WeakEntity, Window};
-use gpui_component::{WindowExt as _, notification::Notification};
+use gpui_component::{WindowExt as _, notification::Notification, status_bar::StatusPresentation};
 use rust_i18n::t;
 use std::path::PathBuf;
 
@@ -65,6 +65,7 @@ impl WorkspaceEditor {
         };
         tab.saving = true;
         tab.status_message = t!("WorkspaceExplorer.status.saving").to_string();
+        tab.status_presentation = StatusPresentation::Progress;
         cx.notify();
         Some(SaveAttempt {
             tab_id: tab.id,
@@ -88,6 +89,7 @@ impl WorkspaceEditor {
         tab.file_size = tab.saved_text.len();
         tab.saving = false;
         tab.status_message = t!("WorkspaceExplorer.status.saved").to_string();
+        tab.status_presentation = StatusPresentation::Success;
         cx.emit(WorkspaceEditorEvent::FileSaved(outcome.path));
         if outcome.close_after_save {
             self.close_clean_tab(index, window, cx);
@@ -107,6 +109,7 @@ impl WorkspaceEditor {
         let tab = &mut self.tabs[index];
         tab.saving = false;
         tab.status_message = t!("WorkspaceExplorer.status.save_failed").to_string();
+        tab.status_presentation = StatusPresentation::Error;
         cx.notify();
     }
 }

@@ -2,15 +2,11 @@ use std::{cell::Cell, rc::Rc};
 
 use gpui::{
     AppContext as _, Context, DragMoveEvent, EntityId, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Window, div, px,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Window, div,
 };
 use gpui_component::ActiveTheme as _;
 
 use super::PersistentConnectionSidebar;
-
-pub(super) const CONNECTION_TREE_DEFAULT_WIDTH: Pixels = px(260.0);
-pub(super) const CONNECTION_TREE_MIN_WIDTH: Pixels = px(140.0);
-pub(super) const CONNECTION_TREE_MAX_WIDTH: Pixels = px(520.0);
 
 #[derive(Clone)]
 struct ConnectionTreeResize {
@@ -29,14 +25,16 @@ pub(super) fn resized_connection_tree_width(
     initial_width: Pixels,
     initial_x: Pixels,
     current_x: Pixels,
+    min_width: Pixels,
+    max_width: Pixels,
 ) -> Pixels {
-    (initial_width + current_x - initial_x)
-        .clamp(CONNECTION_TREE_MIN_WIDTH, CONNECTION_TREE_MAX_WIDTH)
+    (initial_width + current_x - initial_x).clamp(min_width, max_width)
 }
 
 impl PersistentConnectionSidebar {
     pub(super) fn render_tree_resize_handle(&self, cx: &Context<Self>) -> impl IntoElement {
         let initial_x = Rc::new(Cell::new(None));
+        let resize = cx.theme().geometry.resize;
 
         div()
             .id("persistent-connection-tree-resize")
@@ -45,7 +43,7 @@ impl PersistentConnectionSidebar {
             .top_0()
             .right_0()
             .h_full()
-            .w(px(9.0))
+            .w(resize.hit_area())
             .flex()
             .justify_end()
             .cursor_col_resize()
@@ -67,7 +65,7 @@ impl PersistentConnectionSidebar {
             .child(
                 div()
                     .h_full()
-                    .w(px(1.0))
+                    .w(resize.visible_line)
                     .bg(cx.theme().border)
                     .group_hover("persistent-connection-tree-resize", |this| {
                         this.bg(cx.theme().drag_border)
@@ -88,8 +86,14 @@ impl PersistentConnectionSidebar {
         let Some(initial_x) = drag.initial_x.get() else {
             return;
         };
-        self.tree_width =
-            resized_connection_tree_width(drag.initial_width, initial_x, event.event.position.x);
+        let layout = cx.theme().geometry.layout;
+        self.tree_width = resized_connection_tree_width(
+            drag.initial_width,
+            initial_x,
+            event.event.position.x,
+            layout.context_sidebar_min,
+            layout.context_sidebar_max,
+        );
         cx.notify();
     }
 }

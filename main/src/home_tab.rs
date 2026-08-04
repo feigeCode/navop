@@ -12,8 +12,9 @@ use gpui::{
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _, DropdownButton},
+    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, IconSize, InteractiveElementExt,
+    ObjectIcon, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _, DropdownButton, IconButton, IconButtonRole},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
     h_flex,
@@ -59,7 +60,9 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::external_driver_display::external_driver_icon_for_config_with_registry;
+use crate::connection_visuals::{
+    ConnectionVisualSize, connection_type_navigation_icon, connection_type_rail_icon,
+};
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;

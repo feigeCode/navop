@@ -95,7 +95,7 @@ impl TerminalWorkspace {
         snapshot: &TerminalWorkspaceSidebarSnapshot,
         panel: SidebarPanel,
         placement: SidebarPlacement,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(content) = snapshot.panels.get(&panel).cloned() else {
             return div().into_any_element();
@@ -111,6 +111,7 @@ impl TerminalWorkspace {
                     placement,
                     content,
                     snapshot.colors.clone(),
+                    cx.theme().geometry.layout.panel_header,
                 ),
             ))
             .into_any_element()

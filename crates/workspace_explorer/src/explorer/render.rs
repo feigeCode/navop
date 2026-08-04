@@ -7,13 +7,18 @@ use gpui::{
     div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::menu::ContextMenuExt as _;
-use gpui_component::{Icon, IconName, Sizable as _, Size, StyledExt as _, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, Size, StyledExt as _, h_flex, v_flex,
+};
 use rust_i18n::t;
 
 use super::file_actions::{
     build_file_context_menu, build_files_context_menu, build_git_change_context_menu,
 };
 use super::header::ExplorerSection;
+
+const EXPLORER_FILE_ROW_HEIGHT: gpui::Pixels = px(27.0);
+const EXPLORER_TREE_INDENT: gpui::Pixels = px(14.0);
 
 impl WorkspaceExplorer {
     fn render_changes(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -164,6 +169,7 @@ impl WorkspaceExplorer {
         } else {
             self.theme.muted
         };
+        let tree = cx.theme().geometry.tree;
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-file-row-{}",
@@ -171,8 +177,8 @@ impl WorkspaceExplorer {
             )))
             .items_center()
             .gap_1()
-            .h(px(27.0))
-            .pl(px(8.0 + row.depth as f32 * 14.0))
+            .h(EXPLORER_FILE_ROW_HEIGHT)
+            .pl(tree.base_padding + EXPLORER_TREE_INDENT * row.depth)
             .pr_2()
             .cursor_pointer()
             .when(selected, |this| this.bg(selection_background))

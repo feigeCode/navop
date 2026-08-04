@@ -3,7 +3,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, StyledExt,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, Sizable, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -11,6 +11,7 @@ use one_core::storage::StoredConnection;
 use rust_i18n::t;
 
 use super::{HomePage, modern_home_shortcuts::render_shortcuts};
+use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::connection_import_window::show_connection_import_window;
 
 impl HomePage {
@@ -209,7 +210,7 @@ impl HomePage {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let icon = self.connection_icon(&conn, px(20.0));
+        let icon = self.connection_icon(&conn, ConnectionVisualSize::Inline);
         let name = conn.name.clone();
         let type_label = conn.connection_type.label().to_string();
         let connection_id = conn.id;
@@ -319,7 +320,7 @@ fn render_tool_cards(
                 ))
                 .child(tool_card(
                     "modern-home-extensions",
-                    IconName::ExtensionsColor,
+                    IconName::Apps,
                     t!("Home.extensions").to_string(),
                     t!("Home.StartCenter.extensions_description").to_string(),
                     extensions_view,
@@ -357,7 +358,7 @@ fn tool_card(
         .on_click(window.listener_for(&view, move |home, _, window, cx| {
             on_click(home, window, cx);
         }))
-        .child(Icon::new(icon).with_size(Size::Medium))
+        .child(Icon::new(icon).with_size(IconSize::Medium))
         .child(
             v_flex()
                 .min_w_0()

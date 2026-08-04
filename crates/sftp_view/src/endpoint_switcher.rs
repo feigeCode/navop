@@ -6,7 +6,8 @@ use gpui::{
 };
 use gpui_component::list::{List, ListDelegate, ListState};
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size, WindowExt as _, h_flex,
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, Selectable, Sizable, Size, WindowExt as _,
+    h_flex,
 };
 use rust_i18n::t;
 
@@ -197,16 +198,17 @@ impl RenderOnce for EndpointSwitcherItem {
         let view = self.view.clone();
         let entry = self.entry.clone();
         let selected = self.selected || entry.active;
+        let geometry = cx.theme().geometry.clone();
 
         h_flex()
             .id(SharedString::from(format!(
                 "endpoint-switcher-item-{}",
                 entry.id()
             )))
-            .h(px(44.0))
+            .h(geometry.control.xlarge)
             .mx_2()
-            .px_3()
-            .rounded(px(6.0))
+            .px(geometry.spacing.space_3)
+            .rounded(geometry.radius.sm)
             .items_center()
             .gap_3()
             .cursor_pointer()
@@ -221,16 +223,17 @@ impl RenderOnce for EndpointSwitcherItem {
             })
             .child(match &self.entry.value {
                 LeftEndpointValue::Local => Icon::new(self.entry.icon.clone())
-                    .with_size(px(24.0))
+                    .mono()
+                    .with_size(IconSize::Large)
                     .text_color(if selected {
                         cx.theme().foreground
                     } else {
                         cx.theme().muted_foreground
                     }),
                 LeftEndpointValue::Remote(_) => Icon::new(self.entry.icon.clone())
-                    .color()
-                    .with_size(px(24.0))
-                    .text_color(gpui::rgb(0x8b5cf6)),
+                    .mono()
+                    .with_size(IconSize::Large)
+                    .text_color(cx.theme().magenta),
             })
             .child(
                 div()

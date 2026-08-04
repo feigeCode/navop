@@ -704,6 +704,14 @@ fn terminal_command_bar_keeps_oxideterm_keyboard_and_overlay_contracts() {
     assert!(!render_source.contains("ResizePanel"));
     assert!(render_source.contains("group(\"terminal-command-resize-handle\")"));
     assert!(render_source.contains("group_hover(\"terminal-command-resize-handle\""));
+    assert!(render_source.contains("COMMAND_BAR_RESIZE_HANDLE_HEIGHT: f32 = 6.0"));
+    assert!(render_source.contains("COMMAND_BAR_RESIZE_GRIP_WIDTH: f32 = 32.0"));
+    assert!(render_source.contains("COMMAND_BAR_RESIZE_GRIP_HOVER_WIDTH: f32 = 48.0"));
+    assert!(render_source.contains("COMMAND_BAR_RESIZE_GRIP_HEIGHT: f32 = 2.0"));
+    assert!(
+        !render_source.contains("handle.w(px(COMMAND_BAR_RESIZE_GRIP_HOVER_WIDTH)).h("),
+        "hover must not change the command-bar grip height or cause a geometry jump"
+    );
     assert!(render_source.contains("cx.theme().drag_border"));
     assert!(render_source.contains("Input::new(&self.input_state)"));
     assert!(!render_source.contains(".h_full()"));

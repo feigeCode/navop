@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconSize, InteractiveElementExt, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::ScrollableElement,
@@ -217,7 +217,11 @@ impl NewConnectionWindow {
                         this.selected_kind = this.first_visible_item(category);
                         cx.notify();
                     }))
-                    .child(Icon::new(category.icon()).color().with_size(Size::Medium))
+                    .child(
+                        Icon::new(category.icon())
+                            .mono()
+                            .with_size(IconSize::Default),
+                    )
                     .child(
                         div()
                             .text_sm()

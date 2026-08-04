@@ -3,10 +3,12 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable,
     button::{Button, ButtonVariants},
+    content_state::ContentState,
     h_flex,
     input::Input,
+    panel_header::{PanelHeader, PanelHeaderVariant},
     progress::Progress,
     scroll::ScrollableElement,
     v_flex,
@@ -15,9 +17,8 @@ use rust_i18n::t;
 
 use crate::{
     ExtensionKind, ExtensionManagerMode, ExtensionManagerView, ExtensionSummary, MarketplaceEntry,
-    MarketplaceInstallState, filter_installed, filter_marketplace, marketplace_entry_install_id,
-    marketplace_install_state,
-    state::{install_progress_value, marketplace_filter_query},
+    MarketplaceInstallState, filter_installed, filter_marketplace, marketplace_install_state,
+    state::{MarketplaceLoadState, install_progress_value, marketplace_filter_query},
 };
 
 const INSTALL_PROGRESS_WIDTH: f32 = 144.0;
@@ -37,13 +38,10 @@ impl ExtensionManagerView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        h_flex()
-            .w_full()
-            .justify_between()
-            .items_center()
-            .gap_3()
-            .child(self.render_title(cx))
-            .child(
+        PanelHeader::new("extension-manager-toolbar")
+            .variant(PanelHeaderVariant::Toolbar)
+            .title(self.render_title(cx))
+            .trailing(
                 h_flex()
                     .gap_2()
                     .child(
@@ -58,7 +56,7 @@ impl ExtensionManagerView {
                     .child(
                         Button::new("extension-manager-local")
                             .small()
-                            .icon(IconName::File)
+                            .icon(ObjectIcon::new(IconName::File))
                             .label(t!("Extension.local_install").to_string())
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.select_local_tarball(cx);
@@ -210,7 +208,9 @@ impl ExtensionManagerView {
     fn render_installed(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let list = filter_installed(&self.installed, query, self.selected_kind);
         if list.is_empty() {
-            return empty_state(t!("Extension.no_installed_matches").to_string(), cx);
+            return ContentState::empty(t!("Extension.no_installed_matches").to_string())
+                .icon(ObjectIcon::new(IconName::ExtensionsColor).with_size(IconSize::Large))
+                .into_any_element();
         }
         v_flex()
             .w_full()
@@ -224,21 +224,44 @@ impl ExtensionManagerView {
 
     fn render_marketplace(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let list = filter_marketplace(&self.marketplace_entries, query, self.selected_kind);
-        if list.is_empty() {
-            let message = if self.loading {
-                t!("Extension.loading_marketplace").to_string()
-            } else {
-                t!("Extension.no_marketplace_matches").to_string()
-            };
-            return empty_state(message, cx);
+        if !list.is_empty() {
+            return v_flex()
+                .w_full()
+                .gap_3()
+                .children(
+                    list.into_iter()
+                        .map(|entry| self.render_marketplace_item(entry, cx)),
+                )
+                .into_any_element();
         }
-        v_flex()
-            .w_full()
-            .gap_3()
-            .children(
-                list.into_iter()
-                    .map(|entry| self.render_marketplace_item(entry, cx)),
-            )
+
+        if self.marketplace_entries.is_empty() {
+            match &self.marketplace_load_state {
+                MarketplaceLoadState::Loading => {
+                    return ContentState::loading(t!("Extension.loading_marketplace").to_string())
+                        .into_any_element();
+                }
+                MarketplaceLoadState::Failed(detail) => {
+                    return ContentState::error(
+                        t!("Extension.load_marketplace_failed").to_string(),
+                    )
+                    .detail(detail.clone())
+                    .action(
+                        Button::new("extension-marketplace-retry")
+                            .small()
+                            .label(t!("Extension.retry").to_string())
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.load_marketplace(cx);
+                            })),
+                    )
+                    .into_any_element();
+                }
+                MarketplaceLoadState::NotLoaded | MarketplaceLoadState::Loaded => {}
+            }
+        }
+
+        ContentState::empty(t!("Extension.no_marketplace_matches").to_string())
+            .icon(ObjectIcon::new(IconName::ExtensionsColor).with_size(IconSize::Large))
             .into_any_element()
     }
 
@@ -293,7 +316,7 @@ impl ExtensionManagerView {
             }
             MarketplaceInstallState::UpdateAvailable => t!("Extension.update").to_string(),
         };
-        let disabled = self.loading
+        let disabled = self.marketplace_load_state.is_loading()
             || self.busy.is_some()
             || state == MarketplaceInstallState::Installed
             || !entry.host_compatible;
@@ -369,8 +392,7 @@ fn marketplace_description(entry: &MarketplaceEntry) -> String {
     let description = if !entry.description.trim().is_empty() {
         entry.description.clone()
     } else {
-        let id = marketplace_entry_install_id(entry);
-        format!("{id} - {}", entry.asset_url)
+        t!("Extension.no_description").to_string()
     };
     if entry.host_compatible {
         return description;
@@ -382,17 +404,6 @@ fn marketplace_description(entry: &MarketplaceEntry) -> String {
         "{description}\n{}",
         t!("Extension.requires_host", version = required)
     )
-}
-
-fn empty_state(message: String, cx: &Context<ExtensionManagerView>) -> gpui::AnyElement {
-    v_flex()
-        .items_center()
-        .justify_center()
-        .py_16()
-        .text_sm()
-        .text_color(cx.theme().muted_foreground)
-        .child(message)
-        .into_any_element()
 }
 
 fn kind_label(kind: ExtensionKind) -> String {

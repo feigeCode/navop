@@ -8,8 +8,8 @@ use gpui::{
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants},
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants, IconButton},
     checkbox::Checkbox,
     clipboard::Clipboard,
     dialog::DialogButtonProps,
@@ -2475,18 +2475,16 @@ impl ColumnsEditor {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
-                Button::new("add-col")
-                    .small()
-                    .icon(IconName::Plus)
-                    .ghost()
+                IconButton::new("add-col", IconName::Plus)
+                    .hit_size(Size::Small)
+                    .glyph_size(IconSize::Default)
                     .tooltip(t!("Table.add_column").to_string())
                     .on_click(cx.listener(|this, _, window, cx| this.add_column(window, cx))),
             )
             .child(
-                Button::new("remove-col")
-                    .small()
-                    .icon(IconName::Minus)
-                    .ghost()
+                IconButton::new("remove-col", IconName::Minus)
+                    .hit_size(Size::Small)
+                    .glyph_size(IconSize::Default)
                     .tooltip(t!("Table.delete_column").to_string())
                     .on_click(cx.listener(|this, _, _window, cx| this.remove_column(cx))),
             )
@@ -3104,20 +3102,18 @@ impl Render for IndexesEditor {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Button::new("add-idx")
-                            .small()
-                            .icon(IconName::Plus)
-                            .ghost()
+                        IconButton::new("add-idx", IconName::Plus)
+                            .hit_size(Size::Small)
+                            .glyph_size(IconSize::Default)
                             .tooltip(t!("Table.add_index").to_string())
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.add_index(window, cx)),
                             ),
                     )
                     .child(
-                        Button::new("remove-idx")
-                            .small()
-                            .icon(IconName::Minus)
-                            .ghost()
+                        IconButton::new("remove-idx", IconName::Minus)
+                            .hit_size(Size::Small)
+                            .glyph_size(IconSize::Default)
                             .tooltip(t!("Table.delete_index").to_string())
                             .on_click(cx.listener(|this, _, _window, cx| this.remove_index(cx))),
                     ),

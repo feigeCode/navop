@@ -122,37 +122,33 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_enlarges_windows_rail_buttons_and_icons() {
+    fn persistent_sidebar_uses_shared_rail_geometry_and_icon_scale() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs").replace("\r\n", "\n");
+        let geometry = include_str!("../../../crates/ui/src/theme/geometry.rs");
+        let visuals = include_str!("../connection_visuals.rs");
 
         assert!(source.contains("items_center().gap_1().p_1()"));
-        assert!(source.contains("#[cfg(target_os = \"windows\")]\nconst NAVIGATION_RAIL_WIDTH"));
-        assert!(source.contains("px(56.0)"));
-        assert!(source.contains("fn navigation_rail_button_size()"));
-        assert!(source.contains("Size::Size(px(40.0))"));
-        assert!(source.contains("fn navigation_rail_icon_size()"));
-        assert!(source.contains("Size::Size(px(28.0))"));
-        assert!(
-            source
-                .matches(".with_size(navigation_rail_button_size())")
-                .count()
-                >= 2
-        );
-        assert!(
-            source
-                .matches(".with_size(navigation_rail_icon_size())")
-                .count()
-                >= 2
-        );
+        assert!(source.contains("let rail_width = layout.global_rail"));
+        assert!(source.contains("let rail_item_size = Size::Size(layout.global_rail_item)"));
+        assert!(source.contains("connection_type_rail_icon(filter)"));
+        assert!(visuals.contains("Self::Inline | Self::Rail => IconSize::Medium"));
+        assert!(geometry.contains("global_rail: px(52.)"));
+        assert!(geometry.contains("global_rail_item: px(40.)"));
+        assert!(source.matches(".hit_size(rail_item_size)").count() >= 2);
+        assert!(source.contains(".with_size(IconSize::Medium)"));
     }
 
     #[test]
     fn persistent_sidebar_uses_line_style_rail_icons() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
+        let visuals = include_str!("../connection_visuals.rs");
 
         assert!(source.contains("IconName::User"));
-        assert!(source.contains("filter_line_icon"));
+        assert!(source.contains("connection_type_rail_icon"));
+        assert!(visuals.contains("ConnectionType::All => ConnectionVisual"));
+        assert!(visuals.contains("navigation_icon: IconName::ServerLine"));
+        assert!(visuals.contains("navigation_icon: IconName::RdpLine"));
         assert!(icons.contains("icons/user.svg"));
         assert!(icons.contains("icons/server_line.svg"));
         assert!(icons.contains("icons/rdp_line.svg"));

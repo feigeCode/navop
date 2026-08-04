@@ -11,9 +11,10 @@ use gpui::{
     px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Sizable, Size, WindowExt as _,
+    button::{Button, ButtonVariants as _, IconButton},
     checkbox::Checkbox,
+    content_state::ContentState,
     dialog::DialogButtonProps,
     h_flex,
     highlighter::Language,
@@ -21,7 +22,7 @@ use gpui_component::{
     notification::Notification,
     radio::Radio,
     select::{Select, SelectEvent, SelectItem, SelectState},
-    spinner::Spinner,
+    status_bar::StatusBar,
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
@@ -252,6 +253,8 @@ pub struct KeyValueView {
     string_editor: Entity<InputState>,
     /// 待设置的编辑器值（异步加载完成后设置）
     pending_editor_value: Option<String>,
+    /// 单调递增的加载代次，用于忽略晚到的旧请求。
+    load_generation: u64,
 
     // === 筛选功能 ===
     /// 筛选输入框状态
@@ -329,6 +332,7 @@ impl KeyValueView {
             format_select,
             string_editor,
             pending_editor_value: None,
+            load_generation: 0,
             filter_input,
             filter_text: String::new(),
             filter_exact_match: false,
@@ -633,6 +637,8 @@ impl KeyValueView {
         self.load_state = LoadState::Loading;
         self.is_dirty = false;
         self.pending_editor_value = None;
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let load_generation = self.load_generation;
         cx.notify();
 
         let global_state = cx.global::<GlobalRedisState>().clone();
@@ -649,6 +655,9 @@ impl KeyValueView {
                 .await;
 
             _ = this.update(cx, |view, cx| {
+                if !view.is_current_load(load_generation, &connection_id, db_index, &key) {
+                    return;
+                }
                 match result {
                     Ok(detail) => {
                         if let KeyValueContent::String(ref value) = detail.value {
@@ -666,6 +675,19 @@ impl KeyValueView {
             });
         })
         .detach();
+    }
+
+    fn is_current_load(
+        &self,
+        generation: u64,
+        connection_id: &str,
+        db_index: u8,
+        key: &str,
+    ) -> bool {
+        self.load_generation == generation
+            && self.connection_id.as_deref() == Some(connection_id)
+            && self.db_index == db_index
+            && self.current_key.as_deref() == Some(key)
     }
 
     /// 在 render 中应用待设置的编辑器值
@@ -754,10 +776,9 @@ impl KeyValueView {
                     .child(div().flex_1().text_sm().truncate().child(key_name.clone()))
                     // 刷新按钮
                     .child(
-                        Button::new("refresh-key")
-                            .icon(IconName::Refresh)
-                            .ghost()
-                            .with_size(Size::Medium)
+                        IconButton::new("refresh-key", IconName::Refresh)
+                            .glyph_size(IconSize::Default)
+                            .tooltip(t!("Common.refresh"))
                             .on_click({
                                 let view = view.clone();
                                 move |_, _, cx| {
@@ -773,10 +794,9 @@ impl KeyValueView {
                     )
                     // 复制键名按钮
                     .child(
-                        Button::new("copy-key")
-                            .icon(IconName::Copy)
-                            .ghost()
-                            .with_size(Size::Medium)
+                        IconButton::new("copy-key", IconName::Copy)
+                            .glyph_size(IconSize::Default)
+                            .tooltip(t!("Common.copy"))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     key_for_copy.clone(),
@@ -819,10 +839,9 @@ impl KeyValueView {
                     )
                     // 重命名按钮
                     .child(
-                        Button::new("rename-key")
-                            .icon(IconName::Edit)
-                            .ghost()
-                            .with_size(Size::Medium)
+                        IconButton::new("rename-key", IconName::Edit)
+                            .glyph_size(IconSize::Default)
+                            .tooltip(t!("KeyValueView.rename_key_title"))
                             .on_click({
                                 let view = view.clone();
                                 move |_, window, cx| {
@@ -834,10 +853,9 @@ impl KeyValueView {
                     )
                     // 删除按钮
                     .child(
-                        Button::new("delete-key")
-                            .icon(IconName::Remove)
-                            .ghost()
-                            .with_size(Size::Medium)
+                        IconButton::new("delete-key", IconName::Remove)
+                            .glyph_size(IconSize::Default)
+                            .tooltip(t!("Common.delete"))
                             .on_click({
                                 let view = view.clone();
                                 move |_, window, cx| {
@@ -906,22 +924,24 @@ impl KeyValueView {
                             // 排序按钮（集合类型）
                             .when(can_add_element, |this| {
                                 this.child(
-                                    Button::new("sort-order")
-                                        .icon(if self.sort_order == SortOrder::Asc {
+                                    IconButton::new(
+                                        "sort-order",
+                                        if self.sort_order == SortOrder::Asc {
                                             IconName::SortAscending
                                         } else {
                                             IconName::SortDescending
-                                        })
-                                        .ghost()
-                                        .with_size(Size::Medium)
-                                        .on_click({
-                                            let view = view.clone();
-                                            move |_, _, cx| {
-                                                view.update(cx, |view, cx| {
-                                                    view.toggle_sort_order(cx);
-                                                });
-                                            }
-                                        }),
+                                        },
+                                    )
+                                    .glyph_size(IconSize::Default)
+                                    .tooltip(t!("KeyValueView.toggle_sort_order"))
+                                    .on_click({
+                                        let view = view.clone();
+                                        move |_, _, cx| {
+                                            view.update(cx, |view, cx| {
+                                                view.toggle_sort_order(cx);
+                                            });
+                                        }
+                                    }),
                                 )
                             })
                             .when(is_zset, |this| {
@@ -2566,7 +2586,7 @@ impl KeyValueView {
     }
 
     /// 渲染底部状态栏
-    fn render_status_bar(&self, cx: &App) -> impl IntoElement {
+    fn render_status_bar(&self, _cx: &App) -> impl IntoElement {
         let Some(info) = &self.key_info else {
             return div().into_any_element();
         };
@@ -2587,51 +2607,26 @@ impl KeyValueView {
             .map(|m| t!("KeyValueView.status_memory", memory = m).to_string())
             .unwrap_or_default();
 
-        h_flex()
-            .w_full()
-            .h(px(24.0))
-            .px_3()
-            .items_center()
-            .justify_between()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
-            .child(
+        StatusBar::new("redis-key-value-status")
+            .muted_background()
+            .leading(
                 h_flex()
                     .gap_4()
                     .child(
-                        div()
-                            .text_base()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                t!("KeyValueView.status_length", count = content_len).to_string(),
-                            ),
+                        div().child(
+                            t!("KeyValueView.status_length", count = content_len).to_string(),
+                        ),
                     )
                     .when(size > 0, |this| {
                         this.child(
-                            div()
-                                .text_base()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("KeyValueView.status_size", size = size).to_string()),
+                            div().child(t!("KeyValueView.status_size", size = size).to_string()),
                         )
                     })
                     .when(!memory_display.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_base()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(memory_display.clone()),
-                        )
+                        this.child(div().child(memory_display.clone()))
                     }),
             )
-            .child(
-                h_flex().gap_2().child(
-                    div()
-                        .text_base()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.view_format.display_name()),
-                ),
-            )
+            .trailing(div().child(self.view_format.display_name()))
             .into_any_element()
     }
 
@@ -2702,10 +2697,8 @@ impl KeyValueView {
                                 .child(div().flex_1().text_base().truncate().child(display_value))
                                 .when(binary_item.is_none(), |this| {
                                     this.child(
-                                        Button::new(("preview-list", idx))
-                                            .icon(IconName::Maximize)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("preview-list", idx), IconName::Maximize)
+                                            .glyph_size(IconSize::Default)
                                             .tooltip(t!("RedisTool.view_full_value").to_string())
                                             .on_click({
                                                 let view = view.clone();
@@ -2733,10 +2726,8 @@ impl KeyValueView {
                                 .opacity(0.)
                                 .group_hover("list-row", |this| this.opacity(1.))
                                 .child(
-                                    Button::new(("copy-list", idx))
-                                        .icon(IconName::Copy)
-                                        .ghost()
-                                        .with_size(Size::Medium)
+                                    IconButton::new(("copy-list", idx), IconName::Copy)
+                                        .glyph_size(IconSize::Default)
                                         .tooltip(if binary_item.is_some() {
                                             t!("KeyValueView.copy_binary_base64").to_string()
                                         } else {
@@ -2753,32 +2744,35 @@ impl KeyValueView {
                                 )
                                 .when_some(binary_item.clone(), |this, bytes| {
                                     this.child(
-                                        Button::new(("download-list", idx))
-                                            .icon(IconName::ArrowDown)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .tooltip(t!("KeyValueView.download_binary").to_string())
-                                            .on_click({
-                                                let view = view.clone();
-                                                let file_name = binary_file_name.clone();
-                                                move |_, _, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.download_binary_value(
-                                                            bytes.clone(),
-                                                            file_name.clone(),
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("download-list", idx),
+                                            IconName::ArrowDown,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("KeyValueView.download_binary").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let file_name = binary_file_name.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.download_binary_value(
+                                                        bytes.clone(),
+                                                        file_name.clone(),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                 })
                                 .when(binary_item.is_none(), |this| {
                                     this.child(
-                                        Button::new(("edit-list", idx))
-                                            .icon(IconName::Edit)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("edit-list", idx), IconName::Edit)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(
+                                                t!("KeyValueView.edit_list_item", index = idx + 1)
+                                                    .to_string(),
+                                            )
                                             .on_click({
                                                 let view = view.clone();
                                                 let value = value_for_edit.clone();
@@ -2796,10 +2790,9 @@ impl KeyValueView {
                                     )
                                 })
                                 .child(
-                                    Button::new(("delete-list", idx))
-                                        .icon(IconName::Remove)
-                                        .ghost()
-                                        .with_size(Size::Medium)
+                                    IconButton::new(("delete-list", idx), IconName::Remove)
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("Common.delete").to_string())
                                         .on_click({
                                             let view = view.clone();
                                             move |_, _, cx| {
@@ -2878,10 +2871,8 @@ impl KeyValueView {
                                 .child(div().flex_1().text_base().truncate().child(display_value))
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
-                                        Button::new(("preview-set", idx))
-                                            .icon(IconName::Maximize)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("preview-set", idx), IconName::Maximize)
+                                            .glyph_size(IconSize::Default)
                                             .tooltip(t!("RedisTool.view_full_value").to_string())
                                             .on_click({
                                                 let view = view.clone();
@@ -2909,10 +2900,8 @@ impl KeyValueView {
                                 .opacity(0.)
                                 .group_hover("set-row", |this| this.opacity(1.))
                                 .child(
-                                    Button::new(("copy-set", idx))
-                                        .icon(IconName::Copy)
-                                        .ghost()
-                                        .with_size(Size::Medium)
+                                    IconButton::new(("copy-set", idx), IconName::Copy)
+                                        .glyph_size(IconSize::Default)
                                         .tooltip(if binary_member.is_some() {
                                             t!("KeyValueView.copy_binary_base64").to_string()
                                         } else {
@@ -2929,10 +2918,8 @@ impl KeyValueView {
                                 )
                                 .when_some(binary_member.clone(), |this, bytes| {
                                     this.child(
-                                        Button::new(("download-set", idx))
-                                            .icon(IconName::ArrowDown)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("download-set", idx), IconName::ArrowDown)
+                                            .glyph_size(IconSize::Default)
                                             .tooltip(t!("KeyValueView.download_binary").to_string())
                                             .on_click({
                                                 let view = view.clone();
@@ -2951,10 +2938,9 @@ impl KeyValueView {
                                 })
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
-                                        Button::new(("edit-set", idx))
-                                            .icon(IconName::Edit)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("edit-set", idx), IconName::Edit)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("KeyValueView.edit_set_member").to_string())
                                             .on_click({
                                                 let view = view.clone();
                                                 let member = value_for_edit.clone();
@@ -2970,10 +2956,9 @@ impl KeyValueView {
                                             }),
                                     )
                                     .child(
-                                        Button::new(("delete-set", idx))
-                                            .icon(IconName::Remove)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("delete-set", idx), IconName::Remove)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("Common.delete").to_string())
                                             .on_click({
                                                 let view = view.clone();
                                                 let member = value_for_delete.clone();
@@ -3133,26 +3118,27 @@ impl KeyValueView {
                                 .child(div().flex_1().text_base().truncate().child(display_member))
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
-                                        Button::new(("preview-zset", original_idx))
-                                            .icon(IconName::Maximize)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .tooltip(t!("RedisTool.view_full_value").to_string())
-                                            .on_click({
-                                                let view = view.clone();
-                                                let title = preview_title.clone();
-                                                let value = member_for_preview.clone();
-                                                move |_, window, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.show_large_text_preview_dialog(
-                                                            title.clone(),
-                                                            value.clone(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("preview-zset", original_idx),
+                                            IconName::Maximize,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let title = preview_title.clone();
+                                            let value = member_for_preview.clone();
+                                            move |_, window, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.show_large_text_preview_dialog(
+                                                        title.clone(),
+                                                        value.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                 }),
                         )
@@ -3164,10 +3150,8 @@ impl KeyValueView {
                                 .opacity(0.)
                                 .group_hover("zset-row", |this| this.opacity(1.))
                                 .child(
-                                    Button::new(("copy-zset", original_idx))
-                                        .icon(IconName::Copy)
-                                        .ghost()
-                                        .with_size(Size::Medium)
+                                    IconButton::new(("copy-zset", original_idx), IconName::Copy)
+                                        .glyph_size(IconSize::Default)
                                         .tooltip(if binary_member.is_some() {
                                             t!("KeyValueView.copy_binary_base64").to_string()
                                         } else {
@@ -3184,62 +3168,67 @@ impl KeyValueView {
                                 )
                                 .when_some(binary_member.clone(), |this, bytes| {
                                     this.child(
-                                        Button::new(("download-zset", original_idx))
-                                            .icon(IconName::ArrowDown)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .tooltip(t!("KeyValueView.download_binary").to_string())
-                                            .on_click({
-                                                let view = view.clone();
-                                                let file_name = binary_file_name.clone();
-                                                move |_, _, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.download_binary_value(
-                                                            bytes.clone(),
-                                                            file_name.clone(),
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("download-zset", original_idx),
+                                            IconName::ArrowDown,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("KeyValueView.download_binary").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let file_name = binary_file_name.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.download_binary_value(
+                                                        bytes.clone(),
+                                                        file_name.clone(),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                 })
                                 .when(binary_member.is_none(), |this| {
                                     this.child(
-                                        Button::new(("edit-zset", original_idx))
-                                            .icon(IconName::Edit)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .on_click({
-                                                let view = view.clone();
-                                                let member = member_for_edit.clone();
-                                                let score = score_for_edit;
-                                                move |_, window, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.show_zset_edit_dialog(
-                                                            member.clone(),
-                                                            score,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("edit-zset", original_idx),
+                                            IconName::Edit,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("KeyValueView.edit_zset_member").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let member = member_for_edit.clone();
+                                            let score = score_for_edit;
+                                            move |_, window, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.show_zset_edit_dialog(
+                                                        member.clone(),
+                                                        score,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                     .child(
-                                        Button::new(("delete-zset", original_idx))
-                                            .icon(IconName::Remove)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .on_click({
-                                                let view = view.clone();
-                                                let member = member_for_delete.clone();
-                                                move |_, _, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.delete_zset_element(member.clone(), cx);
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("delete-zset", original_idx),
+                                            IconName::Remove,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("Common.delete").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let member = member_for_delete.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.delete_zset_element(member.clone(), cx);
+                                                });
+                                            }
+                                        }),
                                     )
                                 }),
                         )
@@ -3330,10 +3319,8 @@ impl KeyValueView {
                                 .child(div().flex_1().text_base().truncate().child(value_display))
                                 .when(binary_value.is_none(), |this| {
                                     this.child(
-                                        Button::new(("preview-hash", idx))
-                                            .icon(IconName::Maximize)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("preview-hash", idx), IconName::Maximize)
+                                            .glyph_size(IconSize::Default)
                                             .tooltip(t!("RedisTool.view_full_value").to_string())
                                             .on_click({
                                                 let view = view.clone();
@@ -3361,10 +3348,8 @@ impl KeyValueView {
                                 .opacity(0.)
                                 .group_hover("hash-row", |this| this.opacity(1.))
                                 .child(
-                                    Button::new(("copy-hash", idx))
-                                        .icon(IconName::Copy)
-                                        .ghost()
-                                        .with_size(Size::Medium)
+                                    IconButton::new(("copy-hash", idx), IconName::Copy)
+                                        .glyph_size(IconSize::Default)
                                         .tooltip(
                                             if binary_field.is_some() || binary_value.is_some() {
                                                 t!("KeyValueView.copy_binary_base64").to_string()
@@ -3383,54 +3368,55 @@ impl KeyValueView {
                                 )
                                 .when_some(binary_field.clone(), |this, bytes| {
                                     this.child(
-                                        Button::new(("download-hash-field", idx))
-                                            .icon(IconName::ArrowDown)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .tooltip(t!("KeyValueView.download_binary").to_string())
-                                            .on_click({
-                                                let view = view.clone();
-                                                let file_name = binary_field_file_name.clone();
-                                                move |_, _, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.download_binary_value(
-                                                            bytes.clone(),
-                                                            file_name.clone(),
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("download-hash-field", idx),
+                                            IconName::ArrowDown,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("KeyValueView.download_binary").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let file_name = binary_field_file_name.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.download_binary_value(
+                                                        bytes.clone(),
+                                                        file_name.clone(),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                 })
                                 .when_some(binary_value.clone(), |this, bytes| {
                                     this.child(
-                                        Button::new(("download-hash-value", idx))
-                                            .icon(IconName::ArrowDown)
-                                            .ghost()
-                                            .with_size(Size::Medium)
-                                            .tooltip(t!("KeyValueView.download_binary").to_string())
-                                            .on_click({
-                                                let view = view.clone();
-                                                let file_name = binary_value_file_name.clone();
-                                                move |_, _, cx| {
-                                                    view.update(cx, |v, cx| {
-                                                        v.download_binary_value(
-                                                            bytes.clone(),
-                                                            file_name.clone(),
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            }),
+                                        IconButton::new(
+                                            ("download-hash-value", idx),
+                                            IconName::ArrowDown,
+                                        )
+                                        .glyph_size(IconSize::Default)
+                                        .tooltip(t!("KeyValueView.download_binary").to_string())
+                                        .on_click({
+                                            let view = view.clone();
+                                            let file_name = binary_value_file_name.clone();
+                                            move |_, _, cx| {
+                                                view.update(cx, |v, cx| {
+                                                    v.download_binary_value(
+                                                        bytes.clone(),
+                                                        file_name.clone(),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }),
                                     )
                                 })
                                 .when(binary_field.is_none() && binary_value.is_none(), |this| {
                                     this.child(
-                                        Button::new(("edit-hash", idx))
-                                            .icon(IconName::Edit)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("edit-hash", idx), IconName::Edit)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("KeyValueView.edit_hash_field").to_string())
                                             .on_click({
                                                 let view = view.clone();
                                                 let field = field_for_edit.clone();
@@ -3450,10 +3436,9 @@ impl KeyValueView {
                                 })
                                 .when(binary_field.is_none(), |this| {
                                     this.child(
-                                        Button::new(("delete-hash", idx))
-                                            .icon(IconName::Remove)
-                                            .ghost()
-                                            .with_size(Size::Medium)
+                                        IconButton::new(("delete-hash", idx), IconName::Remove)
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("Common.delete").to_string())
                                             .on_click({
                                                 let view = view.clone();
                                                 let field = field_for_delete.clone();
@@ -3603,14 +3588,14 @@ impl KeyValueView {
                                     )
                                     .when(binary_value.is_none(), |this| {
                                         this.child(
-                                            Button::new(("preview-stream", row_id))
-                                                .icon(IconName::Maximize)
-                                                .ghost()
-                                                .with_size(Size::Medium)
-                                                .tooltip(
-                                                    t!("RedisTool.view_full_value").to_string(),
-                                                )
-                                                .on_click({
+                                            IconButton::new(
+                                                ("preview-stream", row_id),
+                                                IconName::Maximize,
+                                            )
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("RedisTool.view_full_value").to_string())
+                                            .on_click(
+                                                {
                                                     let view = view.clone();
                                                     move |_, window, cx| {
                                                         view.update(cx, |v, cx| {
@@ -3622,44 +3607,46 @@ impl KeyValueView {
                                                             );
                                                         });
                                                     }
-                                                }),
+                                                },
+                                            ),
                                         )
                                     })
                                     .when(
                                         binary_field.is_some() || binary_value.is_some(),
                                         |this| {
                                             this.child(
-                                                Button::new(("copy-stream", row_id))
-                                                    .icon(IconName::Copy)
-                                                    .ghost()
-                                                    .with_size(Size::Medium)
-                                                    .tooltip(
-                                                        t!("KeyValueView.copy_binary_base64")
-                                                            .to_string(),
-                                                    )
-                                                    .on_click({
-                                                        let value = value_for_copy.clone();
-                                                        move |_, _, cx| {
-                                                            cx.write_to_clipboard(
-                                                                ClipboardItem::new_string(
-                                                                    value.clone(),
-                                                                ),
-                                                            );
-                                                        }
-                                                    }),
+                                                IconButton::new(
+                                                    ("copy-stream", row_id),
+                                                    IconName::Copy,
+                                                )
+                                                .glyph_size(IconSize::Default)
+                                                .tooltip(
+                                                    t!("KeyValueView.copy_binary_base64")
+                                                        .to_string(),
+                                                )
+                                                .on_click({
+                                                    let value = value_for_copy.clone();
+                                                    move |_, _, cx| {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(
+                                                                value.clone(),
+                                                            ),
+                                                        );
+                                                    }
+                                                }),
                                             )
                                         },
                                     )
                                     .when_some(binary_field.clone(), |this, bytes| {
                                         this.child(
-                                            Button::new(("download-stream-field", row_id))
-                                                .icon(IconName::ArrowDown)
-                                                .ghost()
-                                                .with_size(Size::Medium)
-                                                .tooltip(
-                                                    t!("KeyValueView.download_binary").to_string(),
-                                                )
-                                                .on_click({
+                                            IconButton::new(
+                                                ("download-stream-field", row_id),
+                                                IconName::ArrowDown,
+                                            )
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click(
+                                                {
                                                     let view = view.clone();
                                                     let file_name = field_file_name.clone();
                                                     move |_, _, cx| {
@@ -3671,19 +3658,20 @@ impl KeyValueView {
                                                             );
                                                         });
                                                     }
-                                                }),
+                                                },
+                                            ),
                                         )
                                     })
                                     .when_some(binary_value.clone(), |this, bytes| {
                                         this.child(
-                                            Button::new(("download-stream-value", row_id))
-                                                .icon(IconName::ArrowDown)
-                                                .ghost()
-                                                .with_size(Size::Medium)
-                                                .tooltip(
-                                                    t!("KeyValueView.download_binary").to_string(),
-                                                )
-                                                .on_click({
+                                            IconButton::new(
+                                                ("download-stream-value", row_id),
+                                                IconName::ArrowDown,
+                                            )
+                                            .glyph_size(IconSize::Default)
+                                            .tooltip(t!("KeyValueView.download_binary").to_string())
+                                            .on_click(
+                                                {
                                                     let view = view.clone();
                                                     let file_name = value_file_name.clone();
                                                     move |_, _, cx| {
@@ -3695,7 +3683,8 @@ impl KeyValueView {
                                                             );
                                                         });
                                                     }
-                                                }),
+                                                },
+                                            ),
                                         )
                                     })
                             }
@@ -3705,57 +3694,19 @@ impl KeyValueView {
     }
 
     /// 渲染空状态
-    fn render_empty_state(&self, cx: &App) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .child(
-                Icon::new(IconName::Database.color())
-                    .with_size(Size::Large)
-                    .text_color(cx.theme().muted_foreground),
-            )
-            .child(
-                div()
-                    .text_lg()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("KeyValueView.select_key_placeholder").to_string()),
-            )
+    fn render_empty_state(&self, _cx: &App) -> impl IntoElement {
+        ContentState::empty(t!("KeyValueView.select_key_placeholder"))
+            .icon(ObjectIcon::new(IconName::Database).with_size(IconSize::Large))
     }
 
     /// 渲染加载状态
     fn render_loading_state(&self, _cx: &App) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Spinner::new())
+        ContentState::loading(t!("KeyValueView.loading"))
     }
 
     /// 渲染错误状态
-    fn render_error_state(&self, error: &str, cx: &App) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .child(
-                Icon::new(IconName::TriangleAlert)
-                    .with_size(Size::Large)
-                    .text_color(cx.theme().danger),
-            )
-            .child(
-                div()
-                    .text_lg()
-                    .text_color(cx.theme().danger)
-                    .child(t!("KeyValueView.load_failed", error = error).to_string()),
-            )
+    fn render_error_state(&self, error: &str, _cx: &App) -> impl IntoElement {
+        ContentState::error(t!("KeyValueView.load_failed", error = error))
     }
 }
 
@@ -3867,7 +3818,7 @@ mod tests {
     fn delete_key_button_routes_to_confirmation_dialog() {
         let source = include_str!("key_value_view.rs");
         let button_start = source
-            .find("Button::new(\"delete-key\")")
+            .find("IconButton::new(\"delete-key\", IconName::Remove)")
             .expect("delete key button");
         let button_end = source[button_start..]
             .find("// 第二行：筛选 + 操作按钮")

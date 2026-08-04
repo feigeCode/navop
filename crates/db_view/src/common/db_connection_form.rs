@@ -2548,7 +2548,7 @@ impl DbConnectionForm {
                                             })
                                             .when(!is_checking, |div| match &oracle_client_status {
                                                 Some(Ok(version)) => div
-                                                    .text_color(gpui::rgb(0x166534))
+                                                    .text_color(cx.theme().success_foreground)
                                                     .child(
                                                         t!(
                                                             "ConnectionForm.oracle_client_available",
@@ -2557,7 +2557,7 @@ impl DbConnectionForm {
                                                         .to_string(),
                                                     ),
                                                 Some(Err(error)) => div
-                                                    .text_color(gpui::rgb(0x991b1b))
+                                                    .text_color(cx.theme().danger_foreground)
                                                     .child(
                                                         t!(
                                                             "ConnectionForm.oracle_client_unavailable",

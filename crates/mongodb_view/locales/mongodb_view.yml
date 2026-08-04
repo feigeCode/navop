@@ -875,6 +875,22 @@ MongoCollection:
     en: "No documents."
     zh-CN: "暂无文档。"
     zh-HK: "暫無文件。"
+  loading_documents:
+    en: "Loading documents..."
+    zh-CN: "正在加载文档..."
+    zh-HK: "正在載入文件..."
+  document_load_failed:
+    en: "Unable to load documents"
+    zh-CN: "无法加载文档"
+    zh-HK: "無法載入文件"
+  loading_validation:
+    en: "Loading validation rules..."
+    zh-CN: "正在加载验证规则..."
+    zh-HK: "正在載入驗證規則..."
+  validation_load_failed:
+    en: "Unable to load validation rules"
+    zh-CN: "无法加载验证规则"
+    zh-HK: "無法載入驗證規則"
   explain_result_title:
     en: "Explain result"
     zh-CN: "执行计划结果"
@@ -907,6 +923,14 @@ MongoCollection:
     en: "Page %{current} / %{total}"
     zh-CN: "第 %{current} / %{total} 页"
     zh-HK: "第 %{current} / %{total} 頁"
+  previous_page:
+    en: "Previous page"
+    zh-CN: "上一页"
+    zh-HK: "上一頁"
+  next_page:
+    en: "Next page"
+    zh-CN: "下一页"
+    zh-HK: "下一頁"
   select_collection_prompt:
     en: "Please select a collection."
     zh-CN: "请选择一个集合。"
@@ -1006,3 +1030,9 @@ ConnectionForm:
     en: "Missing required field: %{field}"
     zh-CN: "缺少必填字段：%{field}"
     zh-HK: "缺少必填欄位：%{field}"
+
+MongoSidebar:
+  ai_chat:
+    en: AI Chat
+    zh-CN: AI 对话
+    zh-HK: AI 對話

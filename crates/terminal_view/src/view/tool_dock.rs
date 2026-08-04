@@ -78,7 +78,15 @@ impl TerminalView {
             return div().into_any_element();
         };
         let colors = self.sidebar.read(cx).colors();
-        render_internal_tool_panel_frame(self.sidebar.clone(), panel, placement, view, colors)
+        let panel_header = cx.theme().geometry.layout.panel_header;
+        render_internal_tool_panel_frame(
+            self.sidebar.clone(),
+            panel,
+            placement,
+            view,
+            colors,
+            panel_header,
+        )
     }
 
     pub(super) fn resize_sidebar(

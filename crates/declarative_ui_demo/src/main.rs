@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+mod icon_gallery;
+
 use declarative_ui_demo::{
     CompileOptions, ComponentProps, ComponentRegistry, ComponentRenderer, ComponentResult,
     DeclarativeView, DeclarativeViewConfig, RenderContext, Runtime, StateStore, compile_template,
@@ -10,6 +12,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use gpui_component_assets::Assets;
+use icon_gallery::IconGalleryComponent;
 
 const WINDOW_WIDTH_PX: f32 = 1180.0;
 const WINDOW_HEIGHT_PX: f32 = 820.0;
@@ -744,9 +747,89 @@ const DEMO_HTML: &str = r#"
                 </div>
             </group-box>
 
-           <separator label="registry extension point"></separator>
-           <sql-editor
-               id="sql-editor"
+            <separator label="icon system registry"></separator>
+            <group-box title="Icon Gallery" variant="outline">
+                <div class="flex flex-col gap-3 w-full">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="flex flex-col gap-1">
+                            <span class="text-lg font-semibold">Unified icon inventory</span>
+                            <span class="text-sm text-zinc-400">
+                                Search and audit all embedded icons by semantic family and visual size.
+                            </span>
+                        </div>
+                        <tag variant="info" size="sm">IconName::ALL</tag>
+                    </div>
+
+                    <input
+                        id="icon-gallery-search"
+                        type="search"
+                        bind="icon_gallery_query"
+                        placeholder="Search by name, kind, or canonical path"
+                        cleanable
+                        size="sm"
+                        class="w-full"
+                    />
+
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm text-zinc-400">Kind</span>
+                        <button action="icon-gallery-kind" data-kind="all" variant="ghost" size="xs">
+                            All
+                        </button>
+                        <button
+                            action="icon-gallery-kind"
+                            data-kind="functional-outline"
+                            variant="ghost"
+                            size="xs"
+                        >
+                            Functional Outline
+                        </button>
+                        <button
+                            action="icon-gallery-kind"
+                            data-kind="functional-filled"
+                            variant="ghost"
+                            size="xs"
+                        >
+                            Functional Filled
+                        </button>
+                        <button
+                            action="icon-gallery-kind"
+                            data-kind="brand-color"
+                            variant="ghost"
+                            size="xs"
+                        >
+                            Brand Color
+                        </button>
+                        <button
+                            action="icon-gallery-kind"
+                            data-kind="object-glyph"
+                            variant="ghost"
+                            size="xs"
+                        >
+                            Object Glyph
+                        </button>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <span class="text-sm text-zinc-400">Glyph size</span>
+                        <button action="icon-gallery-size" data-size="12" variant="ghost" size="xs">12</button>
+                        <button action="icon-gallery-size" data-size="14" variant="ghost" size="xs">14</button>
+                        <button action="icon-gallery-size" data-size="16" variant="ghost" size="xs">16</button>
+                        <button action="icon-gallery-size" data-size="20" variant="ghost" size="xs">20</button>
+                        <button action="icon-gallery-size" data-size="24" variant="ghost" size="xs">24</button>
+                        <button action="icon-gallery-size" data-size="32" variant="ghost" size="xs">32</button>
+                        <button action="icon-gallery-size" data-size="40" variant="ghost" size="xs">40</button>
+                    </div>
+
+                    <icon-gallery
+                        id="icon-gallery"
+                        class="p-4 bg-zinc-900 rounded-lg border border-zinc-700"
+                    />
+                </div>
+            </group-box>
+
+            <separator label="registry extension point"></separator>
+            <sql-editor
+                id="sql-editor"
                 class="p-4 bg-zinc-900 rounded-lg border border-zinc-700"
             />
         </section>
@@ -807,6 +890,10 @@ fn main() {
     let mut registry = ComponentRegistry::with_defaults();
     if let Err(error) = registry.register("sql-editor", SqlEditorComponent) {
         eprintln!("failed to register demo component: {error}");
+        return;
+    }
+    if let Err(error) = registry.register("icon-gallery", IconGalleryComponent) {
+        eprintln!("failed to register icon gallery component: {error}");
         return;
     }
     let source = demo_html();
@@ -888,12 +975,39 @@ fn demo_runtime() -> Runtime {
     state.set("selected_tree_node", "lib.rs");
     state.set("tree_selection_status", "No tree node selected yet.");
     state.set("selected_data_row", "row-1");
+    state.set("icon_gallery_query", "");
+    state.set("icon_gallery_kind", "all");
+    state.set("icon_gallery_size", "16");
     state.set(
         "navigation_status",
         "Pagination=3 · Rating=4 · Slider=35 · Tab=1 · Step=1",
     );
 
     let mut runtime = Runtime::new(state);
+    runtime
+        .on("icon-gallery-kind", |context| {
+            let kind = context
+                .event()
+                .payload()
+                .get("kind")
+                .cloned()
+                .unwrap_or_else(|| "all".to_owned());
+            context.set("icon_gallery_kind", kind);
+            Ok(())
+        })
+        .expect("demo action declarations must be unique");
+    runtime
+        .on("icon-gallery-size", |context| {
+            let size = context
+                .event()
+                .payload()
+                .get("size")
+                .cloned()
+                .unwrap_or_else(|| "16".to_owned());
+            context.set("icon_gallery_size", size);
+            Ok(())
+        })
+        .expect("demo action declarations must be unique");
     runtime
         .on("save", |context| {
             let username = context.get("username").unwrap_or_default().to_owned();
@@ -1120,7 +1234,7 @@ impl ComponentRenderer for SqlEditorComponent {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{SqlEditorComponent, demo_html};
+    use super::{IconGalleryComponent, SqlEditorComponent, demo_html};
     use declarative_ui_demo::{
         CompileOptions, ComponentRegistry, VNode, compile_template, parse_html,
     };
@@ -1195,6 +1309,9 @@ mod tests {
         registry
             .register("sql-editor", SqlEditorComponent)
             .expect("register showcase extension");
+        registry
+            .register("icon-gallery", IconGalleryComponent)
+            .expect("register icon gallery extension");
 
         let source = demo_html();
         compile_template(&source, &registry, CompileOptions::strict())

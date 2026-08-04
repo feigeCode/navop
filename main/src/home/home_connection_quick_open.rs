@@ -1,14 +1,14 @@
-use crate::external_driver_display::external_driver_icon_for_config_with_registry;
+use crate::connection_visuals::{ConnectionVisualSize, stored_connection_icon};
 use crate::home_tab::HomePage;
 use db::ipc::IpcDriverRegistry;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt, h_flex,
+    ActiveTheme, IndexPath, WindowExt, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
-use one_core::storage::{ConnectionType, StoredConnection};
+use one_core::storage::StoredConnection;
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
@@ -57,22 +57,6 @@ impl ConnectionQuickOpenDelegate {
     }
 }
 
-fn connection_icon(connection: &StoredConnection, registry: &IpcDriverRegistry) -> Icon {
-    match connection.connection_type {
-        ConnectionType::Database => connection
-            .to_db_connection()
-            .map(|config| {
-                external_driver_icon_for_config_with_registry(&config, Size::Small, registry)
-                    .unwrap_or_else(|| config.database_type.as_icon())
-            })
-            .unwrap_or_else(|_| Icon::new(ConnectionType::Database.icon()).color())
-            .with_size(Size::Small),
-        _ => Icon::new(connection.connection_type.icon())
-            .color()
-            .with_size(Size::Small),
-    }
-}
-
 impl ListDelegate for ConnectionQuickOpenDelegate {
     type Item = ListItem;
 
@@ -102,7 +86,11 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         let parent = self.parent.clone();
         let name = connection.name.clone();
         let connection_type = connection.connection_type;
-        let icon = connection_icon(&connection, &self.external_driver_registry);
+        let icon = stored_connection_icon(
+            &connection,
+            ConnectionVisualSize::Tree,
+            &self.external_driver_registry,
+        );
         let connection_for_open = connection.clone();
 
         Some(

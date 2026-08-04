@@ -1224,6 +1224,10 @@ QuickCommand:
     en: Copy to clipboard
     zh-CN: 复制到剪贴板
     zh-HK: 複製到剪貼板
+  edit_tooltip:
+    en: Edit command
+    zh-CN: 编辑命令
+    zh-HK: 編輯命令
   paste_tooltip:
     en: Paste to terminal input
     zh-CN: 粘贴到终端输入框
@@ -1381,7 +1385,65 @@ TerminalCommandBar:
     zh-CN: 串口终端
     zh-HK: 串口終端
 
+TerminalSidebar:
+  file_explorer:
+    en: File Explorer
+    zh-CN: 文件浏览器
+    zh-HK: 檔案瀏覽器
+  settings:
+    en: Settings
+    zh-CN: 设置
+    zh-HK: 設定
+  quick_commands:
+    en: Quick Commands
+    zh-CN: 快捷命令
+    zh-HK: 快捷命令
+  history_commands:
+    en: History Commands
+    zh-CN: 历史命令
+    zh-HK: 歷史命令
+  ai_chat:
+    en: AI Chat
+    zh-CN: AI 对话
+    zh-HK: AI 對話
+  broadcast_input:
+    en: Broadcast Input
+    zh-CN: 广播输入
+    zh-HK: 廣播輸入
+  file_manager:
+    en: File Manager
+    zh-CN: 文件管理器
+    zh-HK: 檔案管理器
+  server_monitor:
+    en: Server Monitor
+    zh-CN: 服务器监控
+    zh-HK: 伺服器監控
+
 Sidebar:
+  panel_options:
+    en: Panel options
+    zh-CN: 面板选项
+    zh-HK: 面板選項
+  close_panel:
+    en: Close panel
+    zh-CN: 关闭面板
+    zh-HK: 關閉面板
+  move_to:
+    en: Move to
+    zh-CN: 移动到
+    zh-HK: 移動到
+  placement_left:
+    en: Left
+    zh-CN: 左侧
+    zh-HK: 左側
+  placement_right:
+    en: Right
+    zh-CN: 右侧
+    zh-HK: 右側
+  placement_bottom:
+    en: Bottom
+    zh-CN: 底部
+    zh-HK: 底部
   remove_from_sidebar:
     en: Remove from Sidebar
     zh-CN: 从侧边栏移除

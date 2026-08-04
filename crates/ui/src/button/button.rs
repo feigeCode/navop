@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use crate::{
-    ActiveTheme, Colorize as _, Disableable, FocusableExt as _, Icon, IconName, Selectable,
-    Sizable, Size, StyleSized, StyledExt,
+    ActiveTheme, Colorize as _, Disableable, FocusableExt as _, Icon, IconName, IconSize,
+    Selectable, Sizable, Size, StyleSized, StyledExt,
     button::ButtonIcon,
     h_flex,
     tooltip::{ManagedTooltipExt as _, Tooltip},
@@ -10,7 +10,7 @@ use crate::{
 use gpui::{
     AnyElement, App, ClickEvent, Corners, Div, Edges, ElementId, Hsla, InteractiveElement,
     Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, SharedString,
-    Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative, transparent_white,
 };
 
@@ -179,6 +179,15 @@ impl ButtonVariant {
     }
 }
 
+fn resolve_button_icon_size(button_size: Size, glyph_size: Option<IconSize>) -> Size {
+    glyph_size
+        .map(Size::from)
+        .unwrap_or_else(|| match button_size {
+            Size::Size(value) => Size::Size(value * 0.75),
+            _ => button_size,
+        })
+}
+
 /// A Button element.
 #[derive(IntoElement)]
 pub struct Button {
@@ -197,11 +206,13 @@ pub struct Button {
     border_edges: Edges<bool>,
     dropdown_caret: bool,
     size: Size,
+    glyph_size: Option<IconSize>,
     compact: bool,
     tooltip: Option<(
         SharedString,
         Option<(Rc<Box<dyn gpui::Action>>, Option<SharedString>)>,
     )>,
+    accessible_label: Option<SharedString>,
     tooltip_builder: Option<Rc<dyn Fn(&mut Window, &mut App) -> gpui::AnyView>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
@@ -242,7 +253,9 @@ impl Button {
             },
             border_edges: Edges::all(true),
             size: Size::Medium,
+            glyph_size: None,
             tooltip: None,
+            accessible_label: None,
             tooltip_builder: None,
             on_click: None,
             on_hover: None,
@@ -293,9 +306,28 @@ impl Button {
         self
     }
 
+    /// Set the icon glyph size independently from the button hit target.
+    pub fn glyph_size(mut self, size: IconSize) -> Self {
+        self.glyph_size = Some(size);
+        self
+    }
+
     /// Set the tooltip of the button.
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
-        self.tooltip = Some((tooltip.into(), None));
+        let tooltip = tooltip.into();
+        if self.accessible_label.is_none() {
+            self.accessible_label = Some(tooltip.clone());
+        }
+        self.tooltip = Some((tooltip, None));
+        self
+    }
+
+    /// Set the accessible label announced for this button.
+    ///
+    /// Tooltips provide the default label for icon-only actions, while an
+    /// explicit accessible label always takes precedence.
+    pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessible_label = Some(label.into());
         self
     }
 
@@ -306,8 +338,12 @@ impl Button {
         action: &dyn gpui::Action,
         context: Option<&str>,
     ) -> Self {
+        let tooltip = tooltip.into();
+        if self.accessible_label.is_none() {
+            self.accessible_label = Some(tooltip.clone());
+        }
         self.tooltip = Some((
-            tooltip.into(),
+            tooltip,
             Some((
                 Rc::new(action.boxed_clone()),
                 context.map(|c| c.to_string().into()),
@@ -375,12 +411,22 @@ impl Button {
 
     #[inline]
     fn clickable(&self) -> bool {
-        !(self.disabled || self.loading) && self.on_click.is_some()
+        !self.is_unavailable() && self.on_click.is_some()
     }
 
     #[inline]
     fn hoverable(&self) -> bool {
-        !(self.disabled || self.loading) && self.on_hover.is_some()
+        !self.is_unavailable() && self.on_hover.is_some()
+    }
+
+    #[inline]
+    fn is_unavailable(&self) -> bool {
+        self.disabled || self.loading
+    }
+
+    #[inline]
+    fn effective_tab_stop(&self) -> bool {
+        self.tab_stop && !self.disabled
     }
 }
 
@@ -434,17 +480,18 @@ impl InteractiveElement for Button {
     }
 }
 
+impl StatefulInteractiveElement for Button {}
+
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
         let clickable = self.clickable();
-        let is_disabled = self.disabled;
+        let is_unavailable = self.is_unavailable();
         let hoverable = self.hoverable();
+        let effective_tab_stop = self.effective_tab_stop();
         let normal_style = style.normal(self.outline, cx);
-        let icon_size = match self.size {
-            Size::Size(v) => Size::Size(v * 0.75),
-            _ => self.size,
-        };
+        let icon_size = resolve_button_icon_size(self.size, self.glyph_size);
+        let control_height = cx.theme().geometry.control.height(self.size);
 
         let focus_handle = window
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
@@ -461,13 +508,13 @@ impl RenderOnce for Button {
         };
 
         self.base
-            .when(!self.disabled, |this| {
-                this.track_focus(
-                    &focus_handle
-                        .tab_index(self.tab_index)
-                        .tab_stop(self.tab_stop),
-                )
-            })
+            .role(gpui::Role::Button)
+            .when_some(self.accessible_label, |this, label| this.aria_label(label))
+            .track_focus(
+                &focus_handle
+                    .tab_index(self.tab_index)
+                    .tab_stop(effective_tab_stop),
+            )
             .cursor_default()
             .flex()
             .flex_shrink_0()
@@ -481,26 +528,17 @@ impl RenderOnce for Button {
             .when(!style.no_padding(), |this| {
                 if self.label.is_none() && self.children.is_empty() {
                     // Icon Button
-                    match self.size {
-                        Size::Size(px) => this.size(px),
-                        Size::XSmall => this.size_5(),
-                        Size::Small => this.size_6(),
-                        Size::Large | Size::Medium => this.size_8(),
-                    }
+                    this.size(control_height)
                 } else {
                     // Normal Button
-                    match self.size {
+                    this.h(control_height).map(|this| match self.size {
                         Size::Size(size) => this.px(size * 0.2),
-                        Size::XSmall => this.h_5().px_1().when(self.compact, |this| this.min_w_5()),
+                        Size::XSmall => this.px_1().when(self.compact, |this| this.min_w_5()),
                         Size::Small => this
-                            .h_6()
                             .px_3()
                             .when(self.compact, |this| this.min_w_6().px_1p5()),
-                        _ => this
-                            .h_8()
-                            .px_4()
-                            .when(self.compact, |this| this.min_w_8().px_2()),
-                    }
+                        _ => this.px_4().when(self.compact, |this| this.min_w_8().px_2()),
+                    })
                 }
             })
             .when(self.border_corners.top_left, |this| {
@@ -521,6 +559,7 @@ impl RenderOnce for Button {
                     .when(self.border_edges.top, |this| this.border_t_1())
                     .when(self.border_edges.bottom, |this| this.border_b_1())
             })
+            .refine_style(&self.style)
             .text_color(normal_style.fg)
             .when(self.selected, |this| {
                 let selected_style = style.selected(self.outline, cx);
@@ -528,7 +567,7 @@ impl RenderOnce for Button {
                     .border_color(selected_style.border)
                     .text_color(selected_style.fg)
             })
-            .when(!self.disabled && !self.selected, |this| {
+            .when(!is_unavailable && !self.selected, |this| {
                 this.border_color(normal_style.border)
                     .bg(normal_style.bg)
                     .when(normal_style.underline, |this| this.text_decoration_1())
@@ -545,18 +584,16 @@ impl RenderOnce for Button {
                             .text_color(active_style.fg)
                     })
             })
-            .when(self.disabled, |this| {
+            .when(is_unavailable, |this| {
                 let disabled_style = style.disabled(self.outline, cx);
                 this.bg(disabled_style.bg)
                     .text_color(disabled_style.fg)
                     .border_color(disabled_style.border)
                     .shadow_none()
             })
-            .refine_style(&self.style)
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                // Stop handle any click event when disabled.
-                // To avoid handle dropdown menu open when button is disabled.
-                if is_disabled {
+                // Stop all button and dropdown interaction while unavailable.
+                if is_unavailable {
                     cx.stop_propagation();
                     return;
                 }
@@ -607,18 +644,13 @@ impl RenderOnce for Button {
                     .when(self.dropdown_caret, |this| {
                         this.justify_between().child(
                             Icon::new(IconName::ChevronDown).xsmall().text_color(
-                                match self.disabled {
+                                match is_unavailable {
                                     true => normal_style.fg.opacity(0.3),
                                     false => normal_style.fg.opacity(0.5),
                                 },
                             ),
                         )
                     })
-            })
-            .when(self.loading && !self.disabled, |this| {
-                this.bg(normal_style.bg.opacity(0.8))
-                    .border_color(normal_style.border.opacity(0.8))
-                    .text_color(normal_style.fg.opacity(0.8))
             })
             .map(|this| {
                 if let Some(builder) = self.tooltip_builder {
@@ -961,6 +993,8 @@ impl ButtonVariant {
 mod tests {
     use super::*;
 
+    gpui::actions!(button_tests, [CreateQuery]);
+
     #[gpui::test]
     fn test_button_builder(_cx: &mut gpui::TestAppContext) {
         let button = Button::new("complex-button")
@@ -976,6 +1010,7 @@ mod tests {
             .tab_index(1)
             .tab_stop(true)
             .dropdown_caret(false)
+            .glyph_size(IconSize::Medium)
             .rounded(ButtonRounded::Medium)
             .on_click(|_, _, _| {});
 
@@ -991,7 +1026,53 @@ mod tests {
         assert_eq!(button.tab_index, 1);
         assert!(button.tab_stop);
         assert!(!button.dropdown_caret);
+        assert_eq!(button.glyph_size, Some(IconSize::Medium));
         assert!(matches!(button.rounded, ButtonRounded::Medium));
+        assert_eq!(button.accessible_label, Some("Click to save".into()));
+    }
+
+    #[test]
+    fn tooltip_supplies_accessible_label_without_overriding_an_explicit_label() {
+        let tooltip_default = Button::new("tooltip-default").tooltip("Open settings");
+        assert_eq!(
+            tooltip_default.accessible_label,
+            Some("Open settings".into())
+        );
+
+        let explicit_after = Button::new("explicit-after")
+            .tooltip("Open settings")
+            .accessible_label("Settings");
+        assert_eq!(explicit_after.accessible_label, Some("Settings".into()));
+
+        let explicit_before = Button::new("explicit-before")
+            .accessible_label("Settings")
+            .tooltip("Open settings");
+        assert_eq!(explicit_before.accessible_label, Some("Settings".into()));
+    }
+
+    #[gpui::test]
+    fn tooltip_with_action_supplies_accessible_label(cx: &mut gpui::TestAppContext) {
+        cx.update(|_| {
+            let button = Button::new("tooltip-action").tooltip_with_action(
+                "Create query",
+                &CreateQuery,
+                None,
+            );
+
+            assert_eq!(button.accessible_label, Some("Create query".into()));
+        });
+    }
+
+    #[test]
+    fn explicit_glyph_size_is_independent_from_button_hit_size() {
+        assert_eq!(
+            resolve_button_icon_size(Size::Size(px(36.)), Some(IconSize::Medium)),
+            Size::Size(px(20.))
+        );
+        assert_eq!(
+            resolve_button_icon_size(Size::Size(px(36.)), None),
+            Size::Size(px(27.))
+        );
     }
 
     #[gpui::test]
@@ -1007,6 +1088,18 @@ mod tests {
         // Loading button should not be clickable
         let loading = Button::new("test").loading(true).on_click(|_, _, _| {});
         assert!(!loading.clickable());
+    }
+
+    #[test]
+    fn loading_keeps_tab_focus_while_disabled_leaves_the_tab_order() {
+        let loading = Button::new("loading").loading(true).tab_stop(true);
+        assert!(loading.effective_tab_stop());
+
+        let disabled = Button::new("disabled").disabled(true).tab_stop(true);
+        assert!(!disabled.effective_tab_stop());
+
+        let opt_out = Button::new("opt-out").loading(true).tab_stop(false);
+        assert!(!opt_out.effective_tab_stop());
     }
 
     #[gpui::test]

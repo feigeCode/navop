@@ -276,6 +276,10 @@ WorkspaceExplorer:
       en: Saved
       zh-CN: 已保存
       zh-HK: 已儲存
+    unsaved:
+      en: Unsaved changes
+      zh-CN: 有未保存的更改
+      zh-HK: 有未儲存的變更
     save_failed:
       en: Save failed
       zh-CN: 保存失败
@@ -291,8 +295,8 @@ WorkspaceExplorer:
       zh-HK: 大型檔案 · 純文字
     markdown:
       en: Markdown · Notes
-      zh-CN: Markdown · Notes
-      zh-HK: Markdown · Notes
+      zh-CN: Markdown · 笔记
+      zh-HK: Markdown · 筆記
     diff:
       en: Git diff · read only
       zh-CN: Git 差异 · 只读
@@ -312,6 +316,10 @@ WorkspaceExplorer:
       zh-CN: 文件已保存
       zh-HK: 檔案已儲存
   body:
+    empty:
+      en: Open a file to start editing
+      zh-CN: 打开文件以开始编辑
+      zh-HK: 開啟檔案以開始編輯
     loading:
       en: Loading file...
       zh-CN: 正在加载文件...
@@ -321,6 +329,10 @@ WorkspaceExplorer:
       zh-CN: 无法打开文档
       zh-HK: 無法打開文件
   tooltip:
+    close_tab:
+      en: Close tab
+      zh-CN: 关闭标签页
+      zh-HK: 關閉標籤頁
     collapse_folders:
       en: Collapse folders
       zh-CN: 折叠文件夹

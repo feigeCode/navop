@@ -51,6 +51,7 @@ mod tests {
     fn searched_team_ssh() -> StoredConnection {
         StoredConnection {
             id: Some(50),
+            credential_revision: None,
             name: "186华为云服务器".to_string(),
             connection_type: ConnectionType::SshSftp,
             params: "{}".to_string(),

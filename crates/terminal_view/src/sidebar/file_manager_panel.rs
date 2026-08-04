@@ -8,12 +8,13 @@ use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
     Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
-    Focusable, IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent,
+    Focusable, Hsla, IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent,
     ParentElement, PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle,
     Window, actions, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, ObjectIcon, Sizable,
+    Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -56,6 +57,10 @@ use tokio::sync::Mutex;
 actions!(terminal_file_manager, [PasteUpload]);
 
 pub const FILE_MANAGER_CONTEXT: &str = "TerminalFileManager";
+
+const FILE_ROW_HEIGHT: gpui::Pixels = px(36.);
+const SIZE_COLUMN_WIDTH: gpui::Pixels = px(50.);
+const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(70.);
 
 pub fn init_keybindings() -> Vec<KeyBinding> {
     vec![KeyBinding::new(
@@ -1025,8 +1030,6 @@ pub struct FileManagerPanel {
     /// 进度刷新定时器
     progress_refresh_task: Option<gpui::Task<()>>,
     active_extract: Option<ActiveExtract>,
-    /// 是否有外部文件拖入
-    is_dragging_over: bool,
     /// 终端当前工作目录缓存，用于首次连接和导航失败恢复
     working_dir_hint: Option<String>,
     /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
@@ -1136,7 +1139,6 @@ impl FileManagerPanel {
             next_task_id: 0,
             progress_refresh_task: None,
             active_extract: None,
-            is_dragging_over: false,
             working_dir_hint: None,
             colors,
             frame_placement: SidebarPlacement::Right,
@@ -4058,7 +4060,7 @@ impl FileManagerPanel {
         if is_flex {
             base.flex_1()
         } else {
-            base.w(px(70.))
+            base.w(MODIFIED_COLUMN_WIDTH)
         }
     }
 
@@ -4076,7 +4078,7 @@ impl FileManagerPanel {
         let selection = self.colors.accent.opacity(0.24);
 
         h_flex()
-            .h(px(36.))
+            .h(FILE_ROW_HEIGHT)
             .px_2()
             .items_center()
             .text_color(foreground)
@@ -4089,13 +4091,12 @@ impl FileManagerPanel {
                     .items_center()
                     .overflow_hidden()
                     .child(
-                        Icon::new(if is_dir {
+                        ObjectIcon::new(if is_dir {
                             IconName::Folder1
                         } else {
                             IconName::File
                         })
-                        .with_size(Size::Small)
-                        .color(),
+                        .with_size(IconSize::Small),
                     )
                     .child({
                         let tooltip_name = name.clone();
@@ -4115,7 +4116,7 @@ impl FileManagerPanel {
             // 大小列
             .child(
                 div()
-                    .w(px(50.))
+                    .w(SIZE_COLUMN_WIDTH)
                     .text_xs()
                     .text_color(muted_foreground)
                     .child(if is_dir {
@@ -4127,7 +4128,7 @@ impl FileManagerPanel {
             // 时间列
             .child(
                 div()
-                    .w(px(70.))
+                    .w(MODIFIED_COLUMN_WIDTH)
                     .text_xs()
                     .text_color(muted_foreground)
                     .overflow_hidden()
@@ -4142,7 +4143,7 @@ impl FileManagerPanel {
         let foreground = self.colors.foreground;
 
         h_flex()
-            .h(px(36.))
+            .h(FILE_ROW_HEIGHT)
             .px_2()
             .items_center()
             .text_color(foreground)
@@ -4151,11 +4152,11 @@ impl FileManagerPanel {
                     .flex_1()
                     .gap_1()
                     .items_center()
-                    .child(Icon::new(IconName::Folder1).with_size(Size::Small).color())
+                    .child(ObjectIcon::new(IconName::Folder1).with_size(IconSize::Small))
                     .child(div().text_sm().child("..")),
             )
-            .child(div().w(px(50.)))
-            .child(div().w(px(70.)))
+            .child(div().w(SIZE_COLUMN_WIDTH))
+            .child(div().w(MODIFIED_COLUMN_WIDTH))
     }
 
     /// 构建文件项右键菜单
@@ -4555,33 +4556,6 @@ impl FileManagerPanel {
             .into_any_element()
     }
 
-    /// 渲染拖拽覆盖层
-    fn render_drop_overlay(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let foreground = self.colors.foreground;
-
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(gpui::rgba(0x3b82f630))
-            .border_2()
-            .border_color(gpui::rgba(0x3b82f6ff))
-            .rounded_md()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                v_flex().items_center().gap_2().child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(foreground)
-                        .child(t!("FileManager.drop_files_here")),
-                ),
-            )
-    }
-
     /// 渲染连接中状态
     fn render_connecting(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let muted_foreground = self.colors.muted_foreground;
@@ -4704,8 +4678,8 @@ impl FileManagerPanel {
         let is_loading = self.loading;
         let has_active_transfer = self.transfer_queue.has_active();
         let has_active_extract = self.active_extract.is_some();
-        let is_dragging = self.is_dragging_over;
         let background = self.colors.background;
+        let foreground = self.colors.foreground;
         let hover = self.colors.muted.opacity(0.72);
 
         v_flex()
@@ -4735,9 +4709,7 @@ impl FileManagerPanel {
                         .overflow_hidden()
                         .bg(background)
                         // 拖拽上传支持
-                        .drag_over::<ExternalPaths>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
                         .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                            this.is_dragging_over = false;
                             let file_paths = paths.paths().to_vec();
                             if !file_paths.is_empty() {
                                 let remote_dir = this.current_path.clone();
@@ -4860,7 +4832,11 @@ impl FileManagerPanel {
                             .with_sizing_behavior(ListSizingBehavior::Auto),
                         )
                         .vertical_scrollbar(&scroll_handle)
-                        .when(is_dragging, |el| el.child(self.render_drop_overlay(cx))),
+                        .child(render_file_drop_overlay(
+                            foreground,
+                            cx.theme().drop_target,
+                            cx.theme().drag_border,
+                        )),
                 )
             })
             // 底部传输进度条
@@ -4871,6 +4847,35 @@ impl FileManagerPanel {
                 el.child(self.render_extract_progress(cx))
             })
     }
+}
+
+fn render_file_drop_overlay(
+    foreground: Hsla,
+    drop_target: Hsla,
+    drag_border: Hsla,
+) -> impl IntoElement {
+    div()
+        .invisible()
+        .absolute()
+        .inset_0()
+        .m_2()
+        .bg(drop_target)
+        .border_2()
+        .border_color(drag_border)
+        .rounded_lg()
+        .flex()
+        .items_center()
+        .justify_center()
+        .drag_over::<ExternalPaths>(|style, _, _, _| style.visible())
+        .child(
+            v_flex().items_center().gap_2().child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(foreground)
+                    .child(t!("FileManager.drop_files_here")),
+            ),
+        )
 }
 
 /// 获取远程路径的父目录

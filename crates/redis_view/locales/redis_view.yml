@@ -300,6 +300,10 @@ KeyValueView:
     en: "Select a key to view its value"
     zh-CN: "选择一个键以查看其值"
     zh-HK: "選擇一個鍵以查看其值"
+  loading:
+    en: "Loading key value..."
+    zh-CN: "正在加载键值..."
+    zh-HK: "正在載入鍵值..."
   filter_placeholder:
     en: "Filter..."
     zh-CN: "筛选..."
@@ -328,6 +332,10 @@ KeyValueView:
     en: "Sort by %{by}"
     zh-CN: "按%{by}"
     zh-HK: "按%{by}"
+  toggle_sort_order:
+    en: "Toggle sort order"
+    zh-CN: "切换排序方向"
+    zh-HK: "切換排序方向"
   insert_row:
     en: "Insert row"
     zh-CN: "插入行"
@@ -565,6 +573,14 @@ RedisConnection:
     zh-HK: "連接 ID 不能為空。"
 
 RedisTree:
+  loading:
+    en: "Loading Redis objects..."
+    zh-CN: "正在加载 Redis 对象..."
+    zh-HK: "正在載入 Redis 物件..."
+  show_error_details:
+    en: "Show error details"
+    zh-CN: "查看错误详情"
+    zh-HK: "查看錯誤詳情"
   search_placeholder:
     en: "Search keys..."
     zh-CN: "搜索键..."
@@ -830,6 +846,18 @@ RedisTTL:
 
 # Redis 工具页签通用
 RedisTool:
+  loading:
+    en: "Loading Redis data..."
+    zh-CN: "正在加载 Redis 数据..."
+    zh-HK: "正在載入 Redis 資料..."
+  load_failed:
+    en: "Failed to load Redis data"
+    zh-CN: "Redis 数据加载失败"
+    zh-HK: "Redis 資料載入失敗"
+  clear_slowlog:
+    en: "Clear slow log"
+    zh-CN: "清空慢查询日志"
+    zh-HK: "清空慢查詢日誌"
   filter_placeholder:
     en: "Filter key / value"
     zh-CN: "筛选键/值"
@@ -893,6 +921,10 @@ RedisTool:
 
 # Redis 发布订阅
 RedisPubSub:
+  unsubscribe_one:
+    en: "Unsubscribe"
+    zh-CN: "取消订阅"
+    zh-HK: "取消訂閱"
   channel_placeholder:
     en: "Channel"
     zh-CN: "频道"
@@ -1029,3 +1061,9 @@ RedisPubSub:
     en: "shard channel"
     zh-CN: "分片频道"
     zh-HK: "分片頻道"
+
+RedisSidebar:
+  ai_chat:
+    en: "AI Chat"
+    zh-CN: "AI 对话"
+    zh-HK: "AI 對話"

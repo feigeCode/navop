@@ -63,6 +63,14 @@ Extension:
     en: No matching marketplace extensions
     zh-CN: 没有匹配的市场扩展
     zh-HK: 沒有匹配的市場擴展
+  retry:
+    en: Retry
+    zh-CN: 重试
+    zh-HK: 重試
+  no_description:
+    en: No description provided
+    zh-CN: 暂无描述
+    zh-HK: 暫無描述
   install:
     en: Install
     zh-CN: 安装

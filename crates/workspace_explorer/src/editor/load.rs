@@ -13,6 +13,7 @@ use gpui_component::{
     WindowExt as _,
     input::{InputEvent, InputState},
     notification::Notification,
+    status_bar::StatusPresentation,
 };
 use rust_i18n::t;
 use std::path::PathBuf;
@@ -147,6 +148,7 @@ impl WorkspaceEditor {
         tab.loading = true;
         tab.load_error = None;
         tab.status_message = t!("WorkspaceExplorer.status.loading").to_string();
+        tab.status_presentation = StatusPresentation::Progress;
         cx.notify();
 
         let tab_id = tab.id;
@@ -296,6 +298,7 @@ impl WorkspaceEditor {
         tab.read_only = document.read_only;
         tab.load_error = None;
         tab.status_message = loaded_status(tab.policy).to_string();
+        tab.status_presentation = StatusPresentation::Neutral;
         if index == self.active_tab && !tab.read_only {
             if let Some(editor) = editor {
                 editor.update(cx, |state, cx| state.focus(window, cx));
@@ -314,6 +317,7 @@ impl WorkspaceEditor {
         tab.loading = false;
         tab.load_error = Some(failure.message);
         tab.status_message = t!("WorkspaceExplorer.status.load_failed").to_string();
+        tab.status_presentation = StatusPresentation::Error;
         cx.notify();
     }
 }

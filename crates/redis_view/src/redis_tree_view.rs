@@ -9,9 +9,11 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Side, Sizable, Size,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme, BrandIcon, Disableable, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon,
+    Side, Sizable, Size,
+    button::{Button, ButtonVariants as _, IconButton},
     clipboard::Clipboard,
+    content_state::ContentState,
     h_flex,
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
@@ -1440,6 +1442,7 @@ impl RedisTreeView {
     /// 设置节点加载状态
     pub fn set_node_loading(&mut self, node_id: &str, loading: bool, cx: &mut Context<Self>) {
         if loading {
+            self.error_nodes.remove(node_id);
             self.loading_nodes.insert(node_id.to_string());
         } else {
             self.loading_nodes.remove(node_id);
@@ -1760,13 +1763,13 @@ impl RedisTreeView {
         Some(keyword.to_lowercase())
     }
 
-    fn get_node_icon(&self, node_type: &RedisNodeType) -> IconName {
+    fn get_node_icon(&self, node_type: &RedisNodeType) -> Icon {
         match node_type {
-            RedisNodeType::Connection => IconName::Redis,
-            RedisNodeType::Database(_) => IconName::Database,
-            RedisNodeType::Namespace => IconName::FolderOpen1,
-            RedisNodeType::Key(_) => IconName::Key,
-            RedisNodeType::LoadMore => IconName::Ellipsis,
+            RedisNodeType::Connection => BrandIcon::new(IconName::Redis).into_icon(),
+            RedisNodeType::Database(_) => ObjectIcon::new(IconName::Database).into_icon(),
+            RedisNodeType::Namespace => ObjectIcon::new(IconName::FolderOpen1).into_icon(),
+            RedisNodeType::Key(_) => ObjectIcon::new(IconName::Key).into_icon(),
+            RedisNodeType::LoadMore => FunctionalIcon::new(IconName::Ellipsis).into_icon(),
         }
     }
 
@@ -1902,10 +1905,9 @@ impl RedisTreeView {
             .border_color(cx.theme().border)
             .child(div().flex_1().child(Input::new(&self.search_state)))
             .child(
-                Button::new("search")
-                    .icon(IconName::Search)
-                    .ghost()
-                    .xsmall()
+                IconButton::new("search", IconName::Search)
+                    .hit_size(Size::XSmall)
+                    .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.search_help").to_string())
                     .on_click(move |_, _, cx| {
                         view_for_search.update(cx, |this, cx| {
@@ -1931,10 +1933,10 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                Button::new("refresh")
-                    .icon(IconName::Refresh)
-                    .ghost()
-                    .xsmall()
+                IconButton::new("refresh", IconName::Refresh)
+                    .hit_size(Size::XSmall)
+                    .glyph_size(IconSize::Small)
+                    .tooltip(t!("Common.refresh").to_string())
                     .disabled(!can_refresh)
                     .on_click(move |_, _, cx| {
                         view.update(cx, |this, cx| {
@@ -1949,10 +1951,9 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                Button::new("add-key")
-                    .icon(IconName::Plus)
-                    .ghost()
-                    .xsmall()
+                IconButton::new("add-key", IconName::Plus)
+                    .hit_size(Size::XSmall)
+                    .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.menu_create_key").to_string())
                     .disabled(!can_add)
                     .on_click(move |_, _, cx| {
@@ -2005,7 +2006,7 @@ impl RedisTreeView {
                             )
                     }
                 })
-                .icon(IconName::Database.color())
+                .icon(ObjectIcon::new(IconName::Database).into_icon())
                 .checked(selected)
                 .on_click({
                     let view = view.clone();
@@ -2045,7 +2046,9 @@ impl RedisTreeView {
         } else {
             self.loading_nodes.contains(&node_id)
         };
-        let error_msg = self.error_nodes.get(&node_id).cloned();
+        let error_msg = (!is_loading)
+            .then(|| self.error_nodes.get(&node_id).cloned())
+            .flatten();
         let error_title = match &node.node_type {
             RedisNodeType::Database(_) => t!("RedisTree.key_load_error").to_string(),
             _ => t!("RedisTree.connection_error").to_string(),
@@ -2057,7 +2060,7 @@ impl RedisTreeView {
             None
         };
         let depth = entry.depth;
-        let icon = self.get_node_icon(&node.node_type).color();
+        let icon = self.get_node_icon(&node.node_type);
         let name = node.name.clone();
         let key_count = node.key_count;
         let show_arrow = self.should_show_arrow(&node_id);
@@ -2095,18 +2098,19 @@ impl RedisTreeView {
         } else {
             name
         };
+        let tree = cx.theme().geometry.tree;
 
         h_flex()
             .id(SharedString::from(format!("redis-node-{}", ix)))
             .group("tree-item")
             .w_full()
-            .h(px(28.0))
-            .pl(px(8.0 + depth as f32 * 16.0))
+            .h(tree.row_height)
+            .pl(tree.base_padding + tree.indent * depth)
             .pr(px(4.0))
             .gap_1()
             .items_center()
             .cursor_pointer()
-            .rounded(px(4.0))
+            .rounded(cx.theme().geometry.radius.xs)
             .when(is_selected, |this| this.bg(cx.theme().list_active))
             .when(!is_selected, |this| {
                 this.hover(|style| style.bg(cx.theme().list_hover))
@@ -2148,8 +2152,8 @@ impl RedisTreeView {
             .child(
                 div()
                     .id(SharedString::from(format!("arrow-{}", ix)))
-                    .w(px(16.0))
-                    .h(px(16.0))
+                    .w(tree.disclosure_size)
+                    .h(tree.disclosure_size)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -2196,15 +2200,11 @@ impl RedisTreeView {
             // 图标（非 Key 节点显示）
             .when(!is_key, |this| {
                 this.child(
-                    Icon::new(icon)
-                        .with_size(Size::Small)
+                    icon.with_size(IconSize::Medium)
                         .when(
                             is_connection && !is_connected && error_msg.is_none(),
                             |icon| icon.text_color(cx.theme().muted_foreground),
                         )
-                        .when(is_connection && is_connected, |icon| {
-                            icon.text_color(cx.theme().success)
-                        })
                         .when(!is_connection && !is_database, |icon| {
                             icon.text_color(cx.theme().muted_foreground)
                         }),
@@ -2229,52 +2229,58 @@ impl RedisTreeView {
                         .invisible()
                         .group_hover("tree-item", |this| this.visible())
                         .child(
-                            Button::new(SharedString::from(format!("refresh-namespace-{}", ix)))
-                                .icon(IconName::Refresh)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(t!("Common.refresh").to_string())
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    view_for_namespace_refresh.update(cx, |view, cx| {
-                                        if let Some(db_node) =
-                                            view.nodes.get_mut(&db_node_id_for_namespace)
-                                        {
-                                            db_node.children_loaded = false;
-                                        }
-                                        view.refresh_keys(db_node_id_for_namespace.clone(), cx);
-                                    });
-                                }),
+                            IconButton::new(
+                                SharedString::from(format!("refresh-namespace-{}", ix)),
+                                IconName::Refresh,
+                            )
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
+                            .tooltip(t!("Common.refresh").to_string())
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                view_for_namespace_refresh.update(cx, |view, cx| {
+                                    if let Some(db_node) =
+                                        view.nodes.get_mut(&db_node_id_for_namespace)
+                                    {
+                                        db_node.children_loaded = false;
+                                    }
+                                    view.refresh_keys(db_node_id_for_namespace.clone(), cx);
+                                });
+                            }),
                         )
                         .child(
-                            Button::new(SharedString::from(format!("create-in-namespace-{}", ix)))
-                                .icon(IconName::Plus)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(t!("RedisTree.menu_create_key").to_string())
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    view_for_namespace_create.update(cx, |_view, cx| {
-                                        cx.emit(RedisTreeViewEvent::CreateKey {
-                                            node_id: node_id_for_namespace_create.clone(),
-                                        });
+                            IconButton::new(
+                                SharedString::from(format!("create-in-namespace-{}", ix)),
+                                IconName::Plus,
+                            )
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
+                            .tooltip(t!("RedisTree.menu_create_key").to_string())
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                view_for_namespace_create.update(cx, |_view, cx| {
+                                    cx.emit(RedisTreeViewEvent::CreateKey {
+                                        node_id: node_id_for_namespace_create.clone(),
                                     });
-                                }),
+                                });
+                            }),
                         )
                         .child(
-                            Button::new(SharedString::from(format!("delete-namespace-{}", ix)))
-                                .icon(IconName::Remove)
-                                .ghost()
-                                .xsmall()
-                                .tooltip(t!("RedisTree.menu_batch_delete_keys").to_string())
-                                .on_click(move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    view_for_namespace_delete.update(cx, |_view, cx| {
-                                        cx.emit(RedisTreeViewEvent::DeleteNamespaceKeys {
-                                            node_id: node_id_for_namespace_delete.clone(),
-                                        });
+                            IconButton::new(
+                                SharedString::from(format!("delete-namespace-{}", ix)),
+                                IconName::Remove,
+                            )
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
+                            .tooltip(t!("RedisTree.menu_batch_delete_keys").to_string())
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                view_for_namespace_delete.update(cx, |_view, cx| {
+                                    cx.emit(RedisTreeViewEvent::DeleteNamespaceKeys {
+                                        node_id: node_id_for_namespace_delete.clone(),
                                     });
-                                }),
+                                });
+                            }),
                         ),
                 )
             })
@@ -2287,7 +2293,7 @@ impl RedisTreeView {
                     Button::new(SharedString::from(format!("redis-db-switch-btn-{}", ix)))
                         .ghost()
                         .xsmall()
-                        .icon(IconName::Database.color())
+                        .icon(ObjectIcon::new(IconName::Database).into_icon())
                         .label(format!("db{}", current_db))
                         .dropdown_menu(move |menu, _window, cx| {
                             Self::render_database_switcher_menu(
@@ -2304,7 +2310,7 @@ impl RedisTreeView {
             .when(is_loading, |this| {
                 this.child(
                     Spinner::new()
-                        .with_size(Size::XSmall)
+                        .with_size(IconSize::Small)
                         .color(cx.theme().muted_foreground),
                 )
             })
@@ -2314,11 +2320,14 @@ impl RedisTreeView {
                 this.child(
                     Popover::new(SharedString::from(format!("error-popover-{}", ix)))
                         .trigger(
-                            Button::new(SharedString::from(format!("error-btn-{}", ix)))
-                                .ghost()
-                                .icon(IconName::TriangleAlert)
-                                .xsmall()
-                                .text_color(cx.theme().warning),
+                            IconButton::new(
+                                SharedString::from(format!("error-btn-{}", ix)),
+                                IconName::TriangleAlert,
+                            )
+                            .hit_size(Size::XSmall)
+                            .glyph_size(IconSize::Small)
+                            .tooltip(t!("RedisTree.show_error_details").to_string())
+                            .text_color(cx.theme().warning),
                         )
                         .content(move |_state, _window, cx| {
                             let error_for_copy = error_for_copy.clone();
@@ -2680,24 +2689,15 @@ impl Render for RedisTreeView {
                     .overflow_hidden()
                     .vertical_scrollbar(&self.scroll_handle)
                     .when(self.is_loading, |this| {
-                        this.child(
-                            div()
-                                .size_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(Spinner::new()),
-                        )
+                        this.child(ContentState::loading(t!("RedisTree.loading").to_string()))
                     })
                     .when(!self.is_loading && entry_count == 0, |this| {
                         this.child(
-                            div()
-                                .size_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("RedisTree.no_data").to_string()),
+                            ContentState::empty(t!("RedisTree.no_data").to_string())
+                                .icon(
+                                    ObjectIcon::new(IconName::Database).with_size(IconSize::Large),
+                                )
+                                .compact(),
                         )
                     })
                     .when(!self.is_loading && entry_count > 0, |this| {
