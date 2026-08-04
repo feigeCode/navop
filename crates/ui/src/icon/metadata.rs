@@ -67,7 +67,8 @@ impl IconName {
             | Self::ClickHouseLineColor
             | Self::Redis
             | Self::RedisColor
-            | Self::DuckDB => BrandColor,
+            | Self::DuckDB
+            | Self::AI => BrandColor,
 
             Self::Paste
             | Self::Dash
@@ -151,7 +152,6 @@ impl IconName {
             | Self::SchemaCompare
             | Self::DataModel
             | Self::Server
-            | Self::AI
             | Self::SettingColor
             | Self::SerialPort
             | Self::Monitor

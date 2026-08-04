@@ -139,7 +139,7 @@ impl MongoSidebar {
 
         IconButton::new(
             format!("mongodb-sidebar-btn-{panel:?}"),
-            ObjectIcon::new(IconName::AI),
+            ObjectIcon::new(IconName::AILine),
         )
         .hit_size(item_size)
         .glyph_size(IconSize::Medium)
