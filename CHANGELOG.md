@@ -4,6 +4,42 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.3] - 2026-08-04
+
+### 中文
+
+#### 更新内容
+
+- 支持编辑 MySQL 存储过程、MySQL 函数以及 PostgreSQL 函数和过程；例程列表显示参数和身份参数信息，按 schema 区分对象，并支持准确打开重载例程。
+- 新增 RDP 保存前连接测试，提供超时和更清晰的失败诊断；修复远程键盘输入状态处理，并优化 RDP/VNC 连接图标显示。
+- 重设计开始中心并统一桌面 UI 视觉系统，改善连接侧栏和数据库对象导航布局，以及连接协议、数据库导航和 AI 图标的一致性与可读性。
+- 新增全局同步开关（默认关闭），并完善同步与加密提示；便携模式可在设置中选择将加密主密钥副本保存到 `data/state/key_storage` 以自动解锁。该副本使用程序内置密钥而非设备绑定保护，任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥；仅在理解并接受此风险时启用。
+- 新增 Windows 32 位发布包，并让更新器按 Windows x86 选择对应下载包。
+
+#### 修复与优化
+
+- 连接快速打开现在支持按 IP 地址、用户名、主机和端口搜索。
+- 约束 Agent/MCP 不把计划标题、状态等内容直接提交为 shell 命令；远程无 stdin 命令启动后立即发送 EOF，避免因等待输入而无限挂起。
+
+---
+
+### English
+
+#### What's New
+
+- Added editors for MySQL procedures, MySQL functions, and PostgreSQL functions and procedures. Routine lists now show argument and identity-argument information, distinguish schema-scoped objects, and open overloaded routines accurately.
+- Added a pre-save RDP connection test with timeout handling and clearer failure diagnostics, fixed remote keyboard input-state handling, and improved RDP/VNC connection icons.
+- Redesigned the Start Center and established a unified desktop visual system, improving the connection sidebar and database-object navigation layouts, together with the consistency and readability of connection-protocol, database-navigation, and AI icons.
+- Added a global sync switch that is disabled by default and clarified sync and encryption prompts. Portable mode can optionally store an encrypted master-key copy under `data/state/key_storage` for automatic unlock. This copy uses a key embedded in the application rather than device-bound protection, so anyone who obtains both the application and the complete `data` directory may be able to recover the master key. Enable it only if you understand and accept this risk.
+- Added Windows 32-bit release packages and made the updater select the matching Windows x86 download.
+
+#### Fixes and Improvements
+
+- Connection Quick Open now searches by IP address, username, host, and port.
+- Prevented Agent/MCP from submitting plan titles or status text directly as shell commands, and now send EOF immediately to remote commands without stdin so they do not wait indefinitely for input.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.2...v0.10.3
+
 ## [v0.10.2] - 2026-08-03
 
 ### 中文
