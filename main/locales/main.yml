@@ -156,6 +156,10 @@ Home:
     zh-CN: 从其他应用导入
     zh-HK: 從其他應用導入
   StartCenter:
+    get_started:
+      en: START CENTER
+      zh-CN: 开始中心
+      zh-HK: 開始中心
     subtitle:
       en: Your workspace for connections, terminals, data, and AI
       zh-CN: 连接、终端、数据与 AI 的统一工作台
@@ -168,6 +172,42 @@ Home:
       en: Recent
       zh-CN: 最近使用
       zh-HK: 最近使用
+    recent_description:
+      en: Continue from the connections you opened most recently
+      zh-CN: 从最近打开的连接继续工作
+      zh-HK: 從最近開啟的連線繼續工作
+    create_and_import:
+      en: Create & Import
+      zh-CN: 创建与导入
+      zh-HK: 建立與匯入
+    workspace_tools:
+      en: Workspace Tools
+      zh-CN: 工作台工具
+      zh-HK: 工作台工具
+    status:
+      en: Status
+      zh-CN: 状态
+      zh-HK: 狀態
+    no_recent:
+      en: No recent connections
+      zh-CN: 暂无最近连接
+      zh-HK: 暫無最近連線
+    no_recent_description:
+      en: Open a connection and it will appear here
+      zh-CN: 打开连接后会显示在这里
+      zh-HK: 開啟連線後會顯示在這裡
+    sync_description:
+      en: Keep connection data synchronized
+      zh-CN: 保持连接数据同步
+      zh-HK: 保持連線資料同步
+    key_description_unlocked:
+      en: Personal key is ready
+      zh-CN: 个人密钥已就绪
+      zh-HK: 個人金鑰已就緒
+    key_description_locked:
+      en: Unlock encrypted connection data
+      zh-CN: 解锁加密连接数据
+      zh-HK: 解鎖加密連線資料
     tools:
       en: Tools
       zh-CN: 常用工具

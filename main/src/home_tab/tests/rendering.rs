@@ -123,9 +123,11 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(!card.contains(".shadow_sm()\n            .group"));
     assert!(render.contains("self.render_modern_home(window, cx)"));
     assert!(modern_home.contains("modern-home-start-center"));
-    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(840.0)"));
+    assert!(modern_home.contains("START_CENTER_MAX_WIDTH: gpui::Pixels = px(1040.0)"));
     assert!(modern_home.contains(".max_w(START_CENTER_MAX_WIDTH)"));
-    assert!(!modern_home.contains(".max_w(px(760.0))"));
+    assert!(modern_home.contains("modern-home-hero"));
+    assert!(modern_home.contains("modern-home-recent-column"));
+    assert!(modern_home.contains("modern-home-side-column"));
     assert!(!modern_home.contains("render_connection_card"));
     assert!(!modern_home.contains("view.update(cx, |home"));
     assert!(modern_home.contains("modern-home-sync"));
@@ -137,35 +139,53 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
 }
 
 #[test]
-fn modern_start_center_cards_wrap_and_preserve_recent_connection_behavior() {
+fn modern_start_center_separates_primary_work_from_supporting_tools() {
     let modern_home = include_str!("../modern_home.rs");
 
-    assert!(modern_home.contains("START_CENTER_CARD_MIN_WIDTH: gpui::Pixels = px(320.0)"));
-    assert!(modern_home.matches(".flex_wrap()").count() >= 3);
-    assert!(modern_home.contains(".flex_basis(START_CENTER_CARD_MIN_WIDTH)"));
+    for stable_id in [
+        "modern-home-hero",
+        "modern-home-recent-panel",
+        "modern-home-create-panel",
+        "modern-home-tools-panel",
+        "modern-home-status-panel",
+        "modern-home-sync",
+        "modern-home-keys",
+    ] {
+        assert!(modern_home.contains(stable_id));
+    }
+    assert!(modern_home.contains(".flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)"));
+    assert!(modern_home.contains(".flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)"));
+    assert!(modern_home.contains(".flex_grow(2.0)"));
     assert!(modern_home.contains(".flex_grow(1.0)"));
-    assert!(!modern_home.contains(".grid_cols(2)"));
+    assert!(modern_home.contains("render_recent_connections_panel"));
+    assert!(modern_home.contains("render_create_panel"));
+    assert!(modern_home.contains("render_workspace_tools"));
+    assert!(modern_home.contains("render_status_panel"));
+    assert!(!modern_home.contains("start_center_card_slot"));
     assert!(modern_home.contains(".filter(|conn| conn.last_used_at.is_some())"));
     assert!(
         modern_home.contains("recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at))")
     );
     assert!(modern_home.contains("recent.truncate(6)"));
     assert!(modern_home.contains("home.open_connection_from_quick(&open_connection, window, cx)"));
-    assert!(modern_home.contains("home.selected_connection_id = connection_id"));
+    assert!(!modern_home.contains(".on_double_click("));
 }
 
 #[test]
-fn modern_start_center_shortcuts_render_as_a_footer_command_strip() {
+fn modern_start_center_shortcuts_are_attached_to_their_actions() {
+    let modern_home = include_str!("../modern_home.rs");
     let shortcuts = include_str!("../modern_home_shortcuts.rs");
 
-    assert!(shortcuts.contains(".flex_wrap()"));
-    assert!(shortcuts.contains(".mt_6()"));
-    assert!(shortcuts.contains(".pt_4()"));
-    assert!(shortcuts.contains(".border_t_1()"));
+    assert!(modern_home.contains("new_connection_shortcut(cx)"));
+    assert!(modern_home.contains("terminal_shortcut(cx)"));
+    assert!(modern_home.contains("quick_open_shortcut(cx)"));
+    assert!(!modern_home.contains("render_shortcuts(cx)"));
+    assert!(shortcuts.contains("fn shortcut_badge_for"));
     assert!(shortcuts.contains("action_id::HOME_QUICK_OPEN"));
     assert!(shortcuts.contains("action_id::HOME_NEW_CONNECTION"));
     assert!(shortcuts.contains("action_id::HOME_OPEN_LOCAL_TERMINAL"));
     assert!(shortcuts.contains("shortcuts_for(cx, action, &[fallback])"));
+    assert!(shortcuts.contains("unwrap_or_else(|| fallback.to_string())"));
 }
 
 #[test]

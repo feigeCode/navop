@@ -126,7 +126,8 @@ fn connection_type_icon(conn_type: &ConnectionType) -> IconName {
         ConnectionType::SshSftp => IconName::Terminal,
         ConnectionType::Serial => IconName::SquareTerminal,
         ConnectionType::PortForwarding => IconName::Network,
-        ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor,
+        ConnectionType::Rdp => IconName::RdpLine,
+        ConnectionType::Vnc => IconName::Vnc,
         ConnectionType::All => IconName::GalleryVerticalEnd,
     }
 }

@@ -143,15 +143,23 @@ mod tests {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
         let visuals = include_str!("../connection_visuals.rs");
+        let remote_render = include_str!("../../../crates/remote_desktop_view/src/view/render.rs");
+        let rdp_line = include_str!("../../../crates/assets/assets/icons/rdp_line.svg");
 
         assert!(source.contains("IconName::User"));
         assert!(source.contains("connection_type_rail_icon"));
         assert!(visuals.contains("ConnectionType::All => ConnectionVisual"));
         assert!(visuals.contains("navigation_icon: IconName::ServerLine"));
         assert!(visuals.contains("navigation_icon: IconName::RdpLine"));
+        assert!(visuals.contains("identity_icon: Object(IconName::RdpLine)"));
         assert!(icons.contains("icons/user.svg"));
         assert!(icons.contains("icons/server_line.svg"));
         assert!(icons.contains("icons/rdp_line.svg"));
+        assert!(remote_render.contains("RemoteDesktopProtocol::Rdp => IconName::RdpLine.mono()"));
+        assert!(remote_render.contains("RemoteDesktopProtocol::Vnc => IconName::Vnc.color()"));
+        assert!(rdp_line.contains("stroke=\"currentColor\""));
+        assert!(!rdp_line.contains("<text"));
+        assert!(!rdp_line.contains("fill=\"#"));
     }
 
     #[test]

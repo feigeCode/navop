@@ -95,7 +95,7 @@ impl TabContent for RemoteDesktopView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(match self.options.protocol {
-            RemoteDesktopProtocol::Rdp => IconName::Rdp.color(),
+            RemoteDesktopProtocol::Rdp => IconName::RdpLine.mono(),
             RemoteDesktopProtocol::Vnc => IconName::Vnc.color(),
         })
     }

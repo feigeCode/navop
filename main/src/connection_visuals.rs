@@ -90,7 +90,7 @@ const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
         },
         ConnectionType::Rdp => ConnectionVisual {
             navigation_icon: IconName::RdpLine,
-            identity_icon: Object(IconName::Rdp),
+            identity_icon: Object(IconName::RdpLine),
             accessible_label: "RDP",
         },
         ConnectionType::Vnc => ConnectionVisual {
@@ -259,6 +259,16 @@ mod tests {
                 IconKind::BrandColor
             );
         }
+    }
+
+    #[test]
+    fn rdp_uses_the_same_line_icon_for_navigation_and_identity() {
+        let visual = connection_visual(ConnectionType::Rdp);
+        assert_eq!(visual.navigation_icon, IconName::RdpLine);
+        assert!(matches!(
+            visual.identity_icon,
+            ConnectionIdentityIcon::Object(IconName::RdpLine)
+        ));
     }
 
     #[test]

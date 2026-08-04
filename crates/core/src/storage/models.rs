@@ -123,7 +123,7 @@ impl ConnectionType {
             ConnectionType::MongoDB => IconName::MongoDB,
             ConnectionType::Serial => IconName::SerialPort,
             ConnectionType::PortForwarding => IconName::PortForwardingColor,
-            ConnectionType::Rdp => IconName::Rdp,
+            ConnectionType::Rdp => IconName::RdpLine,
             ConnectionType::Vnc => IconName::Vnc,
         }
     }
