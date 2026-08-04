@@ -148,8 +148,9 @@ fn rdp_key_to_scancode(key: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::Keystroke;
-    use remote_desktop::RemoteDesktopProtocol;
+    use crate::modifiers::{RdpKeyboardState, keyboard_state_inputs};
+    use gpui::{Capslock, Keystroke, Modifiers};
+    use remote_desktop::{RemoteDesktopInput, RemoteDesktopProtocol};
 
     #[test]
     fn maps_rdp_keystrokes_to_windows_scancodes() {
@@ -187,5 +188,70 @@ mod tests {
             Some(RemoteKey::Character('?')),
             keystroke_to_remote_key_for_protocol(&question, RemoteDesktopProtocol::Vnc)
         );
+    }
+
+    #[test]
+    fn keeps_shift_pressed_while_sending_rdp_symbols() {
+        assert_eq!(
+            shifted_rdp_symbol_inputs("!->!", 0x0002),
+            shifted_symbol_expected(0x0002)
+        );
+        assert_eq!(
+            shifted_rdp_symbol_inputs("?->?", 0x0035),
+            shifted_symbol_expected(0x0035)
+        );
+    }
+
+    fn shifted_rdp_symbol_inputs(source: &str, expected_scancode: u16) -> Vec<RemoteDesktopInput> {
+        let mut state = RdpKeyboardState::default();
+        let shifted = RdpKeyboardState {
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            ..state
+        };
+        let mut inputs = keyboard_state_inputs(state, shifted);
+        state = shifted;
+
+        let key_event_state = state.with_capslock(Capslock { on: false });
+        inputs.extend(keyboard_state_inputs(state, key_event_state));
+        state = key_event_state;
+        let keystroke = Keystroke::parse(source).expect("valid shifted symbol keystroke");
+        let key = keystroke_to_remote_key_for_protocol(&keystroke, RemoteDesktopProtocol::Rdp)
+            .expect("mapped RDP symbol");
+        assert_eq!(key, RemoteKey::Scancode(expected_scancode));
+        inputs.push(RemoteDesktopInput::Key {
+            key: key.clone(),
+            pressed: true,
+        });
+
+        let key_event_state = state.with_capslock(Capslock { on: false });
+        inputs.extend(keyboard_state_inputs(state, key_event_state));
+        inputs.push(RemoteDesktopInput::Key {
+            key,
+            pressed: false,
+        });
+        inputs.extend(keyboard_state_inputs(
+            key_event_state,
+            RdpKeyboardState::default(),
+        ));
+        inputs
+    }
+
+    fn shifted_symbol_expected(scancode: u16) -> Vec<RemoteDesktopInput> {
+        vec![
+            input(0x002a, true),
+            input(scancode, true),
+            input(scancode, false),
+            input(0x002a, false),
+        ]
+    }
+
+    fn input(scancode: u16, pressed: bool) -> RemoteDesktopInput {
+        RemoteDesktopInput::Key {
+            key: RemoteKey::Scancode(scancode),
+            pressed,
+        }
     }
 }

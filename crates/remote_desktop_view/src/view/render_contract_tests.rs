@@ -12,20 +12,15 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
     let canvas = &source[canvas_start..canvas_end];
 
     assert!(canvas.contains("canvas("));
-    assert!(canvas.contains("window.handle_input("));
+    assert!(
+        !canvas.contains("window.handle_input("),
+        "remote desktops must not register the local platform IME"
+    );
     assert!(canvas.contains("window.paint_image("));
     assert!(
         canvas.matches("window.paint_image(").count() >= 2,
         "framebuffer and remote cursor must be painted in the same bounded canvas"
     );
-    let paint_phase = canvas
-        .find("move |bounds, frame, window, cx|")
-        .expect("remote desktop canvas paint phase");
-    assert!(
-        !canvas[..paint_phase].contains("window.handle_input("),
-        "Window::handle_input may only be called during GPUI paint"
-    );
-    assert!(canvas[paint_phase..].contains("window.handle_input("));
     assert!(canvas.contains(".absolute()"));
     assert!(canvas.contains(".inset_0()"));
     assert!(canvas.contains(".size_full()"));
@@ -125,7 +120,7 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     ] {
         assert!(content.contains(constraint));
     }
-    assert!(content.contains(".child(remote_desktop_frame_canvas(canvas_paint, focus_handle))"));
+    assert!(content.contains(".child(remote_desktop_frame_canvas(canvas_paint))"));
     assert!(
         !content.contains(".when_some(rendered_frame"),
         "frame replacement must not switch between Img and status layout trees"
@@ -148,6 +143,38 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     ] {
         assert!(root.contains(constraint));
     }
+}
+
+#[test]
+fn key_events_only_refresh_capslock_without_overwriting_physical_modifiers() {
+    let source = include_str!("input.rs").replace("\r\n", "\n");
+    let key_down = function_body(
+        &source,
+        "pub(super) fn handle_key_down",
+        "pub(super) fn handle_key_up",
+    );
+    let key_up = function_body(
+        &source,
+        "pub(super) fn handle_key_up",
+        "pub(super) fn send_tab",
+    );
+
+    for handler in [key_down, key_up] {
+        assert!(handler.contains("self.sync_rdp_capslock_state(window.capslock());"));
+        assert!(
+            !handler.contains("event.keystroke.modifiers"),
+            "GPUI folds Shift into printable punctuation and clears this modifier snapshot"
+        );
+    }
+}
+
+fn function_body<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let start = source.find(start).expect("function start");
+    let end = source[start..]
+        .find(end)
+        .map(|offset| start + offset)
+        .expect("next function");
+    &source[start..end]
 }
 
 #[test]

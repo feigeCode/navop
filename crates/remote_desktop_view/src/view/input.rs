@@ -29,7 +29,7 @@ impl RemoteDesktopView {
             cx.stop_propagation();
             return;
         }
-        self.sync_rdp_keyboard_state(event.keystroke.modifiers, window.capslock());
+        self.sync_rdp_capslock_state(window.capslock());
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -48,7 +48,7 @@ impl RemoteDesktopView {
             cx.stop_propagation();
             return;
         }
-        self.sync_rdp_keyboard_state(event.keystroke.modifiers, window.capslock());
+        self.sync_rdp_capslock_state(window.capslock());
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -158,15 +158,18 @@ impl RemoteDesktopView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sync_rdp_keyboard_state(event.modifiers, event.capslock);
+        self.sync_rdp_keyboard_state(RdpKeyboardState {
+            modifiers: event.modifiers,
+            capslock: event.capslock,
+        });
         cx.stop_propagation();
     }
 
-    fn sync_rdp_keyboard_state(&mut self, modifiers: Modifiers, capslock: Capslock) {
-        let current = RdpKeyboardState {
-            modifiers,
-            capslock,
-        };
+    fn sync_rdp_capslock_state(&mut self, capslock: Capslock) {
+        self.sync_rdp_keyboard_state(self.keyboard_state.with_capslock(capslock));
+    }
+
+    fn sync_rdp_keyboard_state(&mut self, current: RdpKeyboardState) {
         let previous = std::mem::replace(&mut self.keyboard_state, current);
         if self.options.protocol != RemoteDesktopProtocol::Rdp {
             return;

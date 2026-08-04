@@ -12,7 +12,6 @@ use remote_desktop::{
 };
 use rust_i18n::t;
 
-use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::{RdpKeyboardState, keyboard_state_inputs};
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};

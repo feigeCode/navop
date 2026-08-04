@@ -8,14 +8,10 @@ struct RemoteDesktopCanvasPaint {
     cursor: Option<cursor::RemoteCursorPaint>,
 }
 
-fn remote_desktop_frame_canvas(
-    frame: RemoteDesktopCanvasPaint,
-    focus_handle: FocusHandle,
-) -> impl IntoElement {
+fn remote_desktop_frame_canvas(frame: RemoteDesktopCanvasPaint) -> impl IntoElement {
     canvas(
         move |_, _, _| frame,
-        move |bounds, frame, window, cx| {
-            window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
+        move |bounds, frame, window, _| {
             paint_remote_frame(bounds, frame.frame, window);
             paint_remote_cursor(bounds, frame.cursor, window);
         },
@@ -154,7 +150,6 @@ impl Render for RemoteDesktopView {
             cursor: self.cursor.paint_state(self.remote_size),
         };
         let view = cx.entity();
-        let focus_handle = self.focus_handle.clone();
 
         let content = div()
             .id("remote-desktop-content")
@@ -237,7 +232,7 @@ impl Render for RemoteDesktopView {
                 this.send_scroll(event);
                 cx.stop_propagation();
             }))
-            .child(remote_desktop_frame_canvas(canvas_paint, focus_handle))
+            .child(remote_desktop_frame_canvas(canvas_paint))
             .when(show_empty_status, |this| {
                 this.child(
                     div()

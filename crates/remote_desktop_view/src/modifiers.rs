@@ -9,6 +9,12 @@ pub struct RdpKeyboardState {
     pub capslock: Capslock,
 }
 
+impl RdpKeyboardState {
+    pub(crate) fn with_capslock(self, capslock: Capslock) -> Self {
+        Self { capslock, ..self }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ModifierBinding {
     was_pressed: bool,
@@ -179,6 +185,23 @@ mod tests {
                 key(CAPSLOCK_SCANCODE, true),
                 key(CAPSLOCK_SCANCODE, false),
             ]
+        );
+    }
+
+    #[test]
+    fn capslock_refresh_preserves_a_pressed_shift_modifier() {
+        let previous = RdpKeyboardState {
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+            capslock: Capslock { on: false },
+        };
+        let current = previous.with_capslock(Capslock { on: true });
+
+        assert_eq!(
+            keyboard_state_inputs(previous, current),
+            vec![key(CAPSLOCK_SCANCODE, true), key(CAPSLOCK_SCANCODE, false)]
         );
     }
 
