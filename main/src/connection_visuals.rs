@@ -66,7 +66,7 @@ const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
         },
         ConnectionType::SshSftp => ConnectionVisual {
             navigation_icon: IconName::TerminalLine,
-            identity_icon: Object(IconName::TerminalColor),
+            identity_icon: ColorObject(IconName::TerminalColor),
             accessible_label: "SSH/SFTP",
         },
         ConnectionType::Redis => ConnectionVisual {
@@ -81,12 +81,12 @@ const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
         },
         ConnectionType::Serial => ConnectionVisual {
             navigation_icon: IconName::SerialLine,
-            identity_icon: Object(IconName::SerialPort),
+            identity_icon: ColorObject(IconName::SerialPort),
             accessible_label: "Serial",
         },
         ConnectionType::PortForwarding => ConnectionVisual {
             navigation_icon: IconName::PortForwardingLine,
-            identity_icon: Object(IconName::PortForwardingColor),
+            identity_icon: ColorObject(IconName::PortForwardingColor),
             accessible_label: "Port Forwarding",
         },
         ConnectionType::Rdp => ConnectionVisual {
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_icons_preserve_color_for_brands_and_remote_desktop_protocols() {
+    fn identity_icons_preserve_color_for_brands_and_protocol_color_assets() {
         assert!(matches!(
             connection_visual(ConnectionType::Redis).identity_icon,
             ConnectionIdentityIcon::Brand(IconName::Redis)
@@ -293,25 +293,33 @@ mod tests {
             ConnectionIdentityIcon::Brand(IconName::MongoDB)
         ));
 
-        for connection_type in [
-            ConnectionType::All,
-            ConnectionType::Database,
-            ConnectionType::SshSftp,
-            ConnectionType::Serial,
-            ConnectionType::PortForwarding,
-        ] {
+        for connection_type in [ConnectionType::All, ConnectionType::Database] {
             assert!(matches!(
                 connection_visual(connection_type).identity_icon,
                 ConnectionIdentityIcon::Object(_)
             ));
         }
 
-        for connection_type in [ConnectionType::Rdp, ConnectionType::Vnc] {
-            assert!(matches!(
-                connection_visual(connection_type).identity_icon,
-                ConnectionIdentityIcon::ColorObject(_)
-            ));
-        }
+        assert!(matches!(
+            connection_visual(ConnectionType::SshSftp).identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::TerminalColor)
+        ));
+        assert!(matches!(
+            connection_visual(ConnectionType::Serial).identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::SerialPort)
+        ));
+        assert!(matches!(
+            connection_visual(ConnectionType::PortForwarding).identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::PortForwardingColor)
+        ));
+        assert!(matches!(
+            connection_visual(ConnectionType::Rdp).identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::Rdp)
+        ));
+        assert!(matches!(
+            connection_visual(ConnectionType::Vnc).identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::Vnc)
+        ));
     }
 
     #[test]
