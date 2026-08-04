@@ -163,7 +163,7 @@ impl HomePage {
             .cloned()
             .collect();
         recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at));
-        recent.truncate(5);
+        recent.truncate(8);
         let recent_count = recent.len();
 
         surface_panel("modern-home-recent-panel", cx)

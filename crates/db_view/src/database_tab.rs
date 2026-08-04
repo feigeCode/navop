@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use crate::database_objects_tab::DatabaseObjectsPanel;
 use crate::database_toolbar::{
-    DatabaseToolbarAction, DatabaseToolbarItem, database_toolbar_items, split_toolbar_items,
+    DatabaseToolbarAction, DatabaseToolbarItem, WORKSPACE_TOOLBAR_HEIGHT,
+    WORKSPACE_TOOLBAR_HOVER_ALPHA, WORKSPACE_TOOLBAR_ITEM_HEIGHT, WORKSPACE_TOOLBAR_ITEM_RADIUS,
+    WORKSPACE_TOOLBAR_ITEM_WIDTH, database_toolbar_items, toolbar_item_icon, toolbar_item_label,
+    toolbar_tone_color,
 };
 use crate::database_users_tab::DatabaseUsersTab;
 use crate::db_tree_event::DatabaseEventHandler;
@@ -16,19 +19,15 @@ use db::{
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
 };
 use gpui::{
-    Anchor, AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Style,
-    Styled, Task, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, IntoElement, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString,
+    StatefulInteractiveElement as _, Style, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::WindowExt;
 use gpui_component::{
-    ActiveTheme, ElementExt as _, Icon, IconName, IconSize, Sizable, Size,
-    button::{Button, ButtonVariants as _, IconButton, IconButtonRole},
-    h_flex,
-    menu::{DropdownMenu as _, PopupMenuItem},
-    notification::Notification,
-    v_flex,
+    ActiveTheme, ElementExt as _, Icon, IconName, Sizable, Size, h_flex,
+    notification::Notification, v_flex,
 };
 use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH};
 use one_core::sidebar_contribution::{
@@ -480,31 +479,29 @@ impl DatabaseTabView {
     }
 
     fn render_workspace_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let geometry = cx.theme().geometry.clone();
         let items = database_toolbar_items()
             .into_iter()
             .filter(|item| self.should_render_toolbar_item(item, cx))
             .collect::<Vec<_>>();
-        let (visible_items, overflow_items) = split_toolbar_items(items);
 
         h_flex()
-            .h(geometry.layout.command_bar)
+            .id("database-workspace-toolbar")
+            .h(WORKSPACE_TOOLBAR_HEIGHT)
             .w_full()
             .flex_shrink_0()
             .items_center()
-            .gap(geometry.spacing.space_1)
-            .px(geometry.spacing.space_2)
+            .gap_1()
+            .px_3()
+            .py_1()
+            .overflow_x_scroll()
             .border_b_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().muted.opacity(0.35))
+            .bg(cx.theme().background)
             .children(
-                visible_items
+                items
                     .into_iter()
                     .map(|item| self.render_toolbar_item(item, cx)),
             )
-            .when(!overflow_items.is_empty(), |this| {
-                this.child(self.render_toolbar_overflow(overflow_items, cx))
-            })
             .into_any_element()
     }
 
@@ -516,48 +513,33 @@ impl DatabaseTabView {
     }
 
     fn render_toolbar_item(&self, item: DatabaseToolbarItem, cx: &mut Context<Self>) -> AnyElement {
+        let color = toolbar_tone_color(item.tone, cx);
+        let hover_bg = cx.theme().muted.opacity(WORKSPACE_TOOLBAR_HOVER_ALPHA);
+        let border = cx.theme().border.opacity(0.0);
+        let hover_border = cx.theme().border;
         let action = item.action;
-        let label = t!(item.label_i18n_key).to_string();
-        let button = Button::new(item.id)
-            .icon(item.icon)
-            .label(label.clone())
-            .compact()
-            .glyph_size(IconSize::Default)
-            .tooltip(label)
+
+        div()
+            .id(item.id)
+            .w(WORKSPACE_TOOLBAR_ITEM_WIDTH)
+            .h(WORKSPACE_TOOLBAR_ITEM_HEIGHT)
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .rounded(WORKSPACE_TOOLBAR_ITEM_RADIUS)
+            .border_1()
+            .border_color(border)
+            .cursor_pointer()
+            .hover(move |this| this.bg(hover_bg).border_color(hover_border))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.handle_toolbar_action(action, window, cx);
-            }));
-
-        match action {
-            DatabaseToolbarAction::CreateQuery => button.primary().into_any_element(),
-            _ => button.ghost().into_any_element(),
-        }
-    }
-
-    fn render_toolbar_overflow(
-        &self,
-        items: Vec<DatabaseToolbarItem>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let view = cx.entity();
-
-        IconButton::new("db-toolbar-more", IconName::Ellipsis)
-            .role(IconButtonRole::Toolbar)
-            .tooltip(t!("DatabaseToolbar.more").to_string())
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, window, _cx| {
-                for item in &items {
-                    let action = item.action;
-                    let view = view.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(t!(item.label_i18n_key).to_string())
-                            .icon(item.icon)
-                            .on_click(window.listener_for(&view, move |this, _, window, cx| {
-                                this.handle_toolbar_action(action, window, cx);
-                            })),
-                    );
-                }
-                menu
-            })
+            }))
+            .child(toolbar_item_icon(item.icon, color))
+            .child(toolbar_item_label(t!(item.label_i18n_key).to_string(), cx))
+            .into_any_element()
     }
 
     fn handle_toolbar_action(

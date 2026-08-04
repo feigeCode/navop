@@ -170,7 +170,7 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     assert!(
         modern_home.contains("recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at))")
     );
-    assert!(modern_home.contains("recent.truncate(5)"));
+    assert!(modern_home.contains("recent.truncate(8)"));
     assert!(modern_home.contains(".min_h(px(50.0))"));
     assert!(modern_home.contains(".min_h(px(140.0))"));
     assert!(!modern_home.contains(".min_h(px(210.0))"));

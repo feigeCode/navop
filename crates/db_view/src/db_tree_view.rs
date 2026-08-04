@@ -12,8 +12,7 @@ use gpui::{
     Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Selectable, Sizable,
-    Size as ComponentSize,
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, Selectable, Sizable, Size as ComponentSize,
     button::{Button, ButtonVariants as _, IconButton},
     checkbox::Checkbox,
     clipboard::Clipboard,
@@ -518,9 +517,7 @@ pub fn get_icon_for_node_type(node_type: &DbNodeType, _theme: &gpui_component::T
 }
 
 fn object_icon(name: IconName) -> Icon {
-    ObjectIcon::new(name)
-        .with_size(IconSize::Default)
-        .into_icon()
+    Icon::new(name).color().with_size(IconSize::Default)
 }
 
 // ============================================================================

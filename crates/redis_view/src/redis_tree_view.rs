@@ -9,8 +9,7 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, BrandIcon, Disableable, FunctionalIcon, Icon, IconName, IconSize, ObjectIcon,
-    Side, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, Side, Sizable, Size,
     button::{Button, ButtonVariants as _, IconButton},
     clipboard::Clipboard,
     content_state::ContentState,
@@ -1764,13 +1763,14 @@ impl RedisTreeView {
     }
 
     fn get_node_icon(&self, node_type: &RedisNodeType) -> Icon {
-        match node_type {
-            RedisNodeType::Connection => BrandIcon::new(IconName::Redis).into_icon(),
-            RedisNodeType::Database(_) => ObjectIcon::new(IconName::Database).into_icon(),
-            RedisNodeType::Namespace => ObjectIcon::new(IconName::FolderOpen1).into_icon(),
-            RedisNodeType::Key(_) => ObjectIcon::new(IconName::Key).into_icon(),
-            RedisNodeType::LoadMore => FunctionalIcon::new(IconName::Ellipsis).into_icon(),
-        }
+        let name = match node_type {
+            RedisNodeType::Connection => IconName::Redis,
+            RedisNodeType::Database(_) => IconName::Database,
+            RedisNodeType::Namespace => IconName::FolderOpen1,
+            RedisNodeType::Key(_) => IconName::Key,
+            RedisNodeType::LoadMore => IconName::Ellipsis,
+        };
+        Icon::new(name).color().with_size(IconSize::Default)
     }
 
     /// 获取键类型的徽章文字和颜色
@@ -1905,7 +1905,7 @@ impl RedisTreeView {
             .border_color(cx.theme().border)
             .child(div().flex_1().child(Input::new(&self.search_state)))
             .child(
-                IconButton::new("search", IconName::Search)
+                IconButton::new("search", Icon::new(IconName::Search).color())
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.search_help").to_string())
@@ -1933,7 +1933,7 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                IconButton::new("refresh", IconName::Refresh)
+                IconButton::new("refresh", Icon::new(IconName::Refresh).color())
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("Common.refresh").to_string())
@@ -1951,7 +1951,7 @@ impl RedisTreeView {
                     }),
             )
             .child(
-                IconButton::new("add-key", IconName::Plus)
+                IconButton::new("add-key", Icon::new(IconName::Plus).color())
                     .hit_size(Size::XSmall)
                     .glyph_size(IconSize::Small)
                     .tooltip(t!("RedisTree.menu_create_key").to_string())
@@ -2006,7 +2006,7 @@ impl RedisTreeView {
                             )
                     }
                 })
-                .icon(ObjectIcon::new(IconName::Database).into_icon())
+                .icon(Icon::new(IconName::Database).color())
                 .checked(selected)
                 .on_click({
                     let view = view.clone();
@@ -2175,6 +2175,7 @@ impl RedisTreeView {
                                 } else {
                                     IconName::ChevronRight
                                 })
+                                .color()
                                 .with_size(Size::XSmall)
                                 .text_color(cx.theme().muted_foreground),
                             )
@@ -2231,7 +2232,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("refresh-namespace-{}", ix)),
-                                IconName::Refresh,
+                                Icon::new(IconName::Refresh).color(),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2251,7 +2252,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("create-in-namespace-{}", ix)),
-                                IconName::Plus,
+                                Icon::new(IconName::Plus).color(),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2268,7 +2269,7 @@ impl RedisTreeView {
                         .child(
                             IconButton::new(
                                 SharedString::from(format!("delete-namespace-{}", ix)),
-                                IconName::Remove,
+                                Icon::new(IconName::Remove).color(),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2293,7 +2294,7 @@ impl RedisTreeView {
                     Button::new(SharedString::from(format!("redis-db-switch-btn-{}", ix)))
                         .ghost()
                         .xsmall()
-                        .icon(ObjectIcon::new(IconName::Database).into_icon())
+                        .icon(Icon::new(IconName::Database).color())
                         .label(format!("db{}", current_db))
                         .dropdown_menu(move |menu, _window, cx| {
                             Self::render_database_switcher_menu(
@@ -2322,7 +2323,7 @@ impl RedisTreeView {
                         .trigger(
                             IconButton::new(
                                 SharedString::from(format!("error-btn-{}", ix)),
-                                IconName::TriangleAlert,
+                                Icon::new(IconName::TriangleAlert).color(),
                             )
                             .hit_size(Size::XSmall)
                             .glyph_size(IconSize::Small)
@@ -2345,6 +2346,7 @@ impl RedisTreeView {
                                                 .gap_1()
                                                 .child(
                                                     Icon::new(IconName::TriangleAlert)
+                                                        .color()
                                                         .with_size(Size::Small)
                                                         .text_color(cx.theme().warning),
                                                 )
@@ -2695,7 +2697,9 @@ impl Render for RedisTreeView {
                         this.child(
                             ContentState::empty(t!("RedisTree.no_data").to_string())
                                 .icon(
-                                    ObjectIcon::new(IconName::Database).with_size(IconSize::Large),
+                                    Icon::new(IconName::Database)
+                                        .color()
+                                        .with_size(IconSize::Large),
                                 )
                                 .compact(),
                         )

@@ -9,7 +9,7 @@ use gpui::{
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme, AxisExt, IconName, Placement, Selectable, Sizable,
+    ActiveTheme, AxisExt, Icon, IconName, Placement, Selectable, Sizable,
     button::{Button, ButtonVariants as _},
     dock::PanelInfo,
     h_flex,
@@ -587,7 +587,7 @@ impl TabPanel {
 
         Some(
             Button::new(SharedString::from(format!("toggle-dock:{:?}", placement)))
-                .icon(icon)
+                .icon(Icon::new(icon).color())
                 .xsmall()
                 .ghost()
                 .tab_stop(false)

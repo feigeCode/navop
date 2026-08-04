@@ -9,7 +9,7 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, BrandIcon, Icon, IconName, IconSize, ObjectIcon, Sizable, Size, WindowExt as _,
+    ActiveTheme, Icon, IconName, IconSize, Sizable, Size, WindowExt as _,
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -1262,17 +1262,12 @@ impl MongoTreeView {
         let is_expanded = self.expanded_nodes.contains(&node_id);
         let show_arrow = self.should_show_arrow(&node_id);
 
-        let icon = match node.node_type {
-            MongoNodeType::Connection => BrandIcon::new(IconName::MongoDB)
-                .with_size(IconSize::Default)
-                .into_icon(),
-            MongoNodeType::Database => ObjectIcon::new(IconName::Database)
-                .with_size(IconSize::Default)
-                .into_icon(),
-            MongoNodeType::Collection => ObjectIcon::new(IconName::Table)
-                .with_size(IconSize::Default)
-                .into_icon(),
+        let icon_name = match node.node_type {
+            MongoNodeType::Connection => IconName::MongoDB,
+            MongoNodeType::Database => IconName::Database,
+            MongoNodeType::Collection => IconName::Table,
         };
+        let icon = Icon::new(icon_name).color().with_size(IconSize::Default);
 
         let indent = MONGO_TREE_INDENT * entry.depth;
         let tree = cx.theme().geometry.tree;
@@ -1339,6 +1334,7 @@ impl MongoTreeView {
                                 } else {
                                     IconName::ChevronRight
                                 })
+                                .color()
                                 .with_size(Size::XSmall)
                                 .text_color(cx.theme().muted_foreground),
                             )
@@ -1596,7 +1592,9 @@ impl Render for MongoTreeView {
                     .child(
                         Input::new(&self.search_input)
                             .prefix(
-                                Icon::new(IconName::Search).text_color(cx.theme().muted_foreground),
+                                Icon::new(IconName::Search)
+                                    .color()
+                                    .text_color(cx.theme().muted_foreground),
                             )
                             .cleanable(true)
                             .small()

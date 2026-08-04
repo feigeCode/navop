@@ -11,7 +11,7 @@ use gpui::{
     px, relative,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Sizable, Size, WindowExt as _,
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt as _,
     button::{Button, ButtonVariants as _, IconButton},
     checkbox::Checkbox,
     content_state::ContentState,
@@ -3695,8 +3695,11 @@ impl KeyValueView {
 
     /// 渲染空状态
     fn render_empty_state(&self, _cx: &App) -> impl IntoElement {
-        ContentState::empty(t!("KeyValueView.select_key_placeholder"))
-            .icon(ObjectIcon::new(IconName::Database).with_size(IconSize::Large))
+        ContentState::empty(t!("KeyValueView.select_key_placeholder")).icon(
+            Icon::new(IconName::Database)
+                .color()
+                .with_size(IconSize::Large),
+        )
     }
 
     /// 渲染加载状态
