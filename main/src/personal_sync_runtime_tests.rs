@@ -36,6 +36,7 @@ fn personal_sync_actions_enabled_with_configured_path(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().expect("tempdir");
     cx.update(|cx| {
         let mut settings = AppSettings::default();
+        settings.sync_enabled = true;
         settings.sync_provider = SyncProvider::Personal;
         settings.personal_sync.backend = PersonalSyncBackendKind::Folder;
         settings.personal_sync.path = temp.path().to_string_lossy().to_string();
@@ -44,6 +45,23 @@ fn personal_sync_actions_enabled_with_configured_path(cx: &mut TestAppContext) {
 
     cx.update(|cx| {
         assert!(actions_enabled(cx));
+    });
+}
+
+#[gpui::test]
+fn personal_sync_actions_disabled_when_global_sync_is_off(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    cx.update(|cx| {
+        let mut settings = AppSettings::default();
+        settings.sync_enabled = false;
+        settings.sync_provider = SyncProvider::Personal;
+        settings.personal_sync.backend = PersonalSyncBackendKind::Folder;
+        settings.personal_sync.path = temp.path().to_string_lossy().to_string();
+        cx.set_global(settings);
+    });
+
+    cx.update(|cx| {
+        assert!(!actions_enabled(cx));
     });
 }
 

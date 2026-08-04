@@ -96,6 +96,7 @@ fn render_account_actions(
     cx: &gpui::App,
 ) -> impl IntoElement {
     let has_key = one_core::crypto::has_master_key();
+    let sync_enabled = one_core::settings::AppSettings::global(cx).sync_enabled;
     h_flex()
         .w_full()
         .justify_center()
@@ -113,8 +114,12 @@ fn render_account_actions(
                 } else {
                     t!("Home.sync").to_string()
                 })
-                .disabled(syncing)
-                .tooltip(t!("Home.sync_tooltip"))
+                .disabled(syncing || !sync_enabled)
+                .tooltip(if sync_enabled {
+                    t!("Home.sync_tooltip")
+                } else {
+                    t!("Home.sync_disabled_tooltip")
+                })
                 .on_click(window.listener_for(&sync_view, |home, _, _, cx| {
                     home.trigger_sync(cx);
                 })),

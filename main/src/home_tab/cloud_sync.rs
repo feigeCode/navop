@@ -2,6 +2,11 @@ use super::*;
 
 impl HomePage {
     pub(super) fn trigger_sync(&mut self, cx: &mut Context<Self>) {
+        if !AppSettings::global(cx).sync_enabled {
+            tracing::debug!("同步总开关已关闭，跳过同步请求");
+            return;
+        }
+
         if sync_route(cx) == HomeSyncRoute::Personal {
             crate::personal_sync_runtime::sync_now(cx);
             return;

@@ -1,8 +1,9 @@
 //! MongoDB 连接表单窗口
 
 use connection_form::team::{
-    TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
-    resolve_team_assignment, selected_team_id, team_label, team_management_enabled,
+    TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
+    refresh_teams_tooltip, resolve_team_assignment, selected_team_id, team_label,
+    team_management_enabled,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -1021,46 +1022,51 @@ impl MongoFormWindow {
                 t!("MongoForm.workspace_label").as_ref(),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .when(team_management_enabled(cx), |form| {
+            .when(
+                connection_sync_controls_visible_in(cx) && team_management_enabled(cx),
+                |form| {
+                    form.child(
+                        self.render_form_row(
+                            &team_label(),
+                            h_flex()
+                                .gap_2()
+                                .child(Select::new(&self.team_select).w_full())
+                                .child(
+                                    Button::new("sync-mongo-teams")
+                                        .icon(IconName::Refresh)
+                                        .ghost()
+                                        .tooltip(refresh_teams_tooltip())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.request_team_sync(window, cx);
+                                        })),
+                                ),
+                        ),
+                    )
+                },
+            )
+            .when(connection_sync_controls_visible_in(cx), |form| {
                 form.child(
                     self.render_form_row(
-                        &team_label(),
+                        t!("MongoForm.cloud_sync_label").as_ref(),
                         h_flex()
                             .gap_2()
-                            .child(Select::new(&self.team_select).w_full())
                             .child(
-                                Button::new("sync-mongo-teams")
-                                    .icon(IconName::Refresh)
-                                    .ghost()
-                                    .tooltip(refresh_teams_tooltip())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.request_team_sync(window, cx);
+                                Checkbox::new("mongo-sync-enabled")
+                                    .checked(self.sync_enabled)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.sync_enabled = !this.sync_enabled;
+                                        cx.notify();
                                     })),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("MongoForm.cloud_sync_enabled").to_string()),
                             ),
                     ),
                 )
             })
-            .child(
-                self.render_form_row(
-                    t!("MongoForm.cloud_sync_label").as_ref(),
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("mongo-sync-enabled")
-                                .checked(self.sync_enabled)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.sync_enabled = !this.sync_enabled;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("MongoForm.cloud_sync_enabled").to_string()),
-                        ),
-                ),
-            )
     }
 
     fn render_cluster_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -104,9 +104,14 @@ pub fn test_connection(cx: &mut App) {
 }
 
 pub fn sync_now(cx: &mut App) {
+    let Some(config) = active_or_current_config(cx) else {
+        set_status(cx, PersonalSyncRuntimeStatus::Disabled);
+        return;
+    };
     sync_master_key_and_user(cx);
     if let Some(runtime) = cx
         .try_global::<GlobalPersonalSyncRuntime>()
+        .filter(|state| state.active_config.as_ref() == Some(&config))
         .and_then(|state| state.runtime.as_ref())
     {
         runtime.worker.enqueue(PersonalSyncEvent::FullScan);
@@ -114,10 +119,6 @@ pub fn sync_now(cx: &mut App) {
         return;
     }
 
-    let Some(config) = active_or_current_config(cx) else {
-        set_status(cx, PersonalSyncRuntimeStatus::Disabled);
-        return;
-    };
     let Some(source) = build_local_source(cx) else {
         set_status(
             cx,
@@ -500,9 +501,11 @@ fn reconcile_runtime(cx: &mut App) {
         }
         Err(PersonalSyncRuntimeError::Disabled | PersonalSyncRuntimeError::NotConfigured) => {
             let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
+            state.generation += 1;
             state.active_config = None;
             state.runtime = None;
             state.status = PersonalSyncRuntimeStatus::Disabled;
+            state.pending_auto_drain = false;
         }
     }
 }
@@ -606,7 +609,10 @@ fn enqueue_periodic_full_scan(cx: &mut App) {
 
 fn enqueue_auto_sync_event(event: PersonalSyncEvent, cx: &mut App) {
     let settings = AppSettings::global(cx);
-    if settings.sync_provider != SyncProvider::Personal || !settings.personal_sync.auto_sync {
+    if !settings.sync_enabled
+        || settings.sync_provider != SyncProvider::Personal
+        || !settings.personal_sync.auto_sync
+    {
         return;
     }
     sync_master_key_and_user(cx);
@@ -630,6 +636,9 @@ pub(crate) fn should_start_drain_after_enqueue(status: &PersonalSyncRuntimeStatu
 }
 
 fn start_runtime_drain(cx: &mut App) {
+    if active_personal_sync_settings(AppSettings::global(cx)).is_none() {
+        return;
+    }
     let Some(state) = cx.try_global::<GlobalPersonalSyncRuntime>() else {
         return;
     };
@@ -781,16 +790,12 @@ fn sync_master_key_and_user(cx: &mut App) {
 }
 
 fn active_or_current_config(cx: &App) -> Option<PersonalSyncRuntimeConfig> {
-    cx.try_global::<GlobalPersonalSyncRuntime>()
-        .and_then(|state| state.active_config.clone())
-        .or_else(|| {
-            active_personal_sync_settings(AppSettings::global(cx))
-                .and_then(|settings| build_personal_sync_runtime_config(&settings).ok())
-        })
+    active_personal_sync_settings(AppSettings::global(cx))
+        .and_then(|settings| build_personal_sync_runtime_config(&settings).ok())
 }
 
 fn active_personal_sync_settings(settings: &AppSettings) -> Option<PersonalSyncSettings> {
-    if settings.sync_provider != SyncProvider::Personal {
+    if !settings.sync_enabled || settings.sync_provider != SyncProvider::Personal {
         return None;
     }
     Some(settings.personal_sync.clone())

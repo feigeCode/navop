@@ -1,4 +1,6 @@
-use connection_form::team::{team_label, team_management_enabled};
+use connection_form::team::{
+    connection_sync_controls_visible_in, team_label, team_management_enabled,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
@@ -103,12 +105,20 @@ impl PortForwardingFormWindow {
                         t!("PortForwarding.workspace").to_string(),
                         Select::new(&self.workspace_select).w_full(),
                     ))
-                    .when(team_management_enabled(cx), |form| {
-                        form.child(
-                            self.render_row(team_label(), Select::new(&self.team_select).w_full()),
-                        )
+                    .when(
+                        connection_sync_controls_visible_in(cx) && team_management_enabled(cx),
+                        |form| {
+                            form.child(
+                                self.render_row(
+                                    team_label(),
+                                    Select::new(&self.team_select).w_full(),
+                                ),
+                            )
+                        },
+                    )
+                    .when(connection_sync_controls_visible_in(cx), |form| {
+                        form.child(self.render_sync_row(cx))
                     })
-                    .child(self.render_sync_row(cx))
                     .child(self.render_row(
                         t!("PortForwarding.remark").to_string(),
                         Input::new(&self.remark_input),

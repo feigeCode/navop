@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use connection_form::team::{
-    TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
-    replace_team_options, resolve_team_assignment, selected_team_id, team_label,
-    team_management_enabled,
+    TeamSelectItem, connection_sync_controls_visible_in, create_team_select, refresh_team_options,
+    refresh_teams_tooltip, replace_team_options, resolve_team_assignment, selected_team_id,
+    team_label, team_management_enabled,
 };
 use db::plugin_manifest::FormVisibilityRule;
 use db::{
@@ -2470,7 +2470,9 @@ impl DbConnectionForm {
                         .label_justify_end()
                         .child(Select::new(&self.workspace_select).w_full()),
                 )
-                .when(team_management_enabled(cx), |form| {
+                .when(
+                    connection_sync_controls_visible_in(cx) && team_management_enabled(cx),
+                    |form| {
                     form.child(
                         field()
                             .label(team_label())
@@ -2491,33 +2493,36 @@ impl DbConnectionForm {
                                     ),
                             ),
                     )
-                })
-                .child(
-                    field()
-                        .label(t!("ConnectionForm.cloud_sync").to_string())
-                        .items_center()
-                        .label_justify_end()
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(
-                                    Checkbox::new("sync-enabled")
-                                        .checked(is_sync_checked)
-                                        .on_click(move |_, _, cx| {
-                                            sync_enabled.update(cx, |sync, cx| {
-                                                *sync = !*sync;
-                                                cx.notify();
-                                            });
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(t!("ConnectionForm.cloud_sync_desc").to_string()),
-                                ),
-                        ),
+                    },
                 )
+                .when(connection_sync_controls_visible_in(cx), |form| {
+                    form.child(
+                        field()
+                            .label(t!("ConnectionForm.cloud_sync").to_string())
+                            .items_center()
+                            .label_justify_end()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Checkbox::new("sync-enabled")
+                                            .checked(is_sync_checked)
+                                            .on_click(move |_, _, cx| {
+                                                sync_enabled.update(cx, |sync, cx| {
+                                                    *sync = !*sync;
+                                                    cx.notify();
+                                                });
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(t!("ConnectionForm.cloud_sync_desc").to_string()),
+                                    ),
+                            ),
+                    )
+                })
                 .when(db_type == DatabaseType::Oracle, |form| {
                     let has_error = matches!(&oracle_client_status, Some(Err(_)));
                     let oracle_client_guide = oracle_client_guide.clone();

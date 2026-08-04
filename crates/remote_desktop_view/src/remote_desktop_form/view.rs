@@ -1,4 +1,6 @@
-use connection_form::team::{refresh_teams_tooltip, team_label, team_management_enabled};
+use connection_form::team::{
+    connection_sync_controls_visible_in, refresh_teams_tooltip, team_label, team_management_enabled,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
@@ -61,30 +63,35 @@ impl RemoteDesktopFormWindow {
                 t!("RemoteDesktopForm.label_workspace").to_string(),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .when(team_management_enabled(cx), |form| {
-                form.child(
-                    self.render_form_row(
-                        team_label(),
-                        h_flex()
-                            .gap_2()
-                            .child(Select::new(&self.team_select).w_full())
-                            .child(
-                                Button::new("sync-remote-desktop-teams")
-                                    .icon(IconName::Refresh)
-                                    .ghost()
-                                    .tooltip(refresh_teams_tooltip())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.request_team_sync(window, cx);
-                                    })),
-                            ),
-                    ),
-                )
-            })
+            .when(
+                connection_sync_controls_visible_in(cx) && team_management_enabled(cx),
+                |form| {
+                    form.child(
+                        self.render_form_row(
+                            team_label(),
+                            h_flex()
+                                .gap_2()
+                                .child(Select::new(&self.team_select).w_full())
+                                .child(
+                                    Button::new("sync-remote-desktop-teams")
+                                        .icon(IconName::Refresh)
+                                        .ghost()
+                                        .tooltip(refresh_teams_tooltip())
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.request_team_sync(window, cx);
+                                        })),
+                                ),
+                        ),
+                    )
+                },
+            )
             .child(self.render_read_only_row(cx))
             .when(self.protocol == RemoteDesktopProtocol::Rdp, |form| {
                 form.child(self.render_audio_playback_row(cx))
             })
-            .child(self.render_sync_row(cx))
+            .when(connection_sync_controls_visible_in(cx), |form| {
+                form.child(self.render_sync_row(cx))
+            })
     }
 
     fn render_proxy_section(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1114,6 +1114,7 @@ impl SettingsPanel {
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
                 .group(sync_setting_group(
+                    default_settings.sync_enabled,
                     default_settings.sync_provider,
                     &default_settings.personal_sync,
                 )),
@@ -1208,12 +1209,14 @@ fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem
 }
 
 fn sync_setting_group(
+    sync_enabled_default: bool,
     sync_provider_default: SyncProvider,
     defaults: &PersonalSyncSettings,
 ) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.Sync.group_title"))
         .items(vec![
+            sync_enabled_item(sync_enabled_default),
             sync_provider_item(sync_provider_default),
             personal_sync_backend_item(defaults.backend),
             personal_sync_path_item(defaults.path.clone()),
@@ -1228,6 +1231,22 @@ fn sync_setting_group(
                 t!("Settings.Sync.sync_now").to_string(),
             ]),
         ])
+}
+
+fn sync_enabled_item(default: bool) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.enabled"),
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).sync_enabled,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sync_enabled = val;
+                });
+            },
+        )
+        .default_value(default),
+    )
+    .description(t!("Settings.Sync.enabled_desc").to_string())
 }
 
 fn sync_provider_item(default: SyncProvider) -> SettingItem {
@@ -1492,7 +1511,16 @@ pub(crate) fn personal_sync_status_view_model(
 
 fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
     let status = crate::personal_sync_runtime::runtime_status(cx);
-    let status_view = personal_sync_status_view_model(&status);
+    let sync_enabled = AppSettings::global(cx).sync_enabled;
+    let status_view = if sync_enabled {
+        personal_sync_status_view_model(&status)
+    } else {
+        PersonalSyncStatusViewModel {
+            label: t!("Settings.Sync.Status.disabled").to_string(),
+            detail: None,
+            syncing: false,
+        }
+    };
     let enabled = crate::personal_sync_runtime::actions_enabled(cx) && !status_view.syncing;
     let conflict_count = crate::personal_sync_conflicts::current_personal_conflict_count(cx);
     h_flex()

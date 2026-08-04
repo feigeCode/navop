@@ -762,6 +762,9 @@ pub struct AppSettings {
     pub auto_update: bool,
     #[serde(default)]
     pub skipped_update_version: Option<String>,
+    /// Whether any configured synchronization provider is allowed to run.
+    #[serde(default)]
+    pub sync_enabled: bool,
     #[serde(default)]
     pub sync_provider: SyncProvider,
     #[serde(default)]
@@ -1104,6 +1107,7 @@ impl Default for AppSettings {
             log_file_path: String::new(),
             auto_update: true,
             skipped_update_version: None,
+            sync_enabled: false,
             sync_provider: SyncProvider::OnetCloud,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
@@ -1365,6 +1369,30 @@ mod tests {
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
     };
+
+    #[test]
+    fn app_settings_disables_sync_by_default() {
+        assert!(!AppSettings::default().sync_enabled);
+    }
+
+    #[test]
+    fn legacy_app_settings_keep_sync_disabled_until_explicitly_enabled() {
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("旧版设置应能反序列化");
+
+        assert!(!settings.sync_enabled);
+    }
+
+    #[test]
+    fn app_settings_round_trip_preserves_sync_enabled() {
+        let mut settings = AppSettings::default();
+        settings.sync_enabled = true;
+
+        let json = serde_json::to_string(&settings).expect("应序列化同步总开关");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化同步总开关");
+
+        assert!(restored.sync_enabled);
+    }
 
     #[test]
     fn remote_file_editor_settings_default_to_builtin_with_conflict_check() {

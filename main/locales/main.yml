@@ -431,6 +431,10 @@ Home:
     en: Sync data with cloud
     zh-CN: 与云端同步数据
     zh-HK: 與雲端同步數據
+  sync_disabled_tooltip:
+    en: Enable sync in Settings before syncing data
+    zh-CN: 请先在设置中启用同步
+    zh-HK: 請先在設定中啟用同步
   mcp_enable:
     en: MCP
     zh-CN: MCP
@@ -892,9 +896,9 @@ Encryption:
     zh-CN: 解锁
     zh-HK: 解鎖
   startup_lock_notice:
-    en: Startup protection is enabled. Unlock Navop with your master key to continue.
-    zh-CN: 已启用启动保护，请输入主密钥解锁 Navop 后继续。
-    zh-HK: 已啟用啟動保護，請輸入主密鑰解鎖 Navop 後繼續。
+    en: Startup protection is enabled. Enter your master key to unlock Navop.
+    zh-CN: 已启用启动保护，请输入主密钥解锁 Navop。
+    zh-HK: 已啟用啟動保護，請輸入主密鑰解鎖 Navop。
   change_repo_password:
     en: Change Master Key
     zh-CN: 修改主密钥
@@ -924,17 +928,25 @@ Encryption:
     zh-CN: 输入新主密钥
     zh-HK: 輸入新主密鑰
   remember_password_title:
-    en: "Please remember your master key"
-    zh-CN: "请牢记你的主密钥"
-    zh-HK: "請牢記你的主密鑰"
+    en: "Your master key protects sensitive data stored locally"
+    zh-CN: "主密钥用于保护本地敏感数据"
+    zh-HK: "主密鑰用於保護本機敏感資料"
   remember_password_detail_local:
-    en: "The master key encrypts all locally stored sensitive data such as database passwords, SSH keys, etc., preventing data leakage even if local files are compromised."
-    zh-CN: "主密钥会对本地存储的所有敏感数据（如数据库密码、SSH 密钥等）进行加密，即使本地文件被窃取也无法获取明文信息。"
-    zh-HK: "主密鑰會對本地存儲的所有敏感數據（如數據庫密碼、SSH 密鑰等）進行加密，即使本地文件被竊取也無法獲取明文信息。"
+    en: "Sensitive information such as database passwords and SSH keys is encrypted locally. The master key is used only for local encryption and unlocking. Navop does not upload your data automatically."
+    zh-CN: "数据库密码、SSH 密钥等敏感信息会在本地加密保存。主密钥仅用于本地加密与解锁，Navop 不会自动上传您的数据。"
+    zh-HK: "資料庫密碼、SSH 密鑰等敏感資訊會在本機加密儲存。主密鑰僅用於本機加密與解鎖，Navop 不會自動上傳您的資料。"
+  sync_info_title:
+    en: "About sync"
+    zh-CN: "关于云同步"
+    zh-HK: "關於雲端同步"
   remember_password_detail_cloud:
-    en: "All data is encrypted locally before being pushed to the cloud. The cloud server only stores encrypted strings and cannot decrypt the content. If the master key is forgotten, the cloud data cannot be recovered."
-    zh-CN: "所有数据在本地加密后才会推送到云端，云端服务器仅存储密文，无法解密内容。主密钥一旦遗忘，云端数据将无法恢复。"
-    zh-HK: "所有數據在本地加密後才會推送到雲端，雲端服務器僅存儲密文，無法解密內容。主密鑰一旦遺忘，雲端數據將無法恢復。"
+    en: "Encrypted data is synchronized only after you explicitly enable and configure sync. The selected destination stores ciphertext and cannot read its contents."
+    zh-CN: "只有在您主动启用并配置同步后，加密数据才会同步到您选择的服务。同步目标仅保存密文，无法读取其中内容。"
+    zh-HK: "只有在您主動啟用並設定同步後，加密資料才會同步到您選擇的服務。同步目標僅儲存密文，無法讀取其中內容。"
+  master_key_loss_warning:
+    en: "Keep your master key safe. If it is lost, encrypted data cannot be recovered."
+    zh-CN: "请妥善保管主密钥；遗失后，已加密的数据将无法恢复。"
+    zh-HK: "請妥善保管主密鑰；遺失後，已加密的資料將無法恢復。"
   key_empty:
     en: "Master key cannot be empty"
     zh-CN: "主密钥不能为空"
@@ -2645,6 +2657,14 @@ Settings:
       en: Sync
       zh-CN: 同步
       zh-HK: 同步
+    enabled:
+      en: Enable Sync
+      zh-CN: 启用同步
+      zh-HK: 啟用同步
+    enabled_desc:
+      en: Sync is off by default. When enabled, Navop can synchronize encrypted data using the selected provider.
+      zh-CN: 同步默认关闭。启用后，Navop 才会通过所选同步方式同步加密数据。
+      zh-HK: 同步預設關閉。啟用後，Navop 才會透過所選同步方式同步加密資料。
     provider:
       en: Sync Provider
       zh-CN: 同步方式
@@ -2720,6 +2740,10 @@ Settings:
         zh-CN: 个人同步
         zh-HK: 個人同步
     Status:
+      disabled:
+        en: Sync disabled
+        zh-CN: 同步已关闭
+        zh-HK: 同步已關閉
       ready:
         en: Ready
         zh-CN: 就绪

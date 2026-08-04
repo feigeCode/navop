@@ -16,13 +16,16 @@ impl HomePage {
         let is_logged_in = self.current_user.is_some();
         let has_sync_license = is_feature_enabled(Feature::CloudSync, cx);
         let route = sync_route(cx);
+        let sync_enabled = AppSettings::global(cx).sync_enabled;
         let personal_syncing = matches!(
             crate::personal_sync_runtime::runtime_status(cx),
             crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing
         );
         let personal_sync_ready = crate::personal_sync_runtime::actions_enabled(cx);
         let sync_disabled = match route {
-            HomeSyncRoute::OnetCloud => (!is_logged_in && has_sync_license) || is_syncing,
+            HomeSyncRoute::OnetCloud => {
+                !sync_enabled || (!is_logged_in && has_sync_license) || is_syncing
+            }
             HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
         };
         let has_master_key = crypto::has_master_key();
@@ -107,7 +110,9 @@ impl HomePage {
                             .ghost()
                             .disabled(sync_disabled)
                             .tooltip(
-                                if route == HomeSyncRoute::Personal && !personal_sync_ready {
+                                if !sync_enabled {
+                                    t!("Home.sync_disabled_tooltip")
+                                } else if route == HomeSyncRoute::Personal && !personal_sync_ready {
                                     t!("Settings.Sync.Status.not_configured")
                                 } else if route == HomeSyncRoute::OnetCloud
                                     && !is_logged_in

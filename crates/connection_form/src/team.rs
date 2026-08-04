@@ -6,6 +6,7 @@ use one_core::cloud_sync::{
 };
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::license::{Feature, is_feature_enabled};
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 
 #[derive(Clone, Default, PartialEq)]
@@ -71,6 +72,14 @@ pub fn team_select_items(teams: &[TeamOption]) -> Vec<TeamSelectItem> {
 
 pub fn team_management_enabled(cx: &App) -> bool {
     is_feature_enabled(Feature::TeamManagement, cx)
+}
+
+pub fn connection_sync_controls_visible(settings: &AppSettings) -> bool {
+    settings.sync_enabled
+}
+
+pub fn connection_sync_controls_visible_in(cx: &App) -> bool {
+    connection_sync_controls_visible(AppSettings::global(cx))
 }
 
 pub fn create_team_select<T: 'static>(
@@ -204,10 +213,11 @@ mod tests {
     use gpui_component::{Root, Theme, select::SelectState};
     use one_core::cloud_sync::{TeamKeyCacheStatus, TeamOption};
     use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
+    use one_core::settings::AppSettings;
 
     use super::{
-        TeamAssignment, TeamSelectItem, apply_team_assignment, create_team_select,
-        team_select_items,
+        TeamAssignment, TeamSelectItem, apply_team_assignment, connection_sync_controls_visible,
+        connection_sync_controls_visible_in, create_team_select, team_select_items,
     };
 
     struct TeamSelectTestRoot {
@@ -297,6 +307,30 @@ mod tests {
     }
 
     #[test]
+    fn global_sync_controls_connection_sync_fields_visibility() {
+        let mut settings = AppSettings::default();
+
+        settings.sync_enabled = false;
+        assert!(!connection_sync_controls_visible(&settings));
+
+        settings.sync_enabled = true;
+        assert!(connection_sync_controls_visible(&settings));
+    }
+
+    #[gpui::test]
+    fn connection_sync_visibility_reads_global_app_settings(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            assert!(!connection_sync_controls_visible_in(cx));
+
+            let mut settings = AppSettings::default();
+            settings.sync_enabled = true;
+            cx.set_global(settings);
+            assert!(connection_sync_controls_visible_in(cx));
+        });
+    }
+
+    #[test]
     fn refresh_waits_for_team_cache_updated_before_replacing_options() {
         let source = include_str!("team.rs");
         let refresh = source
@@ -363,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn every_team_field_uses_the_shared_feature_gate() {
+    fn every_team_and_sync_field_uses_the_shared_visibility_gates() {
         for (name, source) in [
             (
                 "database",
@@ -397,6 +431,13 @@ mod tests {
             assert!(
                 source.contains("team_management_enabled(cx)"),
                 "{name} team field must use the shared feature gate"
+            );
+            assert!(
+                source
+                    .matches("connection_sync_controls_visible_in(cx)")
+                    .count()
+                    >= 2,
+                "{name} team and sync fields must use the global sync visibility gate"
             );
         }
     }

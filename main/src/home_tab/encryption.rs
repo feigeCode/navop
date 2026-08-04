@@ -112,7 +112,7 @@ impl HomePage {
 
             dialog
                 .title(dialog_title.to_string())
-                .width(px(450.))
+                .width(px(520.))
                 .confirm()
                 .overlay_closable(!startup_lock)
                 .close_button(!startup_lock)
@@ -230,7 +230,7 @@ impl HomePage {
                             content.child(
                                 div()
                                     .text_sm()
-                                    .text_color(cx.theme().warning)
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(t!("Encryption.startup_lock_notice").to_string()),
                             )
                         })
@@ -249,18 +249,52 @@ impl HomePage {
                         )
                         .child(
                             v_flex()
-                                .gap_2()
+                                .gap_3()
                                 .child(
                                     div().text_base().font_weight(FontWeight::SEMIBOLD).child(
                                         t!("Encryption.remember_password_title").to_string(),
                                     ),
                                 )
-                                .child(div().text_sm().child(
-                                    t!("Encryption.remember_password_detail_local").to_string(),
-                                ))
-                                .child(div().text_sm().text_color(cx.theme().warning).child(
-                                    t!("Encryption.remember_password_detail_cloud").to_string(),
-                                )),
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            t!("Encryption.remember_password_detail_local")
+                                                .to_string(),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_1()
+                                        .p_3()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().muted)
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(
+                                                    t!("Encryption.sync_info_title").to_string(),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    t!("Encryption.remember_password_detail_cloud")
+                                                        .to_string(),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    div().text_sm().text_color(cx.theme().warning).child(
+                                        t!("Encryption.master_key_loss_warning").to_string(),
+                                    ),
+                                ),
                         )
                         .when_some(error_msg_for_render.read(cx).clone(), |this, msg| {
                             this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
