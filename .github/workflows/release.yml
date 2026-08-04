@@ -18,6 +18,7 @@ on:
           - linux-x64
           - linux-arm64
           - windows-x64
+          - windows-x86
 
 permissions:
   actions: write
@@ -115,15 +116,17 @@ jobs:
           macos_x64='{"target":"x86_64-apple-darwin","os":"macos-15-intel","binary":"navop","archive":"navop-x86_64-apple-darwin.tar.gz","arm_linux":false}'
           linux_x64='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-latest","binary":"navop","archive":"navop-x86_64-unknown-linux-gnu.tar.gz","arm_linux":false}'
           linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm","binary":"navop","archive":"navop-aarch64-unknown-linux-gnu.tar.gz","arm_linux":true}'
-          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","arm_linux":false}'
+          windows_x64='{"target":"x86_64-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-x86_64-pc-windows-msvc.zip","arm_linux":false,"windows_arch":"x64","windows_basename":"navop-x86_64-pc-windows-msvc"}'
+          windows_x86='{"target":"i686-pc-windows-msvc","os":"windows-latest","binary":"navop.exe","archive":"navop-i686-pc-windows-msvc.zip","arm_linux":false,"windows_arch":"x86","windows_basename":"navop-i686-pc-windows-msvc"}'
 
           case "$RELEASE_PLATFORM" in
-            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64]" ;;
+            all) matrix="[$macos_arm64,$macos_x64,$linux_x64,$linux_arm64,$windows_x64,$windows_x86]" ;;
             macos-arm64) matrix="[$macos_arm64]" ;;
             macos-x64) matrix="[$macos_x64]" ;;
             linux-x64) matrix="[$linux_x64]" ;;
             linux-arm64) matrix="[$linux_arm64]" ;;
             windows-x64) matrix="[$windows_x64]" ;;
+            windows-x86) matrix="[$windows_x86]" ;;
             *) echo "::error::Unsupported platform: $RELEASE_PLATFORM"; exit 1 ;;
           esac
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -441,7 +444,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "portable-package/${{ matrix.binary }}"
           Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
           Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
-          Compress-Archive -Path "portable-package/*" -DestinationPath "navop-x86_64-pc-windows-msvc-portable.zip"
+          Compress-Archive -Path "portable-package/*" -DestinationPath "${{ matrix.windows_basename }}-portable.zip"
 
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
@@ -464,25 +467,25 @@ jobs:
             -ext WixToolset.UI.wixext `
             -culture en-US `
             -loc installer/windows/navop.wxl `
-            -arch x64 `
+            -arch ${{ matrix.windows_arch }} `
             -d Version="$msiVersion" `
             -d SourceDir="${{ github.workspace }}\package" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "navop-x86_64-pc-windows-msvc.msi"
+            -out "${{ matrix.windows_basename }}.msi"
           wix build installer/windows/navop-bundle.wxs `
             -ext WixToolset.BootstrapperApplications.wixext `
-            -arch x64 `
+            -arch ${{ matrix.windows_arch }} `
             -d Version="$msiVersion" `
-            -d MsiPath="${{ github.workspace }}\navop-x86_64-pc-windows-msvc.msi" `
+            -d MsiPath="${{ github.workspace }}\${{ matrix.windows_basename }}.msi" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "navop-x86_64-pc-windows-msvc.exe"
+            -out "${{ matrix.windows_basename }}.exe"
 
       - name: Validate Windows MSI metadata
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           ./script/validate-windows-msi.ps1 `
-            -Path "navop-x86_64-pc-windows-msvc.msi" `
+            -Path "${{ matrix.windows_basename }}.msi" `
             -ExpectedLanguage 1033
 
       - name: Upload artifact
@@ -502,22 +505,22 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: navop-windows-msi
-          path: navop-x86_64-pc-windows-msvc.msi
+          name: ${{ matrix.windows_basename }}.msi
+          path: ${{ matrix.windows_basename }}.msi
 
       - name: Upload Windows portable ZIP artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: navop-windows-portable
-          path: navop-x86_64-pc-windows-msvc-portable.zip
+          name: ${{ matrix.windows_basename }}-portable.zip
+          path: ${{ matrix.windows_basename }}-portable.zip
 
       - name: Upload Windows EXE artifact
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: navop-windows-exe-installer
-          path: navop-x86_64-pc-windows-msvc.exe
+          name: ${{ matrix.windows_basename }}.exe
+          path: ${{ matrix.windows_basename }}.exe
 
       - name: Upload Linux installer artifacts
         if: matrix.target == 'x86_64-unknown-linux-gnu'

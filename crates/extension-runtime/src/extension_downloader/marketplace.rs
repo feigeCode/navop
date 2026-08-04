@@ -393,6 +393,7 @@ pub(crate) fn marketplace_target_keys_for(os: &str, arch: &str) -> &'static [&'s
         ("linux", "x86_64") => &["x86_64-unknown-linux-gnu", "linux", "universal"],
         ("linux", "aarch64") => &["aarch64-unknown-linux-gnu", "linux", "universal"],
         ("windows", "x86_64") => &["x86_64-pc-windows-msvc", "windows", "universal"],
+        ("windows", "x86") => &["i686-pc-windows-msvc", "windows", "universal"],
         _ => &["universal"],
     }
 }
@@ -406,6 +407,14 @@ mod tests {
         assert_eq!(
             &["aarch64-unknown-linux-gnu", "linux", "universal"],
             marketplace_target_keys_for("linux", "aarch64")
+        );
+    }
+
+    #[test]
+    fn marketplace_target_keys_include_windows_x86() {
+        assert_eq!(
+            &["i686-pc-windows-msvc", "windows", "universal"],
+            marketplace_target_keys_for("windows", "x86")
         );
     }
 
@@ -453,6 +462,56 @@ mod tests {
             artifact.file
         );
         assert_eq!(Some("linux-arm64-sha"), artifact.sha256.as_deref());
+    }
+
+    #[test]
+    fn artifact_selection_prefers_windows_x86_before_windows_and_universal_fallbacks() {
+        let entry = MarketplaceEntry {
+            id: "duckdb".to_string(),
+            kind: ExtensionKind::DatabaseDriver,
+            name: "DuckDB".to_string(),
+            version: "1.0.0".to_string(),
+            release_tag: "duckdb-v1.0.0".to_string(),
+            description: String::new(),
+            file_extensions: Vec::new(),
+            engines: Default::default(),
+            manifest: String::new(),
+            artifacts: HashMap::from([
+                (
+                    "universal".to_string(),
+                    MarketplaceArtifact {
+                        file: "duckdb-driver-universal.tar.gz".to_string(),
+                        sha256: Some("universal-sha".to_string()),
+                    },
+                ),
+                (
+                    "windows".to_string(),
+                    MarketplaceArtifact {
+                        file: "duckdb-driver-windows.zip".to_string(),
+                        sha256: Some("windows-sha".to_string()),
+                    },
+                ),
+                (
+                    "i686-pc-windows-msvc".to_string(),
+                    MarketplaceArtifact {
+                        file: "duckdb-driver-i686-pc-windows-msvc.zip".to_string(),
+                        sha256: Some("windows-x86-sha".to_string()),
+                    },
+                ),
+            ]),
+            resolved_download_urls: Vec::new(),
+            resolved_sha256: None,
+            source_manifest_url: None,
+            github_manifest_url: None,
+            resolved_manifest_urls: Vec::new(),
+        };
+
+        let artifact = entry
+            .artifact_for_keys(marketplace_target_keys_for("windows", "x86"))
+            .expect("windows x86 应选择专属 artifact");
+
+        assert_eq!("duckdb-driver-i686-pc-windows-msvc.zip", artifact.file);
+        assert_eq!(Some("windows-x86-sha"), artifact.sha256.as_deref());
     }
 
     #[test]

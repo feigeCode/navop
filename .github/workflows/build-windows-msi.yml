@@ -7,6 +7,14 @@ on:
         description: "Installer version to build, for example 0.8.8"
         required: true
         type: string
+      architecture:
+        description: "Windows architecture"
+        required: true
+        type: choice
+        default: x64
+        options:
+          - x64
+          - x86
 
 permissions:
   contents: read
@@ -18,6 +26,9 @@ env:
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
   SCCACHE_IDLE_TIMEOUT: "7200"
+  WINDOWS_TARGET: ${{ inputs.architecture == 'x86' && 'i686-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
+  WINDOWS_WIX_ARCH: ${{ inputs.architecture == 'x86' && 'x86' || 'x64' }}
+  WINDOWS_BASENAME: ${{ inputs.architecture == 'x86' && 'navop-i686-pc-windows-msvc' || 'navop-x86_64-pc-windows-msvc' }}
 
 jobs:
   build:
@@ -40,7 +51,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          target: x86_64-pc-windows-msvc
+          target: ${{ env.WINDOWS_TARGET }}
           cache: false
 
       - name: Setup sccache
@@ -64,7 +75,7 @@ jobs:
           key: navop-cargo-inputs-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             navop-cargo-inputs-v1-${{ runner.os }}-
-            release-cargo-inputs-${{ runner.os }}-x86_64-pc-windows-msvc-
+            release-cargo-inputs-${{ runner.os }}-${{ env.WINDOWS_TARGET }}-
 
       - name: Verify build secrets
         shell: pwsh
@@ -86,7 +97,7 @@ jobs:
           NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
           NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
-        run: cargo build --release -p main --target x86_64-pc-windows-msvc
+        run: cargo build --release -p main --target $env:WINDOWS_TARGET
 
       - name: Show sccache statistics
         if: always()
@@ -98,11 +109,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           New-Item -ItemType Directory -Force portable-package | Out-Null
-          Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "package/navop.exe"
-          Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "portable-package/navop.exe"
+          Copy-Item "target/$env:WINDOWS_TARGET/release/navop.exe" "package/navop.exe"
+          Copy-Item "target/$env:WINDOWS_TARGET/release/navop.exe" "portable-package/navop.exe"
           Set-Content -Path "portable-package/navop.portable" -Value "" -NoNewline
-          Compress-Archive -Path "package/*" -DestinationPath "navop-x86_64-pc-windows-msvc.zip"
-          Compress-Archive -Path "portable-package/*" -DestinationPath "navop-x86_64-pc-windows-msvc-portable.zip"
+          Compress-Archive -Path "package/*" -DestinationPath "${env:WINDOWS_BASENAME}.zip"
+          Compress-Archive -Path "portable-package/*" -DestinationPath "${env:WINDOWS_BASENAME}-portable.zip"
 
       - name: Install WiX Toolset
         shell: pwsh
@@ -119,34 +130,34 @@ jobs:
             -ext WixToolset.UI.wixext `
             -culture en-US `
             -loc installer/windows/navop.wxl `
-            -arch x64 `
+            -arch $env:WINDOWS_WIX_ARCH `
             -d Version="$env:MSI_VERSION" `
             -d SourceDir="${{ github.workspace }}\package" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "navop-x86_64-pc-windows-msvc.msi"
+            -out "${env:WINDOWS_BASENAME}.msi"
           wix build installer/windows/navop-bundle.wxs `
             -ext WixToolset.BootstrapperApplications.wixext `
-            -arch x64 `
+            -arch $env:WINDOWS_WIX_ARCH `
             -d Version="$env:MSI_VERSION" `
-            -d MsiPath="${{ github.workspace }}\navop-x86_64-pc-windows-msvc.msi" `
+            -d MsiPath="${{ github.workspace }}\${env:WINDOWS_BASENAME}.msi" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "navop-x86_64-pc-windows-msvc.exe"
+            -out "${env:WINDOWS_BASENAME}.exe"
 
       - name: Validate MSI metadata
         shell: pwsh
         run: |
           ./script/validate-windows-msi.ps1 `
-            -Path "navop-x86_64-pc-windows-msvc.msi" `
+            -Path "${env:WINDOWS_BASENAME}.msi" `
             -ExpectedLanguage 1033
 
       - name: Generate checksum
         shell: pwsh
         run: |
           $files = @(
-            "navop-x86_64-pc-windows-msvc.zip",
-            "navop-x86_64-pc-windows-msvc-portable.zip",
-            "navop-x86_64-pc-windows-msvc.exe",
-            "navop-x86_64-pc-windows-msvc.msi"
+            "${env:WINDOWS_BASENAME}.zip",
+            "${env:WINDOWS_BASENAME}-portable.zip",
+            "${env:WINDOWS_BASENAME}.exe",
+            "${env:WINDOWS_BASENAME}.msi"
           )
           $checksums = foreach ($file in $files) {
             $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -158,12 +169,12 @@ jobs:
       - name: Upload Windows MSI
         uses: actions/upload-artifact@v4
         with:
-          name: navop-windows-msi-${{ inputs.version }}
+          name: navop-windows-${{ inputs.architecture }}-${{ inputs.version }}
           path: |
-            navop-x86_64-pc-windows-msvc.zip
-            navop-x86_64-pc-windows-msvc-portable.zip
-            navop-x86_64-pc-windows-msvc.exe
-            navop-x86_64-pc-windows-msvc.msi
+            ${{ env.WINDOWS_BASENAME }}.zip
+            ${{ env.WINDOWS_BASENAME }}-portable.zip
+            ${{ env.WINDOWS_BASENAME }}.exe
+            ${{ env.WINDOWS_BASENAME }}.msi
             sha256sums-windows.txt
           if-no-files-found: error
           retention-days: 7

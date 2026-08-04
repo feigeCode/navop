@@ -109,7 +109,10 @@ test("Windows release builds an installable per-user MSI", () => {
 
   assert.match(release, /dotnet tool install --global wix --version 6\.0\.2/);
   assert.match(release, /wix build installer\/windows\/navop\.wxs/);
-  assert.match(release, /navop-x86_64-pc-windows-msvc\.msi/);
+  assert.match(
+    release,
+    /-out "\$\{\{ matrix\.windows_basename \}\}\.msi"/,
+  );
   assert.match(wix, /Scope="perUser"/);
   assert.match(wix, /StandardDirectory Id="LocalAppDataFolder"/);
   assert.match(wix, /<File[^>]+Source="\$\(SourceDir\)\\navop\.exe"/);
@@ -120,15 +123,54 @@ test("Windows release builds an installable per-user MSI", () => {
   assert.match(wix, /Root="HKCU"/);
 });
 
+test("Windows release publishes 32-bit x86 artifacts and updater metadata", () => {
+  const release = read(".github/workflows/release.yml");
+  const manual = read(".github/workflows/build-windows-msi.yml");
+  const upload = read(".github/workflows/upload-r2.yml");
+  const cargoConfig = read(".cargo/config.toml");
+
+  assert.match(release, /- windows-x86/);
+  assert.match(
+    release,
+    /windows_x86='\{"target":"i686-pc-windows-msvc"[^']*"archive":"navop-i686-pc-windows-msvc\.zip"[^']*"windows_arch":"x86"[^']*"windows_basename":"navop-i686-pc-windows-msvc"/,
+  );
+  assert.match(
+    release,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
+  );
+  assert.match(
+    release,
+    /\$\{\{ matrix\.windows_basename \}\}-portable\.zip/,
+  );
+  assert.match(release, /-arch \$\{\{ matrix\.windows_arch \}\}/);
+  assert.match(release, /\$\{\{ matrix\.windows_basename \}\}\.msi/);
+  assert.match(release, /\$\{\{ matrix\.windows_basename \}\}\.exe/);
+
+  assert.match(manual, /architecture:/);
+  assert.match(manual, /- x86/);
+  assert.match(manual, /i686-pc-windows-msvc/);
+  assert.match(manual, /WINDOWS_TARGET/);
+  assert.match(manual, /WINDOWS_WIX_ARCH/);
+  assert.match(manual, /WINDOWS_BASENAME/);
+
+  assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
+  assert.match(
+    upload,
+    /"i686-pc-windows-msvc": "navop-i686-pc-windows-msvc\.zip"/,
+  );
+  assert.match(
+    cargoConfig,
+    /\[target\.i686-pc-windows-msvc\][\s\S]*?link-arg=\/STACK:8000000/,
+  );
+});
+
 test("Windows release builds an EXE installer bundle from the MSI", () => {
   const bundlePath = "installer/windows/navop-bundle.wxs";
   assert.ok(fs.existsSync(bundlePath), `${bundlePath} must exist`);
 
   const bundle = read(bundlePath);
-  const workflows = [
-    read(".github/workflows/release.yml"),
-    read(".github/workflows/build-windows-msi.yml"),
-  ];
+  const release = read(".github/workflows/release.yml");
+  const manual = read(".github/workflows/build-windows-msi.yml");
 
   assert.match(
     bundle,
@@ -143,15 +185,21 @@ test("Windows release builds an EXE installer bundle from the MSI", () => {
   );
   assert.doesNotMatch(bundle, /bal:PrimaryPackageType="x64"/);
 
-  for (const workflow of workflows) {
+  for (const workflow of [release, manual]) {
     assert.match(
       workflow,
       /WixToolset\.BootstrapperApplications\.wixext\/6\.0\.2/,
     );
-    assert.match(
-      workflow,
-      /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]+navop-x86_64-pc-windows-msvc\.msi[^]*-out "navop-x86_64-pc-windows-msvc\.exe"/,
-    );
+  }
+  assert.match(
+    release,
+    /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]*\$\{\{ matrix\.windows_basename \}\}\.msi[^]*-out "\$\{\{ matrix\.windows_basename \}\}\.exe"/,
+  );
+  assert.match(
+    manual,
+    /wix build installer\/windows\/navop-bundle\.wxs[^]*-ext WixToolset\.BootstrapperApplications\.wixext[^]*-d Version=[^\n]+[^]*-d MsiPath=[^\n]*\$\{env:WINDOWS_BASENAME\}\.msi[^]*-out "\$\{env:WINDOWS_BASENAME\}\.exe"/,
+  );
+  for (const workflow of [release, manual]) {
     assert.doesNotMatch(
       workflow,
       /Copy-Item[^\n]+"navop-x86_64-pc-windows-msvc\.exe"/,
@@ -188,32 +236,47 @@ test("Windows release keeps the legacy ZIP standard and publishes portable separ
       workflow,
       /"package\/navop\.portable"/,
     );
-    assert.match(
-      workflow,
-      /Compress-Archive -Path "package\/\*" -DestinationPath "(?:\$\{\{ matrix\.archive \}\}|navop-x86_64-pc-windows-msvc\.zip)"/,
-    );
-    assert.match(
-      workflow,
-      /Compress-Archive -Path "portable-package\/\*" -DestinationPath "navop-x86_64-pc-windows-msvc-portable\.zip"/,
-    );
-    assert.match(workflow, /navop-x86_64-pc-windows-msvc\.zip/);
-    assert.match(workflow, /navop-x86_64-pc-windows-msvc-portable\.zip/);
     assert.match(workflow, /-d SourceDir=.*\\package/);
     assert.doesNotMatch(workflow, /-d SourceDir=.*portable-package/);
   }
   assert.match(
     release,
+    /Compress-Archive -Path "package\/\*" -DestinationPath "\$\{\{ matrix\.archive \}\}"/,
+  );
+  assert.match(
+    release,
+    /Compress-Archive -Path "portable-package\/\*" -DestinationPath "\$\{\{ matrix\.windows_basename \}\}-portable\.zip"/,
+  );
+  assert.match(
+    manual,
+    /Compress-Archive -Path "package\/\*" -DestinationPath "\$\{env:WINDOWS_BASENAME\}\.zip"/,
+  );
+  assert.match(
+    manual,
+    /Compress-Archive -Path "portable-package\/\*" -DestinationPath "\$\{env:WINDOWS_BASENAME\}-portable\.zip"/,
+  );
+  assert.match(release, /navop-x86_64-pc-windows-msvc\.zip/);
+  assert.match(manual, /\$\{env:WINDOWS_BASENAME\}\.zip/);
+  assert.match(manual, /\$\{env:WINDOWS_BASENAME\}-portable\.zip/);
+  assert.match(
+    release,
     /windows_x64='\{"target":"x86_64-pc-windows-msvc"[^']*"archive":"navop-x86_64-pc-windows-msvc\.zip"/,
   );
-  assert.match(release, /name: navop-windows-portable/);
   assert.match(
     release,
-    /path: navop-x86_64-pc-windows-msvc-portable\.zip/,
+    /name: \$\{\{ matrix\.windows_basename \}\}-portable\.zip/,
   );
-  assert.match(release, /name: navop-windows-exe-installer/);
   assert.match(
     release,
-    /path: navop-x86_64-pc-windows-msvc\.exe/,
+    /path: \$\{\{ matrix\.windows_basename \}\}-portable\.zip/,
+  );
+  assert.match(
+    release,
+    /name: \$\{\{ matrix\.windows_basename \}\}\.exe/,
+  );
+  assert.match(
+    release,
+    /path: \$\{\{ matrix\.windows_basename \}\}\.exe/,
   );
   for (const [guide, installerLabel] of [
     [installGuides[0], /EXE 安装包/],
@@ -357,12 +420,15 @@ test("GitHub publishes installers while R2 only uploads updater archives", () =>
 
   assert.match(
     release,
-    /name: navop-windows-msi[\s\S]*?path: navop-x86_64-pc-windows-msvc\.msi/,
+    /name: \$\{\{ matrix\.windows_basename \}\}\.msi[\s\S]*?path: \$\{\{ matrix\.windows_basename \}\}\.msi/,
   );
   assert.match(release, /new_files=\(artifacts\/navop-\* artifacts\/navop_\*\)/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
+  assert.match(upload, /navop-i686-pc-windows-msvc\.zip/);
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-portable\.zip/);
   assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc\.exe/);
+  assert.doesNotMatch(upload, /navop-i686-pc-windows-msvc-portable\.zip/);
+  assert.doesNotMatch(upload, /navop-i686-pc-windows-msvc\.exe/);
   assert.match(upload, /navop-aarch64-apple-darwin\.tar\.gz/);
   assert.match(upload, /navop-x86_64-unknown-linux-gnu\.tar\.gz/);
   assert.doesNotMatch(upload, /\.msi/);
@@ -412,9 +478,17 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   const workflow = read(workflowPath);
   const validator = read(validatorPath);
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /architecture:/);
+  assert.match(workflow, /- x64/);
+  assert.match(workflow, /- x86/);
+  assert.match(workflow, /x86_64-pc-windows-msvc/);
+  assert.match(workflow, /i686-pc-windows-msvc/);
+  assert.match(workflow, /WINDOWS_TARGET/);
+  assert.match(workflow, /WINDOWS_WIX_ARCH/);
+  assert.match(workflow, /WINDOWS_BASENAME/);
   assert.match(
     workflow,
-    /cargo build --release -p main --target x86_64-pc-windows-msvc/,
+    /cargo build --release -p main --target \$env:WINDOWS_TARGET/,
   );
   assert.match(workflow, /wix --version 6\.0\.2/);
   assert.match(workflow, /WixToolset\.UI\.wixext\/6\.0\.2/);
@@ -429,17 +503,12 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   );
   assert.match(workflow, /Get-FileHash[^]*SHA256/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
-  assert.match(workflow, /Compress-Archive[^]*navop-x86_64-pc-windows-msvc\.zip/);
-  assert.match(workflow, /Get-FileHash[^]*navop-x86_64-pc-windows-msvc\.zip/);
-  assert.match(
-    workflow,
-    /Get-FileHash[^]*navop-x86_64-pc-windows-msvc\.exe/,
-  );
-  assert.match(
-    workflow,
-    /Get-FileHash[^]*navop-x86_64-pc-windows-msvc-portable\.zip/,
-  );
-  assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
+  assert.match(workflow, /Compress-Archive[^]*\$\{env:WINDOWS_BASENAME\}\.zip/);
+  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}\.zip"/);
+  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}\.exe"/);
+  assert.match(workflow, /"\$\{env:WINDOWS_BASENAME\}-portable\.zip"/);
+  assert.match(workflow, /Get-FileHash \$file -Algorithm SHA256/);
+  assert.match(workflow, /\$\{env:WINDOWS_BASENAME\}\.msi/);
   assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   assert.match(workflow, /sha256sums-windows\.txt/);
   assert.match(workflow, /validate-windows-msi\.ps1/);
@@ -486,6 +555,7 @@ test("release builds are cacheable and individually repairable", () => {
     "linux-x64",
     "linux-arm64",
     "windows-x64",
+    "windows-x86",
   ]) {
     assert.match(release, new RegExp(`- ${platform}`));
   }
@@ -503,7 +573,7 @@ test("release builds are cacheable and individually repairable", () => {
   assert.match(trigger, /-f platform=all/);
   assert.match(
     release,
-    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64\]"/,
+    /all\) matrix="\[\$macos_arm64,\$macos_x64,\$linux_x64,\$linux_arm64,\$windows_x64,\$windows_x86\]"/,
   );
   assert.equal(fs.existsSync(".github/workflows/build-arm-linux.yml"), false);
 });

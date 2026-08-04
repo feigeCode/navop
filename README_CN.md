@@ -170,7 +170,7 @@ npx -y @navop/mcp@latest
 | macOS | Apple Silicon、Intel | `.dmg`、`.tar.gz` |
 | Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage` |
 | Linux | ARM64 | `.tar.gz` |
-| Windows | x86_64 | `.msi`、`.exe`、`.zip`、`-portable.zip` |
+| Windows | x86_64、x86（32 位） | `.msi`、`.exe`、`.zip`、`-portable.zip` |
 
 Windows `.msi` 和 `.exe` 都是中英双语的当前用户安装程序，使用默认位置时不需要管理员权限；EXE 安装包封装的是同一套 MSI 安装流程。普通 `.zip` 是免安装版，仍使用正常的 Windows 用户数据目录，并支持记住主密钥后自动解锁。只有需要把应用数据放在程序同级目录时才应下载 `-portable.zip`。便携模式默认每次启动都要求输入主密钥。用户也可以在设置中明确选择把可自动恢复的加密主密钥副本保存到 `data/state/key_storage`，但该加密使用程序内置密钥，不具备设备绑定保护；任何同时获得应用程序和完整 `data` 目录的人都可能恢复主密钥。
 

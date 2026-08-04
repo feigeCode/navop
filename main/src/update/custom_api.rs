@@ -86,6 +86,7 @@ pub(crate) fn platform_download_keys_for(os: &str, arch: &str) -> &'static [&'st
         ("linux", "x86_64") => &["x86_64-unknown-linux-gnu", "linux"],
         ("linux", "aarch64") => &["aarch64-unknown-linux-gnu", "linux"],
         ("windows", "x86_64") => &["x86_64-pc-windows-msvc", "windows"],
+        ("windows", "x86") => &["i686-pc-windows-msvc", "windows"],
         _ => &[],
     }
 }
@@ -263,6 +264,57 @@ mod tests {
         assert_eq!(
             &["aarch64-unknown-linux-gnu", "linux"],
             platform_download_keys_for("linux", "aarch64")
+        );
+    }
+
+    #[test]
+    fn platform_download_keys_include_windows_x86() {
+        assert_eq!(
+            &["i686-pc-windows-msvc", "windows"],
+            platform_download_keys_for("windows", "x86")
+        );
+    }
+
+    #[test]
+    fn windows_x86_download_metadata_prefers_target_before_fallbacks() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "download_url": "https://example.test/global.zip",
+                "downloads": {
+                    "windows": "https://example.test/windows.zip",
+                    "i686-pc-windows-msvc": "https://example.test/i686.zip"
+                },
+                "fallback_download_url": "https://github.example.test/global.zip",
+                "fallback_downloads": {
+                    "windows": "https://github.example.test/windows.zip",
+                    "i686-pc-windows-msvc": "https://github.example.test/i686.zip"
+                },
+                "sha256": "global-sha",
+                "sha256s": {
+                    "windows": "windows-sha",
+                    "i686-pc-windows-msvc": "i686-sha"
+                }
+            }"#,
+        )
+        .unwrap();
+        let keys = platform_download_keys_for("windows", "x86");
+
+        assert_eq!(
+            Some("https://example.test/i686.zip".to_string()),
+            select_download_url_for_keys(
+                &response,
+                Some("https://default.example.test/navop.zip".to_string()),
+                keys
+            )
+        );
+        assert_eq!(
+            Some("https://github.example.test/i686.zip".to_string()),
+            select_fallback_download_url_for_keys(&response, keys)
+        );
+        assert_eq!(
+            Some("i686-sha".to_string()),
+            select_sha256_for_keys(&response, keys)
         );
     }
 }

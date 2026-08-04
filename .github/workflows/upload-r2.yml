@@ -123,6 +123,7 @@ jobs:
             --pattern "navop-x86_64-apple-darwin.tar.gz" \
             --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-x86_64-pc-windows-msvc.zip" \
+            --pattern "navop-i686-pc-windows-msvc.zip" \
             --pattern "sha256sums.txt" \
             --dir artifacts
           if ! gh release download "$RELEASE_TAG" \
@@ -142,6 +143,7 @@ jobs:
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
+            navop-i686-pc-windows-msvc.zip \
             sha256sums.txt; do
             if [ ! -s "artifacts/${file}" ]; then
               echo "::error::Missing or empty GitHub Release asset: ${file}"
@@ -153,7 +155,8 @@ jobs:
             navop-aarch64-apple-darwin.tar.gz \
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
-            navop-x86_64-pc-windows-msvc.zip; do
+            navop-x86_64-pc-windows-msvc.zip \
+            navop-i686-pc-windows-msvc.zip; do
             if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
               echo "::error::sha256sums.txt is missing checksum for ${file}"
               exit 1
@@ -203,6 +206,7 @@ jobs:
             "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
             "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
             "x86_64-pc-windows-msvc": "navop-x86_64-pc-windows-msvc.zip",
+            "i686-pc-windows-msvc": "navop-i686-pc-windows-msvc.zip",
           };
           if (fs.existsSync("artifacts/navop-aarch64-unknown-linux-gnu.tar.gz")) {
             appAssets["aarch64-unknown-linux-gnu"] = "navop-aarch64-unknown-linux-gnu.tar.gz";
@@ -328,6 +332,7 @@ jobs:
             navop-x86_64-apple-darwin.tar.gz \
             navop-x86_64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
+            navop-i686-pc-windows-msvc.zip \
           )
           if [ -s "artifacts/navop-aarch64-unknown-linux-gnu.tar.gz" ]; then
             release_files+=(navop-aarch64-unknown-linux-gnu.tar.gz)

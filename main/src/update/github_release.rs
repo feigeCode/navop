@@ -22,6 +22,7 @@ pub(crate) const fn expected_archive_name_for(os: &str, arch: &str) -> &'static 
         (b"linux", b"x86_64") => "navop-x86_64-unknown-linux-gnu.tar.gz",
         (b"linux", b"aarch64") => "navop-aarch64-unknown-linux-gnu.tar.gz",
         (b"windows", b"x86_64") => "navop-x86_64-pc-windows-msvc.zip",
+        (b"windows", b"x86") => "navop-i686-pc-windows-msvc.zip",
         _ => "",
     }
 }
@@ -172,6 +173,14 @@ mod tests {
         assert_eq!(
             "navop-aarch64-unknown-linux-gnu.tar.gz",
             expected_archive_name_for("linux", "aarch64")
+        );
+    }
+
+    #[test]
+    fn expected_archive_name_includes_windows_x86() {
+        assert_eq!(
+            "navop-i686-pc-windows-msvc.zip",
+            expected_archive_name_for("windows", "x86")
         );
     }
 
