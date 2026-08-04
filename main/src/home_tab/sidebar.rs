@@ -240,7 +240,7 @@ impl HomePage {
         let listener = cx.listener(move |home, _, window, cx| on_click(home, window, cx));
 
         if collapsed {
-            IconButton::new(id, ObjectIcon::new(icon))
+            IconButton::new(id, Icon::new(icon).color())
                 .hit_size(Size::Size(cx.theme().geometry.layout.global_rail_item))
                 .glyph_size(IconSize::Medium)
                 .tooltip(label)
@@ -248,7 +248,7 @@ impl HomePage {
                 .into_any_element()
         } else {
             Button::new(id)
-                .icon(ObjectIcon::new(icon))
+                .icon(Icon::new(icon).color())
                 .label(label)
                 .w_full()
                 .justify_start()
