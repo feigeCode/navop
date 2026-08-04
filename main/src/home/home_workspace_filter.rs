@@ -3,18 +3,18 @@ use std::collections::HashSet;
 use crate::home_tab::HomePage;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
+    div, px, App, AppContext, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, Window,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IconSize, IndexPath, ObjectIcon, Sizable, Size, WindowExt,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::{Input, InputState, MaskPattern},
-    list::{ListDelegate, ListItem, ListState},
-    tooltip::Tooltip,
-    v_flex,
+    button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState, MaskPattern}, list::{ListDelegate, ListItem, ListState}, tooltip::Tooltip, v_flex, ActiveTheme,
+    Icon,
+    IconName,
+    IconSize,
+    IndexPath,
+    Sizable,
+    Size,
+    WindowExt,
 };
 use one_core::storage::{StoredConnection, Workspace};
 use rust_i18n::t;
@@ -147,9 +147,9 @@ impl Render for DragWorkspace {
             .bg(cx.theme().popover)
             .shadow_md()
             .child(
-                ObjectIcon::new(IconName::AppsColor)
+                Icon::new(IconName::AppsColor)
+                    .color()
                     .with_size(IconSize::Medium)
-                    .into_icon(),
             )
             .child(
                 div()

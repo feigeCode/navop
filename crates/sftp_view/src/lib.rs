@@ -22,7 +22,7 @@ use gpui::{
     WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IconSize, ObjectIcon, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
@@ -6305,9 +6305,9 @@ impl TabContent for SftpView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(
-            ObjectIcon::new(IconName::Folder1)
+            Icon::new(IconName::Folder1)
                 .with_size(IconSize::Default)
-                .into_icon(),
+                .color(),
         )
     }
 

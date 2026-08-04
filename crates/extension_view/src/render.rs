@@ -209,7 +209,7 @@ impl ExtensionManagerView {
         let list = filter_installed(&self.installed, query, self.selected_kind);
         if list.is_empty() {
             return ContentState::empty(t!("Extension.no_installed_matches").to_string())
-                .icon(ObjectIcon::new(IconName::ExtensionsColor).with_size(IconSize::Large))
+                .icon(Icon::new(IconName::ExtensionsColor).color().with_size(IconSize::Large))
                 .into_any_element();
         }
         v_flex()
@@ -261,7 +261,7 @@ impl ExtensionManagerView {
         }
 
         ContentState::empty(t!("Extension.no_marketplace_matches").to_string())
-            .icon(ObjectIcon::new(IconName::ExtensionsColor).with_size(IconSize::Large))
+            .icon(Icon::new(IconName::ExtensionsColor).color().with_size(IconSize::Large))
             .into_any_element()
     }
 

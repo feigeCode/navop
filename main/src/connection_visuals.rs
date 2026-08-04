@@ -213,9 +213,9 @@ pub(crate) fn external_driver_icon_from_sources(
 }
 
 fn generic_database_icon(size: ConnectionVisualSize) -> Icon {
-    ObjectIcon::new(IconName::Database)
+    Icon::new(IconName::Database)
         .with_size(size.icon_size())
-        .into_icon()
+        .color()
 }
 
 fn brand_icon(name: IconName, size: ConnectionVisualSize) -> Icon {

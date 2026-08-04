@@ -45,7 +45,7 @@ impl HomePage {
                             h_flex()
                                 .w_full()
                                 .min_w_0()
-                                .items_start()
+                                .items_stretch()
                                 .flex_wrap()
                                 .gap_3()
                                 .child(
@@ -409,6 +409,7 @@ fn render_status_panel(
     let key_view = view;
 
     surface_panel("modern-home-status-panel", cx)
+        .flex_grow(1.0)
         .child(panel_header(t!("Home.StartCenter.status"), None, cx))
         .child(
             v_flex()

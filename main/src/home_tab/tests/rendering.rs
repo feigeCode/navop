@@ -159,8 +159,13 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     }
     assert!(modern_home.contains(".flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)"));
     assert!(modern_home.contains(".flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)"));
+    assert!(modern_home.contains(".items_stretch()"));
     assert!(modern_home.contains(".flex_grow(2.0)"));
     assert!(modern_home.contains(".flex_grow(1.0)"));
+    assert!(
+        modern_home
+            .contains("surface_panel(\"modern-home-status-panel\", cx)\n        .flex_grow(1.0)")
+    );
     assert!(modern_home.contains("render_recent_connections_panel"));
     assert!(modern_home.contains("render_create_panel"));
     assert!(modern_home.contains("render_workspace_tools"));
@@ -239,6 +244,20 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
     assert!(sidebar.contains("ObjectIcon::new(IconName::User)"));
+}
+
+#[test]
+fn legacy_ai_workbench_uses_an_object_glyph_icon() {
+    let sidebar = include_str!("../sidebar.rs");
+    let ai_entry = sidebar
+        .split(".when(show_ai_workbench")
+        .nth(1)
+        .and_then(|source| source.split(".when(show_team").next())
+        .expect("legacy AI workbench sidebar entry");
+
+    assert!(ai_entry.contains("\"legacy-open-ai-workbench\""));
+    assert!(ai_entry.contains("IconName::AILine"));
+    assert!(!ai_entry.contains("IconName::AI,"));
 }
 
 #[test]

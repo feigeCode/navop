@@ -17,7 +17,7 @@ use gpui::{
     Render, SharedString, Style, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, BrandIcon, ElementExt as _, Icon, IconName, IconSize, ObjectIcon, Sizable, h_flex,
+    ActiveTheme, BrandIcon, ElementExt as _, Icon, IconName, IconSize, Sizable, h_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::layout::{
@@ -446,9 +446,9 @@ impl TabContent for RedisTabView {
     fn icon(&self, _cx: &App) -> Option<Icon> {
         if self.workspace.is_some() {
             Some(
-                ObjectIcon::new(IconName::AppsColor)
+                Icon::new(IconName::AppsColor)
                     .with_size(IconSize::Medium)
-                    .into_icon(),
+                    .color(),
             )
         } else {
             Some(

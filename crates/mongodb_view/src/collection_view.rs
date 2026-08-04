@@ -2764,7 +2764,7 @@ impl CollectionView {
                 .into_any_element()
         } else if self.documents.is_empty() {
             ContentState::empty(t!("MongoCollection.no_documents").to_string())
-                .icon(ObjectIcon::new(IconName::Table).with_size(IconSize::Large))
+                .icon(Icon::new(IconName::Table).color().with_size(IconSize::Large))
                 .compact()
                 .into_any_element()
         } else {
@@ -3071,9 +3071,9 @@ impl TabContent for CollectionView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(
-            ObjectIcon::new(IconName::Table)
+            Icon::new(IconName::Table)
                 .with_size(IconSize::Default)
-                .into_icon(),
+                .color(),
         )
     }
 
@@ -3136,9 +3136,9 @@ impl TabContent for CollectionTabView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(
-            ObjectIcon::new(IconName::Table)
+            Icon::new(IconName::Table)
                 .with_size(IconSize::Default)
-                .into_icon(),
+                .color(),
         )
     }
 

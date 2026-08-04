@@ -1,16 +1,16 @@
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, ListSizingBehavior,
-    MouseButton, MouseDownEvent, ParentElement, Render, Styled, UniformListScrollHandle, Window,
-    div, prelude::*, px, uniform_list,
+    div, prelude::*, px, uniform_list, AnyElement, App, Context, Entity,
+    FocusHandle, Focusable, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement,
+    Render, Styled, UniformListScrollHandle, Window,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, FunctionalIcon, Icon, IconName, IconSize, InteractiveElementExt,
-    ObjectIcon, Sizable, h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    scroll::ScrollableElement,
-    tooltip::Tooltip,
-    v_flex,
+    h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, scroll::ScrollableElement, tooltip::Tooltip, v_flex,
+    ActiveTheme, ContentState, Icon,
+    IconName,
+    IconSize,
+    InteractiveElementExt
+    ,
+    Sizable,
 };
 use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
 use rust_i18n::t;
@@ -616,11 +616,12 @@ impl FileListPanel {
                     .gap_2()
                     .items_center()
                     .child(
-                        ObjectIcon::new(if is_dir {
+                        Icon::new(if is_dir {
                             IconName::Folder1
                         } else {
                             IconName::File
                         })
+                            .color()
                         .with_size(IconSize::Large),
                     )
                     .child({
@@ -710,7 +711,7 @@ impl FileListPanel {
                     .w(NAME_COLUMN_WIDTH)
                     .gap_2()
                     .items_center()
-                    .child(ObjectIcon::new(IconName::Folder1).with_size(IconSize::Large))
+                    .child(Icon::new(IconName::Folder1).color().with_size(IconSize::Large))
                     .child(div().text_base().child("..")),
             )
             .child(div().w(MODIFIED_COLUMN_WIDTH).px_2())
@@ -738,21 +739,21 @@ impl FileListPanel {
             FileListContentState::EmptyDirectory => {
                 ContentState::empty(t!("File.empty_directory").to_string())
                     .detail(t!("File.empty_directory_detail").to_string())
-                    .icon(ObjectIcon::new(IconName::FolderOpen))
+                    .icon(Icon::new(IconName::FolderOpen).color())
                     .compact()
                     .into_any_element()
             }
             FileListContentState::NoResults => {
                 ContentState::empty(t!("File.no_results").to_string())
                     .detail(t!("File.no_results_detail").to_string())
-                    .icon(FunctionalIcon::new(IconName::Search))
+                    .icon(Icon::new(IconName::Search).color())
                     .compact()
                     .into_any_element()
             }
             FileListContentState::NoVisibleFiles => {
                 ContentState::empty(t!("File.no_visible_files").to_string())
                     .detail(t!("File.no_visible_files_detail").to_string())
-                    .icon(FunctionalIcon::new(IconName::EyeOff))
+                    .icon(Icon::new(IconName::EyeOff).color())
                     .compact()
                     .into_any_element()
             }
@@ -1283,7 +1284,7 @@ impl Render for DraggedFileItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileListContentState, display_file_name, file_list_content_state};
+    use super::{display_file_name, file_list_content_state, FileListContentState};
     use std::collections::HashSet;
 
     #[test]

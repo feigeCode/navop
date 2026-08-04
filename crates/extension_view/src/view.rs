@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
+    div, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window,
 };
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::{ActiveTheme, Icon, IconName, IconSize, ObjectIcon, Sizable, v_flex};
+use gpui_component::{v_flex, ActiveTheme, Icon, IconName, IconSize, Sizable};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
@@ -127,9 +127,9 @@ impl TabContent for ExtensionManagerView {
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(
-            ObjectIcon::new(IconName::ExtensionsColor)
+            Icon::new(IconName::ExtensionsColor)
                 .with_size(IconSize::Medium)
-                .into_icon(),
+                .color(),
         )
     }
 }

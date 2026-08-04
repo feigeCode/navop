@@ -231,7 +231,7 @@ impl RenderOnce for EndpointSwitcherItem {
                         cx.theme().muted_foreground
                     }),
                 LeftEndpointValue::Remote(_) => Icon::new(self.entry.icon.clone())
-                    .mono()
+                    .color()
                     .with_size(IconSize::Large)
                     .text_color(cx.theme().magenta),
             })
