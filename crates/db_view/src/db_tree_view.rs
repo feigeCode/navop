@@ -422,6 +422,8 @@ pub enum DbTreeViewEvent {
     OpenTableData { node_id: String },
     /// 打开视图数据标签页
     OpenViewData { node_id: String },
+    /// 打开函数编辑器
+    OpenFunction { node_id: String },
     /// 打开存储过程编辑器
     OpenProcedure { node_id: String },
     /// 设计表（新建或编辑）
@@ -2136,6 +2138,15 @@ impl DbTreeView {
                         database, node.name
                     );
                     cx.emit(DbTreeViewEvent::OpenViewData {
+                        node_id: node.id.clone(),
+                    });
+                }
+                DbNodeType::Function => {
+                    info!(
+                        "DbTreeView: opening function editor: {}.{}",
+                        database, node.name
+                    );
+                    cx.emit(DbTreeViewEvent::OpenFunction {
                         node_id: node.id.clone(),
                     });
                 }

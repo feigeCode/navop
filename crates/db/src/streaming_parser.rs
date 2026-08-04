@@ -765,6 +765,50 @@ DELIMITER ;
     }
 
     #[test]
+    fn test_mysql_function_replacement_script() {
+        let sql = r#"-- Running this script replaces the existing function.
+-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.
+DROP FUNCTION IF EXISTS `app_db`.`calculate_total`;
+
+DELIMITER $$
+CREATE DEFINER=`root`@`%` FUNCTION `calculate_total`(amount INT)
+RETURNS INT
+DETERMINISTIC
+BEGIN
+  DECLARE result_value INT;
+  SET result_value = amount + 1;
+  RETURN result_value;
+END$$
+DELIMITER ;
+
+-- Add arguments as needed before running:
+-- SELECT `app_db`.`calculate_total`(1);
+"#;
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[0],
+            "DROP FUNCTION IF EXISTS `app_db`.`calculate_total`"
+        );
+        assert!(statements[1].starts_with("CREATE DEFINER="));
+        assert!(statements[1].contains("FUNCTION `calculate_total`"));
+        assert!(statements[1].contains("RETURNS INT"));
+        assert!(statements[1].contains("SET result_value = amount + 1;"));
+        assert!(statements[1].ends_with("END"));
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("DELIMITER"))
+        );
+        assert!(
+            !statements
+                .iter()
+                .any(|statement| statement.contains("-- SELECT"))
+        );
+    }
+
+    #[test]
     fn test_begin_end_block() {
         let sql = "BEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\nSELECT 3;";
         let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);

@@ -498,6 +498,15 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<ObjectView>;
 
+    async fn get_function_definition(
+        &self,
+        _connection: &dyn DbConnection,
+        _database: &str,
+        _function: &str,
+    ) -> Result<String> {
+        bail!("Function definition is not supported")
+    }
+
     fn capabilities(&self) -> DatabaseCapabilities {
         DatabaseUiCapabilities {
             supports_functions: true,

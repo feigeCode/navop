@@ -542,6 +542,10 @@ fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usiz
             DatabaseActionId::DeleteView => 20,
             _ => 900,
         },
+        DbNodeType::Function => match action_id {
+            DatabaseActionId::OpenFunction => 10,
+            _ => 900,
+        },
         DbNodeType::Procedure => match action_id {
             DatabaseActionId::OpenProcedure => 10,
             _ => 900,
@@ -631,6 +635,10 @@ fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) 
             DbNodeType::View => match action.id {
                 DatabaseActionId::OpenViewData => Some("open"),
                 DatabaseActionId::DeleteView => Some("view"),
+                _ => None,
+            },
+            DbNodeType::Function => match action.id {
+                DatabaseActionId::OpenFunction => Some("open"),
                 _ => None,
             },
             DbNodeType::Procedure => match action.id {
@@ -1239,6 +1247,7 @@ fn map_tree_event(action_id: DatabaseActionId, node_id: &str) -> Option<DbTreeVi
         DatabaseActionId::DeleteTable => DbTreeViewEvent::DeleteTable { node_id },
         DatabaseActionId::OpenViewData => DbTreeViewEvent::OpenViewData { node_id },
         DatabaseActionId::DeleteView => DbTreeViewEvent::DeleteView { node_id },
+        DatabaseActionId::OpenFunction => DbTreeViewEvent::OpenFunction { node_id },
         DatabaseActionId::OpenProcedure => DbTreeViewEvent::OpenProcedure { node_id },
         DatabaseActionId::CreateNewQuery => DbTreeViewEvent::CreateNewQuery { node_id },
         DatabaseActionId::OpenNamedQuery => DbTreeViewEvent::OpenNamedQuery { node_id },
@@ -1291,6 +1300,7 @@ fn map_objects_event(
         DatabaseActionId::DeleteTable => Some(|node| DatabaseObjectsEvent::DeleteTable { node }),
         DatabaseActionId::OpenViewData => Some(|node| DatabaseObjectsEvent::OpenViewData { node }),
         DatabaseActionId::DeleteView => Some(|node| DatabaseObjectsEvent::DeleteView { node }),
+        DatabaseActionId::OpenFunction => Some(|node| DatabaseObjectsEvent::OpenFunction { node }),
         DatabaseActionId::OpenProcedure => {
             Some(|node| DatabaseObjectsEvent::OpenProcedure { node })
         }
@@ -1328,6 +1338,7 @@ fn toolbar_icon(action: &DatabaseActionDescriptor) -> IconName {
         | DatabaseActionId::DeleteView
         | DatabaseActionId::DeleteQuery => IconName::Minus,
         DatabaseActionId::EditDatabase
+        | DatabaseActionId::OpenFunction
         | DatabaseActionId::OpenProcedure
         | DatabaseActionId::RenameQuery => IconName::Edit,
         DatabaseActionId::RevealQueryInFileManager => IconName::FolderOpen,
@@ -1372,6 +1383,7 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
         DatabaseActionId::DeleteTable => "delete-table",
         DatabaseActionId::OpenViewData => "open-view-data",
         DatabaseActionId::DeleteView => "delete-view",
+        DatabaseActionId::OpenFunction => "open-function",
         DatabaseActionId::OpenProcedure => "open-procedure",
         DatabaseActionId::CreateNewQuery => "create-query",
         DatabaseActionId::OpenNamedQuery => "open-query",
@@ -1661,6 +1673,36 @@ driver:
             mapper(node),
             DatabaseObjectsEvent::OpenProcedure { node } if node.id == "procedure-1"
         ));
+    }
+
+    #[test]
+    fn open_function_maps_to_tree_and_object_events() {
+        assert!(matches!(
+            map_tree_event(DatabaseActionId::OpenFunction, "function-1"),
+            Some(DbTreeViewEvent::OpenFunction { node_id }) if node_id == "function-1"
+        ));
+
+        let mapper = map_objects_event(DatabaseActionId::OpenFunction)
+            .expect("function action should map to an object event");
+        let node = db::DbNode::new(
+            "function-1",
+            "calculate_total",
+            DbNodeType::Function,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+        assert!(matches!(
+            mapper(node),
+            DatabaseObjectsEvent::OpenFunction { node } if node.id == "function-1"
+        ));
+    }
+
+    #[test]
+    fn open_function_uses_edit_icon_and_stable_action_id() {
+        let action = action_descriptor(DatabaseActionId::OpenFunction);
+
+        assert_eq!(toolbar_icon(&action).path(), IconName::Edit.path());
+        assert_eq!("open-function", action_id(&action));
     }
 
     #[test]

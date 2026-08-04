@@ -43,6 +43,7 @@ const TAB_KIND_TABLE_DATA: &str = "table_data";
 const TAB_KIND_VIEW_DATA: &str = "view_data";
 const TAB_KIND_TABLE_DESIGNER: &str = "table_designer";
 const TAB_KIND_NAMED_QUERY: &str = "named_query";
+const TAB_KIND_FUNCTION: &str = "function";
 const TAB_KIND_PROCEDURE: &str = "procedure";
 
 // Event handler for database tree view events
@@ -153,6 +154,34 @@ impl DatabaseEventHandler {
         format!("procedure-{}", node.id)
     }
 
+    fn function_tab_id(node: &DbNode) -> String {
+        format!("function-{}", node.id)
+    }
+
+    fn build_mysql_function_edit_script(function_reference: &str, create_sql: &str) -> String {
+        let create_sql = create_sql.trim();
+        let create_sql = create_sql
+            .strip_suffix(';')
+            .unwrap_or(create_sql)
+            .trim_end();
+
+        format!(
+            concat!(
+                "-- Running this script replaces the existing function.\n",
+                "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
+                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
+                "DROP FUNCTION IF EXISTS {function_reference};\n\n",
+                "DELIMITER $$\n",
+                "{create_sql}$$\n",
+                "DELIMITER ;\n\n",
+                "-- Add arguments as needed before running:\n",
+                "-- SELECT {function_reference}();\n"
+            ),
+            function_reference = function_reference,
+            create_sql = create_sql,
+        )
+    }
+
     fn build_mysql_procedure_edit_script(procedure_reference: &str, create_sql: &str) -> String {
         let create_sql = create_sql.trim();
         let create_sql = create_sql
@@ -164,6 +193,7 @@ impl DatabaseEventHandler {
             concat!(
                 "-- Running this script replaces the existing procedure.\n",
                 "-- MySQL executes DROP/CREATE as non-atomic DDL; keep a backup before running.\n",
+                "-- The original DEFINER is preserved; adjust it if your account cannot use that definer.\n",
                 "DROP PROCEDURE IF EXISTS {procedure_reference};\n\n",
                 "DELIMITER $$\n",
                 "{create_sql}$$\n",
@@ -282,6 +312,17 @@ impl DatabaseEventHandler {
                     DbTreeViewEvent::OpenViewData { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_open_view_data(node, tab_container, window, cx);
+                        }
+                    }
+                    DbTreeViewEvent::OpenFunction { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_open_function(
+                                node,
+                                tab_container,
+                                global_state,
+                                window,
+                                cx,
+                            );
                         }
                     }
                     DbTreeViewEvent::OpenProcedure { node_id } => {
@@ -640,6 +681,15 @@ impl DatabaseEventHandler {
                     }
                     DatabaseObjectsEvent::OpenViewData { node } => {
                         Self::handle_open_view_data(node.clone(), tab_container, window, cx);
+                    }
+                    DatabaseObjectsEvent::OpenFunction { node } => {
+                        Self::handle_open_function(
+                            node.clone(),
+                            tab_container,
+                            global_state,
+                            window,
+                            cx,
+                        );
                     }
                     DatabaseObjectsEvent::OpenProcedure { node } => {
                         Self::handle_open_procedure(
@@ -1277,6 +1327,115 @@ impl DatabaseEventHandler {
                 cx,
             );
         });
+    }
+
+    /// 加载函数定义并在 SQL 编辑器中打开可替换脚本
+    fn handle_open_function(
+        node: DbNode,
+        tab_container: Entity<TabContainer>,
+        global_state: GlobalDbState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let connection_id = node.connection_id.clone();
+        let function = node.name.clone();
+        let Some(database) = node.get_database_name() else {
+            Self::show_error(window, t!("Common.error_info").to_string(), cx);
+            return;
+        };
+        let schema = node.get_schema_name();
+        let database_type = node.database_type.clone();
+        let tab_id = Self::function_tab_id(&node);
+        let tab_metadata = Self::tab_metadata_for_node(&node, TAB_KIND_FUNCTION);
+        let function_reference = match global_state.db_manager.get_plugin(&database_type) {
+            Ok(plugin) => format!(
+                "{}.{}",
+                plugin.quote_identifier(&database),
+                plugin.quote_identifier(&function)
+            ),
+            Err(error) => {
+                Self::show_error(
+                    window,
+                    t!("DbTreeEvent.load_function_failed", error = error).to_string(),
+                    cx,
+                );
+                return;
+            }
+        };
+        let window_id = cx.active_window();
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let definition = global_state
+                .get_function_definition(
+                    cx,
+                    connection_id.clone(),
+                    database.clone(),
+                    function.clone(),
+                )
+                .await;
+
+            match definition {
+                Ok(create_sql) => {
+                    let script =
+                        Self::build_mysql_function_edit_script(&function_reference, &create_sql);
+                    let Some(window_id) = window_id else {
+                        return;
+                    };
+
+                    cx.update_window(window_id, |_entity, window, cx| {
+                        let tab_id_for_item = tab_id.clone();
+                        let connection_id_for_item = connection_id.clone();
+                        let tab_metadata = tab_metadata.clone();
+                        tab_container.update(cx, |container, cx| {
+                            container.activate_or_add_tab_lazy(
+                                tab_id.clone(),
+                                move |window, cx| {
+                                    let sql_editor = cx.new(|cx| {
+                                        let editor = SqlEditorTab::new_with_config(
+                                            crate::sql_editor_view::SqlEditorTabConfig {
+                                                title: format!("{} - Function", function).into(),
+                                                connection_id: connection_id.clone(),
+                                                database_type,
+                                                file_path: None,
+                                                new_file_directory: None,
+                                                initial_database: Some(database.clone()),
+                                                initial_schema: schema.clone(),
+                                            },
+                                            window,
+                                            cx,
+                                        );
+                                        editor.set_sql(script, window, cx);
+                                        editor
+                                    });
+                                    TabItem::new(
+                                        tab_id_for_item,
+                                        connection_id_for_item,
+                                        sql_editor,
+                                    )
+                                    .with_metadata(tab_metadata)
+                                },
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    if let Some(window_id) = window_id {
+                        cx.update_window(window_id, |_entity, window, cx| {
+                            Self::show_error(
+                                window,
+                                t!("DbTreeEvent.load_function_failed", error = error).to_string(),
+                                cx,
+                            );
+                        })
+                        .ok();
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     /// 加载存储过程定义并在 SQL 编辑器中打开可替换脚本
@@ -4418,14 +4577,14 @@ mod tests {
     #[test]
     fn procedure_tabs_are_stable_and_connection_scoped() {
         let primary = DbNode::new(
-            "conn-1:app:procedure:sync_orders",
+            "conn-1:app:procedures_folder:sync_orders",
             "sync_orders",
             DbNodeType::Procedure,
             "conn-1".to_string(),
             DatabaseType::MySQL,
         );
         let secondary = DbNode::new(
-            "conn-2:app:procedure:sync_orders",
+            "conn-2:app:procedures_folder:sync_orders",
             "sync_orders",
             DbNodeType::Procedure,
             "conn-2".to_string(),
@@ -4443,6 +4602,51 @@ mod tests {
     }
 
     #[test]
+    fn function_tabs_are_stable_and_connection_scoped() {
+        let primary = DbNode::new(
+            "conn-1:app:functions_folder:calculate_total",
+            "calculate_total",
+            DbNodeType::Function,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+        let secondary = DbNode::new(
+            "conn-2:app:functions_folder:calculate_total",
+            "calculate_total",
+            DbNodeType::Function,
+            "conn-2".to_string(),
+            DatabaseType::MySQL,
+        );
+
+        assert_eq!(
+            DatabaseEventHandler::function_tab_id(&primary),
+            DatabaseEventHandler::function_tab_id(&primary)
+        );
+        assert_ne!(
+            DatabaseEventHandler::function_tab_id(&primary),
+            DatabaseEventHandler::function_tab_id(&secondary)
+        );
+    }
+
+    #[test]
+    fn mysql_function_edit_script_replaces_existing_definition() {
+        let script = DatabaseEventHandler::build_mysql_function_edit_script(
+            "`app``db`.`calculate``total`",
+            "CREATE DEFINER=`root`@`%` FUNCTION `calculate``total`(amount INT) RETURNS INT\nDETERMINISTIC\nBEGIN\n    RETURN amount + 1;\nEND;",
+        );
+
+        assert!(script.contains("DROP FUNCTION IF EXISTS `app``db`.`calculate``total`;"));
+        assert!(script.contains("DELIMITER $$\nCREATE DEFINER="));
+        assert!(script.contains("RETURN amount + 1;\nEND$$"));
+        assert!(script.contains("\nDELIMITER ;\n"));
+        assert!(script.contains("-- Add arguments as needed before running:"));
+        assert!(script.contains("-- SELECT `app``db`.`calculate``total`();"));
+        assert!(script.contains("non-atomic"));
+        assert!(script.contains("original DEFINER"));
+        assert!(script.ends_with('\n'));
+    }
+
+    #[test]
     fn mysql_procedure_edit_script_replaces_existing_definition() {
         let script = DatabaseEventHandler::build_mysql_procedure_edit_script(
             "`app``db`.`sync``orders`",
@@ -4456,6 +4660,7 @@ mod tests {
         assert!(script.contains("-- Add arguments as needed before running:"));
         assert!(script.contains("-- CALL `app``db`.`sync``orders`();"));
         assert!(script.contains("non-atomic"));
+        assert!(script.contains("original DEFINER"));
         assert!(script.ends_with('\n'));
     }
 

@@ -285,6 +285,22 @@ fn mysql_quote_identifier(identifier: &str) -> String {
     format!("`{}`", identifier.replace('`', "``"))
 }
 
+fn mysql_function_definition_query(database: &str, function: &str) -> String {
+    format!(
+        "SHOW CREATE FUNCTION {}.{}",
+        mysql_quote_identifier(database),
+        mysql_quote_identifier(function)
+    )
+}
+
+fn mysql_function_definition_from_rows(rows: &[Vec<Option<String>>]) -> Result<String> {
+    rows.first()
+        .and_then(|row| row.get(2))
+        .and_then(Clone::clone)
+        .filter(|definition| !definition.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("SHOW CREATE FUNCTION returned no CREATE statement"))
+}
+
 fn mysql_procedure_definition_query(database: &str, procedure: &str) -> String {
     format!(
         "SHOW CREATE PROCEDURE {}.{}",
@@ -850,6 +866,13 @@ fn mysql_action_manifest() -> DatabaseActionManifest {
                 true,
                 Some(DatabaseActionToolbarScope::CurrentNode),
             ),
+            action(
+                DatabaseActionId::OpenFunction,
+                "Function.edit_function",
+                vec![DbNodeType::Function],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
             action(
                 DatabaseActionId::OpenProcedure,
                 "Procedure.edit_procedure",
@@ -1824,6 +1847,32 @@ impl DatabasePlugin for MySqlPlugin {
             columns,
             rows,
         })
+    }
+
+    async fn get_function_definition(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        function: &str,
+    ) -> Result<String> {
+        let sql = mysql_function_definition_query(database, function);
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to load function definition: {}", error))?;
+
+        match result {
+            SqlResult::Query(query_result) => {
+                mysql_function_definition_from_rows(&query_result.rows)
+            }
+            SqlResult::Error(error) => Err(anyhow::anyhow!(
+                "SHOW CREATE FUNCTION failed: {}",
+                error.message
+            )),
+            SqlResult::Exec(_) => Err(anyhow::anyhow!(
+                "SHOW CREATE FUNCTION returned an unexpected result type"
+            )),
+        }
     }
 
     // === Procedure Operations ===
@@ -4347,6 +4396,7 @@ mod tests {
             DatabaseActionId::ExportData,
             DatabaseActionId::OpenViewData,
             DatabaseActionId::DeleteView,
+            DatabaseActionId::OpenFunction,
             DatabaseActionId::OpenProcedure,
             DatabaseActionId::CreateNewQuery,
             DatabaseActionId::OpenNamedQuery,
@@ -4364,6 +4414,23 @@ mod tests {
             );
         }
 
+        let open_function = manifest
+            .actions
+            .actions
+            .iter()
+            .find(|action| action.id == DatabaseActionId::OpenFunction)
+            .expect("MySQL should expose the function editor action");
+        assert_eq!("Function.edit_function", open_function.label_i18n_key);
+        assert_eq!(DatabaseActionPlacement::Both, open_function.placement);
+        assert_eq!(
+            vec![DbNodeType::Function],
+            open_function
+                .targets
+                .iter()
+                .map(|target| target.node_type)
+                .collect::<Vec<_>>()
+        );
+
         let open_procedure = manifest
             .actions
             .actions
@@ -4380,6 +4447,46 @@ mod tests {
                 .map(|target| target.node_type)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn function_definition_query_quotes_database_and_function_names() {
+        assert_eq!(
+            "SHOW CREATE FUNCTION `app``db`.`calculate``total`",
+            mysql_function_definition_query("app`db", "calculate`total")
+        );
+    }
+
+    #[test]
+    fn function_definition_from_rows_reads_show_create_column() {
+        let rows = vec![vec![
+            Some("calculate_total".to_string()),
+            Some("STRICT_TRANS_TABLES".to_string()),
+            Some(
+                "CREATE DEFINER=`root`@`%` FUNCTION `calculate_total`(amount INT) RETURNS INT\nDETERMINISTIC\nRETURN amount + 1"
+                    .to_string(),
+            ),
+            Some("utf8mb4".to_string()),
+            Some("utf8mb4_0900_ai_ci".to_string()),
+            Some("utf8mb4_0900_ai_ci".to_string()),
+        ]];
+
+        assert_eq!(
+            "CREATE DEFINER=`root`@`%` FUNCTION `calculate_total`(amount INT) RETURNS INT\nDETERMINISTIC\nRETURN amount + 1",
+            mysql_function_definition_from_rows(&rows).unwrap()
+        );
+    }
+
+    #[test]
+    fn function_definition_from_rows_rejects_missing_create_sql() {
+        let error = mysql_function_definition_from_rows(&[vec![
+            Some("calculate_total".to_string()),
+            Some("STRICT_TRANS_TABLES".to_string()),
+            None,
+        ]])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("SHOW CREATE FUNCTION"));
     }
 
     #[test]

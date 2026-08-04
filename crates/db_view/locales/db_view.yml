@@ -1091,6 +1091,13 @@ Schema:
     zh-CN: 模式
     zh-HK: 模式
 
+# 函数操作
+Function:
+  edit_function:
+    en: Edit Function
+    zh-CN: 编辑函数
+    zh-HK: 編輯函數
+
 # 存储过程操作
 Procedure:
   edit_procedure:
@@ -1821,6 +1828,10 @@ DbTree:
     zh-HK: 檢查約束
 
 DbTreeEvent:
+  load_function_failed:
+    en: "Failed to load function: %{error}"
+    zh-CN: "加载函数失败：%{error}"
+    zh-HK: "載入函數失敗：%{error}"
   load_procedure_failed:
     en: "Failed to load procedure: %{error}"
     zh-CN: "加载存储过程失败：%{error}"

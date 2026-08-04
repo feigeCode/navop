@@ -218,6 +218,9 @@ pub enum DatabaseObjectsEvent {
     /// 打开视图数据
     OpenViewData { node: DbNode },
 
+    /// 打开函数编辑器
+    OpenFunction { node: DbNode },
+
     /// 打开存储过程编辑器
     OpenProcedure { node: DbNode },
 
@@ -412,6 +415,7 @@ impl DatabaseObjects {
         Some(match node.node_type {
             DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
             DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
+            DbNodeType::Function => DatabaseObjectsEvent::OpenFunction { node },
             DbNodeType::Procedure => DatabaseObjectsEvent::OpenProcedure { node },
             DbNodeType::NamedQuery => DatabaseObjectsEvent::OpenNamedQuery { node },
             DbNodeType::Database | DbNodeType::Schema => {
@@ -435,6 +439,8 @@ impl DatabaseObjects {
             | DbNodeType::Table
             | DbNodeType::ViewsFolder
             | DbNodeType::View
+            | DbNodeType::FunctionsFolder
+            | DbNodeType::Function
             | DbNodeType::ProceduresFolder
             | DbNodeType::Procedure
             | DbNodeType::QueriesFolder
@@ -763,17 +769,51 @@ impl DatabaseObjects {
                 };
                 (node_id, DbNodeType::View)
             }
+            DbNodeType::FunctionsFolder | DbNodeType::Function => {
+                let db = if database.is_empty() {
+                    current_node.name.clone()
+                } else {
+                    database.clone()
+                };
+                let schema = current_node.get_schema_name();
+                metadata.insert("database".to_string(), db.clone());
+                if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
+                    metadata.insert("schema".to_string(), schema.clone());
+                }
+                let node_id = if let Some(schema) =
+                    schema.as_ref().filter(|schema| !schema.trim().is_empty())
+                {
+                    format!(
+                        "{}:{}:{}:functions_folder:{}",
+                        connection_id, db, schema, name
+                    )
+                } else {
+                    format!("{}:{}:functions_folder:{}", connection_id, db, name)
+                };
+                (node_id, DbNodeType::Function)
+            }
             DbNodeType::ProceduresFolder | DbNodeType::Procedure => {
                 let db = if database.is_empty() {
                     current_node.name.clone()
                 } else {
                     database.clone()
                 };
+                let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), db.clone());
-                (
-                    format!("{}:{}:procedure:{}", connection_id, db, name),
-                    DbNodeType::Procedure,
-                )
+                if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
+                    metadata.insert("schema".to_string(), schema.clone());
+                }
+                let node_id = if let Some(schema) =
+                    schema.as_ref().filter(|schema| !schema.trim().is_empty())
+                {
+                    format!(
+                        "{}:{}:{}:procedures_folder:{}",
+                        connection_id, db, schema, name
+                    )
+                } else {
+                    format!("{}:{}:procedures_folder:{}", connection_id, db, name)
+                };
+                (node_id, DbNodeType::Procedure)
             }
             DbNodeType::QueriesFolder | DbNodeType::QueryFolder | DbNodeType::NamedQuery => {
                 let path = row_data.get(QUERY_ROW_PATH_INDEX)?.clone();
@@ -1651,13 +1691,106 @@ mod tests {
             Some("app_db"),
             node.metadata.get("database").map(String::as_str)
         );
-        assert_eq!("conn1:app_db:procedure:sync_orders", node.id);
+        assert_eq!("conn1:app_db:procedures_folder:sync_orders", node.id);
+    }
+
+    #[test]
+    fn database_object_function_row_builds_function_node() {
+        let row = vec!["calculate_total".to_string(), "INT".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Function,
+            Some(&database_node()),
+            &row,
+        )
+        .expect("function row should produce a node");
+
+        assert_eq!(DbNodeType::Function, node.node_type);
+        assert_eq!("calculate_total", node.name);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!("conn1:app_db:functions_folder:calculate_total", node.id);
+    }
+
+    #[test]
+    fn schema_object_function_row_builds_schema_scoped_function_node() {
+        let row = vec!["calculate_total".to_string(), "INT".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Function,
+            Some(&schema_node()),
+            &row,
+        )
+        .expect("function row under schema should produce a node");
+
+        assert_eq!(DbNodeType::Function, node.node_type);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("public"),
+            node.metadata.get("schema").map(String::as_str)
+        );
+        assert_eq!(
+            "conn1:app_db:public:functions_folder:calculate_total",
+            node.id
+        );
+    }
+
+    #[test]
+    fn schema_object_procedure_row_builds_schema_scoped_procedure_node() {
+        let row = vec!["sync_orders".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Procedure,
+            Some(&schema_node()),
+            &row,
+        )
+        .expect("procedure row under schema should produce a node");
+
+        assert_eq!(DbNodeType::Procedure, node.node_type);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("public"),
+            node.metadata.get("schema").map(String::as_str)
+        );
+        assert_eq!("conn1:app_db:public:procedures_folder:sync_orders", node.id);
+    }
+
+    #[test]
+    fn function_double_click_opens_function_editor() {
+        let node = DbNode::new(
+            "conn1:app_db:functions_folder:calculate_total",
+            "calculate_total",
+            DbNodeType::Function,
+            "conn1".to_string(),
+            DatabaseType::MySQL,
+        )
+        .with_metadata(HashMap::from([(
+            "database".to_string(),
+            "app_db".to_string(),
+        )]));
+
+        let event = DatabaseObjects::event_for_double_click_node(node)
+            .expect("function double click should emit an event");
+
+        assert!(matches!(
+            event,
+            DatabaseObjectsEvent::OpenFunction { node }
+                if node.node_type == DbNodeType::Function && node.name == "calculate_total"
+        ));
     }
 
     #[test]
     fn procedure_double_click_opens_procedure_editor() {
         let node = DbNode::new(
-            "conn1:app_db:procedure:sync_orders",
+            "conn1:app_db:procedures_folder:sync_orders",
             "sync_orders",
             DbNodeType::Procedure,
             "conn1".to_string(),
