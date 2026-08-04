@@ -7,6 +7,7 @@ use one_core::storage::{ConnectionType, DatabaseType, DbConnectionConfig, Stored
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectionIdentityIcon {
     Brand(IconName),
+    ColorObject(IconName),
     Object(IconName),
 }
 
@@ -50,7 +51,7 @@ impl ConnectionVisualSize {
 }
 
 const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
-    use ConnectionIdentityIcon::{Brand, Object};
+    use ConnectionIdentityIcon::{Brand, ColorObject, Object};
 
     match kind {
         ConnectionType::All => ConnectionVisual {
@@ -90,12 +91,12 @@ const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
         },
         ConnectionType::Rdp => ConnectionVisual {
             navigation_icon: IconName::RdpLine,
-            identity_icon: Object(IconName::RdpLine),
+            identity_icon: ColorObject(IconName::Rdp),
             accessible_label: "RDP",
         },
         ConnectionType::Vnc => ConnectionVisual {
             navigation_icon: IconName::VncLine,
-            identity_icon: Object(IconName::Vnc),
+            identity_icon: ColorObject(IconName::Vnc),
             accessible_label: "VNC",
         },
     }
@@ -128,6 +129,9 @@ pub(crate) fn connection_type_icon(kind: ConnectionType, size: ConnectionVisualS
     match connection_visual(kind).identity_icon {
         ConnectionIdentityIcon::Brand(name) => {
             BrandIcon::new(name).with_size(size.icon_size()).into_icon()
+        }
+        ConnectionIdentityIcon::ColorObject(name) => {
+            Icon::new(name).color().with_size(size.icon_size())
         }
         ConnectionIdentityIcon::Object(name) => ObjectIcon::new(name)
             .with_size(size.icon_size())
@@ -262,17 +266,24 @@ mod tests {
     }
 
     #[test]
-    fn rdp_uses_the_same_line_icon_for_navigation_and_identity() {
-        let visual = connection_visual(ConnectionType::Rdp);
-        assert_eq!(visual.navigation_icon, IconName::RdpLine);
+    fn remote_desktop_navigation_and_identity_icons_have_distinct_roles() {
+        let rdp = connection_visual(ConnectionType::Rdp);
+        assert_eq!(rdp.navigation_icon, IconName::RdpLine);
         assert!(matches!(
-            visual.identity_icon,
-            ConnectionIdentityIcon::Object(IconName::RdpLine)
+            rdp.identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::Rdp)
+        ));
+
+        let vnc = connection_visual(ConnectionType::Vnc);
+        assert_eq!(vnc.navigation_icon, IconName::VncLine);
+        assert!(matches!(
+            vnc.identity_icon,
+            ConnectionIdentityIcon::ColorObject(IconName::Vnc)
         ));
     }
 
     #[test]
-    fn identity_icons_preserve_brand_color_only_for_branded_protocols() {
+    fn identity_icons_preserve_color_for_brands_and_remote_desktop_protocols() {
         assert!(matches!(
             connection_visual(ConnectionType::Redis).identity_icon,
             ConnectionIdentityIcon::Brand(IconName::Redis)
@@ -288,12 +299,17 @@ mod tests {
             ConnectionType::SshSftp,
             ConnectionType::Serial,
             ConnectionType::PortForwarding,
-            ConnectionType::Rdp,
-            ConnectionType::Vnc,
         ] {
             assert!(matches!(
                 connection_visual(connection_type).identity_icon,
                 ConnectionIdentityIcon::Object(_)
+            ));
+        }
+
+        for connection_type in [ConnectionType::Rdp, ConnectionType::Vnc] {
+            assert!(matches!(
+                connection_visual(connection_type).identity_icon,
+                ConnectionIdentityIcon::ColorObject(_)
             ));
         }
     }

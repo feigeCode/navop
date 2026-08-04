@@ -1,1 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/><text x="12" y="12.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="6" font-weight="bold" fill="currentColor" stroke="none">VNC</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="2.75" y="3.5" width="18.5" height="13" rx="2"/>
+  <path d="M8.5 20.5h7"/>
+  <path d="M12 16.5v4"/>
+  <path d="m8.5 8.25 3.5 2.25 3.5-2.25"/>
+  <path d="M12 10.5v2.75"/>
+  <circle cx="8.5" cy="8.25" r=".75" fill="currentColor" stroke="none"/>
+  <circle cx="15.5" cy="8.25" r=".75" fill="currentColor" stroke="none"/>
+  <circle cx="12" cy="13.25" r=".75" fill="currentColor" stroke="none"/>
+</svg>

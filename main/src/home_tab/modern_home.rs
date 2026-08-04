@@ -33,54 +33,47 @@ impl HomePage {
             .id("modern-home-start-center")
             .size_full()
             .overflow_y_scroll()
+            .scrollbar_width(px(0.0))
             .child(
-                v_flex()
-                    .min_h_full()
-                    .w_full()
-                    .items_center()
-                    .px_6()
-                    .py_8()
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .max_w(START_CENTER_MAX_WIDTH)
-                            .gap_5()
-                            .child(self.render_start_center_hero(view, window, cx))
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .items_start()
-                                    .flex_wrap()
-                                    .gap_5()
-                                    .child(
-                                        div()
-                                            .id("modern-home-recent-column")
-                                            .min_w_0()
-                                            .flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)
-                                            .flex_grow(2.0)
-                                            .child(
-                                                self.render_recent_connections_panel(window, cx),
-                                            ),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .id("modern-home-side-column")
-                                            .min_w_0()
-                                            .flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)
-                                            .flex_grow(1.0)
-                                            .gap_5()
-                                            .child(render_create_panel(cx.entity(), window, cx))
-                                            .child(render_workspace_tools(cx.entity(), window, cx))
-                                            .child(render_status_panel(
-                                                self.syncing,
-                                                cx.entity(),
-                                                window,
-                                                cx,
-                                            )),
-                                    ),
-                            ),
-                    ),
+                v_flex().w_full().items_center().px_5().py_3().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(START_CENTER_MAX_WIDTH)
+                        .gap_3()
+                        .child(self.render_start_center_hero(view, window, cx))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .items_start()
+                                .flex_wrap()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .id("modern-home-recent-column")
+                                        .min_w_0()
+                                        .flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)
+                                        .flex_grow(2.0)
+                                        .child(self.render_recent_connections_panel(window, cx)),
+                                )
+                                .child(
+                                    v_flex()
+                                        .id("modern-home-side-column")
+                                        .min_w_0()
+                                        .flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)
+                                        .flex_grow(1.0)
+                                        .gap_3()
+                                        .child(render_create_panel(cx.entity(), window, cx))
+                                        .child(render_workspace_tools(cx.entity(), window, cx))
+                                        .child(render_status_panel(
+                                            self.syncing,
+                                            cx.entity(),
+                                            window,
+                                            cx,
+                                        )),
+                                ),
+                        ),
+                ),
             )
             .into_any_element()
     }
@@ -95,9 +88,9 @@ impl HomePage {
             .id("modern-home-hero")
             .w_full()
             .min_w_0()
-            .gap_5()
-            .px_6()
-            .py_5()
+            .gap_3()
+            .px_5()
+            .py_4()
             .rounded_xl()
             .border_1()
             .border_color(cx.theme().border)
@@ -170,7 +163,7 @@ impl HomePage {
             .cloned()
             .collect();
         recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at));
-        recent.truncate(6);
+        recent.truncate(5);
         let recent_count = recent.len();
 
         surface_panel("modern-home-recent-panel", cx)
@@ -222,11 +215,11 @@ impl HomePage {
             )))
             .w_full()
             .min_w_0()
-            .min_h(px(58.0))
+            .min_h(px(50.0))
             .items_center()
-            .gap_3()
+            .gap_2()
             .px_3()
-            .py_2()
+            .py_1()
             .rounded_lg()
             .border_1()
             .border_color(cx.theme().border)
@@ -241,7 +234,7 @@ impl HomePage {
             .child(
                 div()
                     .flex_none()
-                    .size(px(34.0))
+                    .size(px(32.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -480,8 +473,8 @@ fn surface_panel(id: &'static str, cx: &gpui::App) -> gpui::Stateful<gpui::Div> 
         .id(id)
         .w_full()
         .min_w_0()
-        .gap_3()
-        .p_4()
+        .gap_2()
+        .p_3()
         .rounded_xl()
         .border_1()
         .border_color(cx.theme().border)
@@ -524,7 +517,7 @@ fn panel_header(title: impl IntoElement, badge: Option<String>, cx: &gpui::App) 
 fn render_empty_recent(cx: &gpui::App) -> impl IntoElement {
     v_flex()
         .w_full()
-        .min_h(px(210.0))
+        .min_h(px(140.0))
         .items_center()
         .justify_center()
         .gap_3()
@@ -579,11 +572,11 @@ fn utility_row(
         .id(id)
         .w_full()
         .min_w_0()
-        .min_h(px(52.0))
+        .min_h(px(46.0))
         .items_center()
-        .gap_3()
+        .gap_2()
         .px_2()
-        .py_2()
+        .py_1()
         .rounded_lg()
         .cursor_pointer()
         .hover(move |style| style.bg(hover_background))
@@ -647,11 +640,11 @@ fn status_row(
         .id(id)
         .w_full()
         .min_w_0()
-        .min_h(px(48.0))
+        .min_h(px(44.0))
         .items_center()
-        .gap_3()
+        .gap_2()
         .px_2()
-        .py_2()
+        .py_1()
         .rounded_lg()
         .when(interactive, |this| {
             this.cursor_pointer()

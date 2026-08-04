@@ -2455,6 +2455,40 @@ cargo check -p main
 cargo test -p main home_tabs
 ```
 
+#### `UI-304` 实施记录（2026-08-04）
+
+状态：**Implemented，macOS Debug 视觉核验完成，Design Owner 签核待完成**
+
+- Home/Connection 将连接身份图标与导航图标拆分为两条稳定语义路径：
+  - Global Rail、连接类型筛选等导航区域继续使用主题语义色的单色线稿；
+  - 连接树、最近连接、快速打开、新建连接、导入预览、远程桌面 Tab 和 AI
+    连接选择器使用保留协议色的连接身份图标；
+- RDP 和 VNC 继续归类为 `ObjectGlyph`，不伪装成 `BrandColor`；身份场景通过
+  `ColorObject` 显式保留资源原色，避免经过 `ObjectIcon` 的 `.mono()` 路径；
+- RDP 使用蓝色圆角安全区、浅色显示器和双向箭头；VNC 使用绿色圆角安全区、
+  浅色显示器和远程信号符号。两者在 `16px` Connection Tree 中与 SSH、数据库
+  图标保持接近的视觉占比，不再使用会缩成黑色块的深色固定屏幕填充；
+- VNC 导航线稿移除 SVG `<text>`，改用纯 path/circle，避免不同平台字体栅格化
+  导致 `16px` 下字形模糊、偏移或消失；
+- Home Start Center 以约 `1237 × 768` 的真实 macOS Debug 视口为首屏基线：
+  根容器不显示原生纵向滚动条，最近连接最多显示 5 条，右侧创建、工具和状态面板
+  必须完整可见；更矮窗口保留纵向滚动能力，但将原生 scrollbar width 设为 `0`，
+  避免以静默裁切换取“无滚动条”；
+- 视觉核验只使用 worktree 下的 `target/Navop.app`。2026-08-04 最新截图确认：
+  Home 主区域无纵向滚动条，RDP 为清晰蓝色，VNC 为清晰绿色，且不存在黑色
+  显示器块。
+
+验证：
+
+```text
+cargo test --locked -p main connection_visuals
+cargo test --locked -p main home_tab
+cargo test --locked -p main home_tabs
+cargo check --locked -p main
+cargo run --locked -p icon-audit -- check
+codesign --verify --deep --strict target/Navop.app
+```
+
 ### Shell
 
 - [x] `UI-101`：统一内容 Global Rail；

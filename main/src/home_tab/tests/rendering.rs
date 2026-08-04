@@ -132,6 +132,10 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(!modern_home.contains("view.update(cx, |home"));
     assert!(modern_home.contains("modern-home-sync"));
     assert!(modern_home.contains("modern-home-keys"));
+    assert!(modern_home.contains(
+        ".size_full()\n            .overflow_y_scroll()\n            .scrollbar_width(px(0.0))"
+    ));
+    assert!(!modern_home.contains(".min_h_full()"));
     assert!(modern_home.contains("self.render_local_terminal_button(window, cx)"));
     assert!(!modern_home.contains("modern-home-local-terminal"));
     assert!(!modern_home.contains("IconName::Terminal).with_size(px(42.0))"));
@@ -166,7 +170,10 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     assert!(
         modern_home.contains("recent.sort_by_key(|conn| std::cmp::Reverse(conn.last_used_at))")
     );
-    assert!(modern_home.contains("recent.truncate(6)"));
+    assert!(modern_home.contains("recent.truncate(5)"));
+    assert!(modern_home.contains(".min_h(px(50.0))"));
+    assert!(modern_home.contains(".min_h(px(140.0))"));
+    assert!(!modern_home.contains(".min_h(px(210.0))"));
     assert!(modern_home.contains("home.open_connection_from_quick(&open_connection, window, cx)"));
     assert!(!modern_home.contains(".on_double_click("));
 }
