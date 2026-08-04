@@ -1418,10 +1418,12 @@ mod tests {
     use super::*;
 
     use gpui::TestAppContext;
+    use std::{cell::Cell, rc::Rc};
 
     struct TestRoot {
         menu: Entity<PopupMenu>,
         submenu: Entity<PopupMenu>,
+        dismiss_count: Rc<Cell<usize>>,
     }
 
     impl Render for TestRoot {
@@ -1431,7 +1433,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn build_connects_prebuilt_submenu_to_parent(cx: &mut TestAppContext) {
+    fn dismissing_prebuilt_submenu_dismisses_parent(cx: &mut TestAppContext) {
         cx.update(|cx| cx.set_global(crate::Theme::default()));
         let (root, cx) = cx.add_window_view(|window, cx| {
             let submenu = PopupMenu::build(window, cx, |menu, _, _| {
@@ -1441,8 +1443,21 @@ mod tests {
             let menu = PopupMenu::build(window, cx, move |menu, _, _| {
                 menu.item(PopupMenuItem::submenu("Copy As", submenu_for_menu))
             });
+            let dismiss_count = Rc::new(Cell::new(0));
+            window
+                .subscribe(&menu, cx, {
+                    let dismiss_count = dismiss_count.clone();
+                    move |_, _: &DismissEvent, _, _| {
+                        dismiss_count.set(dismiss_count.get() + 1);
+                    }
+                })
+                .detach();
 
-            TestRoot { menu, submenu }
+            TestRoot {
+                menu,
+                submenu,
+                dismiss_count,
+            }
         });
 
         let (menu_id, parent_id) = root.read_with(cx, |root, cx| {
@@ -1457,5 +1472,19 @@ mod tests {
         });
 
         assert_eq!(parent_id, Some(menu_id));
+
+        root.update_in(cx, |root, window, cx| {
+            root.menu.update(cx, |menu, _| {
+                menu.selected_index = Some(0);
+            });
+            root.submenu.update(cx, |submenu, cx| {
+                submenu.dismiss(&Cancel, window, cx);
+            });
+        });
+
+        root.read_with(cx, |root, cx| {
+            assert_eq!(root.dismiss_count.get(), 1);
+            assert_eq!(root.menu.read(cx).selected_index, None);
+        });
     }
 }
