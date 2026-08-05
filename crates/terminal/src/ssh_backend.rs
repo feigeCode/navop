@@ -24,6 +24,7 @@ use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
 use crate::ssh_ingress::{SshActorInput, SshParserIngress, next_ssh_actor_input};
+use crate::zmodem::{ZmodemDetector, ZmodemResponder, is_channel_closed, run_transfer};
 use crate::{
     TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
     TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
@@ -302,6 +303,19 @@ pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
     exec_ids: Arc<AtomicU64>,
     performance_metrics: Arc<TerminalPerformanceMetrics>,
+    transfer_cancellation: CancellationToken,
+}
+
+pub struct SshBackendConnect {
+    pub session_manager: Arc<SshSessionManager>,
+    pub pty_config: PtyConfig,
+    pub connection_id: Option<i64>,
+    pub term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    pub event_proxy: GpuiEventProxy,
+    pub event_tx: UnboundedSender<TerminalEvent>,
+    pub on_disconnect: Option<UnboundedSender<()>>,
+    pub init_commands: Option<String>,
+    pub disable_shell_integration: bool,
 }
 
 type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
@@ -480,18 +494,17 @@ impl SshBackend {
         result.map_err(add_connect_error_context)
     }
 
-    pub async fn connect(
-        session_manager: Arc<SshSessionManager>,
-        pty_config: PtyConfig,
-        connection_id: Option<i64>,
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_proxy: GpuiEventProxy,
-        event_tx: UnboundedSender<TerminalEvent>,
-        on_disconnect: Option<UnboundedSender<()>>,
-        init_commands: Option<String>,
-        disable_shell_integration: bool,
+    pub async fn connect(request: SshBackendConnect) -> anyhow::Result<Self> {
+        let responder = ZmodemResponder::new(request.event_tx.clone());
+        Self::connect_with_recording(request, None, responder).await
+    }
+
+    pub(crate) async fn connect_with_recording(
+        request: SshBackendConnect,
+        recording_tap: Option<RecordingTap>,
+        zmodem_responder: ZmodemResponder,
     ) -> anyhow::Result<Self> {
-        Self::connect_with_recording(
+        let SshBackendConnect {
             session_manager,
             pty_config,
             connection_id,
@@ -501,23 +514,7 @@ impl SshBackend {
             on_disconnect,
             init_commands,
             disable_shell_integration,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn connect_with_recording(
-        session_manager: Arc<SshSessionManager>,
-        pty_config: PtyConfig,
-        connection_id: Option<i64>,
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_proxy: GpuiEventProxy,
-        event_tx: UnboundedSender<TerminalEvent>,
-        on_disconnect: Option<UnboundedSender<()>>,
-        init_commands: Option<String>,
-        disable_shell_integration: bool,
-        recording_tap: Option<RecordingTap>,
-    ) -> anyhow::Result<Self> {
+        } = request;
         let (client, mut channel, shell_integration_active) = Self::establish_channel(
             &session_manager,
             &pty_config,
@@ -537,6 +534,8 @@ impl SshBackend {
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
         let exec_ids = Arc::new(AtomicU64::new(1));
         let task_command_tx = command_tx.clone();
+        let transfer_cancellation = CancellationToken::new();
+        let task_transfer_cancellation = transfer_cancellation.clone();
 
         // 创建 PtyWrite 回写通道
         let (pty_write_tx, mut pty_write_rx) = unbounded_channel::<Vec<u8>>();
@@ -556,11 +555,12 @@ impl SshBackend {
             let mut pending_ingress = None;
             let mut exec_supervisor = ExecSupervisor::new();
             let mut osc_parser = OscStreamParser::default();
+            let mut zmodem_detector = ZmodemDetector::default();
             let mut exec_results = HashMap::new();
             let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
 
-            loop {
+            'actor: loop {
                 match next_ssh_actor_input(
                     &mut channel,
                     &mut command_rx,
@@ -707,80 +707,112 @@ impl SshBackend {
                                 if data.is_empty() {
                                     continue;
                                 }
-                                // 解析所有 OSC 事件
-                                let osc_events = osc_parser.push(&data);
-                                let effects = exec_supervisor.on_terminal_chunk(&data, &osc_events);
-                                tracing::trace!(
-                                    readiness = ?exec_supervisor.readiness(),
-                                    "SSH terminal exec readiness updated"
-                                );
-                                if !apply_exec_effects(
-                                    effects,
-                                    &mut channel,
-                                    &task_command_tx,
-                                    &mut exec_results,
-                                )
-                                .await
-                                {
-                                    break;
+                                let routed = zmodem_detector.push(&data);
+                                let mut terminal_chunks = Vec::new();
+                                if !routed.terminal.is_empty() {
+                                    terminal_chunks.push(routed.terminal);
                                 }
-                                for osc_event in &osc_events {
-                                    match osc_event {
-                                        OscEvent::WorkingDirChanged(path) => {
-                                            let _ = event_tx.send(
-                                                TerminalEvent::WorkingDirChanged(path.clone()),
-                                            );
+                                if let Some(detected) = routed.transfer {
+                                    match run_transfer(
+                                        &mut channel,
+                                        detected,
+                                        &zmodem_responder,
+                                        &task_transfer_cancellation,
+                                    )
+                                    .await
+                                    {
+                                        Ok(trailing) if !trailing.is_empty() => {
+                                            terminal_chunks.push(trailing);
                                         }
-                                        OscEvent::PromptStart => {
-                                            let _ = event_tx.send(TerminalEvent::PromptStart);
-                                        }
-                                        OscEvent::InputStart => {
-                                            let _ = event_tx.send(TerminalEvent::InputStart);
-                                            // 133;B: prompt 渲染完，用户可以输入了
-                                            // 第一次收到时发送 init_commands
-                                            if !shell_ready {
-                                                shell_ready = true;
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            let channel_closed = is_channel_closed(&error);
+                                            tracing::warn!(%error, "SSH ZMODEM transfer failed");
+                                            if channel_closed {
+                                                graceful_ingress_close = true;
+                                                break 'actor;
                                             }
                                         }
-                                        OscEvent::CommandStart => {
-                                            let _ = event_tx.send(TerminalEvent::CommandStart);
-                                        }
-                                        OscEvent::CommandFinished { exit_code } => {
-                                            // 133;D: 命令执行完毕
-                                            let _ = event_tx.send(TerminalEvent::CommandFinished {
-                                                exit_code: *exit_code,
-                                            });
-                                        }
-                                        OscEvent::CommandRecorded(command) => {
-                                            let _ = event_tx.send(TerminalEvent::CommandRecorded(
-                                                command.clone(),
-                                            ));
-                                        }
                                     }
                                 }
-
-                                // shell ready 后发送 init_commands（只发一次）
-                                if shell_ready && !init_sent {
-                                    init_sent = true;
-                                    if let Some(ref commands) = pending_init {
-                                        let inter_command_delay = (!shell_integration_active)
-                                            .then_some(PLAIN_INIT_COMMAND_DELAY);
-                                        if !send_init_commands(
-                                            &mut channel,
-                                            commands,
-                                            inter_command_delay,
-                                            &mut exec_supervisor,
-                                            &task_command_tx,
-                                            &mut exec_results,
-                                        )
-                                        .await
-                                        {
-                                            break;
+                                for data in terminal_chunks {
+                                    // 解析所有 OSC 事件
+                                    let osc_events = osc_parser.push(&data);
+                                    let effects =
+                                        exec_supervisor.on_terminal_chunk(&data, &osc_events);
+                                    tracing::trace!(
+                                        readiness = ?exec_supervisor.readiness(),
+                                        "SSH terminal exec readiness updated"
+                                    );
+                                    if !apply_exec_effects(
+                                        effects,
+                                        &mut channel,
+                                        &task_command_tx,
+                                        &mut exec_results,
+                                    )
+                                    .await
+                                    {
+                                        break 'actor;
+                                    }
+                                    for osc_event in &osc_events {
+                                        match osc_event {
+                                            OscEvent::WorkingDirChanged(path) => {
+                                                let _ = event_tx.send(
+                                                    TerminalEvent::WorkingDirChanged(path.clone()),
+                                                );
+                                            }
+                                            OscEvent::PromptStart => {
+                                                let _ = event_tx.send(TerminalEvent::PromptStart);
+                                            }
+                                            OscEvent::InputStart => {
+                                                let _ = event_tx.send(TerminalEvent::InputStart);
+                                                // 133;B: prompt 渲染完，用户可以输入了
+                                                // 第一次收到时发送 init_commands
+                                                if !shell_ready {
+                                                    shell_ready = true;
+                                                }
+                                            }
+                                            OscEvent::CommandStart => {
+                                                let _ = event_tx.send(TerminalEvent::CommandStart);
+                                            }
+                                            OscEvent::CommandFinished { exit_code } => {
+                                                // 133;D: 命令执行完毕
+                                                let _ =
+                                                    event_tx.send(TerminalEvent::CommandFinished {
+                                                        exit_code: *exit_code,
+                                                    });
+                                            }
+                                            OscEvent::CommandRecorded(command) => {
+                                                let _ = event_tx.send(
+                                                    TerminalEvent::CommandRecorded(command.clone()),
+                                                );
+                                            }
                                         }
                                     }
-                                }
 
-                                pending_ingress = Some(parser_ingress.pending(data));
+                                    // shell ready 后发送 init_commands（只发一次）
+                                    if shell_ready && !init_sent {
+                                        init_sent = true;
+                                        if let Some(ref commands) = pending_init {
+                                            let inter_command_delay = (!shell_integration_active)
+                                                .then_some(PLAIN_INIT_COMMAND_DELAY);
+                                            if !send_init_commands(
+                                                &mut channel,
+                                                commands,
+                                                inter_command_delay,
+                                                &mut exec_supervisor,
+                                                &task_command_tx,
+                                                &mut exec_results,
+                                            )
+                                            .await
+                                            {
+                                                break 'actor;
+                                            }
+                                        }
+                                    }
+
+                                    pending_ingress = Some(parser_ingress.pending(data));
+                                }
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
                                 graceful_ingress_close = true;
@@ -825,6 +857,7 @@ impl SshBackend {
             command_tx,
             exec_ids,
             performance_metrics,
+            transfer_cancellation,
         })
     }
 
@@ -1197,6 +1230,7 @@ mod tests {
             command_tx,
             exec_ids: Arc::new(AtomicU64::new(1)),
             performance_metrics: metrics.clone(),
+            transfer_cancellation: CancellationToken::new(),
         };
 
         TerminalBackend::write(&backend, b"direct".to_vec());
@@ -2618,6 +2652,7 @@ impl TerminalBackend for SshBackend {
     }
 
     fn shutdown(&self) {
+        self.transfer_cancellation.cancel();
         let _ = self.command_tx.send(SshCommand::Shutdown);
     }
 }

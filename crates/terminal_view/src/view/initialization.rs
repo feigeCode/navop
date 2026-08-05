@@ -249,6 +249,7 @@ impl TerminalView {
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
             ssh_mfa_inputs: Vec::new(),
+            zmodem_picker_request_id: None,
             focus_terminal_after_connect: false,
             reconnect_success_pending: false,
             current_theme: default_theme,

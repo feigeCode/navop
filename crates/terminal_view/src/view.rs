@@ -160,6 +160,7 @@ mod terminal_render;
 mod text_input;
 mod tool_dock;
 mod vi_input;
+mod zmodem_picker;
 
 use actions::*;
 use command_bar::{TerminalCommandBar, TerminalCommandBarConfig, TerminalCommandBarEvent};
@@ -274,6 +275,8 @@ pub struct TerminalView {
     /// 当前正在加载目录候选的父目录
     cd_completion_loading_parent: Option<String>,
     ssh_mfa_inputs: Vec<SshMfaInput>,
+    /// 当前已打开系统选择器的 ZMODEM 请求 ID，用于去重和拒绝过期结果。
+    zmodem_picker_request_id: Option<u64>,
     focus_terminal_after_connect: bool,
     reconnect_success_pending: bool,
 

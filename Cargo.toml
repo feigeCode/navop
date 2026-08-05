@@ -201,6 +201,7 @@ zeroize = "1"
 
 # Terminal emulation
 alacritty_terminal = "0.26"
+zmodem2 = "0.7.1"
 
 # Serial port
 serialport = "4"

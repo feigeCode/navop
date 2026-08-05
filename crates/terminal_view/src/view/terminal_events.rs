@@ -37,6 +37,7 @@ impl TerminalView {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
                 self.sync_ssh_mfa_inputs(window, cx);
+                self.sync_zmodem_picker(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
                 cx.emit(TabContentEvent::ContentChanged);
@@ -55,6 +56,9 @@ impl TerminalView {
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
+            }
+            TerminalModelEvent::ZmodemRequestChanged => {
+                self.sync_zmodem_picker(cx);
             }
             TerminalModelEvent::PromptStart
             | TerminalModelEvent::InputStart

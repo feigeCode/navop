@@ -60,10 +60,12 @@ use crate::recording::{
 };
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
+use crate::ssh_backend::SshBackendConnect;
 #[cfg(target_os = "windows")]
 use crate::windows_environment::{
     environment_value, merge_environment_overrides, refreshed_windows_environment,
 };
+use crate::zmodem::{ZmodemPickerRequest, ZmodemPickerResponse, ZmodemResponder};
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
@@ -88,6 +90,8 @@ pub enum TerminalModelEvent {
     HostKeyVerificationRequired,
     /// SSH keyboard-interactive/MFA 请求状态变化
     SshMfaChanged,
+    /// SSH ZMODEM 文件选择请求状态变化
+    ZmodemRequestChanged,
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
     /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
@@ -235,6 +239,20 @@ struct ResolvedSshConnection {
     init_commands: Option<String>,
     connection_id: Option<i64>,
     connection_name: String,
+}
+
+struct SshConnectTask {
+    session_manager: Arc<SshSessionManager>,
+    config: SshTerminalConfig,
+    term: Arc<FairMutex<Term<GpuiEventProxy>>>,
+    event_proxy: GpuiEventProxy,
+    event_tx: UnboundedSender<TerminalEvent>,
+    zmodem_responder: ZmodemResponder,
+    connection_id: Option<i64>,
+    on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
+    init_commands: Option<String>,
+    recording_tap: Option<RecordingTap>,
+    generation: u64,
 }
 
 fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
@@ -952,6 +970,8 @@ pub struct Terminal {
     ssh_session_manager: Option<Arc<SshSessionManager>>,
     /// SSH keyboard-interactive/MFA 输入响应器
     ssh_mfa_responder: Option<TerminalMfaResponder>,
+    /// SSH ZMODEM 文件选择请求协调器
+    zmodem_responder: Option<ZmodemResponder>,
     /// 等待用户确认的未知 SSH 主机指纹
     pending_host_key_verification: Option<HostKeyVerificationRequest>,
     /// 串口参数（用于重连）
@@ -1323,6 +1343,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
@@ -1446,6 +1467,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
@@ -1533,20 +1555,24 @@ impl Terminal {
         let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
         let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
+        let zmodem_responder = ZmodemResponder::new(event_tx.clone());
 
         Self::spawn_disconnect_handler(disconnect_rx, connection_generation, cx);
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_ssh_connect(
-            ssh_session_manager.clone(),
-            config.clone(),
-            term.clone(),
-            event_proxy.clone(),
-            event_tx.clone(),
-            resolved.connection_id,
-            Some(disconnect_tx),
-            resolved.init_commands.clone(),
-            recording_tap,
-            connection_generation,
+            SshConnectTask {
+                session_manager: ssh_session_manager.clone(),
+                config: config.clone(),
+                term: term.clone(),
+                event_proxy: event_proxy.clone(),
+                event_tx: event_tx.clone(),
+                zmodem_responder: zmodem_responder.clone(),
+                connection_id: resolved.connection_id,
+                on_disconnect: Some(disconnect_tx),
+                init_commands: resolved.init_commands.clone(),
+                recording_tap,
+                generation: connection_generation,
+            },
             cx,
         );
         Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
@@ -1573,6 +1599,7 @@ impl Terminal {
             ssh_config: Some(config),
             ssh_session_manager: Some(ssh_session_manager),
             ssh_mfa_responder: Some(resolved.responder),
+            zmodem_responder: Some(zmodem_responder),
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
@@ -1646,6 +1673,7 @@ impl Terminal {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: Some(serial_params),
             wakeup_pending,
@@ -1723,6 +1751,7 @@ impl Terminal {
                 ssh_config: None,
                 ssh_session_manager: None,
                 ssh_mfa_responder: None,
+                zmodem_responder: None,
                 pending_host_key_verification: None,
                 serial_params: None,
                 wakeup_pending: wakeup_pending.clone(),
@@ -1949,19 +1978,20 @@ impl Terminal {
         .detach();
     }
 
-    fn spawn_ssh_connect(
-        session_manager: Arc<SshSessionManager>,
-        config: SshTerminalConfig,
-        term: Arc<FairMutex<Term<GpuiEventProxy>>>,
-        event_proxy: GpuiEventProxy,
-        event_tx: UnboundedSender<TerminalEvent>,
-        connection_id: Option<i64>,
-        on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
-        init_commands: Option<String>,
-        recording_tap: Option<RecordingTap>,
-        generation: u64,
-        cx: &mut Context<Self>,
-    ) {
+    fn spawn_ssh_connect(task: SshConnectTask, cx: &mut Context<Self>) {
+        let SshConnectTask {
+            session_manager,
+            config,
+            term,
+            event_proxy,
+            event_tx,
+            zmodem_responder,
+            connection_id,
+            on_disconnect,
+            init_commands,
+            recording_tap,
+            generation,
+        } = task;
         let task = Tokio::spawn(cx, async move {
             let disconnect_tx = on_disconnect.map(|tx| {
                 let (sender, mut receiver) = unbounded_channel::<()>();
@@ -1973,16 +2003,19 @@ impl Terminal {
                 sender
             });
             SshBackend::connect_with_recording(
-                session_manager,
-                config.pty_config,
-                connection_id,
-                term,
-                event_proxy,
-                event_tx,
-                disconnect_tx,
-                init_commands,
-                config.disable_shell_integration,
+                SshBackendConnect {
+                    session_manager,
+                    pty_config: config.pty_config,
+                    connection_id,
+                    term,
+                    event_proxy,
+                    event_tx,
+                    on_disconnect: disconnect_tx,
+                    init_commands,
+                    disable_shell_integration: config.disable_shell_integration,
+                },
                 recording_tap,
+                zmodem_responder,
             )
             .await
         });
@@ -2224,6 +2257,9 @@ impl Terminal {
             TerminalEvent::SshMfaChanged => {
                 cx.emit(TerminalModelEvent::SshMfaChanged);
             }
+            TerminalEvent::ZmodemRequestChanged => {
+                cx.emit(TerminalModelEvent::ZmodemRequestChanged);
+            }
             TerminalEvent::PromptStart => {
                 cx.emit(TerminalModelEvent::PromptStart);
             }
@@ -2424,6 +2460,18 @@ impl Terminal {
         self.ssh_mfa_responder
             .as_ref()
             .is_some_and(|responder| responder.submit(responses))
+    }
+
+    pub fn zmodem_picker_request(&self) -> Option<ZmodemPickerRequest> {
+        self.zmodem_responder
+            .as_ref()
+            .and_then(ZmodemResponder::pending_request)
+    }
+
+    pub fn submit_zmodem_picker(&self, response: ZmodemPickerResponse) -> bool {
+        self.zmodem_responder
+            .as_ref()
+            .is_some_and(|responder| responder.submit(response))
     }
 
     /// 获取连接类型
@@ -2856,6 +2904,10 @@ impl Terminal {
             if let Some(responder) = &self.ssh_mfa_responder {
                 responder.cancel();
             }
+            let Some(zmodem_responder) = self.zmodem_responder.clone() else {
+                return false;
+            };
+            zmodem_responder.cancel();
             let term = self.term.clone();
             let connection_id = self.connection_id;
             let init_commands = self.init_commands.clone();
@@ -2871,16 +2923,19 @@ impl Terminal {
                     let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
                     Self::spawn_disconnect_handler(disconnect_rx, generation, cx);
                     Self::spawn_ssh_connect(
-                        session_manager.clone(),
-                        config.clone(),
-                        term.clone(),
-                        event_proxy.clone(),
-                        event_tx.clone(),
-                        connection_id,
-                        Some(disconnect_tx),
-                        init_commands.clone(),
-                        recording_tap.clone(),
-                        generation,
+                        SshConnectTask {
+                            session_manager: session_manager.clone(),
+                            config: config.clone(),
+                            term: term.clone(),
+                            event_proxy: event_proxy.clone(),
+                            event_tx: event_tx.clone(),
+                            zmodem_responder: zmodem_responder.clone(),
+                            connection_id,
+                            on_disconnect: Some(disconnect_tx),
+                            init_commands: init_commands.clone(),
+                            recording_tap: recording_tap.clone(),
+                            generation,
+                        },
                         cx,
                     );
                     Self::spawn_ssh_history_loader(session_manager.clone(), cx);
@@ -2984,6 +3039,12 @@ impl Terminal {
 
     /// 关闭终端
     pub fn shutdown(&self) {
+        if let Some(responder) = &self.ssh_mfa_responder {
+            responder.cancel();
+        }
+        if let Some(responder) = &self.zmodem_responder {
+            responder.cancel();
+        }
         if let Some(ref backend) = self.backend {
             backend.shutdown();
         }
@@ -3322,6 +3383,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
@@ -4828,6 +4890,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
@@ -5001,6 +5064,7 @@ mod tests {
             ssh_config: None,
             ssh_session_manager: None,
             ssh_mfa_responder: None,
+            zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,

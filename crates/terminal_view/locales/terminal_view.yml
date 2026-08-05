@@ -2133,3 +2133,13 @@ TerminalRecordingPlayback:
     en: Playback controls are unavailable
     zh-CN: 回放控制当前不可用
     zh-HK: 回放控制目前不可用
+
+TerminalZmodem:
+  select_upload_files:
+    en: Select files to upload with ZMODEM
+    zh-CN: 选择要通过 ZMODEM 上传的文件
+    zh-HK: 選擇要透過 ZMODEM 上傳的檔案
+  select_download_directory:
+    en: Select a folder for the ZMODEM download
+    zh-CN: 选择 ZMODEM 下载保存目录
+    zh-HK: 選擇 ZMODEM 下載儲存目錄

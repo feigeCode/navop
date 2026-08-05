@@ -16,6 +16,7 @@ ssh = { workspace = true }
 
 # Terminal emulation
 alacritty_terminal.workspace = true
+zmodem2.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 shell-words = { workspace = true }

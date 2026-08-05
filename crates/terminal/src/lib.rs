@@ -19,6 +19,7 @@ pub mod types;
 mod windows_environment;
 #[cfg(any(test, target_os = "windows"))]
 mod windows_shell_integration;
+pub mod zmodem;
 
 pub use exec_supervisor::TerminalExecError;
 pub use local_shell::{
