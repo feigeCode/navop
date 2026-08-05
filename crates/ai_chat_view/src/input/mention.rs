@@ -201,7 +201,7 @@ impl CompletionProvider for MentionCompletionProvider {
 }
 
 pub(crate) fn mention_completion_trigger_text(new_text: &str) -> bool {
-    new_text.chars().last().is_some_and(|c| !c.is_whitespace())
+    new_text.chars().last() == Some('@')
 }
 
 /// 是否为可直接插入(无需引号)的简单名称:首字符为字母 / 下划线,其余为字母数字 / 下划线。
@@ -260,9 +260,12 @@ mod tests {
     }
 
     #[test]
-    fn mention_completion_trigger_text_accepts_at_character() {
+    fn mention_completion_trigger_text_only_accepts_at_character() {
         assert!(mention_completion_trigger_text("@"));
-        assert!(mention_completion_trigger_text("p"));
+        assert!(mention_completion_trigger_text("prefix@"));
+        assert!(!mention_completion_trigger_text("p"));
+        assert!(!mention_completion_trigger_text("中"));
+        assert!(!mention_completion_trigger_text("1"));
         assert!(!mention_completion_trigger_text(" "));
     }
 }

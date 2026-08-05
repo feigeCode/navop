@@ -24,25 +24,25 @@ enum CompletionMenuAction {
 }
 
 fn completion_menu_action(
-    has_existing_menu: bool,
+    has_active_menu: bool,
     is_trigger: bool,
     full_text: &str,
     new_offset: usize,
     start_offset: usize,
 ) -> CompletionMenuAction {
     if new_offset < start_offset {
-        return if has_existing_menu {
+        return if has_active_menu {
             CompletionMenuAction::Hide
         } else {
             CompletionMenuAction::Ignore
         };
     }
 
-    if !has_existing_menu && !is_trigger {
+    if !has_active_menu && !is_trigger {
         return CompletionMenuAction::Ignore;
     }
 
-    if has_existing_menu && full_text.trim().is_empty() {
+    if has_active_menu && full_text.trim().is_empty() {
         return CompletionMenuAction::Hide;
     }
 
@@ -181,17 +181,19 @@ impl InputState {
 
         let start = range.start;
         let new_offset = self.cursor();
-        let existing_menu = match self.context_menu_content.as_ref() {
-            Some(ContextMenu::Completion(menu)) => Some(menu),
+        let active_menu = match self.context_menu_content.as_ref() {
+            Some(ContextMenu::Completion(menu)) if menu.read(cx).trigger_start_offset.is_some() => {
+                Some(menu)
+            }
             _ => None,
         };
         let is_trigger = provider.is_completion_trigger(start, new_text, cx);
-        let start_offset = existing_menu
+        let start_offset = active_menu
             .as_ref()
             .and_then(|menu| menu.read(cx).trigger_start_offset)
             .unwrap_or(start);
         let action = completion_menu_action(
-            existing_menu.is_some(),
+            active_menu.is_some(),
             is_trigger,
             &self.text.to_string(),
             new_offset,
@@ -201,7 +203,7 @@ impl InputState {
         match action {
             CompletionMenuAction::Ignore => return,
             CompletionMenuAction::Hide => {
-                if let Some(menu) = existing_menu {
+                if let Some(menu) = active_menu {
                     _ = menu.update(cx, |menu, cx| {
                         menu.hide(cx);
                     });
@@ -212,7 +214,7 @@ impl InputState {
         }
 
         // To create or get the existing completion menu.
-        let menu = match existing_menu {
+        let menu = match active_menu {
             Some(menu) => menu.clone(),
             None => {
                 let menu = CompletionMenu::new(cx.entity(), window, cx);
@@ -241,7 +243,7 @@ impl InputState {
                     lsp_types::CompletionTriggerKind::INVOKED
                 }
             },
-            trigger_character: Some(query),
+            trigger_character: Some(query.clone()),
         };
 
         let provider_responses =
@@ -256,17 +258,51 @@ impl InputState {
             }
 
             if completions.is_empty() {
-                _ = menu.update(cx, |menu, cx| {
-                    menu.hide(cx);
-                    cx.notify();
-                });
+                editor
+                    .update_in(cx, |editor, window, cx| {
+                        if editor.cursor() != new_offset
+                            || editor
+                                .text_for_range(
+                                    editor.range_to_utf16(&(start_offset..new_offset)),
+                                    &mut None,
+                                    window,
+                                    cx,
+                                )
+                                .map(|text| text.trim() != query)
+                                .unwrap_or(true)
+                        {
+                            return;
+                        }
+
+                        if !editor.is_active_completion_menu(&menu, start_offset, cx) {
+                            return;
+                        }
+
+                        _ = menu.update(cx, |menu, cx| {
+                            menu.hide(cx);
+                            cx.notify();
+                        });
+                    })
+                    .ok();
 
                 return Ok(());
             }
 
             editor
                 .update_in(cx, |editor, window, cx| {
-                    if !editor.focus_handle.is_focused(window) {
+                    if !editor.focus_handle.is_focused(window)
+                        || editor.cursor() != new_offset
+                        || editor
+                            .text_for_range(
+                                editor.range_to_utf16(&(start_offset..new_offset)),
+                                &mut None,
+                                window,
+                                cx,
+                            )
+                            .map(|text| text.trim() != query)
+                            .unwrap_or(true)
+                        || !editor.is_active_completion_menu(&menu, start_offset, cx)
+                    {
                         return;
                     }
 
@@ -280,6 +316,21 @@ impl InputState {
 
             Ok(())
         });
+    }
+
+    fn is_active_completion_menu(
+        &self,
+        expected_menu: &gpui::Entity<CompletionMenu>,
+        expected_start_offset: usize,
+        cx: &gpui::App,
+    ) -> bool {
+        matches!(
+            self.context_menu_content.as_ref(),
+            Some(ContextMenu::Completion(current_menu))
+                if current_menu.entity_id() == expected_menu.entity_id()
+                    && current_menu.read(cx).trigger_start_offset
+                        == Some(expected_start_offset)
+        )
     }
 
     /// Schedule an inline completion request after debouncing.
@@ -396,6 +447,10 @@ mod tests {
             completion_menu_action(false, false, "name", 4, 0),
             CompletionMenuAction::Ignore
         );
+        assert_eq!(
+            completion_menu_action(false, false, "@中1", 5, 4),
+            CompletionMenuAction::Ignore
+        );
     }
 
     #[test]
@@ -430,6 +485,18 @@ mod tests {
     fn refreshes_existing_menu_on_delete_when_text_still_has_context() {
         assert_eq!(
             completion_menu_action(true, false, "n", 1, 0),
+            CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
+        );
+    }
+
+    #[test]
+    fn refreshes_active_menu_for_cjk_and_numeric_query_updates() {
+        assert_eq!(
+            completion_menu_action(true, false, "@中", 4, 0),
+            CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
+        );
+        assert_eq!(
+            completion_menu_action(true, false, "@中1", 5, 0),
             CompletionMenuAction::Refresh(CompletionTriggerKind::INVOKED)
         );
     }
