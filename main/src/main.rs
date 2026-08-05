@@ -50,6 +50,8 @@ struct AppAssets {
 
 pub(crate) const NAVOP_ICON_ASSET_PATH: &str = "navop/app-icon.png";
 
+const NAVOP_APP_ID: &str = "navop";
+const NAVOP_WINDOW_TITLE: &str = "Navop";
 const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
 const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
 const MAIN_WINDOW_DISPLAY_RATIO: f32 = 0.9;
@@ -84,6 +86,24 @@ fn initial_main_window_size(
         result.height = result.height.min(maximum.height);
     }
     result
+}
+
+fn main_window_options(window_bounds: Bounds<Pixels>) -> WindowOptions {
+    let mut titlebar = gpui_component::TitleBar::title_bar_options();
+    titlebar.title = Some(NAVOP_WINDOW_TITLE.into());
+
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+        titlebar: Some(titlebar),
+        window_min_size: Some(size(px(640.0), px(480.0))),
+        window_background: WindowBackgroundAppearance::Transparent,
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(WindowDecorations::Client),
+        kind: WindowKind::Normal,
+        app_id: Some(NAVOP_APP_ID.to_owned()),
+        app_owns_titlebar_drag: true,
+        ..Default::default()
+    }
 }
 
 impl AppAssets {
@@ -266,21 +286,7 @@ fn main() {
         let window_size = initial_main_window_size(saved_size, display_size);
 
         let window_bounds = Bounds::centered(None, window_size, cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(window_bounds)),
-            #[cfg(not(target_os = "linux"))]
-            titlebar: Some(gpui_component::TitleBar::title_bar_options()),
-            window_min_size: Some(Size {
-                width: px(640.),
-                height: px(480.),
-            }),
-            window_background: gpui::WindowBackgroundAppearance::Transparent,
-            #[cfg(target_os = "linux")]
-            window_decorations: Some(gpui::WindowDecorations::Client),
-            kind: WindowKind::Normal,
-            app_owns_titlebar_drag: true,
-            ..Default::default()
-        };
+        let options = main_window_options(window_bounds);
 
         cx.spawn(async move |cx| {
             let main_window = cx.open_window(options, |window, cx| {
@@ -455,6 +461,24 @@ mod embedded_cli_removal_tests {
         let option = ["app_owns_titlebar", "_drag: true"].concat();
 
         assert!(source.contains(&option));
+    }
+
+    #[test]
+    fn main_window_identifies_itself_to_desktop_environment() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(px(0.0), px(0.0)),
+            size: size(px(800.0), px(600.0)),
+        };
+        let options = super::main_window_options(bounds);
+
+        assert_eq!(Some("navop"), options.app_id.as_deref());
+        assert_eq!(
+            Some("Navop"),
+            options
+                .titlebar
+                .as_ref()
+                .and_then(|titlebar| titlebar.title.as_deref())
+        );
     }
 }
 
