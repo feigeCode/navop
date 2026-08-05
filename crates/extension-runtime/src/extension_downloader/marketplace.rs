@@ -9,7 +9,7 @@ use crate::extension::manifest::current_host_version;
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
 const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
-    "https://github.com/feigeCode/onetcli-extensions/releases/download/";
+    "https://github.com/feigeCode/navop-extensions/releases/download/";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceManifest {

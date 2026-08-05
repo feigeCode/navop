@@ -9,6 +9,7 @@ use one_core::layout::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 
 use super::TerminalWorkspace;
+use crate::sidebar::tool_dock::right_sidebar_width;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum WorkspaceSidebarResize {
@@ -62,7 +63,9 @@ impl TerminalWorkspace {
         };
         let size = match target {
             WorkspaceSidebarResize::Left => position.x - self.workspace_bounds.left(),
-            WorkspaceSidebarResize::Right => self.workspace_bounds.right() - position.x,
+            WorkspaceSidebarResize::Right => {
+                right_sidebar_width(self.workspace_bounds.right(), position.x)
+            }
             WorkspaceSidebarResize::Bottom => self.workspace_bounds.bottom() - position.y,
         };
         self.sidebar_panel_size = size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);

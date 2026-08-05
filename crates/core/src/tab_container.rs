@@ -12,11 +12,11 @@ use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
 use gpui::KeyBinding;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, Element, ElementId,
-    Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
-    InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, SharedString, Style, Styled, Subscription, Task, Window,
-    WindowControlArea, div, px,
+    AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, Div, Element,
+    ElementId, Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId,
+    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Stateful, Style, Styled,
+    Subscription, Task, Window, WindowControlArea, div, px,
 };
 use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -694,7 +694,7 @@ impl gpui::Global for TabContentRegistry {}
 // TabBarDragState - Window drag state management
 // ============================================================================
 
-/// 窗口拖动状态，用于在 Windows 和 Linux 上支持拖动窗口
+/// 窗口拖动状态，用于标题栏空白区域拖动窗口。
 struct TabBarDragState {
     should_move: bool,
 }
@@ -703,6 +703,35 @@ impl Render for TabBarDragState {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
     }
+}
+
+fn with_tab_bar_window_drag(
+    region: Stateful<Div>,
+    drag_state: &Entity<TabBarDragState>,
+    window: &mut Window,
+) -> Stateful<Div> {
+    region
+        .on_mouse_down_out(window.listener_for(drag_state, |state, _, _, _| {
+            state.should_move = false;
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            window.listener_for(drag_state, |state, _, _, _| {
+                state.should_move = true;
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            window.listener_for(drag_state, |state, _, _, _| {
+                state.should_move = false;
+            }),
+        )
+        .on_mouse_move(window.listener_for(drag_state, |state, _, window, _| {
+            if state.should_move {
+                state.should_move = false;
+                window.start_window_move();
+            }
+        }))
 }
 
 // ============================================================================
@@ -3031,7 +3060,7 @@ impl TabContainer {
             left_padding = layout.macos_compact_title_bar_content_padding;
         }
 
-        // 窗口拖动状态管理（仅在 Windows/Linux 上需要，且启用窗口控件时）
+        // Window dragging is limited to explicit blank regions so tab drag remains independent.
         let is_linux = titlebar_platform.is_linux;
         let is_macos = titlebar_platform.is_macos;
         let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
@@ -3040,6 +3069,44 @@ impl TabContainer {
 
         // 使用状态管理窗口拖动
         let drag_state = window.use_state(cx, |_, _| TabBarDragState { should_move: false });
+        let left_window_drag_region = div()
+            .id("tab-bar-window-drag-left")
+            .flex_shrink_0()
+            .h_full()
+            .w(left_padding)
+            .when(enable_titlebar_interactions, |this| {
+                with_tab_bar_window_drag(this, &drag_state, window)
+            })
+            .when(enable_titlebar_interactions, |this| {
+                this.when(is_linux, |this| {
+                    this.on_double_click(|_, window, _| window.zoom_window())
+                })
+                .when(is_macos, |this| {
+                    this.on_double_click(|_, window, _| window.titlebar_double_click())
+                })
+            })
+            .when(show_window_controls, |this| {
+                this.window_control_area(WindowControlArea::Drag)
+            });
+        let right_window_drag_region = div()
+            .id("tab-bar-window-drag-right")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .when(enable_titlebar_interactions, |this| {
+                with_tab_bar_window_drag(this, &drag_state, window)
+            })
+            .when(enable_titlebar_interactions, |this| {
+                this.when(is_linux, |this| {
+                    this.on_double_click(|_, window, _| window.zoom_window())
+                })
+                .when(is_macos, |this| {
+                    this.on_double_click(|_, window, _| window.titlebar_double_click())
+                })
+            })
+            .when(show_window_controls, |this| {
+                this.window_control_area(WindowControlArea::Drag)
+            });
 
         h_flex()
             .id("tab-bar")
@@ -3057,48 +3124,7 @@ impl TabContainer {
             .items_center()
             .border_b_1()
             .border_color(border_color)
-            // 标题栏交互支持：macOS 始终启用双击/拖动，其他平台跟随窗口控件开关
-            .when(enable_titlebar_interactions, |this| {
-                this.when(is_linux, |this| {
-                    this.on_double_click(|_, window, _| window.zoom_window())
-                })
-                .when(is_macos, |this| {
-                    this.on_double_click(|_, window, _| window.titlebar_double_click())
-                })
-                .on_mouse_down_out(window.listener_for(&drag_state, |state, _, _, _| {
-                    state.should_move = false;
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    window.listener_for(&drag_state, |state, _, _, _| {
-                        state.should_move = true;
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    window.listener_for(&drag_state, |state, _, _, _| {
-                        state.should_move = false;
-                    }),
-                )
-                .on_mouse_move(window.listener_for(
-                    &drag_state,
-                    |state, _, window, _| {
-                        if state.should_move {
-                            state.should_move = false;
-                            window.start_window_move();
-                        }
-                    },
-                ))
-            })
-            .when(is_macos, |this| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .h_full()
-                        .w(left_padding)
-                        .when_some(self.top_padding, |div, padding| div.pt(padding)),
-                )
-            })
+            .child(left_window_drag_region)
             .when_some(navigation_sidebar_expanded, |this, expanded| {
                 this.child(
                     div()
@@ -3158,7 +3184,6 @@ impl TabContainer {
                             .gap_2()
                             .h(tab_item_height)
                             .px_3()
-                            .when(!is_macos && pinned_index == 0, |el| el.ml(left_padding))
                             .when(pinned_index + 1 < pinned_tab_count, |el| el.mr_1())
                             .when_some(top_padding, |el, padding| el.mt(padding))
                             .rounded(px(6.0))
@@ -3203,45 +3228,11 @@ impl TabContainer {
                 h_flex()
                     .id("tabs")
                     .debug_selector(|| "tabs".to_owned())
-                    .w_full()
+                    .flex_shrink(1.0)
                     .min_w_0()
                     .h_full()
                     .items_center()
-                    // 仅在启用窗口控件时设置拖动区域（用于 Windows 原生拖动）
-                    .when(show_window_controls, |this| {
-                        this.window_control_area(WindowControlArea::Drag)
-                            .on_mouse_down_out(window.listener_for(
-                                &drag_state,
-                                |state, _, _, _| {
-                                    state.should_move = false;
-                                },
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                window.listener_for(&drag_state, |state, _, _, _| {
-                                    state.should_move = true;
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                window.listener_for(&drag_state, |state, _, _, _| {
-                                    state.should_move = false;
-                                }),
-                            )
-                            .on_mouse_move(window.listener_for(
-                                &drag_state,
-                                |state, _, window, _| {
-                                    if state.should_move {
-                                        state.should_move = false;
-                                        window.start_window_move();
-                                    }
-                                },
-                            ))
-                    })
                     .overflow_x_scroll()
-                    .when(!is_macos && self.pinned_tabs.is_empty(), |this| {
-                        this.pl(left_padding)
-                    })
                     .when_some(self.top_padding, |div, padding| div.pt(padding))
                     .pr_2()
                     .gap_1()
@@ -3573,7 +3564,7 @@ impl TabContainer {
                             })
                     }))
                     .map(|tabs| {
-                        div()
+                        h_flex()
                             .id("tab-scroll-boundary")
                             .debug_selector(|| "tab-scroll-boundary".to_owned())
                             .flex_1()
@@ -3581,6 +3572,7 @@ impl TabContainer {
                             .min_w_0()
                             .overflow_hidden()
                             .child(tabs)
+                            .child(right_window_drag_region)
                     }),
             )
             .child(

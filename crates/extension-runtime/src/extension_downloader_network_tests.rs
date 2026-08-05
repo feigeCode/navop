@@ -19,8 +19,9 @@ use crate::extension_downloader::{
 };
 #[cfg(not(feature = "github-marketplace"))]
 use crate::extension_downloader::{
-    GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
-    manifest_urls_for_configured_url, manifest_urls_for_configured_url_with_github_fallback,
+    GITHUB_EXTENSION_MANIFEST_URL, LEGACY_GITHUB_EXTENSION_MANIFEST_URL,
+    fetch_manifest_url_with_fallback, manifest_urls_for_configured_url,
+    manifest_urls_for_configured_url_with_github_fallback,
 };
 
 #[test]
@@ -67,9 +68,12 @@ fn fetch_manifest_url_parses_marketplace_manifest() {
 
 #[cfg(not(feature = "github-marketplace"))]
 #[test]
-fn missing_extension_manifest_env_uses_github_only() {
+fn missing_extension_manifest_env_uses_current_then_legacy_github() {
     assert_eq!(
-        vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()],
+        vec![
+            GITHUB_EXTENSION_MANIFEST_URL.to_string(),
+            LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string(),
+        ],
         manifest_urls_for_configured_url(None)
     );
 }
@@ -93,8 +97,15 @@ fn configured_manifest_urls_use_injected_github_fallback() {
 #[test]
 fn github_marketplace_feature_points_to_github_manifest() {
     assert_eq!(
-        "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json",
+        "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json",
         DEFAULT_EXTENSION_MANIFEST_URL
+    );
+    assert_eq!(
+        vec![
+            DEFAULT_EXTENSION_MANIFEST_URL.to_string(),
+            crate::extension_downloader::LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string(),
+        ],
+        crate::extension_downloader::manifest_urls_for_configured_url(None)
     );
 }
 
@@ -137,9 +148,138 @@ fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
         requests[0].uri
     );
     assert_eq!(
-        "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json",
+        "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json",
         requests[1].uri
     );
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn fetch_default_manifest_url_falls_back_to_legacy_github_source() {
+    let r2_manifest_url = "https://onetcli.test.cn/extensions/manifest.json".to_string();
+    let client = Arc::new(FakeHttpClient::new(vec![
+        Err(anyhow::anyhow!("r2 unavailable")),
+        Err(anyhow::anyhow!("current GitHub unavailable")),
+        FakeHttpClient::response(
+            200,
+            r#"{
+                "release_version": "legacy-github-fallback",
+                "extensions": [{
+                    "id": "fake_pg",
+                    "kind": "database_driver",
+                    "name": "Fake PostgreSQL",
+                    "version": "1.2.3",
+                    "release_tag": "fake_pg-v1.2.3",
+                    "artifacts": {
+                        "universal": {
+                            "file": "fake_pg-driver-universal.tar.gz",
+                            "sha256": "abc"
+                        }
+                    }
+                }]
+            }"#,
+        ),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url_with_fallback(
+        client.clone(),
+        Some(r2_manifest_url),
+    ))
+    .unwrap();
+
+    assert_eq!("legacy-github-fallback", manifest.release_version);
+    let entries = manifest.into_entries();
+    assert_eq!(1, entries.len());
+    assert_eq!(
+        Some(
+            "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz"
+                .to_string()
+        ),
+        entries[0].fallback_asset_url()
+    );
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/manifest.json",
+        requests[0].uri
+    );
+    assert_eq!(GITHUB_EXTENSION_MANIFEST_URL, requests[1].uri);
+    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[2].uri);
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn legacy_github_manifest_keeps_extension_manifest_and_artifact_fallbacks_on_legacy_repo() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let marketplace_manifest = r#"{
+        "schema_version": 2,
+        "extensions": [{
+            "id": "fake_pg",
+            "kind": "database_driver",
+            "name": "Fake PostgreSQL",
+            "version": "1.2.3",
+            "release_tag": "fake_pg-v1.2.3",
+            "manifest": "fake_pg/manifest.json"
+        }]
+    }"#;
+    let extension_manifest = format!(
+        r#"{{
+            "schema_version": 2,
+            "extensions": [{{
+                "id": "fake_pg",
+                "kind": "database_driver",
+                "name": "Fake PostgreSQL",
+                "version": "1.2.3",
+                "release_tag": "fake_pg-v1.2.3",
+                "artifacts": {{
+                    "universal": {{
+                        "file": "fake_pg-driver-universal.tar.gz",
+                        "sha256": "{sha256}"
+                    }}
+                }}
+            }}]
+        }}"#,
+    );
+    let client = Arc::new(FakeHttpClient::new(vec![
+        Err(anyhow::anyhow!("r2 unavailable")),
+        Err(anyhow::anyhow!("current GitHub unavailable")),
+        FakeHttpClient::response(200, marketplace_manifest),
+        Err(anyhow::anyhow!(
+            "legacy relative extension manifest unavailable"
+        )),
+        FakeHttpClient::response(200, &extension_manifest),
+        binary_response(200, tarball),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url_with_fallback(
+        client.clone(),
+        Some("https://onetcli.test.cn/extensions/manifest.json".to_string()),
+    ))
+    .unwrap();
+    let entries = manifest.into_entries();
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging(
+        client.clone(),
+        &entries[0],
+    ))
+    .unwrap();
+
+    assert!(staging.join("driver.json").exists());
+    let requests = client.take_requests();
+    assert_eq!(LEGACY_GITHUB_EXTENSION_MANIFEST_URL, requests[2].uri);
+    assert_eq!(
+        "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/fake_pg/manifest.json",
+        requests[3].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
+        requests[4].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[5].uri
+    );
+    fs::remove_dir_all(staging).unwrap();
 }
 
 #[test]
@@ -365,7 +505,7 @@ fn download_marketplace_entry_to_staging_resolves_v2_primary_url_from_manifest_p
         requests[1].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://github.com/feigeCode/navop-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
         requests[2].uri
     );
     fs::remove_dir_all(staging).unwrap();
@@ -438,7 +578,7 @@ fn download_marketplace_entry_to_staging_resolves_v2_artifact_and_host_github_fa
         requests[2].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://github.com/feigeCode/navop-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
         requests[3].uri
     );
     fs::remove_dir_all(staging).unwrap();
@@ -504,11 +644,11 @@ fn download_marketplace_entry_to_staging_falls_back_to_github_extension_manifest
         requests[1].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
+        "https://github.com/feigeCode/navop-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
         requests[2].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://github.com/feigeCode/navop-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
         requests[3].uri
     );
     fs::remove_dir_all(staging).unwrap();

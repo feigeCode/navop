@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar::tool_dock::right_sidebar_width;
 
 impl TerminalView {
     pub(super) fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
@@ -105,7 +106,7 @@ impl TerminalView {
                 self.sidebar_panel_size = new_size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
             }
             ResizingPanel::RightSidebar => {
-                let new_size = self.view_bounds.right() - mouse_position.x;
+                let new_size = right_sidebar_width(self.view_bounds.right(), mouse_position.x);
                 self.sidebar_panel_size = new_size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
             }
             ResizingPanel::BottomSidebar => {

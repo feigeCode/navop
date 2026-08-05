@@ -12,8 +12,12 @@ use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/feigeCode/navop-extensions/main/manifest.json";
+pub const LEGACY_GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json";
 pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
+const LEGACY_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
+    "https://github.com/feigeCode/onetcli-extensions/releases/download/";
 const DOWNLOAD_BUFFER_SIZE: usize = 16 * 1024;
 const DOWNLOAD_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(120);
 
@@ -48,7 +52,12 @@ pub async fn fetch_manifest_url(
         .with_context(|| format!("fetch release manifest from {url}"))?;
     let mut manifest: MarketplaceManifest =
         serde_json::from_slice(&bytes).context("parse release manifest")?;
-    manifest.resolve_downloads(url, &GITHUB_EXTENSION_MANIFEST_URL.to_string());
+    let github_fallback_url = if url.trim() == LEGACY_GITHUB_EXTENSION_MANIFEST_URL {
+        LEGACY_GITHUB_RELEASE_DOWNLOAD_BASE
+    } else {
+        GITHUB_EXTENSION_MANIFEST_URL
+    };
+    manifest.resolve_downloads(url, github_fallback_url);
     Ok(manifest)
 }
 
@@ -79,10 +88,12 @@ pub async fn fetch_manifest_url_with_fallback(
 }
 
 pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<String> {
-    manifest_urls_for_configured_url_with_github_fallback(
+    let mut urls = manifest_urls_for_configured_url_with_github_fallback(
         configured_url,
         GITHUB_EXTENSION_MANIFEST_URL.to_string(),
-    )
+    );
+    push_unique_url(&mut urls, LEGACY_GITHUB_EXTENSION_MANIFEST_URL.to_string());
+    urls
 }
 
 pub fn manifest_urls_for_configured_url_with_github_fallback(
@@ -129,12 +140,12 @@ fn extension_manifest_url_from_public_base() -> Option<String> {
     })
 }
 
+#[cfg(not(feature = "github-marketplace"))]
 fn non_empty_trimmed(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
 }
 
-#[cfg(not(feature = "github-marketplace"))]
 fn push_unique_url(urls: &mut Vec<String>, url: String) {
     if !urls.contains(&url) {
         urls.push(url);

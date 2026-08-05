@@ -54,6 +54,10 @@ pub(crate) fn right_tool_region_width(
     }
 }
 
+pub(crate) fn right_sidebar_width(outer_right: Pixels, mouse_x: Pixels) -> Pixels {
+    outer_right - TOOLBAR_WIDTH - mouse_x
+}
+
 pub(crate) fn render_internal_tool_panel_frame(
     sidebar: Entity<TerminalSidebar>,
     panel: SidebarPanel,
@@ -289,6 +293,11 @@ mod tests {
             px(420.0) + TOOLBAR_WIDTH,
             right_tool_region_width(&layout, px(420.0))
         );
+    }
+
+    #[test]
+    fn right_sidebar_resize_excludes_toolbar_width() {
+        assert_eq!(px(256.0), right_sidebar_width(px(1000.0), px(700.0)));
     }
 
     #[test]
