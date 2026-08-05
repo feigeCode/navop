@@ -17,17 +17,18 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Anchor, AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, FontWeight, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
     WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants, IconButton, IconButtonRole},
+    button::{Button, ButtonVariants, DropdownButton, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
+    menu::PopupMenuItem,
     notification::Notification,
     popover::{Popover, PopoverState},
     progress::Progress,
@@ -5565,6 +5566,7 @@ impl SftpView {
         };
         let selected_count = self.get_local_selected_count(cx);
         let has_selection = selected_count > 0;
+        let is_connected = self.connection_state == ConnectionState::Connected;
         let local_path_input = self.local_path_input.clone();
         let is_editing = self.local_path_editing;
         let is_dragging = self.is_dragging_over_local;
@@ -5585,10 +5587,7 @@ impl SftpView {
             self.local_favorite_paths()
         };
         let left_endpoint_title = self.left_endpoint_title();
-        let left_ready = self
-            .left_remote
-            .as_ref()
-            .is_none_or(|endpoint| endpoint.state == LeftRemoteConnectionState::Connected);
+        let upload_view = cx.entity();
 
         v_flex()
             .flex_1()
@@ -5734,13 +5733,68 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                IconButton::new("local_upload", IconName::Upload)
-                                    .role(IconButtonRole::Toolbar)
+                                DropdownButton::new("local_upload")
+                                    .button(
+                                        Button::new("local_upload_selected")
+                                            .icon(IconName::Upload)
+                                            .tooltip(t!("Common.upload"))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                let has_selection =
+                                                    this.get_local_selected_count(cx) > 0;
+                                                let left_ready = this
+                                                    .left_remote
+                                                    .as_ref()
+                                                    .is_none_or(|endpoint| {
+                                                        endpoint.state
+                                                            == LeftRemoteConnectionState::Connected
+                                                    });
+
+                                                if has_selection && left_ready {
+                                                    this.transfer_left_selection_to_right(
+                                                        window, cx,
+                                                    );
+                                                } else {
+                                                    this.select_and_upload_files(window, cx);
+                                                }
+                                            })),
+                                    )
+                                    .ghost()
+                                    .small()
+                                    .compact()
                                     .tooltip(t!("Common.upload"))
-                                    .disabled(!has_selection || !left_ready)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.transfer_left_selection_to_right(window, cx);
-                                    })),
+                                    .disabled(!is_connected)
+                                    .dropdown_menu_with_anchor(
+                                        Anchor::TopRight,
+                                        move |menu, window, _cx| {
+                                            let upload_files_view = upload_view.clone();
+                                            let upload_folder_view = upload_view.clone();
+
+                                            menu.item(
+                                                PopupMenuItem::new(
+                                                    t!("File.upload_file").to_string(),
+                                                )
+                                                .icon(IconName::Upload)
+                                                .on_click(window.listener_for(
+                                                    &upload_files_view,
+                                                    move |this, _, window, cx| {
+                                                        this.select_and_upload_files(window, cx);
+                                                    },
+                                                )),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new(
+                                                    t!("File.upload_folder").to_string(),
+                                                )
+                                                .icon(IconName::NewFolder)
+                                                .on_click(window.listener_for(
+                                                    &upload_folder_view,
+                                                    move |this, _, window, cx| {
+                                                        this.select_and_upload_folder(window, cx);
+                                                    },
+                                                )),
+                                            )
+                                        },
+                                    ),
                             )
                             .child(
                                 IconButton::new("local_new_file", IconName::File)

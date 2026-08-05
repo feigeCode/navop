@@ -16,7 +16,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, ObjectIcon, Sizable,
     Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariants, DropdownButton},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -3423,6 +3423,7 @@ impl FileManagerPanel {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let can_go_back = self.history_index > 0;
         let breadcrumb = self.render_path_breadcrumb(cx);
+        let upload_panel = cx.entity();
         let has_selection = !self.selected_indices.is_empty();
         let is_connected = self.connection_state == ConnectionState::Connected;
         let is_favorite = self.is_current_path_favorite();
@@ -3520,14 +3521,45 @@ impl FileManagerPanel {
                             ),
                     )
                     .child(
-                        Button::new("fm-upload-file")
+                        DropdownButton::new("fm-upload")
                             .ghost()
                             .small()
-                            .icon(IconName::Upload)
-                            .tooltip(t!("FileManager.upload_file"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.select_and_upload_files(window, cx);
-                            })),
+                            .button(
+                                Button::new("fm-upload-file")
+                                    .icon(IconName::Upload)
+                                    .tooltip(t!("FileManager.upload_file"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.select_and_upload_files(window, cx);
+                                    })),
+                            )
+                            .dropdown_menu_with_anchor(
+                                Anchor::TopRight,
+                                move |menu, window, _cx| {
+                                    let upload_files_panel = upload_panel.clone();
+                                    let upload_folder_panel = upload_panel.clone();
+
+                                    menu.item(
+                                        PopupMenuItem::new(t!("FileManager.upload_file"))
+                                            .icon(IconName::Upload)
+                                            .on_click(window.listener_for(
+                                                &upload_files_panel,
+                                                move |this, _, window, cx| {
+                                                    this.select_and_upload_files(window, cx);
+                                                },
+                                            )),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(t!("FileManager.upload_folder"))
+                                            .icon(IconName::NewFolder)
+                                            .on_click(window.listener_for(
+                                                &upload_folder_panel,
+                                                move |this, _, window, cx| {
+                                                    this.select_and_upload_folder(window, cx);
+                                                },
+                                            )),
+                                    )
+                                },
+                            ),
                     )
                     .child(
                         Button::new("fm-new-file")
