@@ -215,6 +215,9 @@ fn persistent_sidebar_supports_connection_group_drag_and_drop() {
     assert!(rows.contains(".on_drag("));
     assert!(rows.contains(".drag_over::<DragConnection>"));
     assert!(rows.contains("move_connection_to_workspace"));
+    assert!(
+        rows.contains("home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);")
+    );
     assert!(rows.contains("Some(id)"));
     assert!(rows.contains("None"));
     assert!(grouping.contains("repo.update_workspace("));

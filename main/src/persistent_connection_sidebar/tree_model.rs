@@ -28,6 +28,7 @@ pub(crate) enum ConnectionTreeRow {
         id: i64,
         name: String,
         depth: usize,
+        workspace_id: Option<i64>,
     },
     Unassigned {
         connection_count: usize,
@@ -158,6 +159,7 @@ impl TreeBuilder<'_> {
                     id: connection.id,
                     name: connection.name.clone(),
                     depth: depth + 1,
+                    workspace_id: Some(id),
                 }
             }));
     }
@@ -198,6 +200,7 @@ fn append_unassigned_rows(
                     id: connection.id,
                     name: connection.name.clone(),
                     depth: 1,
+                    workspace_id: None,
                 }),
         );
     }
@@ -275,6 +278,32 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn connection_rows_keep_their_workspace_drop_target() {
+        let rows = build_connection_tree_rows(
+            &[workspace(1, None, "Root"), workspace(2, Some(1), "Child")],
+            &[
+                connection(10, Some(1), "Root connection"),
+                connection(20, Some(2), "Child connection"),
+                connection(30, None, "Unassigned connection"),
+            ],
+            &HashSet::new(),
+            false,
+        );
+
+        let drop_targets = rows
+            .iter()
+            .filter_map(|row| match row {
+                ConnectionTreeRow::Connection {
+                    id, workspace_id, ..
+                } => Some((*id, *workspace_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![(20, Some(2)), (10, Some(1)), (30, None)], drop_targets);
     }
 
     #[test]

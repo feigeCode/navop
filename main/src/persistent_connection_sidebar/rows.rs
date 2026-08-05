@@ -30,9 +30,12 @@ impl PersistentConnectionSidebar {
             row @ ConnectionTreeRow::Workspace { .. } => {
                 self.render_workspace_row(row, palette, cx)
             }
-            ConnectionTreeRow::Connection { id, name, depth } => {
-                self.render_connection_row(id, name, depth, palette, cx)
-            }
+            ConnectionTreeRow::Connection {
+                id,
+                name,
+                depth,
+                workspace_id,
+            } => self.render_connection_row(id, name, depth, workspace_id, palette, cx),
             ConnectionTreeRow::Unassigned {
                 connection_count,
                 expanded,
@@ -165,6 +168,7 @@ impl PersistentConnectionSidebar {
         id: i64,
         name: String,
         depth: usize,
+        workspace_id: Option<i64>,
         palette: SidebarPalette,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
@@ -220,6 +224,20 @@ impl PersistentConnectionSidebar {
             .when(!selected, |this| {
                 this.hover(move |this| this.bg(palette.hover))
             })
+            .drag_over::<DragConnection>(move |this, _, _, _| {
+                this.bg(palette.hover).border_color(palette.accent)
+            })
+            .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
+                if let Some(workspace_id) = workspace_id {
+                    this.collapsed_workspaces.remove(&workspace_id);
+                } else {
+                    this.unassigned_collapsed = false;
+                }
+                this.home_page.update(cx, |home, cx| {
+                    home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);
+                });
+                cx.notify();
+            }))
             .when(can_drag, |this| {
                 this.on_drag(drag, |drag, _, _, cx| {
                     cx.stop_propagation();
