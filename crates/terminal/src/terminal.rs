@@ -59,8 +59,11 @@ use crate::recording::{
     RecordingTransition, TerminalPlaybackRuntime,
 };
 #[cfg(not(target_os = "windows"))]
-#[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
+#[cfg(target_os = "windows")]
+use crate::windows_environment::{
+    environment_value, merge_environment_overrides, refreshed_windows_environment,
+};
 
 use crate::{
     LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
@@ -637,27 +640,10 @@ fn resolve_default_windows_shell_from_env(
 }
 
 #[cfg(target_os = "windows")]
-fn resolve_default_windows_shell() -> String {
-    // Shell discovery can touch every entry in PATH. Resolve it once for the
-    // process so opening another terminal does not repeat potentially slow
-    // network/antivirus-backed filesystem checks.
-    static DEFAULT_SHELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    DEFAULT_SHELL
-        .get_or_init(|| {
-            resolve_default_windows_shell_from_env(
-                env::var_os("PATH").as_deref(),
-                env::var_os("SystemRoot")
-                    .or_else(|| env::var_os("SYSTEMROOT"))
-                    .as_deref(),
-                env::var_os("COMSPEC").as_deref(),
-            )
-        })
-        .clone()
-}
-
-#[cfg(target_os = "windows")]
 fn build_local_shell(shell: Option<String>, extra_args: Vec<String>) -> Option<tty::Shell> {
-    let program = shell.unwrap_or_else(resolve_default_windows_shell);
+    // `new_local` resolves the default shell from the freshly read Windows
+    // environment before reaching this helper.
+    let program = shell.unwrap_or_else(|| "cmd.exe".to_string());
     Some(tty::Shell::new(program, extra_args))
 }
 
@@ -782,10 +768,8 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 
 #[cfg(target_os = "windows")]
 fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
-    let program = shell
-        .map(str::to_string)
-        .unwrap_or_else(resolve_default_windows_shell);
-    crate::windows_shell_integration::prepare(&program)
+    let program = shell.unwrap_or("cmd.exe");
+    crate::windows_shell_integration::prepare(program)
 }
 
 fn history_file_candidates(preferred_shell: Option<&str>) -> Vec<(PathBuf, ShellHistoryFormat)> {
@@ -1395,7 +1379,18 @@ impl Terminal {
             env,
         } = config;
         #[cfg(target_os = "windows")]
-        let shell = shell.or_else(|| Some(resolve_default_windows_shell()));
+        let refreshed_env = refreshed_windows_environment();
+        #[cfg(target_os = "windows")]
+        let shell = shell.or_else(|| {
+            let path = environment_value(&refreshed_env, "PATH").map(OsStr::new);
+            let system_root = environment_value(&refreshed_env, "SystemRoot").map(OsStr::new);
+            let comspec = environment_value(&refreshed_env, "COMSPEC").map(OsStr::new);
+            Some(resolve_default_windows_shell_from_env(
+                path,
+                system_root,
+                comspec,
+            ))
+        });
         let history_shell = shell.clone();
         let working_directory = resolve_local_working_dir(working_dir);
 
@@ -1405,6 +1400,9 @@ impl Terminal {
         shell_args.extend(integration_args);
 
         // 合并用户环境变量与 Shell Integration 环境变量
+        #[cfg(target_os = "windows")]
+        let mut env_pairs = merge_environment_overrides(refreshed_env, env);
+        #[cfg(not(target_os = "windows"))]
         let mut env_pairs = env;
         env_pairs.extend(integration_env);
         env_pairs = with_local_terminal_default_env(env_pairs);

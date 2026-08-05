@@ -168,6 +168,14 @@ fn resolve_unix_shell(program: &str) -> Result<String> {
 
 #[cfg(any(test, target_os = "windows"))]
 fn resolve_windows_profile(kind: LocalTerminalProfileKind) -> Result<(String, Vec<String>)> {
+    resolve_windows_profile_with_git_bash(kind, resolve_git_bash)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn resolve_windows_profile_with_git_bash(
+    kind: LocalTerminalProfileKind,
+    git_bash_resolver: impl FnOnce() -> Result<String>,
+) -> Result<(String, Vec<String>)> {
     match kind {
         LocalTerminalProfileKind::Zsh
         | LocalTerminalProfileKind::Bash
@@ -177,7 +185,7 @@ fn resolve_windows_profile(kind: LocalTerminalProfileKind) -> Result<(String, Ve
         LocalTerminalProfileKind::Cmd => Ok((resolve_cmd(), Vec::new())),
         LocalTerminalProfileKind::Wsl => Ok((resolve_wsl(), Vec::new())),
         LocalTerminalProfileKind::GitBash => {
-            Ok((resolve_git_bash(), vec!["--login".into(), "-i".into()]))
+            Ok((git_bash_resolver()?, vec!["--login".into(), "-i".into()]))
         }
         _ => bail!("profile is not a Windows terminal profile"),
     }
@@ -242,16 +250,105 @@ fn resolve_wsl() -> String {
 }
 
 #[cfg(any(test, target_os = "windows"))]
-fn resolve_git_bash() -> String {
-    ["ProgramFiles", "ProgramFiles(x86)"]
+fn resolve_git_bash() -> Result<String> {
+    resolve_git_bash_from_environment(
+        std::env::var_os("ProgramW6432"),
+        std::env::var_os("ProgramFiles"),
+        std::env::var_os("ProgramFiles(x86)"),
+        std::env::var_os("LOCALAPPDATA"),
+        std::env::var_os("PATH"),
+    )
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn resolve_git_bash_from_environment(
+    program_w6432: Option<std::ffi::OsString>,
+    program_files: Option<std::ffi::OsString>,
+    program_files_x86: Option<std::ffi::OsString>,
+    local_app_data: Option<std::ffi::OsString>,
+    path: Option<std::ffi::OsString>,
+) -> Result<String> {
+    let machine_installations = [program_w6432, program_files, program_files_x86]
         .into_iter()
-        .filter_map(std::env::var_os)
+        .flatten()
         .map(std::path::PathBuf::from)
-        .map(|root| root.join("Git").join("bin").join("bash.exe"))
-        .find(|path| path.is_file())
+        .map(|root| root.join("Git").join("bin").join("bash.exe"));
+    let user_installation = local_app_data.map(std::path::PathBuf::from).map(|root| {
+        root.join("Programs")
+            .join("Git")
+            .join("bin")
+            .join("bash.exe")
+    });
+
+    machine_installations
+        .chain(user_installation)
+        .find(|candidate| candidate.is_file())
+        .or_else(|| find_git_for_windows_bash_in_path(path.as_deref()))
         .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| find_in_path("bash.exe"))
-        .unwrap_or_else(|| "bash.exe".to_string())
+        .context(
+            "Git Bash was not found. Install Git for Windows or configure a custom terminal \
+             profile with the full path to its bash.exe",
+        )
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn find_git_for_windows_bash_in_path(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    path.into_iter()
+        .flat_map(std::env::split_paths)
+        .flat_map(git_bash_candidates_from_path_entry)
+        .find(|candidate| is_git_for_windows_bash(candidate))
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn git_bash_candidates_from_path_entry(
+    dir: std::path::PathBuf,
+) -> impl Iterator<Item = std::path::PathBuf> {
+    let direct = dir.join("bash.exe");
+    let git_cmd_sibling = dir
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("cmd"))
+        .then(|| dir.parent().map(|root| root.join("bin").join("bash.exe")))
+        .flatten();
+
+    std::iter::once(direct).chain(git_cmd_sibling)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn is_git_for_windows_bash(candidate: &std::path::Path) -> bool {
+    if !candidate.is_file()
+        || !candidate
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("bash.exe"))
+    {
+        return false;
+    }
+
+    let Some(bin_dir) = candidate.parent() else {
+        return false;
+    };
+    if !bin_dir
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("bin"))
+    {
+        return false;
+    }
+
+    let Some(parent) = bin_dir.parent() else {
+        return false;
+    };
+    let git_root = if parent
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("usr"))
+    {
+        let Some(root) = parent.parent() else {
+            return false;
+        };
+        root
+    } else {
+        parent
+    };
+
+    git_root.join("cmd").join("git.exe").is_file() && git_root.join("etc").join("profile").is_file()
 }
 
 #[cfg(any(test, target_os = "windows"))]

@@ -16,6 +16,8 @@ mod ssh_session_identity;
 pub mod terminal;
 pub mod types;
 #[cfg(any(test, target_os = "windows"))]
+mod windows_environment;
+#[cfg(any(test, target_os = "windows"))]
 mod windows_shell_integration;
 
 pub use exec_supervisor::TerminalExecError;

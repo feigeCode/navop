@@ -12455,6 +12455,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows 0.61.3",
 ]
 
 [[package]]
