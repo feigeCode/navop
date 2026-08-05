@@ -3,18 +3,18 @@ use std::collections::HashSet;
 use crate::home_tab::HomePage;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, Window,
+    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::{Input, InputState, MaskPattern}, list::{ListDelegate, ListItem, ListState}, tooltip::Tooltip, v_flex, ActiveTheme,
-    Icon,
-    IconName,
-    IconSize,
-    IndexPath,
-    Sizable,
-    Size,
-    WindowExt,
+    ActiveTheme, Icon, IconName, IconSize, IndexPath, Sizable, Size, WindowExt,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    input::{Input, InputState, MaskPattern},
+    list::{ListDelegate, ListItem, ListState},
+    tooltip::Tooltip,
+    v_flex,
 };
 use one_core::storage::{StoredConnection, Workspace};
 use rust_i18n::t;
@@ -149,7 +149,7 @@ impl Render for DragWorkspace {
             .child(
                 Icon::new(IconName::AppsColor)
                     .color()
-                    .with_size(IconSize::Medium)
+                    .with_size(IconSize::Medium),
             )
             .child(
                 div()

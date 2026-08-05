@@ -1,16 +1,15 @@
 use gpui::{
-    div, prelude::*, px, uniform_list, AnyElement, App, Context, Entity,
-    FocusHandle, Focusable, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement,
-    Render, Styled, UniformListScrollHandle, Window,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, ListSizingBehavior,
+    MouseButton, MouseDownEvent, ParentElement, Render, Styled, UniformListScrollHandle, Window,
+    div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-    h_flex, input::{Input, InputEvent, InputState}, menu::{ContextMenuExt, PopupMenu, PopupMenuItem}, scroll::ScrollableElement, tooltip::Tooltip, v_flex,
-    ActiveTheme, ContentState, Icon,
-    IconName,
-    IconSize,
-    InteractiveElementExt
-    ,
-    Sizable,
+    ActiveTheme, ContentState, Icon, IconName, IconSize, InteractiveElementExt, Sizable, h_flex,
+    input::{Input, InputEvent, InputState},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    scroll::ScrollableElement,
+    tooltip::Tooltip,
+    v_flex,
 };
 use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
 use rust_i18n::t;
@@ -621,7 +620,7 @@ impl FileListPanel {
                         } else {
                             IconName::File
                         })
-                            .color()
+                        .color()
                         .with_size(IconSize::Large),
                     )
                     .child({
@@ -711,7 +710,11 @@ impl FileListPanel {
                     .w(NAME_COLUMN_WIDTH)
                     .gap_2()
                     .items_center()
-                    .child(Icon::new(IconName::Folder1).color().with_size(IconSize::Large))
+                    .child(
+                        Icon::new(IconName::Folder1)
+                            .color()
+                            .with_size(IconSize::Large),
+                    )
                     .child(div().text_base().child("..")),
             )
             .child(div().w(MODIFIED_COLUMN_WIDTH).px_2())
@@ -1284,7 +1287,7 @@ impl Render for DraggedFileItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_file_name, file_list_content_state, FileListContentState};
+    use super::{FileListContentState, display_file_name, file_list_content_state};
     use std::collections::HashSet;
 
     #[test]

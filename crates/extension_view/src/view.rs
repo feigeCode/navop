@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::{v_flex, ActiveTheme, Icon, IconName, IconSize, Sizable};
+use gpui_component::{ActiveTheme, Icon, IconName, IconSize, Sizable, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 
