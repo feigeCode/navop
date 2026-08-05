@@ -2973,6 +2973,7 @@ mod tests {
     use super::*;
     use db::plugin_manifest::FormValueCondition;
     use gpui::{TestAppContext, VisualTestContext, WindowOptions};
+    use one_core::settings::AppSettings;
     use one_core::storage::{SshAuthMethod, SshParams};
 
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
@@ -3095,7 +3096,10 @@ mod tests {
 
     #[gpui::test]
     fn ssh_selection_uses_confirmed_event_value(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
         let window = cx.update(|cx| {
             cx.open_window(WindowOptions::default(), |window, cx| {
                 cx.new(|cx| DbConnectionForm::new(DbFormConfig::mysql(), window, cx))

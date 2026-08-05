@@ -2520,6 +2520,7 @@ mod tests {
     };
     use anyhow::Context as _;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
+    use one_core::settings::AppSettings;
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
@@ -2623,7 +2624,10 @@ mod tests {
 
     #[gpui::test]
     fn icon_picker_click_selects_icon_and_shows_feedback(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
         let (form, cx) = cx.add_window_view(|window, cx| {
             super::SshFormWindow::new(
                 super::SshFormWindowConfig {

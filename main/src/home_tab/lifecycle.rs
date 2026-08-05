@@ -254,8 +254,11 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("\n        page\n").next())
             .expect("HomePage::new source");
+        let normalized_constructor = constructor.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        assert!(constructor.contains("let master_key_policy = startup_master_key_policy("));
+        assert!(
+            normalized_constructor.contains("let master_key_policy = startup_master_key_policy(")
+        );
         assert!(constructor.contains("master_key_policy.forget_persisted_key"));
         assert!(constructor.contains("master_key_policy.restore_from_storage"));
         assert!(constructor.contains("master_key_policy.prompt_for_unlock"));

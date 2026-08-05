@@ -3720,8 +3720,10 @@ mod tests {
 
         assert!(source.contains("remember_portable_master_key"));
         assert!(source.contains("remember_portable_master_key_desc"));
-        assert!(!source.contains("let val = val || one_core::app_paths::is_portable()"));
-        assert!(locales.contains("anyone who obtains both the application"));
+        let legacy_portable_override =
+            ["let val = val || one_core::app_paths::", "is_portable()"].concat();
+        assert!(!source.contains(&legacy_portable_override));
+        assert!(locales.contains("Anyone who obtains both the application"));
         assert!(locales.contains("任何同时获得应用程序和完整 data 目录的人"));
         assert!(locales.contains("任何同時取得應用程式和完整 data 目錄的人"));
     }
