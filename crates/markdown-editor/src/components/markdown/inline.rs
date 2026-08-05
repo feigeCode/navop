@@ -315,6 +315,34 @@ impl InlineMarkdownOffsetMap {
     }
 }
 
+pub(crate) fn proportional_utf8_boundary_map(source: &str, target: &str) -> Vec<usize> {
+    let source_boundaries = utf8_char_boundaries(source);
+    let target_boundaries = utf8_char_boundaries(target);
+    let source_char_count = source_boundaries.len().saturating_sub(1);
+    let target_char_count = target_boundaries.len().saturating_sub(1);
+    let mut map = vec![0; source.len() + 1];
+
+    if source_char_count == 0 {
+        return map;
+    }
+
+    for source_index in 0..source_char_count {
+        let source_start = source_boundaries[source_index];
+        let source_end = source_boundaries[source_index + 1];
+        let target_index = source_index * target_char_count / source_char_count;
+        map[source_start..source_end].fill(target_boundaries[target_index]);
+    }
+    map[source.len()] = target.len();
+    map
+}
+
+fn utf8_char_boundaries(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
 impl InlineRenderCache {
     pub fn from_tree(tree: &InlineTextTree) -> Self {
         let mut visible_text = String::new();
@@ -595,28 +623,20 @@ impl InlineTextTree {
         while index < self.fragments.len() {
             if let Some(footnote) = self.fragments[index].footnote.clone() {
                 let raw_markdown = footnote.raw_markdown();
-                let raw_len = raw_markdown.len();
-                let run_visible_len = self.fragments[index].text.len();
+                let visible_text = &self.fragments[index].text;
+                let run_visible_len = visible_text.len();
                 let run_start = output.len();
                 output.push_str(&raw_markdown);
                 let run_end = output.len();
 
-                for local_visible in 0..=run_visible_len {
-                    let mapped = if run_visible_len == 0 {
-                        0
-                    } else {
-                        (raw_len * local_visible) / run_visible_len
-                    };
+                let visible_to_raw = proportional_utf8_boundary_map(visible_text, &raw_markdown);
+                for (local_visible, mapped) in visible_to_raw.into_iter().enumerate() {
                     visible_to_markdown[visible_cursor + local_visible] = run_start + mapped;
                 }
 
                 markdown_to_visible.resize(run_end + 1, visible_cursor);
-                for local_markdown in 0..=raw_len {
-                    let mapped = if raw_len == 0 {
-                        0
-                    } else {
-                        (run_visible_len * local_markdown) / raw_len
-                    };
+                let raw_to_visible = proportional_utf8_boundary_map(&raw_markdown, visible_text);
+                for (local_markdown, mapped) in raw_to_visible.into_iter().enumerate() {
                     markdown_to_visible[run_start + local_markdown] = visible_cursor + mapped;
                 }
 
@@ -3241,6 +3261,55 @@ mod tests {
         assert_eq!(tree.visible_text(), "1234567890abcd");
         assert_eq!(reparsed.visible_text(), tree.visible_text());
         assert_eq!(reparsed.render_cache().spans(), tree.render_cache().spans());
+    }
+
+    #[test]
+    fn resolved_footnote_offset_map_uses_only_utf8_boundaries() {
+        for id in ["éa", "aé", "€a", "a€", "中a", "a中", "é😀"] {
+            let raw = format!("[^{id}]");
+            let mut tree = InlineTextTree::from_markdown(&raw);
+            tree.apply_footnote_reference_state(|candidate| {
+                assert_eq!(candidate, id);
+                Some((12, 0))
+            });
+            let visible = tree.visible_text();
+            assert_eq!(visible, "¹²");
+
+            let map = tree.markdown_offset_map();
+            assert_eq!(map.markdown(), raw);
+            let visible_to_markdown = (0..=visible.len())
+                .map(|offset| map.visible_to_markdown_offset(offset))
+                .collect::<Vec<_>>();
+            let markdown_to_visible = (0..=raw.len())
+                .map(|offset| map.markdown_to_visible_offset(offset))
+                .collect::<Vec<_>>();
+            assert_eq!(visible_to_markdown.first(), Some(&0));
+            assert_eq!(visible_to_markdown.last(), Some(&raw.len()));
+            assert_eq!(markdown_to_visible.first(), Some(&0));
+            assert_eq!(markdown_to_visible.last(), Some(&visible.len()));
+            assert!(
+                visible_to_markdown
+                    .windows(2)
+                    .all(|pair| pair[0] <= pair[1])
+            );
+            assert!(
+                markdown_to_visible
+                    .windows(2)
+                    .all(|pair| pair[0] <= pair[1])
+            );
+            for (offset, mapped) in visible_to_markdown.into_iter().enumerate() {
+                assert!(
+                    raw.is_char_boundary(mapped),
+                    "visible offset {offset} mapped to non-boundary {mapped} in {raw:?}"
+                );
+            }
+            for (offset, mapped) in markdown_to_visible.into_iter().enumerate() {
+                assert!(
+                    visible.is_char_boundary(mapped),
+                    "markdown offset {offset} mapped to non-boundary {mapped} in {visible:?}"
+                );
+            }
+        }
     }
 
     #[test]

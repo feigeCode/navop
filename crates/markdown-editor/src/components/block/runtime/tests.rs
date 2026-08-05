@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::projection::{
-    expanded_display_cursor_offset_for_clean, expanded_display_offset_for_clean,
+    ExpandedInlineProjection, expanded_display_cursor_offset_for_clean,
+    expanded_display_offset_for_clean,
 };
 use crate::components::markdown::code_highlight::{CodeHighlightPaint, CodeLanguageKey};
 use crate::components::markdown::inline::{
@@ -122,6 +123,95 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
 
     assert_eq!(expanded_display_cursor_offset_for_clean(&fragments, 1), 1);
     assert_eq!(expanded_display_cursor_offset_for_clean(&fragments, 3), 4);
+}
+
+#[test]
+fn expanded_footnote_projection_maps_only_to_utf8_boundaries() {
+    for id in ["éa", "aé", "€a", "a€", "中a", "a中", "é😀"] {
+        let raw = format!("[^{id}]");
+        let mut tree = InlineTextTree::from_markdown(&raw);
+        tree.apply_footnote_reference_state(|candidate| {
+            assert_eq!(candidate, id);
+            Some((12, 0))
+        });
+        let clean = tree.visible_text();
+        assert_eq!(clean, "¹²");
+
+        let projection =
+            ExpandedInlineProjection::build(&tree.fragments, 0..0, None).expect("projection");
+        let display = projection.cache.visible_text();
+        assert_eq!(display, raw);
+        assert_eq!(projection.clean_to_display_cursor.len(), clean.len() + 1);
+        assert_eq!(projection.display_to_clean.len(), display.len() + 1);
+        assert_eq!(projection.clean_to_display_cursor.first(), Some(&2));
+        assert_eq!(
+            projection.clean_to_display_cursor.last(),
+            Some(&(display.len() - 1))
+        );
+        assert_eq!(projection.display_to_clean.first(), Some(&0));
+        assert_eq!(projection.display_to_clean.last(), Some(&clean.len()));
+        assert!(
+            projection
+                .clean_to_display_cursor
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1])
+        );
+        assert!(
+            projection
+                .display_to_clean
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1])
+        );
+
+        for mapped in &projection.clean_to_display_cursor {
+            assert!(
+                display.is_char_boundary(*mapped),
+                "clean-to-display offset {mapped} is not a boundary in {display:?}"
+            );
+        }
+        for mapped in &projection.display_to_clean {
+            assert!(
+                clean.is_char_boundary(*mapped),
+                "display-to-clean offset {mapped} is not a boundary in {clean:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn adjacent_expanded_footnotes_share_the_same_markdown_boundary() {
+    let raw = "[^é][^中]";
+    let mut tree = InlineTextTree::from_markdown(raw);
+    let mut ordinal = 0;
+    tree.apply_footnote_reference_state(|_| {
+        ordinal += 1;
+        Some((ordinal, 0))
+    });
+    let clean = tree.visible_text();
+    assert_eq!(clean, "¹²");
+
+    let projection =
+        ExpandedInlineProjection::build(&tree.fragments, 0..clean.len(), None).expect("projection");
+    assert_eq!(projection.cache.visible_text(), raw);
+    assert_eq!(projection.footnote_runs.len(), 2);
+
+    let first = &projection.footnote_runs[0];
+    let second = &projection.footnote_runs[1];
+    let shared_display_offset = first.display_range.end;
+    assert_eq!(shared_display_offset, second.display_range.start);
+    assert_eq!(
+        projection
+            .footnote_run_containing_offset(shared_display_offset)
+            .expect("shared endpoint")
+            .clean_range,
+        first.clean_range
+    );
+
+    let map = tree.markdown_offset_map();
+    let first_markdown_end = map.visible_to_markdown_offset(first.clean_range.start)
+        + first.footnote.raw_markdown().len();
+    let second_markdown_start = map.visible_to_markdown_offset(second.clean_range.start);
+    assert_eq!(first_markdown_end, second_markdown_start);
 }
 
 #[test]

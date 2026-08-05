@@ -1089,33 +1089,33 @@ impl Block {
             return start..end;
         }
 
-        if let Some(footnote_run) = self
-            .projection
-            .as_ref()
-            .and_then(|projection| projection.footnote_run_fully_covering_range(&range))
-        {
-            let raw = footnote_run.footnote.raw_markdown();
-            let raw_len = raw.len();
-            let local_start = range
-                .start
-                .saturating_sub(footnote_run.display_range.start)
-                .min(footnote_run.display_range.len());
-            let local_end = range
-                .end
-                .saturating_sub(footnote_run.display_range.start)
-                .min(footnote_run.display_range.len());
-            let mapped_start = (raw_len * local_start) / footnote_run.display_range.len().max(1);
-            let mapped_end = (raw_len * local_end) / footnote_run.display_range.len().max(1);
-            let map = self.record.title.markdown_offset_map();
-            let run_markdown_start = map.visible_to_markdown_offset(footnote_run.clean_range.start);
-            return run_markdown_start + mapped_start..run_markdown_start + mapped_end;
+        let map = self.record.title.markdown_offset_map();
+        let clean_range = self.current_to_clean_range(range.clone());
+        let footnote_markdown_offset = |offset: usize| {
+            let run = self
+                .projection
+                .as_ref()?
+                .footnote_run_containing_offset(offset)?;
+            let raw_len = run.footnote.raw_markdown().len();
+            debug_assert_eq!(run.display_range.len(), raw_len);
+            let local = offset
+                .saturating_sub(run.display_range.start)
+                .min(run.display_range.len())
+                .min(raw_len);
+            Some(map.visible_to_markdown_offset(run.clean_range.start) + local)
+        };
+        match (
+            footnote_markdown_offset(range.start),
+            footnote_markdown_offset(range.end),
+        ) {
+            (None, None) => map.visible_to_markdown_range(clean_range),
+            (start, end) => {
+                let start =
+                    start.unwrap_or_else(|| map.visible_to_markdown_offset(clean_range.start));
+                let end = end.unwrap_or_else(|| map.visible_to_markdown_offset(clean_range.end));
+                start..end
+            }
         }
-
-        let clean_range = self.current_to_clean_range(range);
-        self.record
-            .title
-            .markdown_offset_map()
-            .visible_to_markdown_range(clean_range)
     }
 
     pub(crate) fn markdown_range_to_current_range(&self, range: Range<usize>) -> Range<usize> {

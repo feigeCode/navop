@@ -873,7 +873,7 @@ mod tests {
     use gpui::{AppContext, Bounds, Context, TestAppContext, point, px, size};
 
     use super::{CrossBlockSelection, CrossBlockSelectionEndpoint, Editor};
-    use crate::components::{Cut, Undo, UndoCaptureKind};
+    use crate::components::{Cut, Delete, DeleteBack, Undo, UndoCaptureKind};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
 
@@ -1094,6 +1094,74 @@ mod tests {
                 Some("pha\n\nbeta\n\nga")
             );
         });
+    }
+
+    enum FootnoteDeleteAction {
+        Forward,
+        Backward,
+    }
+
+    fn assert_unicode_footnote_selection_delete(
+        cx: &mut TestAppContext,
+        id_prefix: char,
+        action: FootnoteDeleteAction,
+    ) {
+        init_editor_test_app(cx);
+        let id = format!("{id_prefix}a");
+        let original = format!("[^{id}] tail\n\n[^{id}]: body");
+        let (editor, cx) = cx.add_window_view({
+            let original = original.clone();
+            move |_window, cx| Editor::from_markdown(cx, original, None)
+        });
+        redraw(cx);
+
+        let reference = editor.update(cx, |editor, cx| {
+            let reference = editor.document.visible_blocks()[0].entity.clone();
+            reference.update(cx, |block, _cx| {
+                assert_eq!(block.display_text(), format!("[^{id}] tail"));
+            });
+            editor.focus_block(reference.entity_id());
+            reference
+        });
+        redraw(cx);
+
+        reference.update(cx, |block, _cx| {
+            let display = block.display_text();
+            let selection_start =
+                display.find(id_prefix).expect("expanded footnote id") + id_prefix.len_utf8();
+            let selection_end = display.find("tail").expect("trailing text");
+            block.selected_range = selection_start..selection_end;
+        });
+
+        match action {
+            FootnoteDeleteAction::Forward => cx.dispatch_action(Delete),
+            FootnoteDeleteAction::Backward => cx.dispatch_action(DeleteBack),
+        }
+        redraw(cx);
+
+        assert_eq!(
+            editor.read_with(cx, |editor, cx| editor.document.markdown_text(cx)),
+            format!("[\\^{id_prefix}tail\n\n[^{id}]: body")
+        );
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(
+                editor.document.visible_blocks()[0]
+                    .entity
+                    .read(cx)
+                    .display_text(),
+                format!("[^{id_prefix}tail")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn delete_back_selection_across_unicode_footnote_run_does_not_panic(cx: &mut TestAppContext) {
+        assert_unicode_footnote_selection_delete(cx, '€', FootnoteDeleteAction::Backward);
+    }
+
+    #[gpui::test]
+    fn delete_selection_across_unicode_footnote_run_does_not_panic(cx: &mut TestAppContext) {
+        assert_unicode_footnote_selection_delete(cx, '😀', FootnoteDeleteAction::Forward);
     }
 
     const TABLE_DOC: &str = "alpha\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\ngamma";

@@ -5,7 +5,7 @@ use std::ops::Range;
 use crate::components::InlineFootnoteReference;
 use crate::components::markdown::inline::{
     InlineFragment, InlineLink, InlineRenderCache, InlineScript, InlineStyle, InlineTextTree,
-    StyleFlag, can_use_markdown_script_delimiters,
+    StyleFlag, can_use_markdown_script_delimiters, proportional_utf8_boundary_map,
 };
 
 use super::CollapsedCaretAffinity;
@@ -330,21 +330,13 @@ impl ExpandedInlineProjection {
                         link_group: None,
                         kind: ExpandedInlineSegmentKind::FootnoteIdText,
                     });
-                    for offset in 0..=fragment_len {
-                        let mapped = if fragment_len == 0 {
-                            0
-                        } else {
-                            (id_len * offset) / fragment_len
-                        };
+                    let clean_to_id = proportional_utf8_boundary_map(&fragment.text, &footnote.id);
+                    for (offset, mapped) in clean_to_id.into_iter().enumerate() {
                         clean_to_display_cursor[clean_range.start + offset] =
                             display_cursor + mapped;
                     }
-                    for offset in 1..=id_len {
-                        let mapped = if id_len == 0 {
-                            0
-                        } else {
-                            (fragment_len * offset) / id_len
-                        };
+                    let id_to_clean = proportional_utf8_boundary_map(&footnote.id, &fragment.text);
+                    for mapped in id_to_clean.into_iter().skip(1) {
                         display_to_clean.push(clean_range.start + mapped);
                     }
                     display_cursor += id_len;
@@ -925,13 +917,13 @@ impl ExpandedInlineProjection {
             .find(|run| run.clean_range == *clean_range)
     }
 
-    pub(super) fn footnote_run_fully_covering_range(
+    pub(super) fn footnote_run_containing_offset(
         &self,
-        range: &Range<usize>,
+        offset: usize,
     ) -> Option<&ExpandedFootnoteRun> {
-        self.footnote_runs.iter().find(|run| {
-            run.display_range.start <= range.start && range.end <= run.display_range.end
-        })
+        self.footnote_runs
+            .iter()
+            .find(|run| run.display_range.start <= offset && offset <= run.display_range.end)
     }
 }
 
