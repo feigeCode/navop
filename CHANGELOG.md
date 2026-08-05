@@ -4,6 +4,46 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.4] - 2026-08-05
+
+### 中文
+
+#### 更新内容
+
+- 终端新增 SSH 下的 ZMODEM 文件传输支持，可在检测到上传或下载请求时选择本地文件或下载目录。
+- SFTP 文件传输工具栏新增目录上传能力，可从上传菜单直接选择文件或目录。
+- 数据库对象树中的表菜单新增“复制表名”和“复制表注释”操作。
+
+#### 修复与优化
+
+- 修复 SQL 查询结果导出不完整的问题，现在可导出完整结果集。
+- 修复 Agent 输入框 mention 补全在快速输入、中文或数字查询时可能崩溃或显示过期结果的问题。
+- 修复 Windows 本地终端环境变量未及时刷新以及 Git Bash 路径解析问题。
+- 修复 RDP 显示及桌面交互相关问题，并改善连接侧栏中的连接分组拖放目标区域。
+- 为 Linux Wayland 窗口设置稳定的应用 ID 和 `Navop` 窗口标题，改善桌面环境中的窗口识别。
+- 修复 Markdown 编辑器删除包含 Unicode 字符的脚注引用时可能发生的崩溃。
+
+---
+
+### English
+
+#### What's New
+
+- Added ZMODEM file transfers over SSH, including file selection for uploads and destination-directory selection for downloads.
+- Added directory uploads to the SFTP file-transfer toolbar, allowing users to choose files or folders directly from the upload menu.
+- Added table actions for copying a table name or table comment from the database object tree.
+
+#### Fixes and Improvements
+
+- Fixed incomplete SQL query-result exports so complete result sets can now be exported.
+- Fixed crashes and stale-result updates in Agent mention completion, especially during rapid typing and CJK or numeric queries.
+- Fixed stale Windows local-terminal environments and improved Git Bash path resolution.
+- Fixed display and desktop interaction issues in RDP sessions, and expanded connection-group drop targets in the sidebar.
+- Set a stable Linux Wayland application ID and `Navop` window title for better desktop integration.
+- Fixed a crash when deleting Markdown footnote references containing Unicode characters.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.3...v0.10.4
+
 ## [v0.10.3] - 2026-08-04
 
 ### 中文
