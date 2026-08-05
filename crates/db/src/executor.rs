@@ -221,6 +221,17 @@ impl SqlResult {
     pub fn is_error(&self) -> bool {
         matches!(self, SqlResult::Error(_))
     }
+
+    /// Restore the parser-provided statement as result metadata after execution-time rewriting.
+    pub fn with_original_sql(mut self, sql: impl Into<String>) -> Self {
+        let sql = sql.into();
+        match &mut self {
+            SqlResult::Query(result) => result.sql = sql,
+            SqlResult::Exec(result) => result.sql = sql,
+            SqlResult::Error(result) => result.sql = sql,
+        }
+        self
+    }
 }
 
 /// Column metadata for query results
@@ -432,6 +443,42 @@ mod tests {
             serde_json::from_str(&encoded).expect("binary cell should deserialize");
 
         assert_eq!(decoded, cell);
+    }
+
+    #[test]
+    fn sql_result_restores_original_statement_sql() {
+        let original_sql = "select * from users";
+        let rewritten_sql = "select * from users LIMIT 1000";
+        let results = [
+            SqlResult::Query(QueryResult {
+                sql: rewritten_sql.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows: vec![],
+                binary_cells: vec![],
+                elapsed_ms: 0,
+            }),
+            SqlResult::Exec(ExecResult {
+                sql: rewritten_sql.to_string(),
+                rows_affected: 0,
+                elapsed_ms: 0,
+                message: None,
+            }),
+            SqlResult::Error(SqlErrorInfo {
+                sql: rewritten_sql.to_string(),
+                message: "failure".to_string(),
+            }),
+        ];
+
+        for result in results {
+            let result = result.with_original_sql(original_sql);
+            let actual_sql = match result {
+                SqlResult::Query(result) => result.sql,
+                SqlResult::Exec(result) => result.sql,
+                SqlResult::Error(result) => result.sql,
+            };
+            assert_eq!(original_sql, actual_sql);
+        }
     }
 }
 

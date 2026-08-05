@@ -436,7 +436,7 @@ impl DbConnection for MssqlDbConnection {
                         statements.len()
                     );
                 }
-                results.push(result);
+                results.push(result.with_original_sql(sql));
 
                 if is_error && options.stop_on_error {
                     debug!("[MSSQL] Stopping execution due to error (stop_on_error=true)");
@@ -578,6 +578,7 @@ impl DbConnection for MssqlDbConnection {
                     }
                 };
 
+                let result = result.with_original_sql(sql.as_str());
                 let is_error = result.is_error();
                 let progress =
                     StreamingProgress::with_file_progress(current, result, bytes_read, total_size);
@@ -664,6 +665,7 @@ impl DbConnection for MssqlDbConnection {
                         }
                     };
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::new(current, total, result);
                     if sender.send(progress).await.is_err() {

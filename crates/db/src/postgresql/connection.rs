@@ -1012,7 +1012,7 @@ impl DbConnection for PostgresDbConnection {
                 };
 
                 let is_error = result.is_error();
-                results.push(result);
+                results.push(result.with_original_sql(sql));
 
                 if is_error {
                     debug!(
@@ -1138,10 +1138,13 @@ impl DbConnection for PostgresDbConnection {
                                         Self::postgres_error_message(&e),
                                         sql_preview
                                     );
-                                    results.push(SqlResult::Error(SqlErrorInfo {
-                                        sql: sql_to_execute.to_string(),
-                                        message: Self::postgres_error_message(&e),
-                                    }));
+                                    results.push(
+                                        SqlResult::Error(SqlErrorInfo {
+                                            sql: sql_to_execute.to_string(),
+                                            message: Self::postgres_error_message(&e),
+                                        })
+                                        .with_original_sql(sql),
+                                    );
 
                                     if options.stop_on_error {
                                         debug!(
@@ -1174,10 +1177,13 @@ impl DbConnection for PostgresDbConnection {
                                         Self::postgres_error_message(&e),
                                         sql_preview
                                     );
-                                    results.push(SqlResult::Error(SqlErrorInfo {
-                                        sql: sql_to_execute.to_string(),
-                                        message: Self::postgres_error_message(&e),
-                                    }));
+                                    results.push(
+                                        SqlResult::Error(SqlErrorInfo {
+                                            sql: sql_to_execute.to_string(),
+                                            message: Self::postgres_error_message(&e),
+                                        })
+                                        .with_original_sql(sql),
+                                    );
 
                                     if options.stop_on_error {
                                         debug!(
@@ -1196,10 +1202,13 @@ impl DbConnection for PostgresDbConnection {
                             Self::postgres_error_message(&e),
                             sql_preview
                         );
-                        results.push(SqlResult::Error(SqlErrorInfo {
-                            sql: sql_to_execute.to_string(),
-                            message: Self::postgres_error_message(&e),
-                        }));
+                        results.push(
+                            SqlResult::Error(SqlErrorInfo {
+                                sql: sql_to_execute.to_string(),
+                                message: Self::postgres_error_message(&e),
+                            })
+                            .with_original_sql(sql),
+                        );
 
                         if options.stop_on_error {
                             debug!(
@@ -1211,7 +1220,7 @@ impl DbConnection for PostgresDbConnection {
                     }
                 };
 
-                results.push(result);
+                results.push(result.with_original_sql(sql));
             }
         }
 
@@ -1492,6 +1501,7 @@ impl DbConnection for PostgresDbConnection {
                         }
                     };
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     if is_error {
                         has_error = true;
@@ -1634,6 +1644,7 @@ impl DbConnection for PostgresDbConnection {
                         }
                     };
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::with_file_progress(
                         current, result, bytes_read, total_size,
@@ -1748,6 +1759,7 @@ impl DbConnection for PostgresDbConnection {
                         }
                     };
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     if is_error {
                         has_error = true;
@@ -1866,6 +1878,7 @@ impl DbConnection for PostgresDbConnection {
                         }
                     };
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::new(current, total, result);
                     if sender.send(progress).await.is_err() {

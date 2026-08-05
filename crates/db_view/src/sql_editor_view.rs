@@ -1273,6 +1273,7 @@ impl SqlEditorTab {
             session_id,
             connection_id: self.connection_id.clone(),
             database: scope.database,
+            schema: scope.schema,
             database_type: self.database_type.clone(),
         };
         self.sql_result_tab_container.update(cx, |container, cx| {

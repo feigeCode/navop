@@ -564,7 +564,7 @@ impl DbConnection for OracleDbConnection {
                     statements.len()
                 );
             }
-            results.push(result);
+            results.push(result.with_original_sql(sql.as_str()));
 
             if is_error && stop_on_error {
                 debug!("[Oracle] Stopping execution due to error (stop_on_error=true)");
@@ -771,6 +771,7 @@ impl DbConnection for OracleDbConnection {
                     }
                 };
 
+                let result = result.with_original_sql(sql.as_str());
                 let is_error = result.is_error();
                 let progress =
                     StreamingProgress::with_file_progress(current, result, bytes_read, total_size);
@@ -840,6 +841,7 @@ impl DbConnection for OracleDbConnection {
                     }
                 };
 
+                let result = result.with_original_sql(sql.as_str());
                 let is_error = result.is_error();
                 let progress = StreamingProgress::new(current, total, result);
                 if sender.send(progress).await.is_err() {

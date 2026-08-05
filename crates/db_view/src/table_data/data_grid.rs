@@ -35,6 +35,7 @@ use db::{
 use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
+use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
 use one_core::storage::DatabaseType;
@@ -148,6 +149,86 @@ pub enum DataGridUsage {
     SqlResult,
 }
 
+type ExportPayload = (Vec<SharedString>, Vec<Vec<Option<String>>>);
+
+struct SqlResultExportRequest {
+    connection_id: String,
+    database: Option<String>,
+    schema: Option<String>,
+    session_id: Option<String>,
+    sql: String,
+}
+
+fn result_set_export_exec_options() -> ExecOptions {
+    ExecOptions {
+        max_rows: None,
+        ..Default::default()
+    }
+}
+
+async fn execute_sql_result_export(
+    global_state: GlobalDbState,
+    request: SqlResultExportRequest,
+    cx: &mut AsyncApp,
+) -> Result<ExportPayload, String> {
+    let SqlResultExportRequest {
+        connection_id,
+        database,
+        schema,
+        session_id,
+        sql,
+    } = request;
+    let options = Some(result_set_export_exec_options());
+    let results = match session_id {
+        Some(session_id) => {
+            Tokio::spawn_result(cx, async move {
+                global_state.execute_session(session_id, sql, options).await
+            })
+            .await
+        }
+        None => {
+            global_state
+                .execute_script(cx, connection_id, sql, database, schema, options)
+                .await
+        }
+    }
+    .map_err(|error| error.to_string())?;
+
+    query_result_for_export(results)
+}
+
+fn query_result_for_export(results: Vec<SqlResult>) -> Result<ExportPayload, String> {
+    let mut results = results.into_iter();
+    let result = results
+        .next()
+        .ok_or_else(|| "query returned no results".to_string())?;
+    if results.next().is_some() {
+        return Err("query returned multiple results".to_string());
+    }
+
+    match result {
+        SqlResult::Query(result) => Ok(DataGrid::normalize_query_result(result)),
+        SqlResult::Exec(_) => Err("statement did not return a result set".to_string()),
+        SqlResult::Error(error) => Err(error.message),
+    }
+}
+
+fn notify_export_failure(
+    cx: &mut AsyncApp,
+    window_id: Option<gpui::AnyWindowHandle>,
+    error: String,
+) {
+    let Some(window_id) = window_id else {
+        return;
+    };
+    let _ = cx.update_window(window_id, |_entity, window, cx| {
+        window.push_notification(
+            t!("TableDataGrid.export_failed", error = error).to_string(),
+            cx,
+        );
+    });
+}
+
 /// 数据表格配置
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataGridConfig {
@@ -169,6 +250,8 @@ pub struct DataGridConfig {
     pub usage: DataGridUsage,
     /// 原始 SQL（SqlResult 场景使用）
     pub sql: String,
+    /// Existing execution session for manual transaction results.
+    pub session_id: Option<String>,
     /// 执行时间（SqlResult 场景使用）
     execution_time: u128,
     /// 数据行数（SqlResult 场景使用）
@@ -192,6 +275,7 @@ impl DataGridConfig {
             show_toolbar: true,
             usage: DataGridUsage::TableData,
             sql: "".to_string(),
+            session_id: None,
             execution_time: 0,
             rows_count: 0,
         }
@@ -219,6 +303,10 @@ impl DataGridConfig {
 
     pub fn sql(mut self, sql: impl Into<String>) -> Self {
         self.sql = sql.into();
+        self
+    }
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
     pub fn execution_time(mut self, execution_time: u128) -> Self {
@@ -1013,6 +1101,8 @@ impl DataGrid {
         let connection_id = self.config.connection_id.clone();
         let database_name = self.config.database_name.clone();
         let schema_name = self.config.schema_name.clone();
+        let session_id = self.config.session_id.clone();
+        let sql = self.config.sql.clone();
         let table_name = self.config.table_name.clone();
         let current_page = self.table_data_info.read(cx).current_page;
         let total_count = self.table_data_info.read(cx).total_count;
@@ -1065,29 +1155,28 @@ impl DataGrid {
                                     Some((columns, rows))
                                 }
                                 Err(error) => {
-                                    let _ = cx.update(|cx| {
-                                        if let Some(window_id) = window_id {
-                                            let _ = cx.update_window(
-                                                window_id,
-                                                |_entity, window, cx| {
-                                                    window.push_notification(
-                                                        t!(
-                                                            "TableDataGrid.export_failed",
-                                                            error = error
-                                                        )
-                                                        .to_string(),
-                                                        cx,
-                                                    );
-                                                },
-                                            );
-                                        }
-                                    });
+                                    notify_export_failure(cx, window_id, error.to_string());
                                     return;
                                 }
                             }
                         }
                     }
-                    DataGridUsage::SqlResult => Self::collect_visible_rows(&table, cx),
+                    DataGridUsage::SqlResult => {
+                        let request = SqlResultExportRequest {
+                            connection_id: connection_id.clone(),
+                            database: (!database_name.is_empty()).then_some(database_name.clone()),
+                            schema: schema_name.clone(),
+                            session_id: session_id.clone(),
+                            sql: sql.clone(),
+                        };
+                        match execute_sql_result_export(global_state.clone(), request, cx).await {
+                            Ok(payload) => Some(payload),
+                            Err(error) => {
+                                notify_export_failure(cx, window_id, error);
+                                return;
+                            }
+                        }
+                    }
                 },
             };
 
@@ -2938,11 +3027,13 @@ pub fn notification(cx: &mut App, error: String) {
 mod tests {
     use super::{
         DataGrid, ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
-        build_large_text_editor_title, collect_delete_row_indices, resolve_large_text_editor_route,
-        table_has_unsaved_changes,
+        build_large_text_editor_title, collect_delete_row_indices, query_result_for_export,
+        resolve_large_text_editor_route, result_set_export_exec_options, table_has_unsaved_changes,
     };
     use crate::table_data::results_delegate::{CellChange, RowChange};
-    use db::{DbManager, TableCellValue, TableRowChange};
+    use db::{
+        DbManager, ExecResult, QueryResult, SqlErrorInfo, SqlResult, TableCellValue, TableRowChange,
+    };
     use gpui::SharedString;
     use one_core::settings::LargeTextCellEditorOpenMode;
     use one_core::storage::DatabaseType;
@@ -2959,6 +3050,62 @@ mod tests {
         let columns = vec![SharedString::from("id"), SharedString::from("body")];
         let metadata = TableMetadata::new("news").with_columns(vec!["id", "body"]);
         (rows, columns, metadata)
+    }
+
+    fn sample_query_result(row_count: usize) -> QueryResult {
+        QueryResult {
+            sql: "select id from users".to_string(),
+            columns: vec!["id".to_string()],
+            column_meta: vec![],
+            rows: (0..row_count)
+                .map(|row| vec![Some(row.to_string())])
+                .collect(),
+            binary_cells: vec![],
+            elapsed_ms: 0,
+        }
+    }
+
+    #[test]
+    fn result_set_export_disables_query_row_limit() {
+        assert_eq!(None, result_set_export_exec_options().max_rows);
+    }
+
+    #[test]
+    fn query_result_export_preserves_all_rows() {
+        let (_, rows) =
+            query_result_for_export(vec![SqlResult::Query(sample_query_result(1001))]).unwrap();
+        assert_eq!(1001, rows.len());
+    }
+
+    #[test]
+    fn query_result_export_rejects_non_query_and_ambiguous_results() {
+        let exec = SqlResult::Exec(ExecResult {
+            sql: "update users set active = true".to_string(),
+            rows_affected: 1,
+            elapsed_ms: 0,
+            message: None,
+        });
+        assert!(query_result_for_export(vec![exec]).is_err());
+
+        let database_error = "database unavailable";
+        let error = SqlResult::Error(SqlErrorInfo {
+            sql: "select id from users".to_string(),
+            message: database_error.to_string(),
+        });
+        assert!(
+            query_result_for_export(vec![error])
+                .unwrap_err()
+                .contains(database_error)
+        );
+
+        assert!(query_result_for_export(vec![]).is_err());
+        assert!(
+            query_result_for_export(vec![
+                SqlResult::Query(sample_query_result(1)),
+                SqlResult::Query(sample_query_result(1)),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

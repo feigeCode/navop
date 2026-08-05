@@ -366,7 +366,7 @@ impl DbConnection for SqliteDbConnection {
                     statements.len()
                 );
             }
-            results.push(result);
+            results.push(result.with_original_sql(sql));
 
             if is_error && options.stop_on_error {
                 debug!("[SQLite] Stopping execution due to error (stop_on_error=true)");
@@ -499,6 +499,7 @@ impl DbConnection for SqliteDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     if is_error {
                         has_error = true;
@@ -582,6 +583,7 @@ impl DbConnection for SqliteDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::with_file_progress(
                         current, result, bytes_read, total_size,
@@ -650,6 +652,7 @@ impl DbConnection for SqliteDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     if is_error {
                         has_error = true;
@@ -709,6 +712,7 @@ impl DbConnection for SqliteDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::new(current, total, result);
                     if sender.send(progress).await.is_err() {
@@ -724,5 +728,77 @@ impl DbConnection for SqliteDbConnection {
 
         debug!("[SQLite] execute_streaming() completed");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SqliteDbConnection;
+    use crate::connection::DbConnection;
+    use crate::executor::{ExecOptions, SqlResult};
+    use crate::sqlite::SqlitePlugin;
+    use one_core::storage::{DatabaseType, DbConnectionConfig};
+
+    #[tokio::test]
+    async fn execute_limits_rows_but_preserves_original_query_sql() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = temp_dir.path().join("sqlite-row-limit-test.db");
+        let mut connection = SqliteDbConnection::new(DbConnectionConfig {
+            id: "sqlite-row-limit-test".to_string(),
+            name: "sqlite-row-limit-test".to_string(),
+            database_type: DatabaseType::SQLite,
+            host: db_path.to_string_lossy().to_string(),
+            port: 0,
+            workspace_id: None,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            proxy: None,
+            extra_params: Default::default(),
+        });
+        connection.connect().await.expect("sqlite should connect");
+        {
+            let guard = connection.connection.lock().expect("lock should succeed");
+            let sqlite = guard.as_ref().expect("sqlite should be connected");
+            sqlite
+                .execute_batch(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY);
+                     WITH RECURSIVE ids(id) AS (
+                         SELECT 1
+                         UNION ALL
+                         SELECT id + 1 FROM ids WHERE id < 1001
+                     )
+                     INSERT INTO users SELECT id FROM ids;",
+                )
+                .expect("fixture should be created");
+        }
+
+        let original_sql = "SELECT id FROM users ORDER BY id";
+        let results = connection
+            .execute(
+                &SqlitePlugin::new(),
+                original_sql,
+                ExecOptions {
+                    max_rows: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("query should execute");
+
+        match results.as_slice() {
+            [SqlResult::Query(result)] => {
+                assert_eq!(2, result.rows.len());
+                assert_eq!(original_sql, result.sql);
+            }
+            other => panic!("expected one query result, got {other:?}"),
+        }
+
+        connection
+            .disconnect()
+            .await
+            .expect("sqlite should disconnect");
     }
 }

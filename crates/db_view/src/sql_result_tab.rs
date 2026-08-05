@@ -28,6 +28,7 @@ use tracing::log::error;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
+use one_core::gpui_tokio::Tokio;
 use one_core::settings::AppSettings;
 // 3. 当前 crate 导入（按模块分组）
 use db::{GlobalDbState, SqlErrorInfo, SqlResult, SqlSource};
@@ -71,13 +72,25 @@ pub struct StatementListData {
     cached_filtered_items: Vec<StatementListItem>,
 }
 
+#[derive(Clone)]
+struct ResultExecutionContext {
+    connection_id: String,
+    database: Option<String>,
+    schema: Option<String>,
+    session_id: Option<String>,
+    database_type: one_core::storage::DatabaseType,
+}
+
 struct ResultsBatchUpdate {
     results: Vec<SqlResult>,
     current: usize,
     total: usize,
-    connection_id: String,
-    database: Option<String>,
-    database_type: one_core::storage::DatabaseType,
+    execution: ResultExecutionContext,
+}
+
+struct ResultsBatchRender {
+    results: Vec<SqlResult>,
+    execution: ResultExecutionContext,
 }
 
 pub(crate) struct SessionSqlRun {
@@ -85,6 +98,7 @@ pub(crate) struct SessionSqlRun {
     pub session_id: String,
     pub connection_id: String,
     pub database: Option<String>,
+    pub schema: Option<String>,
     pub database_type: one_core::storage::DatabaseType,
 }
 
@@ -231,6 +245,7 @@ impl SqlResultTabContainer {
         let clone_self = self.clone();
         let connection_id_clone = connection_id.clone();
         let database_clone = current_database_value.clone();
+        let schema_clone = current_schema_value.clone();
 
         self.clear_results(cx);
 
@@ -350,6 +365,13 @@ impl SqlResultTabContainer {
                     return None;
                 }
             };
+            let execution = ResultExecutionContext {
+                connection_id: connection_id_clone.clone(),
+                database: database_clone,
+                schema: schema_clone,
+                session_id: None,
+                database_type,
+            };
 
             let mut has_query_result = false;
             let mut first_query_index: Option<usize> = None;
@@ -390,9 +412,7 @@ impl SqlResultTabContainer {
                             results: results_to_send,
                             current,
                             total,
-                            connection_id: connection_id_clone.clone(),
-                            database: database_clone.clone(),
-                            database_type: database_type.clone(),
+                            execution: execution.clone(),
                         },
                         cx,
                     );
@@ -406,10 +426,10 @@ impl SqlResultTabContainer {
                     if let Some(window_id) = cx.active_window() {
                         if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                             clone_self.add_streaming_results_batch(
-                                results_to_send,
-                                connection_id_clone.clone(),
-                                database_clone.clone(),
-                                database_type,
+                                ResultsBatchRender {
+                                    results: results_to_send,
+                                    execution,
+                                },
                                 window,
                                 cx,
                             );
@@ -500,13 +520,14 @@ impl SqlResultTabContainer {
                 max_rows,
                 ..Default::default()
             };
-            let results = match global_state
-                .execute_session(
-                    request.session_id.clone(),
-                    request.sql.clone(),
-                    Some(exec_opts),
-                )
-                .await
+            let session_id = request.session_id.clone();
+            let sql = request.sql.clone();
+            let results = match Tokio::spawn_result(cx, async move {
+                global_state
+                    .execute_session(session_id, sql, Some(exec_opts))
+                    .await
+            })
+            .await
             {
                 Ok(results) => results,
                 Err(error) => vec![SqlResult::Error(SqlErrorInfo {
@@ -518,15 +539,19 @@ impl SqlResultTabContainer {
                 .iter()
                 .any(|result| matches!(result, SqlResult::Query(_)));
             let total_elapsed = execution_start.elapsed().as_secs_f64();
+            let execution = ResultExecutionContext {
+                connection_id: request.connection_id,
+                database: request.database,
+                schema: request.schema,
+                session_id: Some(request.session_id),
+                database_type: request.database_type,
+            };
 
             cx.update(|cx| {
                 if let Some(window_id) = cx.active_window() {
                     if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                         clone_self.add_streaming_results_batch(
-                            results,
-                            request.connection_id,
-                            request.database,
-                            request.database_type,
+                            ResultsBatchRender { results, execution },
                             window,
                             cx,
                         );
@@ -596,10 +621,10 @@ impl SqlResultTabContainer {
                     });
 
                     self.add_streaming_results_batch(
-                        update.results,
-                        update.connection_id,
-                        update.database,
-                        update.database_type,
+                        ResultsBatchRender {
+                            results: update.results,
+                            execution: update.execution,
+                        },
                         window,
                         cx,
                     );
@@ -613,13 +638,18 @@ impl SqlResultTabContainer {
     /// 批量添加streaming结果并滚动到最新位置
     fn add_streaming_results_batch(
         &self,
-        results: Vec<SqlResult>,
-        connection_id: String,
-        database: Option<String>,
-        database_type: one_core::storage::DatabaseType,
+        batch: ResultsBatchRender,
         _window: &mut Window,
         cx: &mut App,
     ) {
+        let ResultsBatchRender { results, execution } = batch;
+        let ResultExecutionContext {
+            connection_id,
+            database,
+            schema,
+            session_id,
+            database_type,
+        } = execution;
         let mut new_all_results = Vec::new();
         let mut new_tabs = Vec::new();
 
@@ -640,7 +670,7 @@ impl SqlResultTabContainer {
                     (false, "".to_string())
                 };
 
-                let config = DataGridConfig::new(
+                let mut config = DataGridConfig::new(
                     db_name.clone(),
                     table_name.clone(),
                     &connection_id,
@@ -652,6 +682,12 @@ impl SqlResultTabContainer {
                 .rows_count(query_result.rows.len())
                 .execution_time(query_result.elapsed_ms)
                 .sql(query_result.sql.clone());
+                if let Some(schema) = schema.clone() {
+                    config = config.with_schema(schema);
+                }
+                if let Some(session_id) = session_id.clone() {
+                    config = config.with_session_id(session_id);
+                }
 
                 let data_grid = cx.new(|cx| DataGrid::new(config, _window, cx));
                 let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), _window, cx));

@@ -337,7 +337,7 @@ impl DbConnection for DuckDbConnection {
             .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
             let is_error = result.is_error();
-            results.push(result);
+            results.push(result.with_original_sql(sql.as_str()));
             if is_error && options.stop_on_error {
                 break;
             }
@@ -445,6 +445,7 @@ impl DbConnection for DuckDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     if is_error {
                         has_error = true;
@@ -523,6 +524,7 @@ impl DbConnection for DuckDbConnection {
                     .await
                     .map_err(|e| DbError::Internal(format!("task join error: {}", e)))??;
 
+                    let result = result.with_original_sql(sql.as_str());
                     let is_error = result.is_error();
                     let progress = StreamingProgress::with_file_progress(
                         current, result, bytes_read, total_size,
