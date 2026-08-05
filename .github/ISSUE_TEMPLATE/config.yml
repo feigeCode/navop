@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 下载最新版本 / Download the latest release
+    url: https://github.com/feigeCode/navop/releases/latest
+    about: 提交问题前请先升级到最新版本并确认问题仍然存在。Please update to the latest release before reporting an issue.
+  - name: QQ 用户群 / QQ user group
+    url: https://qm.qq.com/cgi-bin/qm/qr?group_code=860670605
+    about: 适合快速交流、使用咨询和复现确认。For quick questions, usage help, and reproduction checks.
+  - name: 微信用户群 / WeChat user group
+    url: https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD
+    about: 查看加入微信群的方式。See how to join the WeChat user group.
