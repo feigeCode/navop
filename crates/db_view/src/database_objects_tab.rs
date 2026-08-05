@@ -13,6 +13,7 @@ use crate::extension_menu::{
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
 };
+use crate::table_copy_menu::append_table_copy_items;
 use db::plugin_manifest::DatabaseActionId;
 use db::{
     DbNode, DbNodeType, GlobalDbState, ObjectView, ObjectViewColumn,
@@ -657,7 +658,8 @@ impl DatabaseObjects {
         columns: &[Column],
         row_data: &[String],
     ) -> Option<DbNode> {
-        let name = row_data.first().cloned()?;
+        let name = Self::row_value_for_column(columns, row_data, "name")
+            .or_else(|| row_data.first().cloned())?;
         let mut node_name = name.clone();
 
         // 特殊处理：当 current_node 为 None 且显示连接列表时
@@ -733,6 +735,16 @@ impl DatabaseObjects {
                     metadata.insert("schema".to_string(), schema.clone());
                 }
                 metadata.insert("table".to_string(), name.clone());
+                if let Some(comment) = Self::row_value_for_column(columns, row_data, "comment")
+                    .filter(|comment| {
+                        let comment = comment.trim();
+                        !comment.is_empty() && comment != "-"
+                    })
+                {
+                    metadata.insert("comment".to_string(), comment);
+                } else {
+                    metadata.remove("comment");
+                }
                 let node_id = if let Some(schema) =
                     schema.as_ref().filter(|schema| !schema.trim().is_empty())
                 {
@@ -917,7 +929,7 @@ impl DatabaseObjects {
     fn row_value_for_column(columns: &[Column], row_data: &[String], key: &str) -> Option<String> {
         let index = columns
             .iter()
-            .position(|column| column.key.as_ref() == key)?;
+            .position(|column| column.key.as_ref().eq_ignore_ascii_case(key))?;
         row_data.get(index).cloned()
     }
 
@@ -1106,6 +1118,10 @@ impl DatabaseObjects {
         if !extension_items.is_empty() {
             menu = menu.separator();
             menu = Self::render_extension_menu_items(menu, extension_items, is_active, &node);
+        }
+        if node.node_type == DbNodeType::Table {
+            menu = menu.separator();
+            menu = append_table_copy_items(menu, &node);
         }
         let refresh_node = view.read(cx).current_node.clone().unwrap_or(node);
         let view = view.clone();
@@ -1720,6 +1736,87 @@ mod tests {
             node.metadata.get("table").map(String::as_str)
         );
         assert_eq!("conn1:app_db:public:table_folder:users", node.id);
+    }
+
+    #[test]
+    fn table_row_uses_named_columns_and_preserves_comment_metadata() {
+        let columns = vec![
+            Column::new("schema", "Schema"),
+            Column::new("name", "Name"),
+            Column::new("comment", "Comment"),
+        ];
+        let row = vec![
+            "analytics".to_string(),
+            "users".to_string(),
+            "Application users".to_string(),
+        ];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&schema_node()),
+            &columns,
+            &row,
+        )
+        .expect("table row with reordered columns should produce a node");
+
+        assert_eq!("users", node.name);
+        assert_eq!(
+            Some("users"),
+            node.metadata.get("table").map(String::as_str)
+        );
+        assert_eq!(
+            Some("Application users"),
+            node.metadata.get("comment").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn table_row_column_keys_are_case_insensitive() {
+        let columns = vec![
+            Column::new("Schema", "Schema"),
+            Column::new("Name", "Name"),
+            Column::new("Comment", "Comment"),
+        ];
+        let row = vec![
+            "analytics".to_string(),
+            "users".to_string(),
+            "Imported table comment".to_string(),
+        ];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Table,
+            Some(&schema_node()),
+            &columns,
+            &row,
+        )
+        .expect("table row with IPC-style column keys should produce a node");
+
+        assert_eq!("users", node.name);
+        assert_eq!(
+            Some("Imported table comment"),
+            node.metadata.get("comment").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn table_row_ignores_empty_or_placeholder_comments() {
+        let columns = vec![
+            Column::new("name", "Name"),
+            Column::new("comment", "Comment"),
+        ];
+
+        for comment in ["", "   ", "-"] {
+            let row = vec!["users".to_string(), comment.to_string()];
+            let node = DatabaseObjects::build_node_from_object_row(
+                DbNodeType::Table,
+                Some(&schema_node()),
+                &columns,
+                &row,
+            )
+            .expect("table row without a usable comment should produce a node");
+
+            assert!(!node.metadata.contains_key("comment"));
+        }
     }
 
     #[test]

@@ -39,6 +39,7 @@ pub(crate) mod sql_inline_completion;
 pub mod sql_result_tab;
 #[cfg(test)]
 mod sql_result_tab_tests;
+mod table_copy_menu;
 mod table_data;
 pub mod table_data_tab;
 pub mod table_designer_tab;

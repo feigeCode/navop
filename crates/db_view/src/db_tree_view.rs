@@ -39,6 +39,7 @@ use crate::extension_menu::{
 use crate::search_shortcut::{
     DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
 };
+use crate::table_copy_menu::append_table_copy_items;
 use db::{
     DbNode, DbNodeType, GlobalDbState,
     ipc::{driver_icon_from_asset_path, driver_icon_from_file_path},
@@ -3022,6 +3023,11 @@ impl DbTreeView {
         if !extension_items.is_empty() {
             menu = menu.separator();
             menu = Self::render_extension_menu_items(menu, extension_items, is_active, node);
+        }
+
+        if node.node_type == DbNodeType::Table {
+            menu = menu.separator();
+            menu = append_table_copy_items(menu, node);
         }
 
         // 添加通用的刷新菜单项

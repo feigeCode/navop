@@ -852,6 +852,18 @@ Table:
     en: Backup Table
     zh-CN: 创建备份表
     zh-HK: 建立備份表
+  copy_table_name:
+    en: Copy Table Name
+    zh-CN: 复制表名
+    zh-HK: 複製表名
+  copy_table_comment:
+    en: Copy Comment
+    zh-CN: 复制注释
+    zh-HK: 複製註解
+  copy_success:
+    en: Copied to clipboard
+    zh-CN: 已复制到剪贴板
+    zh-HK: 已複製到剪貼簿
   truncate_table:
     en: Truncate Table
     zh-CN: 清空表
