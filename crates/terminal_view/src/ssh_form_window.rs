@@ -39,8 +39,11 @@ use ssh::{
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use terminal::SshBackend;
+use terminal::{SshBackend, terminal::HostKeyVerificationReason};
 
+use crate::host_key_dialog::{
+    host_key_dialog_presentation, render_host_key_details_card, verifier_with_confirmed_host_key,
+};
 use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
     form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
@@ -239,22 +242,34 @@ fn build_connection_test_signature(params: &SshParams) -> String {
 struct ConnectionTestHostKeyRequest {
     identity: HostKeyIdentity,
     presented: HostKeyDetails,
+    reason: HostKeyVerificationReason,
 }
 
 fn connection_test_host_key_request(error: &anyhow::Error) -> Option<ConnectionTestHostKeyRequest> {
-    error.chain().find_map(|cause| {
-        let HostKeyRejection::Unknown {
-            identity,
-            presented,
-        } = cause.downcast_ref::<HostKeyRejection>()?
-        else {
-            return None;
-        };
-        Some(ConnectionTestHostKeyRequest {
-            identity: identity.clone(),
-            presented: presented.clone(),
+    error
+        .chain()
+        .find_map(|cause| match cause.downcast_ref::<HostKeyRejection>()? {
+            HostKeyRejection::Unknown {
+                identity,
+                presented,
+            } => Some(ConnectionTestHostKeyRequest {
+                identity: identity.clone(),
+                presented: presented.clone(),
+                reason: HostKeyVerificationReason::Unknown,
+            }),
+            HostKeyRejection::Changed {
+                identity,
+                presented,
+                expected,
+            } => Some(ConnectionTestHostKeyRequest {
+                identity: identity.clone(),
+                presented: presented.clone(),
+                reason: HostKeyVerificationReason::Changed {
+                    expected: expected.clone(),
+                },
+            }),
+            HostKeyRejection::Revoked { .. } | HostKeyRejection::StoreUnavailable { .. } => None,
         })
-    })
 }
 
 fn xquartz_installation_warning_required(
@@ -1275,8 +1290,7 @@ impl SshFormWindow {
     ) {
         let form = cx.entity().downgrade();
         let identity = request.identity.to_string();
-        let algorithm = request.presented.algorithm.clone();
-        let fingerprint = request.presented.fingerprint.clone();
+        let presentation = host_key_dialog_presentation(&request.reason);
 
         window.open_dialog(cx, move |dialog, _window, cx| {
             let reject_form = form.clone();
@@ -1288,67 +1302,28 @@ impl SshFormWindow {
             let accept_once_signature = signature.clone();
             let accept_once_identity = request.identity.clone();
             let accept_once_details = request.presented.clone();
+            let accept_once_reason = request.reason.clone();
             let accept_once_verifier = host_key_verifier.clone();
             let accept_save_params = params.clone();
             let accept_save_signature = signature.clone();
             let accept_save_identity = request.identity.clone();
             let accept_save_details = request.presented.clone();
+            let accept_save_reason = request.reason.clone();
             let accept_save_verifier = host_key_verifier.clone();
 
             dialog
-                .title(t!("SshSession.host_key_title").to_string())
+                .title(t!(presentation.title_key).to_string())
                 .w(px(520.))
                 .child(
                     v_flex()
                         .gap_3()
-                        .child(t!("SshSession.host_key_message").to_string())
-                        .child(
-                            v_flex()
-                                .gap_2()
-                                .p_3()
-                                .rounded_md()
-                                .bg(cx.theme().secondary)
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_identity").to_string(),
-                                                ),
-                                        )
-                                        .child(identity.clone()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_algorithm").to_string(),
-                                                ),
-                                        )
-                                        .child(algorithm.clone()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_fingerprint")
-                                                        .to_string(),
-                                                ),
-                                        )
-                                        .child(div().text_xs().child(fingerprint.clone())),
-                                ),
-                        ),
+                        .child(t!(presentation.message_key).to_string())
+                        .child(render_host_key_details_card(
+                            identity.clone(),
+                            request.presented.clone(),
+                            &presentation,
+                            cx,
+                        )),
                 )
                 .footer(move |_, _, _window, _cx| {
                     let reject_form = reject_form.clone();
@@ -1359,11 +1334,13 @@ impl SshFormWindow {
                     let accept_once_signature = accept_once_signature.clone();
                     let accept_once_identity = accept_once_identity.clone();
                     let accept_once_details = accept_once_details.clone();
+                    let accept_once_reason = accept_once_reason.clone();
                     let accept_once_verifier = accept_once_verifier.clone();
                     let accept_save_params = accept_save_params.clone();
                     let accept_save_signature = accept_save_signature.clone();
                     let accept_save_identity = accept_save_identity.clone();
                     let accept_save_details = accept_save_details.clone();
+                    let accept_save_reason = accept_save_reason.clone();
                     let accept_save_verifier = accept_save_verifier.clone();
 
                     vec![
@@ -1386,9 +1363,11 @@ impl SshFormWindow {
                             .ghost()
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
-                                let verifier = accept_once_verifier.clone().with_confirmed_key(
+                                let verifier = verifier_with_confirmed_host_key(
+                                    accept_once_verifier.clone(),
                                     accept_once_identity.clone(),
                                     accept_once_details.clone(),
+                                    &accept_once_reason,
                                     false,
                                 );
                                 let params = accept_once_params.clone();
@@ -1401,13 +1380,15 @@ impl SshFormWindow {
                             })
                             .into_any_element(),
                         Button::new("ssh-test-host-key-accept-save")
-                            .label(t!("SshSession.host_key_accept_save").to_string())
+                            .label(t!(presentation.save_label_key).to_string())
                             .primary()
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);
-                                let verifier = accept_save_verifier.clone().with_confirmed_key(
+                                let verifier = verifier_with_confirmed_host_key(
+                                    accept_save_verifier.clone(),
                                     accept_save_identity.clone(),
                                     accept_save_details.clone(),
+                                    &accept_save_reason,
                                     true,
                                 );
                                 let params = accept_save_params.clone();
@@ -2525,6 +2506,7 @@ mod tests {
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
     use std::sync::Arc;
+    use terminal::terminal::HostKeyVerificationReason;
 
     fn sample_params() -> SshParams {
         SshParams {
@@ -2734,24 +2716,41 @@ mod tests {
 
         assert_eq!(request.identity, identity);
         assert_eq!(request.presented, presented);
+        assert_eq!(request.reason, HostKeyVerificationReason::Unknown);
     }
 
     #[test]
-    fn connection_test_changed_host_key_cannot_be_confirmed() {
+    fn connection_test_changed_host_key_requests_explicit_replacement_confirmation() {
         let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
-        let error = anyhow::Error::new(HostKeyRejection::Changed {
-            identity,
-            presented: HostKeyDetails {
-                algorithm: "ssh-ed25519".to_string(),
-                fingerprint: "SHA256:new".to_string(),
-            },
-            expected: vec![HostKeyDetails {
+        let presented = HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:new".to_string(),
+        };
+        let expected = vec![
+            HostKeyDetails {
                 algorithm: "ssh-ed25519".to_string(),
                 fingerprint: "SHA256:old".to_string(),
-            }],
+            },
+            HostKeyDetails {
+                algorithm: "ecdsa-sha2-nistp256".to_string(),
+                fingerprint: "SHA256:older".to_string(),
+            },
+        ];
+        let error = anyhow::Error::new(HostKeyRejection::Changed {
+            identity: identity.clone(),
+            presented: presented.clone(),
+            expected: expected.clone(),
         });
 
-        assert!(connection_test_host_key_request(&error).is_none());
+        let request = connection_test_host_key_request(&error)
+            .expect("changed host key should open the replacement confirmation dialog");
+
+        assert_eq!(request.identity, identity);
+        assert_eq!(request.presented, presented);
+        assert_eq!(
+            request.reason,
+            HostKeyVerificationReason::Changed { expected }
+        );
     }
 
     #[test]

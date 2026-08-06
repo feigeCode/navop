@@ -12,8 +12,8 @@ impl TerminalView {
 
         let view = cx.entity().downgrade();
         let identity = request.identity.to_string();
-        let algorithm = request.presented.algorithm;
-        let fingerprint = request.presented.fingerprint;
+        let presented = request.presented;
+        let presentation = host_key_dialog_presentation(&request.reason);
 
         window.open_dialog(cx, move |dialog, _window, cx| {
             let reject_view = view.clone();
@@ -21,59 +21,18 @@ impl TerminalView {
             let accept_save_view = view.clone();
 
             dialog
-                .title(t!("SshSession.host_key_title").to_string())
+                .title(t!(presentation.title_key).to_string())
                 .w(px(520.))
                 .child(
                     v_flex()
                         .gap_3()
-                        .child(t!("SshSession.host_key_message").to_string())
-                        .child(
-                            v_flex()
-                                .gap_2()
-                                .p_3()
-                                .rounded_md()
-                                .bg(cx.theme().secondary)
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_identity").to_string(),
-                                                ),
-                                        )
-                                        .child(identity.clone()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_algorithm").to_string(),
-                                                ),
-                                        )
-                                        .child(algorithm.clone()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .w(px(150.))
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(
-                                                    t!("SshSession.host_key_fingerprint")
-                                                        .to_string(),
-                                                ),
-                                        )
-                                        .child(div().text_xs().child(fingerprint.clone())),
-                                ),
-                        ),
+                        .child(t!(presentation.message_key).to_string())
+                        .child(render_host_key_details_card(
+                            identity.clone(),
+                            presented.clone(),
+                            &presentation,
+                            cx,
+                        )),
                 )
                 .footer(move |_, _, _window, _cx| {
                     let reject_view = reject_view.clone();
@@ -114,7 +73,7 @@ impl TerminalView {
                             })
                             .into_any_element(),
                         Button::new("ssh-host-key-accept-save")
-                            .label(t!("SshSession.host_key_accept_save").to_string())
+                            .label(t!(presentation.save_label_key).to_string())
                             .primary()
                             .on_click(move |_, window, cx| {
                                 window.close_dialog(cx);

@@ -53,6 +53,7 @@ use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
+use crate::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
 use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,

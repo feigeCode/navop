@@ -325,6 +325,7 @@ struct ConfirmedHostKey {
     identity: HostKeyIdentity,
     details: HostKeyDetails,
     persist: bool,
+    replace_existing: bool,
 }
 
 impl Default for HostKeyVerifier {
@@ -419,6 +420,27 @@ impl HostKeyVerifier {
             identity,
             details,
             persist,
+            replace_existing: false,
+        });
+        self
+    }
+
+    /// Return a verifier that accepts a changed key only after the user
+    /// explicitly confirmed the presented replacement.
+    #[must_use]
+    pub fn with_confirmed_changed_key(
+        mut self,
+        identity: HostKeyIdentity,
+        details: HostKeyDetails,
+        persist: bool,
+    ) -> Self {
+        self.confirmed_keys
+            .retain(|entry| entry.identity != identity || entry.details != details);
+        self.confirmed_keys.push(ConfirmedHostKey {
+            identity,
+            details,
+            persist,
+            replace_existing: true,
         });
         self
     }
@@ -441,12 +463,18 @@ impl HostKeyVerifier {
 
         let _lock = trust_store_lock();
         let app_entries = self.load_app_entries()?;
+        let mut algorithms = Vec::new();
+        for confirmation in self.confirmed_keys.iter().filter(|confirmation| {
+            confirmation.identity == *identity && confirmation.replace_existing
+        }) {
+            push_unique_algorithm(&mut algorithms, &confirmation.details.algorithm);
+        }
+
         let app_matches = app_entries
             .iter()
             .filter(|entry| entry.identity == *identity)
             .collect::<Vec<_>>();
         if !app_matches.is_empty() {
-            let mut algorithms = Vec::new();
             for entry in app_matches {
                 push_unique_algorithm(&mut algorithms, &entry.details.algorithm);
             }
@@ -455,14 +483,12 @@ impl HostKeyVerifier {
 
         let openssh_entries = self.load_openssh_entries(identity)?;
         if !openssh_entries.is_empty() {
-            let mut algorithms = Vec::new();
             for entry in openssh_entries.iter().filter(|entry| !entry.revoked) {
                 push_unique_algorithm(&mut algorithms, &entry.details.algorithm);
             }
             return Ok(algorithms);
         }
 
-        let mut algorithms = Vec::new();
         for confirmation in self
             .confirmed_keys
             .iter()
@@ -501,12 +527,34 @@ impl HostKeyVerifier {
             .iter()
             .filter(|entry| entry.identity == *identity)
             .collect::<Vec<_>>();
+        let confirmation = self.confirmed_keys.iter().find(|confirmation| {
+            confirmation.identity == *identity && confirmation.details == presented
+        });
+        let openssh_lookup = match self.lookup_openssh(identity, server_public_key) {
+            Ok(OpenSshLookup::Revoked) => {
+                return Err(HostKeyRejection::Revoked {
+                    identity: identity.clone(),
+                    presented,
+                });
+            }
+            Ok(lookup) => lookup,
+            Err(reason) => {
+                return Err(HostKeyRejection::StoreUnavailable {
+                    identity: identity.clone(),
+                    presented,
+                    reason,
+                });
+            }
+        };
         if !app_matches.is_empty() {
             if app_matches
                 .iter()
                 .any(|entry| entry.public_key == public_key_string(server_public_key))
             {
                 return Ok(HostKeyAcceptance::Known);
+            }
+            if let Some(confirmation) = confirmation.filter(|entry| entry.replace_existing) {
+                return self.accept_confirmation(identity, server_public_key, confirmation);
             }
             return Err(HostKeyRejection::Changed {
                 identity: identity.clone(),
@@ -518,54 +566,24 @@ impl HostKeyVerifier {
             });
         }
 
-        match self.lookup_openssh(identity, server_public_key) {
-            Ok(OpenSshLookup::Known) => return Ok(HostKeyAcceptance::Known),
-            Ok(OpenSshLookup::Changed(expected)) => {
+        match openssh_lookup {
+            OpenSshLookup::Known => return Ok(HostKeyAcceptance::Known),
+            OpenSshLookup::Changed(expected) => {
+                if let Some(confirmation) = confirmation.filter(|entry| entry.replace_existing) {
+                    return self.accept_confirmation(identity, server_public_key, confirmation);
+                }
                 return Err(HostKeyRejection::Changed {
                     identity: identity.clone(),
                     presented,
                     expected,
                 });
             }
-            Ok(OpenSshLookup::Revoked) => {
-                return Err(HostKeyRejection::Revoked {
-                    identity: identity.clone(),
-                    presented,
-                });
-            }
-            Ok(OpenSshLookup::Unknown) => {}
-            Err(reason) => {
-                return Err(HostKeyRejection::StoreUnavailable {
-                    identity: identity.clone(),
-                    presented,
-                    reason,
-                });
-            }
+            OpenSshLookup::Unknown => {}
+            OpenSshLookup::Revoked => unreachable!("revoked keys are rejected before app trust"),
         }
 
-        if let Some(confirmation) = self.confirmed_keys.iter().find(|confirmation| {
-            confirmation.identity == *identity && confirmation.details == presented
-        }) {
-            if !confirmation.persist {
-                return Ok(HostKeyAcceptance::AcceptedOnce);
-            }
-
-            let public_key = public_key_string(server_public_key);
-            let details = HostKeyDetails::from_public_key(server_public_key);
-            let mut entries = app_entries;
-            entries.push(StoredHostKey {
-                identity: identity.clone(),
-                public_key,
-                details,
-            });
-            if let Err(reason) = self.save_app_entries(&entries) {
-                return Err(HostKeyRejection::StoreUnavailable {
-                    identity: identity.clone(),
-                    presented,
-                    reason,
-                });
-            }
-            return Ok(HostKeyAcceptance::AcceptedNew);
+        if let Some(confirmation) = confirmation.filter(|entry| !entry.replace_existing) {
+            return self.accept_confirmation(identity, server_public_key, confirmation);
         }
 
         if self.policy == HostKeyPolicy::AcceptNew {
@@ -591,6 +609,41 @@ impl HostKeyVerifier {
             identity: identity.clone(),
             presented,
         })
+    }
+
+    fn accept_confirmation(
+        &self,
+        identity: &HostKeyIdentity,
+        server_public_key: &PublicKey,
+        confirmation: &ConfirmedHostKey,
+    ) -> Result<HostKeyAcceptance, HostKeyRejection> {
+        if !confirmation.persist {
+            return Ok(HostKeyAcceptance::AcceptedOnce);
+        }
+
+        let presented = HostKeyDetails::from_public_key(server_public_key);
+        let mut entries =
+            self.load_app_entries()
+                .map_err(|reason| HostKeyRejection::StoreUnavailable {
+                    identity: identity.clone(),
+                    presented: presented.clone(),
+                    reason,
+                })?;
+        if confirmation.replace_existing {
+            entries.retain(|entry| entry.identity != *identity);
+        }
+        entries.push(StoredHostKey {
+            identity: identity.clone(),
+            public_key: public_key_string(server_public_key),
+            details: presented.clone(),
+        });
+        self.save_app_entries(&entries)
+            .map_err(|reason| HostKeyRejection::StoreUnavailable {
+                identity: identity.clone(),
+                presented,
+                reason,
+            })?;
+        Ok(HostKeyAcceptance::AcceptedNew)
     }
 
     fn load_app_entries(&self) -> Result<Vec<StoredHostKey>, String> {
@@ -1119,6 +1172,277 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_changed_key_is_accepted_once_without_replacing_trust() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let changed = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &original)
+            .expect("seed original key");
+
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .with_confirmed_changed_key(
+                    id.clone(),
+                    HostKeyDetails::from_public_key(&changed),
+                    false,
+                )
+                .verify(&id, &changed)
+                .expect("explicitly confirmed changed key should be accepted once"),
+            HostKeyAcceptance::AcceptedOnce
+        );
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .verify(&id, &original)
+                .expect("accept-once must preserve the original trust entry"),
+            HostKeyAcceptance::Known
+        );
+        assert!(matches!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path).verify(&id, &changed),
+            Err(HostKeyRejection::Changed { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmed_changed_key_replaces_app_trust_when_saved() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let changed = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &original)
+            .expect("seed original key");
+
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .with_confirmed_changed_key(
+                    id.clone(),
+                    HostKeyDetails::from_public_key(&changed),
+                    true,
+                )
+                .verify(&id, &changed)
+                .expect("explicitly confirmed changed key should replace app trust"),
+            HostKeyAcceptance::AcceptedNew
+        );
+        assert_eq!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+                .verify(&id, &changed)
+                .expect("replacement key should be trusted"),
+            HostKeyAcceptance::Known
+        );
+        assert!(matches!(
+            HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path).verify(&id, &original),
+            Err(HostKeyRejection::Changed { .. })
+        ));
+
+        let entries = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .load_app_entries()
+            .expect("trust store should load");
+        assert_eq!(
+            1,
+            entries.iter().filter(|entry| entry.identity == id).count()
+        );
+    }
+
+    #[test]
+    fn confirmed_changed_key_cannot_bypass_openssh_revocation() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_store_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let changed = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &app_store_path)
+            .verify(&id, &original)
+            .expect("seed original app trust");
+        fs::write(
+            &known_hosts_path,
+            format!(
+                "@revoked {} {}\n",
+                id.openssh_host(),
+                changed.to_openssh().expect("changed key should encode"),
+            ),
+        )
+        .expect("write revoked known_hosts entry");
+
+        let error = HostKeyVerifier::new(
+            HostKeyPolicy::Strict,
+            Some(app_store_path),
+            Some(known_hosts_path),
+        )
+        .with_confirmed_changed_key(id.clone(), HostKeyDetails::from_public_key(&changed), false)
+        .verify(&id, &changed)
+        .expect_err("changed-key confirmation must not bypass OpenSSH revocation");
+
+        assert!(matches!(
+            error,
+            HostKeyRejection::Revoked {
+                identity,
+                presented,
+            } if identity == id && presented == HostKeyDetails::from_public_key(&changed)
+        ));
+    }
+
+    #[test]
+    fn app_trust_cannot_bypass_openssh_revocation() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_store_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let id = identity("host.example", 22);
+        let presented = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &app_store_path)
+            .verify(&id, &presented)
+            .expect("seed app trust");
+        fs::write(
+            &known_hosts_path,
+            format!(
+                "@revoked {} {}\n",
+                id.openssh_host(),
+                presented.to_openssh().expect("host key should encode"),
+            ),
+        )
+        .expect("write revoked known_hosts entry");
+
+        let error = HostKeyVerifier::new(
+            HostKeyPolicy::Strict,
+            Some(app_store_path),
+            Some(known_hosts_path),
+        )
+        .verify(&id, &presented)
+        .expect_err("app trust must not bypass OpenSSH revocation");
+
+        assert!(matches!(
+            error,
+            HostKeyRejection::Revoked {
+                identity,
+                presented: details,
+            } if identity == id && details == HostKeyDetails::from_public_key(&presented)
+        ));
+    }
+
+    #[test]
+    fn changed_confirmation_cannot_bypass_openssh_store_error() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_store_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let changed = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &app_store_path)
+            .verify(&id, &original)
+            .expect("seed original app trust");
+        fs::write(&known_hosts_path, [0xff]).expect("write invalid UTF-8 known_hosts");
+
+        let error = HostKeyVerifier::new(
+            HostKeyPolicy::Strict,
+            Some(app_store_path),
+            Some(known_hosts_path),
+        )
+        .with_confirmed_changed_key(id.clone(), HostKeyDetails::from_public_key(&changed), false)
+        .verify(&id, &changed)
+        .expect_err("changed-key confirmation must not bypass known_hosts read errors");
+
+        assert!(matches!(
+            error,
+            HostKeyRejection::StoreUnavailable {
+                identity,
+                presented,
+                ..
+            } if identity == id && presented == HostKeyDetails::from_public_key(&changed)
+        ));
+    }
+
+    #[test]
+    fn confirmed_openssh_changed_key_persists_without_rewriting_known_hosts() {
+        let temp = TempDir::new().expect("temp dir");
+        let app_store_path = temp.path().join("keys.json");
+        let known_hosts_path = temp.path().join("known_hosts");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let changed = key(ssh_key::Algorithm::Ed25519);
+        let original_line = format!(
+            "{} {}\n",
+            id.openssh_host(),
+            original.to_openssh().expect("original key should encode"),
+        );
+        fs::write(&known_hosts_path, original_line).expect("write known_hosts");
+        let known_hosts_before = fs::read(&known_hosts_path).expect("read known_hosts before");
+
+        assert!(matches!(
+            HostKeyVerifier::new(
+                HostKeyPolicy::Strict,
+                Some(app_store_path.clone()),
+                Some(known_hosts_path.clone()),
+            )
+            .verify(&id, &changed),
+            Err(HostKeyRejection::Changed { .. })
+        ));
+
+        assert_eq!(
+            HostKeyVerifier::new(
+                HostKeyPolicy::Strict,
+                Some(app_store_path.clone()),
+                Some(known_hosts_path.clone()),
+            )
+            .with_confirmed_changed_key(
+                id.clone(),
+                HostKeyDetails::from_public_key(&changed),
+                true,
+            )
+            .verify(&id, &changed)
+            .expect("confirmed replacement should persist"),
+            HostKeyAcceptance::AcceptedNew
+        );
+        assert_eq!(
+            known_hosts_before,
+            fs::read(&known_hosts_path).expect("read known_hosts after"),
+            "OpenSSH known_hosts must remain byte-for-byte unchanged",
+        );
+        assert_eq!(
+            HostKeyVerifier::new(
+                HostKeyPolicy::Strict,
+                Some(app_store_path),
+                Some(known_hosts_path),
+            )
+            .verify(&id, &changed)
+            .expect("persisted replacement should be known"),
+            HostKeyAcceptance::Known
+        );
+    }
+
+    #[test]
+    fn changed_confirmation_is_bound_to_exact_identity_and_key() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let other_id = identity("other.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        let confirmed = key(ssh_key::Algorithm::Ed25519);
+        let other = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &original)
+            .expect("seed original key");
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .with_confirmed_changed_key(
+                id.clone(),
+                HostKeyDetails::from_public_key(&confirmed),
+                false,
+            );
+
+        assert!(matches!(
+            verifier.verify(&id, &other),
+            Err(HostKeyRejection::Changed { .. })
+        ));
+        assert!(matches!(
+            verifier.verify(&other_id, &confirmed),
+            Err(HostKeyRejection::Unknown { .. })
+        ));
+    }
+
+    #[test]
     fn known_algorithms_follow_app_identity_and_route_isolation() {
         let temp = TempDir::new().expect("temp dir");
         let path = temp.path().join("keys.json");
@@ -1201,6 +1525,34 @@ mod tests {
                 .known_host_key_algorithms(&id)
                 .expect("confirmed algorithm should be available"),
             vec!["ecdsa-sha2-nistp384"]
+        );
+    }
+
+    #[test]
+    fn confirmed_changed_algorithm_is_preferred_before_handshake() {
+        let temp = TempDir::new().expect("temp dir");
+        let path = temp.path().join("keys.json");
+        let id = identity("host.example", 22);
+        let original = key(ssh_key::Algorithm::Ed25519);
+        HostKeyVerifier::for_store(HostKeyPolicy::AcceptNew, &path)
+            .verify(&id, &original)
+            .expect("seed original key");
+
+        let verifier = HostKeyVerifier::for_store(HostKeyPolicy::Strict, &path)
+            .with_confirmed_changed_key(
+                id.clone(),
+                HostKeyDetails {
+                    algorithm: "ecdsa-sha2-nistp384".to_owned(),
+                    fingerprint: "SHA256:test".to_owned(),
+                },
+                false,
+            );
+
+        assert_eq!(
+            verifier
+                .known_host_key_algorithms(&id)
+                .expect("confirmed changed algorithm should be preferred"),
+            vec!["ecdsa-sha2-nistp384", "ssh-ed25519"]
         );
     }
 

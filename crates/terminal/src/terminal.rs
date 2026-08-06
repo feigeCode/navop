@@ -124,6 +124,13 @@ pub enum ConnectionState {
 pub struct HostKeyVerificationRequest {
     pub identity: HostKeyIdentity,
     pub presented: HostKeyDetails,
+    pub reason: HostKeyVerificationReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostKeyVerificationReason {
+    Unknown,
+    Changed { expected: Vec<HostKeyDetails> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3014,15 +3021,16 @@ impl Terminal {
             return;
         };
 
-        config.ssh_config.host_key_verifier = config
-            .ssh_config
-            .host_key_verifier
-            .clone()
-            .with_confirmed_key(
-                request.identity,
-                request.presented,
-                decision == HostKeyVerificationDecision::AcceptAndSave,
-            );
+        let persist = decision == HostKeyVerificationDecision::AcceptAndSave;
+        let verifier = config.ssh_config.host_key_verifier.clone();
+        config.ssh_config.host_key_verifier = match request.reason {
+            HostKeyVerificationReason::Unknown => {
+                verifier.with_confirmed_key(request.identity, request.presented, persist)
+            }
+            HostKeyVerificationReason::Changed { .. } => {
+                verifier.with_confirmed_changed_key(request.identity, request.presented, persist)
+            }
+        };
         self.ssh_session_manager =
             Some(Arc::new(SshSessionManager::new(config.ssh_config.clone())));
         self.reconnect(cx);
@@ -3198,10 +3206,20 @@ fn host_key_verification_request(error: &anyhow::Error) -> Option<HostKeyVerific
             } => Some(HostKeyVerificationRequest {
                 identity: identity.clone(),
                 presented: presented.clone(),
+                reason: HostKeyVerificationReason::Unknown,
             }),
-            HostKeyRejection::Changed { .. }
-            | HostKeyRejection::Revoked { .. }
-            | HostKeyRejection::StoreUnavailable { .. } => None,
+            HostKeyRejection::Changed {
+                identity,
+                presented,
+                expected,
+            } => Some(HostKeyVerificationRequest {
+                identity: identity.clone(),
+                presented: presented.clone(),
+                reason: HostKeyVerificationReason::Changed {
+                    expected: expected.clone(),
+                },
+            }),
+            HostKeyRejection::Revoked { .. } | HostKeyRejection::StoreUnavailable { .. } => None,
         })
 }
 
@@ -3251,12 +3269,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::with_local_terminal_default_env;
     use super::{
-        CommandRecordGate, ConnectionState, SshConnectionUpdate, Terminal, TerminalConnectionKind,
-        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
-        TerminalSessionMode, build_cd_command, build_ssh_base_init_commands,
-        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
-        flush_pending_terminal_events, format_connection_error, host_key_verification_request,
-        is_reconnect_generation, keyboard_interactive_answers_for_terminal, merge_history_matches,
+        CommandRecordGate, ConnectionState, HostKeyVerificationReason, SshConnectionUpdate,
+        Terminal, TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest,
+        TerminalMfaResponder, TerminalScrollProxy, TerminalSessionMode, build_cd_command,
+        build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
+        compose_ssh_init_commands, flush_pending_terminal_events, format_connection_error,
+        host_key_verification_request, is_reconnect_generation,
+        keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
         send_coalesced_wakeup, shell_escape_arg,
@@ -4730,25 +4749,35 @@ mod tests {
 
         assert_eq!(request.identity, identity);
         assert_eq!(request.presented, presented);
+        assert_eq!(request.reason, HostKeyVerificationReason::Unknown);
     }
 
     #[test]
-    fn changed_host_key_error_never_becomes_verification_request() {
+    fn changed_host_key_error_becomes_verification_request() {
         let identity = HostKeyIdentity::new("host.example", 22, HostKeyRoute::Direct);
         let presented = HostKeyDetails {
             algorithm: "ssh-ed25519".to_string(),
             fingerprint: "SHA256:new".to_string(),
         };
+        let expected = vec![HostKeyDetails {
+            algorithm: "ssh-ed25519".to_string(),
+            fingerprint: "SHA256:old".to_string(),
+        }];
         let error = anyhow::Error::new(HostKeyRejection::Changed {
-            identity,
-            presented,
-            expected: vec![HostKeyDetails {
-                algorithm: "ssh-ed25519".to_string(),
-                fingerprint: "SHA256:old".to_string(),
-            }],
+            identity: identity.clone(),
+            presented: presented.clone(),
+            expected: expected.clone(),
         });
 
-        assert!(host_key_verification_request(&error).is_none());
+        let request =
+            host_key_verification_request(&error).expect("changed key should require confirmation");
+
+        assert_eq!(request.identity, identity);
+        assert_eq!(request.presented, presented);
+        assert_eq!(
+            request.reason,
+            HostKeyVerificationReason::Changed { expected }
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod broadcast_registry;
 pub mod cd_completion;
 pub mod highlight_presets;
 pub mod history_prompt;
+mod host_key_dialog;
 pub mod keys;
 pub mod public_mcp;
 pub mod public_mcp_remote_ops;
