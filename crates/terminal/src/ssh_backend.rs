@@ -14,6 +14,7 @@ use ssh::{
     ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
 };
 
+use crate::encoding::{TerminalEncoding, TerminalOutputDecoder, encode_terminal_input};
 use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
 #[cfg(test)]
 use crate::osc::extract_osc_events;
@@ -309,6 +310,7 @@ pub struct SshBackend {
 pub struct SshBackendConnect {
     pub session_manager: Arc<SshSessionManager>,
     pub pty_config: PtyConfig,
+    pub terminal_encoding: TerminalEncoding,
     pub connection_id: Option<i64>,
     pub term: Arc<FairMutex<Term<GpuiEventProxy>>>,
     pub event_proxy: GpuiEventProxy,
@@ -380,19 +382,45 @@ async fn send_terminal_data<C: SshChannel + ?Sized>(channel: &mut C, data: &[u8]
         .is_ok_and(|result| result.is_ok())
 }
 
+fn append_terminal_data(terminal_data: &mut Vec<u8>, chunk: Vec<u8>) {
+    if terminal_data.is_empty() {
+        *terminal_data = chunk;
+    } else {
+        terminal_data.extend(chunk);
+    }
+}
+
 async fn send_terminal_input<C: SshChannel + ?Sized>(
     channel: &mut C,
+    terminal_encoding: TerminalEncoding,
     source: TerminalInputSource,
     data: &[u8],
     recording_tap: Option<&RecordingTap>,
 ) -> bool {
-    let sent = send_terminal_data(channel, data).await;
+    let encoded = encode_terminal_input(terminal_encoding, source, data);
+    let sent = send_terminal_data(channel, encoded.as_ref()).await;
     if sent && source.is_recordable_user_input() {
         if let Some(tap) = recording_tap {
-            let _ = tap.record_input(data);
+            let _ = tap.record_input(encoded.as_ref());
         }
     }
     sent
+}
+
+fn encode_exec_effects(
+    terminal_encoding: TerminalEncoding,
+    effects: Vec<ExecEffect>,
+) -> Vec<ExecEffect> {
+    effects
+        .into_iter()
+        .map(|effect| match effect {
+            ExecEffect::Write { source, data } => ExecEffect::Write {
+                source,
+                data: encode_terminal_input(terminal_encoding, source, &data).into_owned(),
+            },
+            effect => effect,
+        })
+        .collect()
 }
 
 async fn apply_exec_effects<C: SshChannel + ?Sized>(
@@ -436,6 +464,7 @@ async fn apply_exec_effects<C: SshChannel + ?Sized>(
 
 async fn send_init_commands<C: SshChannel + ?Sized>(
     channel: &mut C,
+    terminal_encoding: TerminalEncoding,
     commands: &str,
     inter_command_delay: Option<Duration>,
     exec_supervisor: &mut ExecSupervisor,
@@ -454,9 +483,17 @@ async fn send_init_commands<C: SshChannel + ?Sized>(
         .collect::<Vec<_>>();
     let last_index = lines.len().saturating_sub(1);
     for (index, cmd_data) in lines.into_iter().enumerate() {
-        let effects = exec_supervisor.on_input(TerminalInputSource::InitCommand, &cmd_data);
+        let effects = encode_exec_effects(
+            terminal_encoding,
+            exec_supervisor.on_input(TerminalInputSource::InitCommand, &cmd_data),
+        );
+        let encoded = encode_terminal_input(
+            terminal_encoding,
+            TerminalInputSource::InitCommand,
+            &cmd_data,
+        );
         if !apply_exec_effects(effects, channel, command_tx, exec_results).await
-            || !send_terminal_data(channel, &cmd_data).await
+            || !send_terminal_data(channel, encoded.as_ref()).await
         {
             return false;
         }
@@ -507,6 +544,7 @@ impl SshBackend {
         let SshBackendConnect {
             session_manager,
             pty_config,
+            terminal_encoding,
             connection_id,
             term,
             event_proxy,
@@ -556,6 +594,7 @@ impl SshBackend {
             let mut exec_supervisor = ExecSupervisor::new();
             let mut osc_parser = OscStreamParser::default();
             let mut zmodem_detector = ZmodemDetector::default();
+            let mut output_decoder = TerminalOutputDecoder::new(terminal_encoding);
             let mut exec_results = HashMap::new();
             let mut shell_ready = !shell_integration_active;
             let mut init_sent = false;
@@ -571,7 +610,10 @@ impl SshBackend {
                 {
                     SshActorInput::Command(cmd) => match cmd {
                         SshCommand::Write { source, data } => {
-                            let effects = exec_supervisor.on_input(source, &data);
+                            let effects = encode_exec_effects(
+                                terminal_encoding,
+                                exec_supervisor.on_input(source, &data),
+                            );
                             if !apply_exec_effects(
                                 effects,
                                 &mut channel,
@@ -581,6 +623,7 @@ impl SshBackend {
                             .await
                                 || !send_terminal_input(
                                     &mut channel,
+                                    terminal_encoding,
                                     source,
                                     &data,
                                     recording_tap.as_ref(),
@@ -629,7 +672,10 @@ impl SshBackend {
                             result,
                         } => {
                             exec_results.insert(id, result);
-                            let effects = exec_supervisor.start(id, request);
+                            let effects = encode_exec_effects(
+                                terminal_encoding,
+                                exec_supervisor.start(id, request),
+                            );
                             if !apply_exec_effects(
                                 effects,
                                 &mut channel,
@@ -643,7 +689,8 @@ impl SshBackend {
                         }
                         SshCommand::CancelExec { id } => {
                             exec_results.remove(&id);
-                            let effects = exec_supervisor.cancel(id);
+                            let effects =
+                                encode_exec_effects(terminal_encoding, exec_supervisor.cancel(id));
                             if !apply_exec_effects(
                                 effects,
                                 &mut channel,
@@ -656,7 +703,10 @@ impl SshBackend {
                             }
                         }
                         SshCommand::ExecTimeout { id, phase } => {
-                            let effects = exec_supervisor.timeout(id, phase);
+                            let effects = encode_exec_effects(
+                                terminal_encoding,
+                                exec_supervisor.timeout(id, phase),
+                            );
                             if !apply_exec_effects(
                                 effects,
                                 &mut channel,
@@ -708,10 +758,7 @@ impl SshBackend {
                                     continue;
                                 }
                                 let routed = zmodem_detector.push(&data);
-                                let mut terminal_chunks = Vec::new();
-                                if !routed.terminal.is_empty() {
-                                    terminal_chunks.push(routed.terminal);
-                                }
+                                let mut raw_terminal_data = routed.terminal;
                                 if let Some(detected) = routed.transfer {
                                     match run_transfer(
                                         &mut channel,
@@ -722,7 +769,7 @@ impl SshBackend {
                                     .await
                                     {
                                         Ok(trailing) if !trailing.is_empty() => {
-                                            terminal_chunks.push(trailing);
+                                            append_terminal_data(&mut raw_terminal_data, trailing);
                                         }
                                         Ok(_) => {}
                                         Err(error) => {
@@ -735,88 +782,98 @@ impl SshBackend {
                                         }
                                     }
                                 }
-                                for data in terminal_chunks {
-                                    // 解析所有 OSC 事件
-                                    let osc_events = osc_parser.push(&data);
-                                    let effects =
-                                        exec_supervisor.on_terminal_chunk(&data, &osc_events);
-                                    tracing::trace!(
-                                        readiness = ?exec_supervisor.readiness(),
-                                        "SSH terminal exec readiness updated"
-                                    );
-                                    if !apply_exec_effects(
-                                        effects,
-                                        &mut channel,
-                                        &task_command_tx,
-                                        &mut exec_results,
-                                    )
-                                    .await
-                                    {
-                                        break 'actor;
-                                    }
-                                    for osc_event in &osc_events {
-                                        match osc_event {
-                                            OscEvent::WorkingDirChanged(path) => {
-                                                let _ = event_tx.send(
-                                                    TerminalEvent::WorkingDirChanged(path.clone()),
-                                                );
-                                            }
-                                            OscEvent::PromptStart => {
-                                                let _ = event_tx.send(TerminalEvent::PromptStart);
-                                            }
-                                            OscEvent::InputStart => {
-                                                let _ = event_tx.send(TerminalEvent::InputStart);
-                                                // 133;B: prompt 渲染完，用户可以输入了
-                                                // 第一次收到时发送 init_commands
-                                                if !shell_ready {
-                                                    shell_ready = true;
-                                                }
-                                            }
-                                            OscEvent::CommandStart => {
-                                                let _ = event_tx.send(TerminalEvent::CommandStart);
-                                            }
-                                            OscEvent::CommandFinished { exit_code } => {
-                                                // 133;D: 命令执行完毕
-                                                let _ =
-                                                    event_tx.send(TerminalEvent::CommandFinished {
-                                                        exit_code: *exit_code,
-                                                    });
-                                            }
-                                            OscEvent::CommandRecorded(command) => {
-                                                let _ = event_tx.send(
-                                                    TerminalEvent::CommandRecorded(command.clone()),
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // shell ready 后发送 init_commands（只发一次）
-                                    if shell_ready && !init_sent {
-                                        init_sent = true;
-                                        if let Some(ref commands) = pending_init {
-                                            let inter_command_delay = (!shell_integration_active)
-                                                .then_some(PLAIN_INIT_COMMAND_DELAY);
-                                            if !send_init_commands(
-                                                &mut channel,
-                                                commands,
-                                                inter_command_delay,
-                                                &mut exec_supervisor,
-                                                &task_command_tx,
-                                                &mut exec_results,
-                                            )
-                                            .await
-                                            {
-                                                break 'actor;
-                                            }
-                                        }
-                                    }
-
-                                    pending_ingress = Some(parser_ingress.pending(data));
+                                if raw_terminal_data.is_empty() {
+                                    continue;
                                 }
+                                let data = output_decoder.decode(&raw_terminal_data);
+                                if data.is_empty() {
+                                    continue;
+                                }
+                                // 解析所有 OSC 事件
+                                let osc_events = osc_parser.push(&data);
+                                let effects = encode_exec_effects(
+                                    terminal_encoding,
+                                    exec_supervisor.on_terminal_chunk(&data, &osc_events),
+                                );
+                                tracing::trace!(
+                                    readiness = ?exec_supervisor.readiness(),
+                                    "SSH terminal exec readiness updated"
+                                );
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                )
+                                .await
+                                {
+                                    break 'actor;
+                                }
+                                for osc_event in &osc_events {
+                                    match osc_event {
+                                        OscEvent::WorkingDirChanged(path) => {
+                                            let _ = event_tx.send(
+                                                TerminalEvent::WorkingDirChanged(path.clone()),
+                                            );
+                                        }
+                                        OscEvent::PromptStart => {
+                                            let _ = event_tx.send(TerminalEvent::PromptStart);
+                                        }
+                                        OscEvent::InputStart => {
+                                            let _ = event_tx.send(TerminalEvent::InputStart);
+                                            // 133;B: prompt 渲染完，用户可以输入了
+                                            // 第一次收到时发送 init_commands
+                                            if !shell_ready {
+                                                shell_ready = true;
+                                            }
+                                        }
+                                        OscEvent::CommandStart => {
+                                            let _ = event_tx.send(TerminalEvent::CommandStart);
+                                        }
+                                        OscEvent::CommandFinished { exit_code } => {
+                                            // 133;D: 命令执行完毕
+                                            let _ = event_tx.send(TerminalEvent::CommandFinished {
+                                                exit_code: *exit_code,
+                                            });
+                                        }
+                                        OscEvent::CommandRecorded(command) => {
+                                            let _ = event_tx.send(TerminalEvent::CommandRecorded(
+                                                command.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                // shell ready 后发送 init_commands（只发一次）
+                                if shell_ready && !init_sent {
+                                    init_sent = true;
+                                    if let Some(ref commands) = pending_init {
+                                        let inter_command_delay = (!shell_integration_active)
+                                            .then_some(PLAIN_INIT_COMMAND_DELAY);
+                                        if !send_init_commands(
+                                            &mut channel,
+                                            terminal_encoding,
+                                            commands,
+                                            inter_command_delay,
+                                            &mut exec_supervisor,
+                                            &task_command_tx,
+                                            &mut exec_results,
+                                        )
+                                        .await
+                                        {
+                                            break 'actor;
+                                        }
+                                    }
+                                }
+
+                                pending_ingress = Some(parser_ingress.pending(data));
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
                                 graceful_ingress_close = true;
-                                let effects = exec_supervisor.disconnect();
+                                let effects = encode_exec_effects(
+                                    terminal_encoding,
+                                    exec_supervisor.disconnect(),
+                                );
                                 let _ = apply_exec_effects(
                                     effects,
                                     &mut channel,
@@ -834,6 +891,18 @@ impl SshBackend {
 
             if !graceful_ingress_close {
                 parser_ingress.abort();
+            } else {
+                let trailing = output_decoder.finish();
+                if !trailing.is_empty() {
+                    let mut trailing_ingress = parser_ingress.pending(trailing);
+                    if let Err(error) = trailing_ingress.wait().await {
+                        tracing::warn!(
+                            error = %error,
+                            "SSH terminal ingress rejected decoder trailing bytes"
+                        );
+                        parser_ingress.abort();
+                    }
+                }
             }
             // The pending future owns a sender clone. It must be dropped before
             // waiting for the parser worker, otherwise a graceful worker drain
@@ -841,7 +910,7 @@ impl SshBackend {
             drop(pending_ingress.take());
             let _ = parser_ingress.finish().await;
 
-            let effects = exec_supervisor.disconnect();
+            let effects = encode_exec_effects(terminal_encoding, exec_supervisor.disconnect());
             let _ = apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
                 .await;
 
@@ -1520,8 +1589,9 @@ mod tests {
         assert!(
             send_terminal_input(
                 &mut channel,
+                crate::encoding::TerminalEncoding::EucJp,
                 TerminalInputSource::User,
-                b"user input",
+                "あ".as_bytes(),
                 Some(&tap),
             )
             .await
@@ -1529,8 +1599,9 @@ mod tests {
         assert!(
             send_terminal_input(
                 &mut channel,
+                crate::encoding::TerminalEncoding::EucJp,
                 TerminalInputSource::ExternalInput,
-                b"external input",
+                "い".as_bytes(),
                 Some(&tap),
             )
             .await
@@ -1542,6 +1613,7 @@ mod tests {
         assert!(
             !send_terminal_input(
                 &mut channel,
+                crate::encoding::TerminalEncoding::EucJp,
                 TerminalInputSource::User,
                 b"failed input",
                 Some(&tap),
@@ -1554,8 +1626,58 @@ mod tests {
         assert_eq!(1, parsed.events.len());
         assert!(matches!(
             &parsed.events[0].kind,
-            crate::recording::RecordingEventKind::Input(data) if data == b"user input"
+            crate::recording::RecordingEventKind::Input(data) if data == &[0xA4, 0xA2]
         ));
+        assert_eq!(
+            recorded_ops(&state),
+            vec![
+                ChannelOp::SendData(vec![0xA4, 0xA2]),
+                ChannelOp::SendData(vec![0xA4, 0xA4]),
+                ChannelOp::SendData(b"failed input".to_vec()),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_effects_encode_agent_commands_but_preserve_preflight_bytes() {
+        let (mut channel, state) = MockChannel::new([], false);
+        let (command_tx, _command_rx) = unbounded_channel();
+        let mut exec_results = HashMap::new();
+        let effects = vec![
+            ExecEffect::Write {
+                source: TerminalInputSource::AgentCommand,
+                data: "あ\r".as_bytes().to_vec(),
+            },
+            ExecEffect::Write {
+                source: TerminalInputSource::AgentPreflight,
+                data: vec![0x03],
+            },
+        ];
+
+        assert!(
+            apply_exec_effects(
+                encode_exec_effects(TerminalEncoding::EucJp, effects),
+                &mut channel,
+                &command_tx,
+                &mut exec_results,
+            )
+            .await
+        );
+        assert_eq!(
+            recorded_ops(&state),
+            vec![
+                ChannelOp::SendData(vec![0xA4, 0xA2, b'\r']),
+                ChannelOp::SendData(vec![0x03]),
+            ],
+        );
+    }
+
+    #[test]
+    fn zmodem_terminal_prefix_and_trailing_are_combined_before_ingress() {
+        let mut terminal_data = b"before-transfer".to_vec();
+        append_terminal_data(&mut terminal_data, b"after-transfer".to_vec());
+
+        assert_eq!(terminal_data, b"before-transferafter-transfer");
     }
 
     #[tokio::test]
@@ -1567,6 +1689,7 @@ mod tests {
 
         let sent = send_init_commands(
             &mut channel,
+            crate::encoding::TerminalEncoding::Utf8,
             "enable\n\npassword\n",
             Some(Duration::ZERO),
             &mut exec_supervisor,
@@ -1583,6 +1706,31 @@ mod tests {
                 ChannelOp::SendData(b"password\r".to_vec()),
             ],
             "空行应跳过，enable 和密码必须模拟终端 Enter，以 CR 分行发送"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_commands_use_selected_terminal_encoding() {
+        let (mut channel, state) = MockChannel::new([], false);
+        let (command_tx, _command_rx) = unbounded_channel();
+        let mut exec_supervisor = ExecSupervisor::new();
+        let mut exec_results = HashMap::new();
+
+        let sent = send_init_commands(
+            &mut channel,
+            crate::encoding::TerminalEncoding::EucJp,
+            "あ\n",
+            Some(Duration::ZERO),
+            &mut exec_supervisor,
+            &command_tx,
+            &mut exec_results,
+        )
+        .await;
+
+        assert!(sent, "初始化命令应使用连接选择的终端字符集");
+        assert_eq!(
+            recorded_ops(&state),
+            vec![ChannelOp::SendData(vec![0xA4, 0xA2, b'\r'])],
         );
     }
 

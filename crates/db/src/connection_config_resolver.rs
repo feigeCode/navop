@@ -118,6 +118,7 @@ mod tests {
                 port: 2222,
                 username: "deploy".to_string(),
                 auth_method,
+                terminal_encoding: Default::default(),
                 connect_timeout: Some(15),
                 keepalive_interval: Some(30),
                 keepalive_max: Some(3),

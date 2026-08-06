@@ -15,6 +15,7 @@ fn ssh_connection() -> StoredConnection {
             auth_method: SshAuthMethod::Password {
                 password: "super-secret".to_string(),
             },
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -91,6 +92,7 @@ fn basic_info_omits_nested_credentials_and_embedded_private_keys() {
                 private_key: "TARGET PRIVATE KEY BODY".to_string(),
                 passphrase: Some("target-passphrase".to_string()),
             },
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -143,6 +145,7 @@ fn full_info_keeps_credentials_but_always_redacts_embedded_private_key_contents(
                 private_key: "TARGET PRIVATE KEY BODY".to_string(),
                 passphrase: Some("target-passphrase".to_string()),
             },
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,

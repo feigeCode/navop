@@ -250,12 +250,61 @@ impl DatabaseType {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredTerminalEncoding {
+    #[default]
+    Utf8,
+    Gbk,
+    Gb18030,
+    Big5,
+    ShiftJis,
+    EucJp,
+    EucKr,
+    Windows1252,
+}
+
+impl StoredTerminalEncoding {
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Utf8,
+            Self::Gbk,
+            Self::Gb18030,
+            Self::Big5,
+            Self::ShiftJis,
+            Self::EucJp,
+            Self::EucKr,
+            Self::Windows1252,
+        ]
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Gbk => "GBK",
+            Self::Gb18030 => "GB18030",
+            Self::Big5 => "Big5",
+            Self::ShiftJis => "Shift_JIS",
+            Self::EucJp => "EUC-JP",
+            Self::EucKr => "EUC-KR",
+            Self::Windows1252 => "Windows-1252",
+        }
+    }
+
+    fn is_utf8(value: &Self) -> bool {
+        *value == Self::Utf8
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshParams {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth_method: SshAuthMethod,
+    /// SSH 终端文本编码；旧连接缺少此字段时保持 UTF-8。
+    #[serde(default, skip_serializing_if = "StoredTerminalEncoding::is_utf8")]
+    pub terminal_encoding: StoredTerminalEncoding,
     /// 连接超时（秒）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u64>,
@@ -1514,6 +1563,7 @@ mod tests {
                 port: 2222,
                 username: "deploy".to_string(),
                 auth_method,
+                terminal_encoding: Default::default(),
                 connect_timeout: Some(15),
                 keepalive_interval: Some(30),
                 keepalive_max: Some(3),
@@ -1692,6 +1742,7 @@ mod tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -2502,6 +2553,7 @@ mod serial_tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,
@@ -2532,6 +2584,7 @@ mod serial_tests {
         )
         .expect("旧连接缺少兼容算法字段时应可反序列化");
         assert_eq!(params.allow_legacy_algorithms, None);
+        assert_eq!(params.terminal_encoding, StoredTerminalEncoding::Utf8);
 
         params.allow_legacy_algorithms = Some(true);
         let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
@@ -2539,6 +2592,24 @@ mod serial_tests {
 
         let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
         assert_eq!(parsed.allow_legacy_algorithms, Some(true));
+    }
+
+    #[test]
+    fn ssh_terminal_encoding_round_trips_through_json() {
+        let mut params: SshParams = serde_json::from_str(
+            r#"{"host":"example.com","port":22,"username":"root","auth_method":"Agent"}"#,
+        )
+        .expect("旧连接缺少终端字符集字段时应可反序列化");
+        assert_eq!(params.terminal_encoding, StoredTerminalEncoding::Utf8);
+
+        params.terminal_encoding = StoredTerminalEncoding::EucJp;
+        let json = serde_json::to_string(&params).expect("SshParams 应可序列化");
+        assert!(json.contains("\"terminal_encoding\":\"euc_jp\""));
+
+        let parsed: SshParams = serde_json::from_str(&json).expect("SshParams 应可反序列化");
+        assert_eq!(parsed.terminal_encoding, StoredTerminalEncoding::EucJp);
+        assert!(StoredTerminalEncoding::all().contains(&StoredTerminalEncoding::EucJp));
+        assert_eq!(StoredTerminalEncoding::EucJp.label(), "EUC-JP");
     }
 
     #[test]

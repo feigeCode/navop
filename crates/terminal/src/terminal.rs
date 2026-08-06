@@ -45,6 +45,7 @@ use std::ffi::OsStr;
 #[cfg(any(test, target_os = "windows"))]
 use std::path::Path;
 
+use crate::encoding::TerminalEncoding;
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
     collect_history_search_results, collect_history_suggestions_with_cwd, collect_recent_history,
@@ -230,6 +231,7 @@ impl CommandRecordGate {
 pub struct SshTerminalConfig {
     pub ssh_config: SshConnectConfig,
     pub pty_config: PtyConfig,
+    pub terminal_encoding: TerminalEncoding,
     /// 关闭 shell integration 注入:走裸 request_shell,失去 OSC 集成。
     pub disable_shell_integration: bool,
 }
@@ -494,6 +496,7 @@ fn resolve_ssh_connection(
         .jump_server
         .as_ref()
         .and_then(|jump| password_from_storage_auth(&jump.auth_method));
+    let terminal_encoding = params.terminal_encoding.into();
     let init_commands = build_ssh_init_commands(
         update.working_dir.as_deref(),
         params.default_directory.as_deref(),
@@ -535,6 +538,7 @@ fn resolve_ssh_connection(
         config: SshTerminalConfig {
             ssh_config,
             pty_config: PtyConfig::default(),
+            terminal_encoding,
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
         },
         responder,
@@ -2013,6 +2017,7 @@ impl Terminal {
                 SshBackendConnect {
                     session_manager,
                     pty_config: config.pty_config,
+                    terminal_encoding: config.terminal_encoding,
                     connection_id,
                     term,
                     event_proxy,
@@ -4156,6 +4161,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "latest-password".to_string(),
                 },
+                terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,

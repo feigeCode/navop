@@ -136,6 +136,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "secret".to_string(),
                 },
+                terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,

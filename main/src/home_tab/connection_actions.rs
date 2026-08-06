@@ -409,6 +409,7 @@ mod sensitive_copy_tests {
                 auth_method: SshAuthMethod::Password {
                     password: "clipboard-secret".to_string(),
                 },
+                terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,

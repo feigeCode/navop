@@ -16,6 +16,7 @@ fn ssh_connection(id: i64) -> StoredConnection {
             port: 22,
             username: "deploy".to_string(),
             auth_method: SshAuthMethod::Agent,
+            terminal_encoding: Default::default(),
             connect_timeout: Some(12),
             keepalive_interval: Some(20),
             keepalive_max: Some(3),

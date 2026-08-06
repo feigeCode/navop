@@ -425,6 +425,7 @@ mod tests {
             port: 2222,
             username: "alice doe".to_string(),
             auth_method,
+            terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
             keepalive_max: None,

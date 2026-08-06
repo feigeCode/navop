@@ -25,12 +25,12 @@ use crate::ingress_queue::{
 use crate::pty_backend::GpuiEventProxy;
 use crate::recording::RecordingTap;
 
-/// Maximum accepted SSH output bytes waiting for the parser worker.
+/// Maximum SSH output bytes queued at once for the parser worker.
 ///
-/// The SSH channel adapter is expected to deliver source chunks no larger than
-/// this limit. An oversized source chunk is rejected instead of copied or
-/// split in the actor, so the one-source-chunk memory allowance remains
-/// explicit and bounded by the transport contract.
+/// A decoded source chunk can be larger than the transport chunk because
+/// transcoding to UTF-8 may expand it. `SshParserIngress::pending` keeps that
+/// source chunk as the actor's single pending item and splits only the queue
+/// writes so the byte budget remains bounded.
 pub(crate) const SSH_PENDING_BYTES: u64 = 512 * 1024;
 const SSH_PENDING_CHUNKS: usize = 16;
 const SSH_PENDING_CONTROLS: usize = 8;
@@ -47,6 +47,7 @@ pub(crate) struct SshPendingIngress {
 /// Queue and parser task owned by one SSH connection.
 pub(crate) struct SshParserIngress {
     sender: BoundedTerminalSender<()>,
+    max_chunk_bytes: usize,
     metrics: Arc<TerminalPerformanceMetrics>,
     ingress_generation: u64,
     task: JoinHandle<()>,
@@ -82,6 +83,7 @@ impl SshParserIngress {
         budget: TerminalIngressBudget,
         recording_tap: Option<RecordingTap>,
     ) -> Self {
+        let max_chunk_bytes = budget.max_pending_bytes();
         let (sender, mut receiver) = bounded_terminal_queue::<()>(budget);
         let ingress_generation = metrics.begin_ingress_backlog();
         let task_metrics = metrics.clone();
@@ -118,6 +120,7 @@ impl SshParserIngress {
         });
         Self {
             sender,
+            max_chunk_bytes,
             metrics,
             ingress_generation,
             task,
@@ -131,12 +134,21 @@ impl SshParserIngress {
 
     pub(crate) fn pending(&self, data: Vec<u8>) -> SshPendingIngress {
         let sender = self.sender.clone();
+        let max_chunk_bytes = self.max_chunk_bytes;
         let metrics = self.metrics.clone();
         let ingress_generation = self.ingress_generation;
         SshPendingIngress::from_future(async move {
             // Keep metrics current even when the send has reserved bytes but
             // is waiting for a bounded chunk slot.
-            let mut send = Box::pin(sender.send_data(data));
+            let mut send = Box::pin(async {
+                if data.len() <= max_chunk_bytes {
+                    return sender.send_data(data).await;
+                }
+                for chunk in data.chunks(max_chunk_bytes) {
+                    sender.send_data(chunk.to_vec()).await?;
+                }
+                Ok(())
+            });
             let result = poll_fn(|cx| {
                 let result = std::future::Future::poll(send.as_mut(), cx);
                 metrics.record_ingress_backlog(
@@ -183,7 +195,7 @@ impl SshPendingIngress {
         }
     }
 
-    async fn wait(&mut self) -> Result<(), TerminalDataSendError> {
+    pub(crate) async fn wait(&mut self) -> Result<(), TerminalDataSendError> {
         self.send.as_mut().await
     }
 }

@@ -1,3 +1,4 @@
+pub mod encoding;
 pub(crate) mod exec_capture;
 pub(crate) mod exec_supervisor;
 pub mod history;
@@ -45,6 +46,8 @@ pub use types::{
     TerminalExecProgress, TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };
 
+#[cfg(test)]
+mod encoding_tests;
 #[cfg(test)]
 mod ingress_queue_tests;
 #[cfg(test)]

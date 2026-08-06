@@ -5,7 +5,7 @@ use connection_form::team::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    App, AppContext, AsyncApp, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     WeakEntity, Window, div, px,
 };
@@ -28,7 +28,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     JumpServerConfig, ProxyConfig, ProxyType as StorageProxyType, SSH_ICON_IDS, SshAuthMethod,
-    SshParams, StoredConnection, Workspace, ssh_os_icon,
+    SshParams, StoredConnection, StoredTerminalEncoding, Workspace, ssh_os_icon,
 };
 use rust_i18n::t;
 use ssh::{
@@ -130,6 +130,23 @@ impl SelectItem for WorkspaceSelectItem {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TerminalEncodingSelectItem {
+    encoding: StoredTerminalEncoding,
+}
+
+impl SelectItem for TerminalEncodingSelectItem {
+    type Value = StoredTerminalEncoding;
+
+    fn title(&self) -> SharedString {
+        self.encoding.label().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.encoding
+    }
+}
+
 pub struct SshFormWindow {
     focus_handle: FocusHandle,
     is_editing: bool,
@@ -152,6 +169,7 @@ pub struct SshFormWindow {
     passphrase_input: Entity<InputState>,
 
     auth_method: AuthMethodSelection,
+    terminal_encoding_select: Entity<SelectState<Vec<TerminalEncodingSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
 
@@ -580,6 +598,17 @@ impl SshFormWindow {
         );
         let workspace_select =
             cx.new(|cx| SelectState::new(workspace_items, Some(Default::default()), window, cx));
+        let terminal_encoding_items = StoredTerminalEncoding::all()
+            .iter()
+            .copied()
+            .map(|encoding| TerminalEncodingSelectItem { encoding })
+            .collect::<Vec<_>>();
+        let terminal_encoding_select = cx.new(|cx| {
+            let mut state = SelectState::new(terminal_encoding_items, None, window, cx);
+            state = state.searchable(true);
+            state.set_selected_value(&StoredTerminalEncoding::Utf8, window, cx);
+            state
+        });
 
         let team_select = create_team_select(&config.teams, None, window, cx);
 
@@ -668,6 +697,9 @@ impl SshFormWindow {
                 disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
                 x11_forwarding = params.x11_forwarding.unwrap_or(false);
                 allow_legacy_algorithms = params.allow_legacy_algorithms.unwrap_or(false);
+                terminal_encoding_select.update(cx, |select, cx| {
+                    select.set_selected_value(&params.terminal_encoding, window, cx);
+                });
 
                 // 加载跳板机设置
                 if let Some(ref jump) = params.jump_server {
@@ -771,6 +803,7 @@ impl SshFormWindow {
             private_key_content_input,
             passphrase_input,
             auth_method,
+            terminal_encoding_select,
             workspace_select,
             team_select,
             enable_jump_server,
@@ -989,6 +1022,12 @@ impl SshFormWindow {
             port,
             username,
             auth_method,
+            terminal_encoding: self
+                .terminal_encoding_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
             connect_timeout,
             keepalive_interval,
             keepalive_max,
@@ -1583,9 +1622,8 @@ impl SshFormWindow {
         window.remove_window();
     }
 
-    fn render_form_row(&self, label: &str, child: impl IntoElement) -> impl IntoElement {
+    fn render_form_row(&self, label: &str, child: impl IntoElement) -> Div {
         h_flex()
-            .w_full()
             .gap_3()
             .items_center()
             .child(
@@ -1813,6 +1851,10 @@ impl SshFormWindow {
                 )
             })
             .child(self.render_form_row(
+                &t!("SSH.terminal_encoding"),
+                Select::new(&self.terminal_encoding_select).w_full(),
+            ))
+            .child(self.render_form_row(
                 &t!("SSH.workspace"),
                 Select::new(&self.workspace_select).w_full(),
             ))
@@ -1866,16 +1908,23 @@ impl SshFormWindow {
     /// 渲染初始化标签页
     fn render_init_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .debug_selector(|| "ssh-init-tab".to_string())
             .w_full()
             .gap_2()
-            .child(self.render_form_row(
-                &t!("SSH.default_directory"),
-                self.render_form_input(&self.default_directory_input),
-            ))
-            .child(self.render_form_row(
-                &t!("SSH.init_script"),
-                self.render_form_input(&self.init_script_input),
-            ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.default_directory"),
+                    self.render_form_input(&self.default_directory_input),
+                )
+                .debug_selector(|| "ssh-default-directory-row".to_string()),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.init_script"),
+                    self.render_form_input(&self.init_script_input),
+                )
+                .debug_selector(|| "ssh-init-script-row".to_string()),
+            )
             .child(
                 self.render_form_row(
                     &t!("SSH.disable_shell_integration"),
@@ -2502,7 +2551,7 @@ mod tests {
     use anyhow::Context as _;
     use gpui::{Modifiers, TestAppContext, VisualTestContext};
     use one_core::settings::AppSettings;
-    use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+    use one_core::storage::{SshAuthMethod, SshParams, StoredConnection, StoredTerminalEncoding};
     use rust_i18n::t;
     use ssh::{HostKeyDetails, HostKeyIdentity, HostKeyRejection, HostKeyRoute};
     use std::sync::Arc;
@@ -2514,6 +2563,7 @@ mod tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            terminal_encoding: Default::default(),
             connect_timeout: Some(30),
             keepalive_interval: Some(60),
             keepalive_max: Some(3),
@@ -2602,6 +2652,78 @@ mod tests {
 
         assert!(config.supports_save_and_continue());
         assert!(!config.is_editing());
+    }
+
+    #[gpui::test]
+    fn ssh_form_prefills_and_builds_terminal_encoding(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.terminal_encoding = StoredTerminalEncoding::EucJp;
+        let initial_connection = StoredConnection::new_ssh("imported".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("预填 SSH 表单应能构建参数");
+        assert_eq!(built.terminal_encoding, StoredTerminalEncoding::EucJp);
+    }
+
+    #[gpui::test]
+    fn ssh_init_inputs_fill_the_available_form_width(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (_form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.active_tab = 1;
+            form
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let init_tab = cx
+            .debug_bounds("ssh-init-tab")
+            .expect("initialization tab should be rendered");
+        let default_directory_row = cx
+            .debug_bounds("ssh-default-directory-row")
+            .expect("default directory row should be rendered");
+        let init_script_row = cx
+            .debug_bounds("ssh-init-script-row")
+            .expect("initialization script row should be rendered");
+
+        assert!(
+            default_directory_row.size.width >= init_tab.size.width - gpui::px(1.0),
+            "default directory row should fill the initialization tab: tab={init_tab:?}, row={default_directory_row:?}"
+        );
+        assert!(
+            init_script_row.size.width >= init_tab.size.width - gpui::px(1.0),
+            "initialization script row should fill the initialization tab: tab={init_tab:?}, row={init_script_row:?}"
+        );
     }
 
     #[gpui::test]

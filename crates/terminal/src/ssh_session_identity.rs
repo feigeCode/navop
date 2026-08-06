@@ -282,6 +282,7 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: TARGET_PASSWORD.to_string(),
                 },
+                terminal_encoding: Default::default(),
                 connect_timeout: Some(10),
                 keepalive_interval: Some(30),
                 keepalive_max: Some(6),

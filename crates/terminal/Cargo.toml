@@ -25,6 +25,7 @@ tracing = { workspace = true }
 serialport = { workspace = true }
 base64 = { workspace = true }
 dirs = { workspace = true }
+encoding_rs = { workspace = true }
 uuid = { workspace = true }
 tempfile = "3"
 polling = "3.11.0"

@@ -184,6 +184,7 @@ mod tests {
                 port: 22,
                 username: "deploy".to_string(),
                 auth_method: SshAuthMethod::Agent,
+                terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
                 keepalive_max: None,

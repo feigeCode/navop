@@ -271,6 +271,7 @@ fn ssh_params() -> SshParams {
         port: 22,
         username: "app".to_string(),
         auth_method: SshAuthMethod::AutoPublicKey,
+        terminal_encoding: Default::default(),
         connect_timeout: None,
         keepalive_interval: None,
         keepalive_max: None,

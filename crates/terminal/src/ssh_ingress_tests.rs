@@ -275,6 +275,50 @@ async fn oversized_source_chunk_is_rejected_without_queueing() {
 }
 
 #[tokio::test]
+async fn parser_ingress_splits_decoded_chunks_larger_than_the_byte_budget() {
+    let (event_tx, _event_rx) = unbounded_channel();
+    let metrics = Arc::new(TerminalPerformanceMetrics::enabled());
+    let proxy = GpuiEventProxy::with_metrics(event_tx, metrics.clone());
+    let term = Arc::new(FairMutex::new(Term::new(
+        TermConfig::default(),
+        &TestDimensions,
+        proxy.clone(),
+    )));
+    let ingress = SshParserIngress::spawn_with_budget(
+        term.clone(),
+        proxy,
+        metrics.clone(),
+        TerminalIngressBudget::new(4, 1, 1).expect("valid worker budget"),
+    );
+
+    let mut pending = ingress.pending(b"abcdef".to_vec());
+    timeout(Duration::from_secs(1), pending.wait())
+        .await
+        .expect("oversized decoded output should be split instead of disconnecting")
+        .expect("split decoded output should be accepted");
+    drop(pending);
+
+    timeout(Duration::from_secs(1), ingress.finish())
+        .await
+        .expect("worker should gracefully drain")
+        .expect("worker should not panic");
+
+    let term = term.lock();
+    assert_eq!(term.grid()[Line(0)][Column(0)].c, 'a');
+    assert_eq!(term.grid()[Line(0)][Column(1)].c, 'b');
+    assert_eq!(term.grid()[Line(0)][Column(2)].c, 'c');
+    assert_eq!(term.grid()[Line(0)][Column(3)].c, 'd');
+    assert_eq!(term.grid()[Line(0)][Column(4)].c, 'e');
+    assert_eq!(term.grid()[Line(0)][Column(5)].c, 'f');
+    drop(term);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.ingress_bytes, 6);
+    assert_eq!(snapshot.parser_chunks, 2);
+    assert!(snapshot.ingress_pending_bytes_lifetime_max <= 4);
+}
+
+#[tokio::test]
 async fn sustained_transport_holds_only_one_source_chunk_and_never_exceeds_the_budget() {
     const BUDGET_BYTES: usize = 4;
     const SOURCE_CHUNKS: usize = 32;
