@@ -4,6 +4,36 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
+## [v0.10.5] - 2026-08-06
+
+### 中文
+
+#### 更新内容
+
+- SSH 终端新增可配置字符集，支持 UTF-8、GBK、GB18030、Big5、Shift_JIS、EUC-JP、EUC-KR 和 Windows-1252，改善旧系统及非 UTF-8 环境的显示与输入。
+- 终端右键菜单新增“粘贴选中内容”，可直接将当前选中的文本发送到终端。
+- SSH 主机指纹发生变化时新增安全确认，展示新旧指纹并提示中间人攻击风险，需明确确认后才能更新或临时接受。
+
+#### 修复与优化
+
+- 修复 Agent 上下文压缩模型调用失败时任务会中断的问题，现在会使用本地摘要继续执行，同时保留取消操作语义。
+
+---
+
+### English
+
+#### What's New
+
+- Added configurable SSH terminal encodings, including UTF-8, GBK, GB18030, Big5, Shift_JIS, EUC-JP, EUC-KR, and Windows-1252, improving display and input for legacy and non-UTF-8 environments.
+- Added “Paste Selected Text” to the terminal context menu, allowing the current selection to be sent directly to the terminal.
+- Added explicit security confirmation when an SSH host key changes, showing the new and previously trusted fingerprints and warning about possible man-in-the-middle attacks before allowing an update or one-time acceptance.
+
+#### Fixes and Improvements
+
+- Fixed Agent tasks stopping when context-compaction model calls fail; a local fallback summary is now used while preserving cancellation behavior.
+
+**Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.4...v0.10.5
+
 ## [v0.10.4] - 2026-08-05
 
 ### 中文
