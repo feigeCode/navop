@@ -113,7 +113,17 @@ async fn summarize_prefix(
     let fallback_history = RuntimeHistory::from_items(prefix.clone());
     let request =
         ModelRequest::new(compaction_messages(prefix)).with_max_tokens(policy.max_summary_tokens);
-    let response = services.model.complete(request).await?;
+    let response = match services.model.complete(request).await {
+        Ok(response) => response,
+        Err(RuntimeError::Cancelled) => return Err(RuntimeError::Cancelled),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "上下文压缩模型调用失败，使用本地截断摘要继续任务"
+            );
+            return Ok(fallback_summary(&fallback_history));
+        }
+    };
     if let Some(summary) = response
         .text
         .map(|text| text.trim().to_string())
@@ -223,15 +233,35 @@ mod tests {
     use super::*;
     use crate::history::HistoryItem;
     use crate::ids::ToolCallId;
-    use crate::model::{MockModelClient, ModelResponse};
+    use crate::model::{MockModelClient, ModelClient, ModelResponse};
     use crate::resource::ResourceContext;
     use crate::runtime::{Runtime, RuntimeServices};
     use crate::tools::{
         ObservationData, ToolCall, ToolName, ToolObservation, ToolRegistry, ToolRouter,
     };
+    use async_trait::async_trait;
     use llm_connector::types::Role;
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
+
+    struct FailingCompactionModel;
+    struct CancelledCompactionModel;
+
+    #[async_trait]
+    impl ModelClient for FailingCompactionModel {
+        async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+            Err(RuntimeError::model(
+                "Parse error: CPA: expected value at line 1 column 1",
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl ModelClient for CancelledCompactionModel {
+        async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+            Err(RuntimeError::Cancelled)
+        }
+    }
 
     #[tokio::test]
     async fn compacts_session_history_when_estimated_context_exceeds_threshold() {
@@ -306,6 +336,73 @@ mod tests {
             }
             other => panic!("expected fallback context summary, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn compaction_model_error_uses_local_fallback_summary() {
+        let runtime = Runtime::new(RuntimeServices::new(
+            Arc::new(FailingCompactionModel),
+            Arc::new(ToolRouter::new(ToolRegistry::new())),
+        ));
+        let session = runtime.create_session(ResourceContext::new());
+        session.record_user_input("旧上下文 ".repeat(32));
+        session.record_user_input("继续处理");
+
+        let compacted = compact_session_context_if_needed(
+            &session,
+            &TurnId::new(),
+            runtime.services(),
+            ContextCompactionPolicy {
+                trigger_chars: 16,
+                keep_last_items: 1,
+                max_summary_tokens: 256,
+            },
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("compaction model failure should not fail the turn");
+
+        assert!(compacted);
+        match &session.history_snapshot().items()[0] {
+            HistoryItem::ContextSummary { text, .. } => {
+                assert!(text.contains("模型未返回上下文压缩摘要"));
+                assert!(text.contains("旧上下文"));
+            }
+            other => panic!("expected fallback context summary, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compaction_model_cancellation_is_not_converted_to_fallback() {
+        let runtime = Runtime::new(RuntimeServices::new(
+            Arc::new(CancelledCompactionModel),
+            Arc::new(ToolRouter::new(ToolRegistry::new())),
+        ));
+        let session = runtime.create_session(ResourceContext::new());
+        session.record_user_input("旧上下文 ".repeat(32));
+        session.record_user_input("继续处理");
+
+        let result = compact_session_context_if_needed(
+            &session,
+            &TurnId::new(),
+            runtime.services(),
+            ContextCompactionPolicy {
+                trigger_chars: 16,
+                keep_last_items: 1,
+                max_summary_tokens: 256,
+            },
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(RuntimeError::Cancelled)));
+        assert!(
+            session
+                .history_snapshot()
+                .items()
+                .iter()
+                .all(|item| !matches!(item, HistoryItem::ContextSummary { .. }))
+        );
     }
 
     #[tokio::test]
