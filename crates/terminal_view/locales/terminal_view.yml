@@ -851,6 +851,10 @@ ContextMenu:
     en: Paste
     zh-CN: 粘贴
     zh-HK: 貼上
+  paste_selection:
+    en: Paste Selected Text
+    zh-CN: 粘贴选中内容
+    zh-HK: 貼上選取內容
   paste_with_shortcut:
     en: "Paste (%{shortcut})"
     zh-CN: "粘贴（%{shortcut}）"

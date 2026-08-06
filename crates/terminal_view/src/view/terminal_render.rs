@@ -121,10 +121,14 @@ impl TerminalView {
         _cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let view_copy = view.clone();
+        let view_paste_selection = view.clone();
         let view_paste = view.clone();
         let view_select_all = view.clone();
         let view_clear_screen = view.clone();
         let view_clear = view.clone();
+        let can_paste_selection =
+            accepts_live_input && selection_text.as_ref().is_some_and(|text| !text.is_empty());
+        let selection_text_for_paste = selection_text.clone();
         let copy_shortcut = terminal_shortcut_label(TERMINAL_COPY_SHORTCUT);
         let paste_shortcut = terminal_shortcut_label(TERMINAL_PASTE_SHORTCUT);
         let select_all_shortcut = terminal_shortcut_label(TERMINAL_SELECT_ALL_SHORTCUT);
@@ -145,6 +149,19 @@ impl TerminalView {
                         this.copy(&Copy, window, cx);
                     });
                 }),
+            )
+            // 粘贴选中内容
+            .item(
+                PopupMenuItem::new(t!("ContextMenu.paste_selection"))
+                    .disabled(!can_paste_selection)
+                    .on_click(move |_, window, cx| {
+                        let Some(selection_text) = selection_text_for_paste.clone() else {
+                            return;
+                        };
+                        let _ = view_paste_selection.update(cx, |this, cx| {
+                            this.paste_text(&selection_text, window, cx);
+                        });
+                    }),
             )
             // 粘贴
             .item(

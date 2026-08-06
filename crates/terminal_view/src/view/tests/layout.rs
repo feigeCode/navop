@@ -187,6 +187,26 @@ fn terminal_context_menu_exposes_clear_screen() {
 }
 
 #[test]
+fn terminal_context_menu_pastes_selected_text_through_safe_paste_path() {
+    let source = include_str!("../terminal_render.rs");
+    let context_menu = source
+        .split("pub(super) fn build_context_menu")
+        .nth(1)
+        .expect("terminal context menu should exist");
+    let paste_selection = context_menu
+        .split("ContextMenu.paste_selection")
+        .nth(1)
+        .expect("paste-selection item should exist");
+    let regular_paste = paste_selection
+        .find("ContextMenu.paste_with_shortcut")
+        .expect("paste-selection should be placed before clipboard paste");
+    let paste_selection = &paste_selection[..regular_paste];
+
+    assert!(paste_selection.contains(".disabled(!can_paste_selection)"));
+    assert!(paste_selection.contains("this.paste_text(&selection_text, window, cx)"));
+}
+
+#[test]
 fn terminal_context_menu_disables_live_actions_during_playback() {
     let source = include_str!("../terminal_render.rs");
     let context_menu = source
