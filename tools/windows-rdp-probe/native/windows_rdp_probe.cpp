@@ -124,7 +124,7 @@ HWND create_parent_window() {
 HWND create_host_window(HWND parent) {
     return CreateWindowExW(
         0,
-        ATLAXWIN_CLASSW,
+        L"AtlAxWin",
         L"",
         WS_CHILD,
         0,

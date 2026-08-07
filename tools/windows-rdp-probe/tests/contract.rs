@@ -79,7 +79,7 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
             "exclude(\"UINT_PTR\")",
             "#include \"mstscax.tlh\"",
             "AtlAxWinInit",
-            "ATLAXWIN_CLASSW",
+            "L\"AtlAxWin\"",
             "AtlAxCreateControlEx",
             "945EE98E-B376-4EC2-B2E5-64C9410F93B7",
             "B2B3FA47-3F11-4148-AD24-DFF8684A16D0",
@@ -108,6 +108,7 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
             "#import <mstscax.dll>",
             "CLSID_MsRdpClient12",
             "ATLAXWIN_CLASS,",
+            "ATLAXWIN_CLASSW",
             "CComPtr<IMsRdpClientNonScriptable8>",
             "struct IMsRdpClientNonScriptable8",
             "interface IMsRdpClientNonScriptable8",
@@ -130,7 +131,7 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
         path,
         "HWND create_host_window(HWND parent) {",
         "\n}\n\nHRESULT create_rdp_control",
-        &["CreateWindowExW(", "ATLAXWIN_CLASSW"],
+        &["CreateWindowExW(", "L\"AtlAxWin\""],
     );
 }
 
