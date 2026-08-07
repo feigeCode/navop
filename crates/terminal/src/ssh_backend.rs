@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -315,7 +316,7 @@ pub struct SshBackendConnect {
     pub term: Arc<FairMutex<Term<GpuiEventProxy>>>,
     pub event_proxy: GpuiEventProxy,
     pub event_tx: UnboundedSender<TerminalEvent>,
-    pub on_disconnect: Option<UnboundedSender<()>>,
+    pub on_disconnect: Option<UnboundedSender<Option<String>>>,
     pub init_commands: Option<String>,
     pub disable_shell_integration: bool,
 }
@@ -376,10 +377,17 @@ fn build_terminal_control_handle(command_tx: UnboundedSender<SshCommand>) -> Ter
     })
 }
 
-async fn send_terminal_data<C: SshChannel + ?Sized>(channel: &mut C, data: &[u8]) -> bool {
-    tokio::time::timeout(Duration::from_secs(30), channel.send_data(data))
-        .await
-        .is_ok_and(|result| result.is_ok())
+async fn send_terminal_data<C: SshChannel + ?Sized>(
+    channel: &mut C,
+    data: &[u8],
+) -> anyhow::Result<()> {
+    match tokio::time::timeout(Duration::from_secs(30), channel.send_data(data)).await {
+        Ok(result) => result.context("SSH channel data send failed"),
+        Err(error) => {
+            Err(anyhow::Error::new(error)
+                .context("SSH channel data send timed out after 30 seconds"))
+        }
+    }
 }
 
 fn append_terminal_data(terminal_data: &mut Vec<u8>, chunk: Vec<u8>) {
@@ -396,15 +404,17 @@ async fn send_terminal_input<C: SshChannel + ?Sized>(
     source: TerminalInputSource,
     data: &[u8],
     recording_tap: Option<&RecordingTap>,
-) -> bool {
+) -> anyhow::Result<()> {
     let encoded = encode_terminal_input(terminal_encoding, source, data);
-    let sent = send_terminal_data(channel, encoded.as_ref()).await;
-    if sent && source.is_recordable_user_input() {
+    send_terminal_data(channel, encoded.as_ref())
+        .await
+        .context("failed to send terminal input over SSH")?;
+    if source.is_recordable_user_input() {
         if let Some(tap) = recording_tap {
             let _ = tap.record_input(encoded.as_ref());
         }
     }
-    sent
+    Ok(())
 }
 
 fn encode_exec_effects(
@@ -428,13 +438,13 @@ async fn apply_exec_effects<C: SshChannel + ?Sized>(
     channel: &mut C,
     command_tx: &UnboundedSender<SshCommand>,
     results: &mut HashMap<u64, ExecResultSender>,
-) -> bool {
+) -> anyhow::Result<()> {
     for effect in effects {
         match effect {
             ExecEffect::Write { data, .. } => {
-                if !send_terminal_data(channel, &data).await {
-                    return false;
-                }
+                send_terminal_data(channel, &data)
+                    .await
+                    .context("failed to send exec supervisor data over SSH")?;
             }
             ExecEffect::Complete { id, output } => {
                 if let Some(sender) = results.remove(&id) {
@@ -459,7 +469,7 @@ async fn apply_exec_effects<C: SshChannel + ?Sized>(
             }
         }
     }
-    true
+    Ok(())
 }
 
 async fn send_init_commands<C: SshChannel + ?Sized>(
@@ -470,7 +480,7 @@ async fn send_init_commands<C: SshChannel + ?Sized>(
     exec_supervisor: &mut ExecSupervisor,
     command_tx: &UnboundedSender<SshCommand>,
     exec_results: &mut HashMap<u64, ExecResultSender>,
-) -> bool {
+) -> anyhow::Result<()> {
     let lines = commands
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -492,11 +502,12 @@ async fn send_init_commands<C: SshChannel + ?Sized>(
             TerminalInputSource::InitCommand,
             &cmd_data,
         );
-        if !apply_exec_effects(effects, channel, command_tx, exec_results).await
-            || !send_terminal_data(channel, encoded.as_ref()).await
-        {
-            return false;
-        }
+        apply_exec_effects(effects, channel, command_tx, exec_results)
+            .await
+            .context("failed to apply initialization command effects over SSH")?;
+        send_terminal_data(channel, encoded.as_ref())
+            .await
+            .context("failed to send initialization command over SSH")?;
 
         if index < last_index {
             if let Some(delay) = inter_command_delay {
@@ -506,7 +517,7 @@ async fn send_init_commands<C: SshChannel + ?Sized>(
             }
         }
     }
-    true
+    Ok(())
 }
 
 impl SshBackend {
@@ -590,6 +601,7 @@ impl SshBackend {
         tokio::spawn(async move {
             let mut shutdown = false;
             let mut graceful_ingress_close = false;
+            let mut disconnect_error: Option<anyhow::Error> = None;
             let mut pending_ingress = None;
             let mut exec_supervisor = ExecSupervisor::new();
             let mut osc_parser = OscStreamParser::default();
@@ -614,22 +626,29 @@ impl SshBackend {
                                 terminal_encoding,
                                 exec_supervisor.on_input(source, &data),
                             );
-                            if !apply_exec_effects(
+                            if let Err(error) = apply_exec_effects(
                                 effects,
                                 &mut channel,
                                 &task_command_tx,
                                 &mut exec_results,
                             )
                             .await
-                                || !send_terminal_input(
-                                    &mut channel,
-                                    terminal_encoding,
-                                    source,
-                                    &data,
-                                    recording_tap.as_ref(),
-                                )
-                                .await
                             {
+                                disconnect_error = Some(
+                                    error.context("failed to apply SSH terminal input effects"),
+                                );
+                                break;
+                            }
+                            if let Err(error) = send_terminal_input(
+                                &mut channel,
+                                terminal_encoding,
+                                source,
+                                &data,
+                                recording_tap.as_ref(),
+                            )
+                            .await
+                            {
+                                disconnect_error = Some(error);
                                 break;
                             }
                         }
@@ -649,16 +668,23 @@ impl SshBackend {
                             };
                             match readiness {
                                 Ok(readiness_before) => {
-                                    if send_terminal_data(&mut channel, &[0x03]).await {
-                                        let _ = result.send(Ok(TerminalControlOutput {
-                                            action: request.action,
-                                            sent: true,
-                                            readiness_before,
-                                        }));
-                                    } else {
-                                        let _ =
-                                            result.send(Err(TerminalControlError::Disconnected));
-                                        break;
+                                    match send_terminal_data(&mut channel, &[0x03])
+                                        .await
+                                        .context("failed to send Ctrl-C over SSH")
+                                    {
+                                        Ok(()) => {
+                                            let _ = result.send(Ok(TerminalControlOutput {
+                                                action: request.action,
+                                                sent: true,
+                                                readiness_before,
+                                            }));
+                                        }
+                                        Err(error) => {
+                                            let _ = result
+                                                .send(Err(TerminalControlError::Disconnected));
+                                            disconnect_error = Some(error);
+                                            break;
+                                        }
                                     }
                                 }
                                 Err(error) => {
@@ -676,7 +702,7 @@ impl SshBackend {
                                 terminal_encoding,
                                 exec_supervisor.start(id, request),
                             );
-                            if !apply_exec_effects(
+                            if let Err(error) = apply_exec_effects(
                                 effects,
                                 &mut channel,
                                 &task_command_tx,
@@ -684,6 +710,9 @@ impl SshBackend {
                             )
                             .await
                             {
+                                disconnect_error = Some(
+                                    error.context("failed to start SSH terminal exec request"),
+                                );
                                 break;
                             }
                         }
@@ -691,7 +720,7 @@ impl SshBackend {
                             exec_results.remove(&id);
                             let effects =
                                 encode_exec_effects(terminal_encoding, exec_supervisor.cancel(id));
-                            if !apply_exec_effects(
+                            if let Err(error) = apply_exec_effects(
                                 effects,
                                 &mut channel,
                                 &task_command_tx,
@@ -699,6 +728,9 @@ impl SshBackend {
                             )
                             .await
                             {
+                                disconnect_error = Some(
+                                    error.context("failed to cancel SSH terminal exec request"),
+                                );
                                 break;
                             }
                         }
@@ -707,7 +739,7 @@ impl SshBackend {
                                 terminal_encoding,
                                 exec_supervisor.timeout(id, phase),
                             );
-                            if !apply_exec_effects(
+                            if let Err(error) = apply_exec_effects(
                                 effects,
                                 &mut channel,
                                 &task_command_tx,
@@ -715,6 +747,9 @@ impl SshBackend {
                             )
                             .await
                             {
+                                disconnect_error = Some(
+                                    error.context("failed to time out SSH terminal exec request"),
+                                );
                                 break;
                             }
                         }
@@ -731,18 +766,19 @@ impl SshBackend {
                     SshActorInput::TerminalResponse(data) => {
                         let _ =
                             exec_supervisor.on_input(TerminalInputSource::TerminalResponse, &data);
-                        let send_result =
-                            tokio::time::timeout(Duration::from_secs(30), channel.send_data(&data))
-                                .await;
-                        if send_result.is_err() || send_result.is_ok_and(|r| r.is_err()) {
+                        if let Err(error) = send_terminal_data(&mut channel, &data)
+                            .await
+                            .context("failed to send terminal response over SSH")
+                        {
+                            disconnect_error = Some(error);
                             break;
                         }
                     }
                     SshActorInput::Ingress(Ok(())) => {}
                     SshActorInput::Ingress(Err(error)) => {
-                        tracing::warn!(
-                            error = %error,
-                            "SSH terminal ingress rejected or closed"
+                        disconnect_error = Some(
+                            anyhow::Error::new(error)
+                                .context("SSH terminal parser ingress rejected or closed"),
                         );
                         break;
                     }
@@ -774,8 +810,16 @@ impl SshBackend {
                                         Ok(_) => {}
                                         Err(error) => {
                                             let channel_closed = is_channel_closed(&error);
-                                            tracing::warn!(%error, "SSH ZMODEM transfer failed");
+                                            tracing::warn!(
+                                                target: "terminal.ssh.runtime",
+                                                error = %format!("{error:#}"),
+                                                error_debug = ?error,
+                                                "SSH ZMODEM transfer failed"
+                                            );
                                             if channel_closed {
+                                                disconnect_error = Some(error.context(
+                                                    "SSH ZMODEM transfer stopped because the channel closed",
+                                                ));
                                                 graceful_ingress_close = true;
                                                 break 'actor;
                                             }
@@ -799,7 +843,7 @@ impl SshBackend {
                                     readiness = ?exec_supervisor.readiness(),
                                     "SSH terminal exec readiness updated"
                                 );
-                                if !apply_exec_effects(
+                                if let Err(error) = apply_exec_effects(
                                     effects,
                                     &mut channel,
                                     &task_command_tx,
@@ -807,6 +851,10 @@ impl SshBackend {
                                 )
                                 .await
                                 {
+                                    disconnect_error = Some(
+                                        error
+                                            .context("failed to apply SSH terminal output effects"),
+                                    );
                                     break 'actor;
                                 }
                                 for osc_event in &osc_events {
@@ -850,7 +898,7 @@ impl SshBackend {
                                     if let Some(ref commands) = pending_init {
                                         let inter_command_delay = (!shell_integration_active)
                                             .then_some(PLAIN_INIT_COMMAND_DELAY);
-                                        if !send_init_commands(
+                                        if let Err(error) = send_init_commands(
                                             &mut channel,
                                             terminal_encoding,
                                             commands,
@@ -861,6 +909,7 @@ impl SshBackend {
                                         )
                                         .await
                                         {
+                                            disconnect_error = Some(error);
                                             break 'actor;
                                         }
                                     }
@@ -897,9 +946,16 @@ impl SshBackend {
                     let mut trailing_ingress = parser_ingress.pending(trailing);
                     if let Err(error) = trailing_ingress.wait().await {
                         tracing::warn!(
+                            target: "terminal.ssh.runtime",
                             error = %error,
+                            error_debug = ?error,
                             "SSH terminal ingress rejected decoder trailing bytes"
                         );
+                        if disconnect_error.is_none() {
+                            disconnect_error = Some(anyhow::Error::new(error).context(
+                                "SSH terminal parser ingress rejected decoder trailing bytes",
+                            ));
+                        }
                         parser_ingress.abort();
                     }
                 }
@@ -908,7 +964,19 @@ impl SshBackend {
             // waiting for the parser worker, otherwise a graceful worker drain
             // can wait forever for the queue to close.
             drop(pending_ingress.take());
-            let _ = parser_ingress.finish().await;
+            if let Err(error) = parser_ingress.finish().await {
+                tracing::warn!(
+                    target: "terminal.ssh.runtime",
+                    error = %error,
+                    error_debug = ?error,
+                    "SSH terminal parser worker failed"
+                );
+                if disconnect_error.is_none() {
+                    disconnect_error = Some(
+                        anyhow::Error::new(error).context("SSH terminal parser worker failed"),
+                    );
+                }
+            }
 
             let effects = encode_exec_effects(terminal_encoding, exec_supervisor.disconnect());
             let _ = apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
@@ -917,8 +985,19 @@ impl SshBackend {
             if !shutdown && session_manager.invalidate_client(&transport_client).await {
                 task_metrics.record_ssh_invalidation();
             }
+            let disconnect_detail = disconnect_error.as_ref().map(|error| format!("{error:#}"));
+            if let (Some(error), Some(detail)) =
+                (disconnect_error.as_ref(), disconnect_detail.as_ref())
+            {
+                tracing::error!(
+                    target: "terminal.ssh.runtime",
+                    error = %detail,
+                    error_debug = ?error,
+                    "SSH terminal runtime failed"
+                );
+            }
             if let Some(tx) = on_disconnect {
-                let _ = tx.send(());
+                let _ = tx.send(disconnect_detail);
             }
         });
 
@@ -1578,6 +1657,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_terminal_data_preserves_channel_error_without_logging_payload() {
+        let (mut channel, state) = MockChannel::new([], false);
+        state
+            .lock()
+            .expect("mock channel state should lock")
+            .send_data_error = true;
+
+        let error = send_terminal_data(&mut channel, b"secret terminal input")
+            .await
+            .expect_err("SSH channel send failure should be returned");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("SSH channel data send failed"),
+            "错误链应包含发送操作上下文，实际: {message}"
+        );
+        assert!(
+            message.contains("mock send failure"),
+            "错误链应保留底层 channel 错误，实际: {message}"
+        );
+        assert!(
+            !message.contains("secret terminal input"),
+            "错误消息不能包含终端输入内容，实际: {message}"
+        );
+    }
+
+    #[tokio::test]
     async fn ssh_input_recording_captures_only_successfully_sent_user_bytes() {
         let recording = crate::recording::test_support::TestRecording::start(
             crate::recording::RecordingBackend::Ssh,
@@ -1595,6 +1701,7 @@ mod tests {
                 Some(&tap),
             )
             .await
+            .is_ok()
         );
         assert!(
             send_terminal_input(
@@ -1605,13 +1712,14 @@ mod tests {
                 Some(&tap),
             )
             .await
+            .is_ok()
         );
         state
             .lock()
             .expect("mock channel state should lock")
             .send_data_error = true;
         assert!(
-            !send_terminal_input(
+            send_terminal_input(
                 &mut channel,
                 crate::encoding::TerminalEncoding::EucJp,
                 TerminalInputSource::User,
@@ -1619,6 +1727,7 @@ mod tests {
                 Some(&tap),
             )
             .await
+            .is_err()
         );
 
         drop(tap);
@@ -1654,15 +1763,14 @@ mod tests {
             },
         ];
 
-        assert!(
-            apply_exec_effects(
-                encode_exec_effects(TerminalEncoding::EucJp, effects),
-                &mut channel,
-                &command_tx,
-                &mut exec_results,
-            )
-            .await
-        );
+        apply_exec_effects(
+            encode_exec_effects(TerminalEncoding::EucJp, effects),
+            &mut channel,
+            &command_tx,
+            &mut exec_results,
+        )
+        .await
+        .expect("exec effects should be sent");
         assert_eq!(
             recorded_ops(&state),
             vec![
@@ -1698,7 +1806,7 @@ mod tests {
         )
         .await;
 
-        assert!(sent, "裸终端初始化脚本应成功发送");
+        assert!(sent.is_ok(), "裸终端初始化脚本应成功发送");
         assert_eq!(
             recorded_ops(&state),
             vec![
@@ -1727,7 +1835,7 @@ mod tests {
         )
         .await;
 
-        assert!(sent, "初始化命令应使用连接选择的终端字符集");
+        assert!(sent.is_ok(), "初始化命令应使用连接选择的终端字符集");
         assert_eq!(
             recorded_ops(&state),
             vec![ChannelOp::SendData(vec![0xA4, 0xA2, b'\r'])],

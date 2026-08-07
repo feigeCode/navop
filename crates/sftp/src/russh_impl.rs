@@ -2327,24 +2327,29 @@ mod tests {
 
         let default_config =
             build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
-        assert!(
+        let legacy_kex = [
+            russh::kex::DH_G14_SHA1,
+            russh::kex::DH_GEX_SHA1,
+            russh::kex::DH_G1_SHA1,
+        ];
+        assert!(legacy_kex.iter().all(|legacy| {
             !default_config
                 .preferred
                 .kex
                 .iter()
-                .any(|name| *name == russh::kex::DH_G14_SHA1)
-        );
+                .any(|name| name == legacy)
+        }));
 
         ssh_config.allow_legacy_algorithms = true;
         let compatible_config =
             build_sftp_russh_config(&ssh_config, &identity).expect("SFTP config should build");
-        assert!(
+        assert!(legacy_kex.iter().all(|legacy| {
             compatible_config
                 .preferred
                 .kex
                 .iter()
-                .any(|name| *name == russh::kex::DH_G14_SHA1)
-        );
+                .any(|name| name == legacy)
+        }));
     }
 
     #[test]

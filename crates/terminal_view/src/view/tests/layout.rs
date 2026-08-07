@@ -73,6 +73,32 @@ fn connection_status_rendering_does_not_restore_the_full_screen_backdrop() {
 }
 
 #[test]
+fn connection_error_banner_shows_scrollable_multiline_details() {
+    let source = include_str!("../connection_overlay.rs");
+    let error_block = source
+        .split(".when_some(error_msg")
+        .nth(1)
+        .expect("connection overlay should render an error block");
+
+    assert!(
+        error_block.contains(".whitespace_normal()"),
+        "SSH error details should wrap instead of staying on one line"
+    );
+    assert!(
+        error_block.contains(".overflow_scrollbar()"),
+        "long SSH error details, including unbroken tokens, should remain inspectable"
+    );
+    assert!(
+        error_block.contains(".max_h(px("),
+        "the scrollable SSH error area should have a bounded height"
+    );
+    assert!(
+        !error_block.contains(".truncate()"),
+        "SSH error details must not be visually truncated"
+    );
+}
+
+#[test]
 fn reconnect_success_reports_that_a_new_remote_shell_was_opened() {
     let terminal_events = include_str!("../terminal_events.rs");
     let locales = include_str!("../../../locales/terminal_view.yml");

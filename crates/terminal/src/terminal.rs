@@ -258,7 +258,7 @@ struct SshConnectTask {
     event_tx: UnboundedSender<TerminalEvent>,
     zmodem_responder: ZmodemResponder,
     connection_id: Option<i64>,
-    on_disconnect: Option<tokio::sync::oneshot::Sender<()>>,
+    on_disconnect: Option<tokio::sync::oneshot::Sender<Option<String>>>,
     init_commands: Option<String>,
     recording_tap: Option<RecordingTap>,
     generation: u64,
@@ -1564,11 +1564,11 @@ impl Terminal {
         let recording_runtime =
             Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
         let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
-        let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
+        let (disconnect_tx, disconnect_rx) = oneshot::channel::<Option<String>>();
         let connection_generation = 1;
         let zmodem_responder = ZmodemResponder::new(event_tx.clone());
 
-        Self::spawn_disconnect_handler(disconnect_rx, connection_generation, cx);
+        Self::spawn_ssh_disconnect_handler(disconnect_rx, connection_generation, cx);
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
         Self::spawn_ssh_connect(
             SshConnectTask {
@@ -1989,6 +1989,31 @@ impl Terminal {
         .detach();
     }
 
+    fn spawn_ssh_disconnect_handler(
+        disconnect_rx: tokio::sync::oneshot::Receiver<Option<String>>,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let entity = cx.entity().downgrade();
+        cx.spawn(async move |_, cx| {
+            let Ok(error) = disconnect_rx.await else {
+                // Backend creation failed before the runtime actor was installed.
+                // handle_ssh_result owns that error and must not be overwritten.
+                return;
+            };
+            let _ = entity.update(cx, |this, cx| {
+                if !this.is_current_connection_generation(generation) {
+                    return;
+                }
+                this.connection_state = ConnectionState::Disconnected { error };
+                this.backend = None;
+                this.set_connection_active(false, cx);
+                cx.emit(TerminalModelEvent::Wakeup);
+            });
+        })
+        .detach();
+    }
+
     fn spawn_ssh_connect(task: SshConnectTask, cx: &mut Context<Self>) {
         let SshConnectTask {
             session_manager,
@@ -2005,10 +2030,10 @@ impl Terminal {
         } = task;
         let task = Tokio::spawn(cx, async move {
             let disconnect_tx = on_disconnect.map(|tx| {
-                let (sender, mut receiver) = unbounded_channel::<()>();
+                let (sender, mut receiver) = unbounded_channel::<Option<String>>();
                 tokio::spawn(async move {
-                    if receiver.recv().await.is_some() {
-                        let _ = tx.send(());
+                    if let Some(error) = receiver.recv().await {
+                        let _ = tx.send(error);
                     }
                 });
                 sender
@@ -2092,8 +2117,15 @@ impl Terminal {
                     cx.emit(TerminalModelEvent::HostKeyVerificationRequired);
                 } else {
                     self.pending_host_key_verification = None;
+                    let detail = format_connection_error(&e);
+                    tracing::error!(
+                        target: "terminal.ssh.connect",
+                        error = %detail,
+                        error_debug = ?e,
+                        "SSH connection failed"
+                    );
                     self.connection_state = ConnectionState::Disconnected {
-                        error: Some(format_connection_error(&e)),
+                        error: Some(detail),
                     };
                 }
                 self.set_connection_active(false, cx);
@@ -2103,8 +2135,15 @@ impl Terminal {
                     responder.cancel();
                 }
                 self.pending_host_key_verification = None;
+                let detail = format!("{e:#}");
+                tracing::error!(
+                    target: "terminal.ssh.connect",
+                    error = %detail,
+                    error_debug = ?e,
+                    "SSH connection task failed"
+                );
                 self.connection_state = ConnectionState::Disconnected {
-                    error: Some(e.to_string()),
+                    error: Some(detail),
                 };
                 self.set_connection_active(false, cx);
             }
@@ -2932,8 +2971,9 @@ impl Terminal {
                         return;
                     }
 
-                    let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
-                    Self::spawn_disconnect_handler(disconnect_rx, generation, cx);
+                    let (disconnect_tx, disconnect_rx) =
+                        tokio::sync::oneshot::channel::<Option<String>>();
+                    Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
                     Self::spawn_ssh_connect(
                         SshConnectTask {
                             session_manager: session_manager.clone(),

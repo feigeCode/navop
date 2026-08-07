@@ -1,4 +1,5 @@
 use super::*;
+use gpui_component::scroll::ScrollableElement;
 
 impl TerminalView {
     pub(super) fn render_connection_banner(
@@ -140,7 +141,9 @@ impl TerminalView {
                 this.child(
                     div()
                         .w_full()
-                        .truncate()
+                        .max_h(px(180.0))
+                        .overflow_scrollbar()
+                        .whitespace_normal()
                         .text_sm()
                         .text_color(theme.danger)
                         .child(message),

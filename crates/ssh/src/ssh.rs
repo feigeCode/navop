@@ -34,8 +34,8 @@ pub mod defaults {
 
 /// 保留 russh 的现代算法优先级，并可在扩展标记前追加旧服务器兼容回退。
 ///
-/// 兼容回退默认由调用方关闭。即使开启，`group1-sha1` 与
-/// `group-exchange-sha1` 风险更高，也不会随兼容回退一起开放。
+/// 兼容回退默认由调用方关闭。开启后会包含 SHA-1 KEX，仅用于连接无法升级的
+/// 旧版服务器。
 ///
 /// 已知的 host-key 算法只会稳定地移动到 russh 默认列表前部；默认算法不会被
 /// 删除，因此服务器不再提供已知算法时仍可完成协商，并由完整公钥校验拒绝变更。
@@ -73,6 +73,8 @@ pub fn build_client_preferred_algorithms_with_legacy(
                 kex::ECDH_SHA2_NISTP384,
                 kex::ECDH_SHA2_NISTP521,
                 kex::DH_G14_SHA1,
+                kex::DH_GEX_SHA1,
+                kex::DH_G1_SHA1,
             ],
         );
         preferred.kex = Cow::Owned(kex);
@@ -2119,24 +2121,19 @@ mod port_forward_tests {
             .iter()
             .position(|name| name == "diffie-hellman-group14-sha1")
             .expect("group14 SHA-1 fallback should be enabled");
+        let group_exchange_sha1 = names
+            .iter()
+            .position(|name| name == "diffie-hellman-group-exchange-sha1")
+            .expect("group-exchange SHA-1 fallback should be enabled");
+        let group1_sha1 = names
+            .iter()
+            .position(|name| name == "diffie-hellman-group1-sha1")
+            .expect("group1 SHA-1 fallback should be enabled");
 
         assert!(curve25519 < nistp256);
         assert!(nistp256 < group14_sha1);
-    }
-
-    #[test]
-    fn client_kex_does_not_enable_high_risk_sha1_algorithms() {
-        let names = kex_names(true);
-        assert!(
-            !names
-                .iter()
-                .any(|name| name == "diffie-hellman-group1-sha1")
-        );
-        assert!(
-            !names
-                .iter()
-                .any(|name| name == "diffie-hellman-group-exchange-sha1")
-        );
+        assert!(group14_sha1 < group_exchange_sha1);
+        assert!(group_exchange_sha1 < group1_sha1);
     }
 
     #[test]
@@ -2393,15 +2390,42 @@ mod port_forward_tests {
     }
 
     #[tokio::test]
-    async fn client_rejects_group14_sha1_when_legacy_algorithms_are_disabled() {
-        let result = connect_client_to_server_with_only(russh::kex::DH_G14_SHA1, false).await;
+    async fn client_falls_back_to_group_exchange_sha1_when_it_is_the_only_server_kex() {
+        connect_client_to_server_with_only(russh::kex::DH_GEX_SHA1, true)
+            .await
+            .expect("client should negotiate the explicitly enabled group-exchange SHA-1 KEX");
+    }
 
+    #[tokio::test]
+    async fn client_falls_back_to_group1_sha1_when_it_is_the_only_server_kex() {
+        connect_client_to_server_with_only(russh::kex::DH_G1_SHA1, true)
+            .await
+            .expect("client should negotiate the explicitly enabled group1 SHA-1 KEX");
+    }
+
+    async fn assert_legacy_kex_is_rejected_when_disabled(kex: russh::kex::Name) {
+        let result = connect_client_to_server_with_only(kex, false).await;
         let Err(error) = result else {
-            panic!("group14 SHA-1 must not be negotiated unless the connection opts in");
+            panic!("legacy KEX must not be negotiated unless the connection opts in");
         };
         assert!(error.downcast_ref::<LegacyAlgorithmRequired>().is_some());
         assert!(error.to_string().contains("No common Kex algorithm"));
         assert!(error.to_string().contains("Allow Legacy SSH Algorithms"));
+    }
+
+    #[tokio::test]
+    async fn client_rejects_group14_sha1_when_legacy_algorithms_are_disabled() {
+        assert_legacy_kex_is_rejected_when_disabled(russh::kex::DH_G14_SHA1).await;
+    }
+
+    #[tokio::test]
+    async fn client_rejects_group_exchange_sha1_when_legacy_algorithms_are_disabled() {
+        assert_legacy_kex_is_rejected_when_disabled(russh::kex::DH_GEX_SHA1).await;
+    }
+
+    #[tokio::test]
+    async fn client_rejects_group1_sha1_when_legacy_algorithms_are_disabled() {
+        assert_legacy_kex_is_rejected_when_disabled(russh::kex::DH_G1_SHA1).await;
     }
 
     #[test]
