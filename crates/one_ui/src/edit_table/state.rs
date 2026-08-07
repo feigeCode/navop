@@ -1,4 +1,9 @@
-use std::{collections::HashSet, ops::Range, rc::Rc, time::Duration};
+use std::{
+    collections::HashSet,
+    ops::{Range, RangeInclusive},
+    rc::Rc,
+    time::Duration,
+};
 
 use super::filter_state::FilterState;
 use super::selection::{CellCoord, TableSelection};
@@ -22,6 +27,24 @@ use gpui_component::{
     v_flex,
 };
 use rust_i18n::t;
+
+fn data_column_selection_bounds(
+    data_column_count: usize,
+    row_number_offset: usize,
+) -> Option<(usize, usize)> {
+    let last_data_column = data_column_count.checked_sub(1)?;
+    Some((row_number_offset, row_number_offset + last_data_column))
+}
+
+fn selected_delegate_column_range(
+    min_col: usize,
+    max_col: usize,
+    row_number_offset: usize,
+) -> Option<RangeInclusive<usize>> {
+    let first_data_col = min_col.max(row_number_offset);
+    (first_data_col <= max_col)
+        .then(|| first_data_col - row_number_offset..=max_col - row_number_offset)
+}
 
 const SCROLLBAR_WIDTH: Pixels = px(16.);
 const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
@@ -324,9 +347,13 @@ where
         } else {
             0
         };
-        let end_col = self.col_groups.len().saturating_sub(1);
-        self.selection
-            .select_row(row_ix, row_number_offset, end_col);
+        if let Some((start_col, end_col)) =
+            data_column_selection_bounds(self.col_groups.len(), row_number_offset)
+        {
+            self.selection.select_row(row_ix, start_col, end_col);
+        } else {
+            self.selection.clear();
+        }
         if let Some(row_ix) = self.selected_row {
             self.vertical_scroll_handle.scroll_to_item(
                 row_ix,
@@ -353,19 +380,22 @@ where
         } else {
             0
         };
-        let end_col = self.col_groups.len().saturating_sub(1);
+        let selection_bounds =
+            data_column_selection_bounds(self.col_groups.len(), row_number_offset);
 
         self.selection_state = SelectionState::Row;
         self.right_clicked_row = None;
         self.selected_row = Some(row_ix);
         self.selected_col = None;
         self.selected_cell = None;
-        if can_extend {
-            self.selection
-                .extend_row_to(row_ix, row_number_offset, end_col);
+        if let Some((start_col, end_col)) = selection_bounds {
+            if can_extend {
+                self.selection.extend_row_to(row_ix, start_col, end_col);
+            } else {
+                self.selection.select_row(row_ix, start_col, end_col);
+            }
         } else {
-            self.selection
-                .select_row(row_ix, row_number_offset, end_col);
+            self.selection.clear();
         }
         self.vertical_scroll_handle.scroll_to_item(
             row_ix,
@@ -659,8 +689,13 @@ where
         } else {
             0
         };
-        self.selection
-            .select_all(row_count, col_count.saturating_sub(row_number_offset));
+        if let Some((start_col, end_col)) =
+            data_column_selection_bounds(col_count, row_number_offset)
+        {
+            self.selection.select_all(row_count, start_col, end_col);
+        } else {
+            self.selection.clear();
+        }
         self.sync_legacy_selection(cx);
         cx.emit(EditTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
@@ -1626,12 +1661,12 @@ where
             0
         };
         let ((min_row, min_col), (max_row, max_col)) = range.normalized();
+        let delegate_columns = selected_delegate_column_range(min_col, max_col, row_number_offset)?;
 
         let mut data: Vec<Vec<String>> = Vec::new();
         for row in min_row..=max_row {
             let mut row_data: Vec<String> = Vec::new();
-            for col in min_col..=max_col {
-                let delegate_col = col.saturating_sub(row_number_offset);
+            for delegate_col in delegate_columns.clone() {
                 let value = self.delegate.get_cell_value(row, delegate_col, cx);
                 row_data.push(value);
             }
@@ -1657,12 +1692,12 @@ where
             0
         };
         let ((min_row, min_col), (max_row, max_col)) = range.normalized();
+        let delegate_columns = selected_delegate_column_range(min_col, max_col, row_number_offset)?;
 
         let mut data = Vec::new();
         for row in min_row..=max_row {
             let mut row_data = Vec::new();
-            for col in min_col..=max_col {
-                let delegate_col = col.saturating_sub(row_number_offset);
+            for delegate_col in delegate_columns.clone() {
                 row_data.push(self.delegate.get_optional_cell_value(row, delegate_col, cx));
             }
             data.push(row_data);
@@ -1684,11 +1719,10 @@ where
         };
         let ((_, min_col), (_, max_col)) = range.normalized();
 
-        (min_col..=max_col)
-            .map(|col| {
-                let delegate_col = col.saturating_sub(row_number_offset);
-                self.delegate.get_column_name(delegate_col, cx)
-            })
+        selected_delegate_column_range(min_col, max_col, row_number_offset)
+            .into_iter()
+            .flatten()
+            .map(|delegate_col| self.delegate.get_column_name(delegate_col, cx))
             .collect()
     }
 
@@ -1708,14 +1742,17 @@ where
             0
         };
         let ((min_row, min_col), (max_row, max_col)) = range.normalized();
+        let Some(delegate_columns) =
+            selected_delegate_column_range(min_col, max_col, row_number_offset)
+        else {
+            return;
+        };
 
         // 收集选中单元格的原始值，保留 SQL NULL 与文本值的区别。
         let mut data: Vec<Vec<Option<String>>> = Vec::new();
         for row in min_row..=max_row {
             let mut row_data: Vec<Option<String>> = Vec::new();
-            for col in min_col..=max_col {
-                // 转换为 delegate 的列索引（去除行号列偏移）
-                let delegate_col = col.saturating_sub(row_number_offset);
+            for delegate_col in delegate_columns.clone() {
                 let value = self.delegate.get_optional_cell_value(row, delegate_col, cx);
                 row_data.push(value);
             }
@@ -3074,6 +3111,23 @@ mod tests {
         );
 
         assert_eq!(DeletedRowSelectionCleanup::default(), cleanup);
+    }
+
+    #[test]
+    fn data_column_bounds_include_every_data_column_after_row_numbers() {
+        assert_eq!(Some((1, 4)), data_column_selection_bounds(4, 1));
+        assert_eq!(Some((0, 3)), data_column_selection_bounds(4, 0));
+        assert_eq!(None, data_column_selection_bounds(0, 1));
+    }
+
+    #[test]
+    fn selected_delegate_columns_skip_the_row_number_column() {
+        let columns = selected_delegate_column_range(0, 3, 1)
+            .unwrap()
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![0, 1, 2], columns);
+        assert_eq!(None, selected_delegate_column_range(0, 0, 1));
     }
 }
 

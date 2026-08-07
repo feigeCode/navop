@@ -257,16 +257,19 @@ impl TableSelection {
         self.active = Some((0, col));
     }
 
-    /// 选择所有单元格
-    pub fn select_all(&mut self, row_count: usize, col_count: usize) {
+    /// 选择指定列边界内的所有单元格
+    pub fn select_all(&mut self, row_count: usize, start_col: usize, end_col: usize) {
         self.ranges.clear();
-        if row_count > 0 && col_count > 0 {
+        if row_count > 0 && start_col <= end_col {
             self.ranges.push(CellRange::new(
-                (0, 0),
-                (row_count.saturating_sub(1), col_count.saturating_sub(1)),
+                (0, start_col),
+                (row_count.saturating_sub(1), end_col),
             ));
-            self.anchor = Some((0, 0));
-            self.active = Some((0, 0));
+            self.anchor = Some((0, start_col));
+            self.active = Some((0, start_col));
+        } else {
+            self.anchor = None;
+            self.active = None;
         }
     }
 
@@ -386,5 +389,17 @@ mod tests {
         assert!(selection.contains_row(2));
         assert!(selection.contains_row(3));
         assert!(!selection.contains_row(4));
+    }
+
+    #[test]
+    fn select_all_respects_explicit_data_column_bounds() {
+        let mut selection = TableSelection::new();
+        selection.select_all(3, 1, 4);
+
+        assert!(!selection.contains(1, 0));
+        assert!(selection.contains(1, 1));
+        assert!(selection.contains(1, 4));
+        assert_eq!(Some((0, 1)), selection.anchor);
+        assert_eq!(Some((0, 1)), selection.active);
     }
 }
