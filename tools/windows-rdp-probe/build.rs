@@ -1,4 +1,6 @@
 use std::env;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(windows_rdp_probe_native)");
@@ -45,10 +47,14 @@ fn validate_windows_target() {
 
 #[cfg(windows)]
 fn build_native_probe() {
+    let out_dir = PathBuf::from(required_env("OUT_DIR"));
+
     cc::Build::new()
         .cpp(true)
         .file("native/windows_rdp_probe.cpp")
         .include("native")
+        .include(&out_dir)
+        .out_dir(&out_dir)
         .flag("/EHsc")
         .flag("/std:c++17")
         .flag("/permissive-")

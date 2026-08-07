@@ -6,6 +6,7 @@ use std::process::Command;
 const X64_TARGET: &str = "x86_64-pc-windows-msvc";
 const X86_TARGET: &str = "i686-pc-windows-msvc";
 const PROBE_BUILD: &str = "cargo build --locked -p windows-rdp-probe";
+const RDP_TYPELIB_LIBID: &str = "8C11EFA1-92C3-11D1-BC1E-00C04FA31489";
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -71,7 +72,11 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
         "tools/windows-rdp-probe/native/windows_rdp_probe.cpp",
         &[
             "atlhost.h",
-            "mstscax.h",
+            &format!("#import \"libid:{RDP_TYPELIB_LIBID}\""),
+            "raw_interfaces_only",
+            "named_guids",
+            "no_namespace",
+            "#include \"mstscax.tlh\"",
             "AtlAxWinInit",
             "AtlAxCreateControlEx",
             "CLSID_MsRdpClient12",
@@ -91,7 +96,14 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
     );
     assert_excludes_all(
         "tools/windows-rdp-probe/native/windows_rdp_probe.cpp",
-        &["IMsRdpClient11", "IMsRdpClient12", "#import"],
+        &[
+            "IMsRdpClient11",
+            "IMsRdpClient12",
+            "#include <mstscax.h>",
+            "#include \"mstscax.h\"",
+            "#import \"mstscax.dll\"",
+            "#import <mstscax.dll>",
+        ],
     );
 }
 
@@ -170,8 +182,10 @@ fn build_contract_is_windows_hosted_msvc_only() {
             "CARGO_CFG_TARGET_ARCH",
             "HOST",
             "TARGET",
+            "OUT_DIR",
             "windows_rdp_probe.cpp",
             "cpp(true)",
+            "include(&out_dir)",
             "windows_rdp_probe_native",
             "x86_64",
             "\"x86\"",
@@ -189,7 +203,7 @@ fn build_contract_is_windows_hosted_msvc_only() {
 }
 
 #[test]
-fn windows_setup_requires_native_desktop_atl_and_sdk_headers() {
+fn windows_setup_requires_native_desktop_atl_and_system_typelib() {
     assert_contains_all(
         "script/install-window.ps1",
         &[
@@ -209,7 +223,6 @@ fn windows_setup_requires_native_desktop_atl_and_sdk_headers() {
             "Microsoft.VisualStudio.Workload.NativeDesktop",
             "Microsoft.VisualStudio.Component.VC.ATL",
             "atlbase.h",
-            "mstscax.h",
             "vcvarsall.bat",
             X64_TARGET,
             X86_TARGET,
@@ -218,6 +231,10 @@ fn windows_setup_requires_native_desktop_atl_and_sdk_headers() {
             "chcp 65001 >nul",
             "Compile-only probe gate",
         ],
+    );
+    assert_excludes_all(
+        "script/build-windows-rdp-probe.ps1",
+        &["mstscax.h", "mstscax.dll", "regsvr32"],
     );
 }
 
@@ -255,6 +272,8 @@ fn probe_does_not_redistribute_or_register_mstscax() {
         "curl mstscax.dll",
         "wget mstscax.dll",
         "Copy-Item mstscax.dll",
+        "#import \"mstscax.dll\"",
+        "#import <mstscax.dll>",
     ];
 
     for path in paths {
