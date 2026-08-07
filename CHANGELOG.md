@@ -4,7 +4,7 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 
 <!-- NAVOP_RELEASES -->
 
-## [v0.10.5] - 2026-08-06
+## [v0.10.5] - 2026-08-07
 
 ### 中文
 
@@ -17,6 +17,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### 修复与优化
 
 - 修复 Agent 上下文压缩模型调用失败时任务会中断的问题，现在会使用本地摘要继续执行，同时保留取消操作语义。
+- 修复弹出菜单在搜索或内容更新后可能丢失键盘焦点的问题，并在关闭时正确恢复此前焦点。
+- 修复 AI Chat 切换资源上下文后最新消息可能不可见的问题，现在会自动滚动到最新消息。
+- 改善 SSH 和 SFTP 的连接失败诊断以及 SSH 终端运行时错误展示：日志和断开界面会保留完整错误上下文，便于定位连接、输入发送、解析及会话运行问题。
+- 改善旧版 SSH 服务器兼容性；明确启用“允许旧版 SSH 算法”后，SSH 和 SFTP 支持更多 SHA-1 密钥交换算法，默认仍保持关闭。
 
 ---
 
@@ -31,6 +35,10 @@ Navop user-facing release notes. Generate and review each bilingual version entr
 #### Fixes and Improvements
 
 - Fixed Agent tasks stopping when context-compaction model calls fail; a local fallback summary is now used while preserving cancellation behavior.
+- Fixed keyboard focus being lost in popovers during search or content updates, and correctly restored the previously focused element when the popover is dismissed.
+- Fixed the latest message becoming hidden after changing the AI Chat resource context; the view now scrolls to the newest message automatically.
+- Improved SSH and SFTP connection diagnostics and SSH terminal runtime error reporting. Logs and the disconnect UI now preserve full error context for connection, input, parser, and session failures.
+- Improved compatibility with older SSH servers by supporting additional SHA-1 key-exchange algorithms for SSH and SFTP when “Allow Legacy SSH Algorithms” is explicitly enabled; the setting remains disabled by default.
 
 **Full Changelog**: https://github.com/feigeCode/navop/compare/v0.10.4...v0.10.5
 
