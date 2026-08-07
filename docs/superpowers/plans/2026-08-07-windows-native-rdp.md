@@ -299,22 +299,67 @@ Presentation 层不拥有：
 
 ### 4.3 C ABI 草案
 
-所有接口在 Task 2 contract test 后冻结。复杂参数通过 struct 传递，不增加大量位置参数。
+ABI v1 lifecycle prefix 已在 Task 2 第一最小切片的 contract test 后冻结；后续接口只在
+各自小切片的 contract test 后分别冻结。复杂参数通过 versioned struct 传递，不增加大量位置参数。
+
+Task 2 第一最小切片已经冻结以下 **ABI v1 lifecycle prefix**。这一版只覆盖
+`probe/create/destroy` 和 opaque handle，不包含 parent `HWND`、callback、connect、
+credentials、bounds 或 ActiveX/COM 对象：
 
 ```c
-typedef struct NavopRdpHost NavopRdpHost;
+typedef struct NativeRdpHost NativeRdpHost;
 
-typedef struct {
+typedef int32_t NavopRdpResult;
+
+#define NAVOP_RDP_ABI_VERSION UINT32_C(1)
+
+typedef struct NavopRdpProbeOptions {
+    uint32_t struct_size;
     uint32_t abi_version;
-    uintptr_t parent_hwnd;
-    uint64_t generation;
-    void* callback_context;
-    void (__stdcall *event_callback)(
-        void* context,
-        const NavopRdpEvent* event);
+} NavopRdpProbeOptions;
+
+typedef struct NavopRdpProbeResult {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t available;
+    uint32_t reserved;
+} NavopRdpProbeResult;
+
+typedef struct NavopRdpCreateOptions {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t generation_low;
+    uint32_t generation_high;
 } NavopRdpCreateOptions;
 
+NavopRdpResult navop_rdp_probe(
+    const NavopRdpProbeOptions* options,
+    NavopRdpProbeResult* out_result);
+NavopRdpResult navop_rdp_create(
+    const NavopRdpCreateOptions* options,
+    NativeRdpHost** out_host);
+NavopRdpResult navop_rdp_destroy(NativeRdpHost** host);
+```
+
+ABI v1 lifecycle prefix 规则：
+
+- 所有 versioned struct 的 `struct_size` 固定在 offset 0，`abi_version` 固定在 offset 4。
+- `struct_size >= sizeof(current layout)` 表示调用方提供了当前已知前缀以及可能存在的未来尾部字段；实现只访问已知前缀，不访问或修改未知尾部。
+- 输出 struct 必须保留调用方传入的 `struct_size`，不能把更大的未来布局缩回当前尺寸。
+- 校验顺序固定为 null pointer → `struct_size` → `abi_version`；尺寸不足时不得提前读取 version。
+- 新字段只能追加到 versioned struct 尾部；不能重排、复用或改变已冻结字段的宽度。
+- `generation_low`/`generation_high` 代替 ABI 中直接暴露的 `uint64_t`，避免 x86/x64 alignment 差异；数值按 `low | (high << 32)` 重组。
+- `NavopRdpResult` 固定为 32-bit signed integer；C++ 异常不得跨 C ABI。
+- `create` 在可写的 `out_host` 非空时先将 `*out_host` 置空；`destroy` 使用 `NativeRdpHost**`，成功后置空，重复 destroy 可安全返回。
+
+以下是 **尚未冻结的后续扩展方向**。parent `HWND`、callback、connect、credentials、
+bounds 和 settings 必须在各自小切片中增加独立 versioned struct/entrypoint，并通过
+x64/x86 layout contract；不能无版本地塞回已经冻结的 lifecycle prefix：
+
+```c
 typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
     const uint16_t* host;
     uint32_t host_len;
     uint16_t port;
@@ -331,12 +376,16 @@ typedef struct {
 } NavopRdpBorrowedSecret;
 
 typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
     NavopRdpBorrowedSecret server_password;
     NavopRdpBorrowedSecret gateway_password;
     uint32_t flags;
 } NavopRdpCredentialBundle;
 
 typedef struct {
+    uint32_t struct_size;
+    uint32_t abi_version;
     int32_t x;
     int32_t y;
     int32_t width;
@@ -344,27 +393,22 @@ typedef struct {
     uint32_t dpi;
 } NavopRdpBounds;
 
-NavopRdpResult navop_rdp_probe(NavopRdpCapabilities* out);
-NavopRdpResult navop_rdp_create(
-    const NavopRdpCreateOptions* options,
-    NavopRdpHost** out_host);
 NavopRdpResult navop_rdp_connect(
-    NavopRdpHost* host,
+    NativeRdpHost* host,
     const NavopRdpConnectOptions* options);
 NavopRdpResult navop_rdp_apply_credentials(
-    NavopRdpHost* host,
+    NativeRdpHost* host,
     const NavopRdpCredentialBundle* credentials);
 NavopRdpResult navop_rdp_set_bounds(
-    NavopRdpHost* host,
+    NativeRdpHost* host,
     const NavopRdpBounds* bounds);
 NavopRdpResult navop_rdp_set_visible(
-    NavopRdpHost* host,
+    NativeRdpHost* host,
     uint8_t visible);
-NavopRdpResult navop_rdp_focus(NavopRdpHost* host);
+NavopRdpResult navop_rdp_focus(NativeRdpHost* host);
 NavopRdpResult navop_rdp_disconnect(
-    NavopRdpHost* host,
+    NativeRdpHost* host,
     uint32_t reason);
-NavopRdpResult navop_rdp_destroy(NavopRdpHost** host);
 ```
 
 扩展功能按 settings struct 分组：
@@ -379,7 +423,7 @@ NavopRdpResult navop_rdp_destroy(NavopRdpHost** host);
 
 ABI 规则：
 
-- `abi_version` 首字段固定。
+- 所有后续 versioned struct 继续使用 `struct_size`/`abi_version` 固定前缀和 append-only 演进。
 - C++ 不保存 Rust 临时 slice pointer。
 - `NavopRdpBorrowedSecret` 只在 FFI 调用返回前有效；native 不跨调用保存该 pointer。
 - server 和 Gateway secret 使用不同字段，禁止凭据来源不明确或意外复用。
@@ -388,7 +432,7 @@ ABI 规则：
 - callback 不直接更新 GPUI entity，只复制为 owned Rust event 并投递到 UI executor。
 - callback 发出期间不得重入 destroy。
 - callback 进入时增加 in-flight 计数，退出时减少；`Closing` 后不再转发新事件。
-- destroy 使用 `NavopRdpHost**`，成功后置空，保证重复调用可检测。
+- destroy 使用 `NativeRdpHost**`，成功后置空，保证重复调用可检测。
 - 错误返回固定 code + HRESULT + extended disconnect reason；错误文本在 Rust 侧本地化。
 
 ### 4.4 事件模型
@@ -894,6 +938,9 @@ Probe contract：
 
 **Depends on:** Task 1。
 
+**Status:** 进行中。当前只交付并验证 ABI v1 lifecycle prefix 第一最小切片；event/callback、
+credentials/zeroize 和完整 lifecycle review 尚未完成。
+
 **Files:**
 
 - Create: `crates/windows_rdp_host/Cargo.toml`
@@ -918,17 +965,64 @@ Probe contract：
 - owned Rust event bridge。
 - deterministic error type。
 
-- [ ] **Red:** 写 ABI layout test，覆盖 Rust/C++ struct size、alignment、enum width 和 `abi_version` mismatch。
-- [ ] **Red:** 写 fake native implementation 测试 create failure、null handle、double destroy、callback-after-close。
+- [x] **Red:** 写 ABI layout test，覆盖 Rust/C++ struct size、alignment、固定 32-bit result width 和 `abi_version` mismatch。
+- [x] **Red:** 写 fake bindings 测试 create failure、null handle、double destroy 和 native 未清空 handle。
+- [ ] **Red:** 写 callback-after-close、stale generation、owned payload 和 callback reentrancy 测试。
 - [ ] **Red:** 写 server/Gateway secret borrowed-until-return、异常/OOM/取消/重复 apply、两端 zeroize 和禁止 full-memory dump 的 contract test。
-- [ ] **Green:** 使用 `cc::Build` 编译 C++17 shim；非 Windows target 完全不运行 build。
-- [ ] **Green:** 实现 RAII Rust wrapper，`Drop` 只调幂等 destroy。
-- [ ] **Green:** C++ 入口捕获异常并转换为固定 result。
+- [x] **Green:** 使用 `cc::Build` 编译 C++17 shim；非 Windows target 完全不运行 build。
+- [x] **Green:** 实现 RAII Rust wrapper，`Drop` 只调幂等 destroy。
+- [x] **Green:** C++ 入口捕获异常并转换为固定 result。
 - [ ] **Green:** callback 转成 owned event queue，不从 callback 直接访问 GPUI。
 - [ ] **Green:** 实现独立的一次性 credential apply API，server 和 Gateway secret 不进入普通 connect options。
 - [ ] **Refactor:** 将 lifecycle、event、error 分文件，保持文件/函数复杂度约束。
 - [ ] **Review:** 对所有 `unsafe` 添加 safety invariant；检查 pointer lifetime、string length、thread ownership。
-- [ ] **Verify:** 运行 crate tests、Windows x64/x86 check、C/C++ warning-as-error。
+- [x] **Verify（第一最小切片）:** 通过本地 crate/contract tests、C/C++ warning-as-error 配置，以及 GitHub Windows x64/x86 compile/link-only gate。
+
+**Execution Notes (2026-08-07) — 第一最小切片：**
+
+- Red evidence:
+  - ABI contract 首先固定 `NAVOP_RDP_ABI_VERSION == 1`、`NavopRdpResult == int32_t`、三个 versioned struct 的 size/alignment/field offset、generation low/high 拆分和 deterministic result code mapping。
+  - fake bindings 覆盖 create failure、native 返回 success 但 null handle、close/Drop 重复 destroy、destroy failure，以及 native 返回 success 但未清空 handle。
+  - contract review 发现组合校验 helper 可能在 `struct_size` 不足时提前读取 `abi_version`；实现已改为先校验 size，再读取 version，并增加源码 contract 防回归。
+  - callback-after-close、owned event、stale generation、server/Gateway secret、credential apply 和 zeroize 仍保持 Red/未实现，不能由当前 lifecycle tests 代替。
+- Green implementation:
+  - 新增 `crates/windows_rdp_host` workspace crate，提供 `WindowsRdpHost`、`WindowsRdpHostOptions`、`WindowsRdpHostCapabilities`、`WindowsRdpHostError` 和 opaque `NativeRdpHost*` facade。
+  - 当前冻结的 ABI v1 只包含 `probe/create/destroy`；所有 structs 使用 `struct_size` offset 0、`abi_version` offset 4 的 append-only prefix。
+  - `NavopRdpCreateOptions` 将 generation 拆成 `generation_low`/`generation_high`，避免在 C ABI 中引入 x86/x64 不同的 `uint64_t` alignment。
+  - `struct_size >= sizeof(current layout)` 被定义为前向兼容：只访问当前已知前缀，probe 保留调用方输出 size，不触碰未知尾部。
+  - create 对可写 `out_host` 先置空，使用 `new (std::nothrow)` 并映射 allocation failure；probe/create/destroy 全部捕获 C++ 异常并返回固定 result。
+  - destroy 对 null handle 幂等，成功路径先清空调用方 pointer 再释放对象；Safe Rust `close()` 额外拒绝“native 返回成功但未清空 handle”。
+  - Rust facade 使用 `PhantomData<Rc<()>>` 保持 `!Send + !Sync`，为后续 STA/COM owner-thread contract 预留正确默认。
+  - 非 Windows stub 不运行 `cc::Build`，probe 稳定返回 `available = false`，create 返回 `Unavailable`，并保持与 native 相同的 size/version 校验顺序和输出 size 语义。
+- Refactor/review:
+  - 当前代码按 `ffi`、`handle`、`options`、`capabilities`、`error` 分离；`event.rs` 和独立 lifecycle/event queue 尚未创建，因此 Task 2 的完整 Refactor 项仍未勾选。
+  - 两轮独立只读审查未发现本切片阻断问题；审查意见已用于增加所有字段的 C++ `offsetof` static assertions、扩展 struct 注释、destroy failure/non-clearing fake tests 和更严格的 CI contract。
+  - `Drop` 无法返回 destroy error，当前平凡 native object 的 destroy 会先清空再 delete；引入 COM/event sink/in-flight callback 后必须重新审查销毁错误、callback quiescence 和资源释放保证。
+- Automated verification:
+  - Commit：`984e921d7b005c8175914ecef50674c3b3e45097`。
+  - `rtk cargo fmt --all --check`：通过。
+  - `rtk cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`：通过。
+  - `rtk cargo test --locked -p windows_rdp_host`：18 passed。
+  - `rtk cargo test --locked -p windows-rdp-probe --test contract`：11 passed。
+  - `rtk git diff --check`：通过。
+- GitHub-hosted Windows compile/link verification:
+  - Workflow run：[`31176321867`](https://github.com/feigeCode/navop/actions/runs/31176321867)，head SHA 为 `984e921d7b005c8175914ecef50674c3b3e45097`。
+  - x64 job：[`Windows RDP probe (x86_64-pc-windows-msvc)` / `92859007370`](https://github.com/feigeCode/navop/actions/runs/31176321867/job/92859007370)，成功编译并链接 `windows-rdp-probe` 与 `windows_rdp_host` test executable。
+  - x86 job：[`Windows RDP probe (i686-pc-windows-msvc)` / `92859007371`](https://github.com/feigeCode/navop/actions/runs/31176321867/job/92859007371)，成功编译并链接 `windows-rdp-probe` 与 `windows_rdp_host` test executable。
+  - 两个目标 job 完成后，为节省 runner 主动取消了该 workflow 的其他无关 job，因此 workflow 最终 conclusion 为 `cancelled`；这不表示上述两个目标 job 失败。
+  - Windows gate 实际执行 locked probe build 和 `windows_rdp_host --no-run`。它证明 MSVC C++ static library、Rust FFI symbols、x64/i686 ABI 能完成 compile/link，不运行 test executable，也不证明 ActiveX runtime。
+- Manual verification:
+  - 当前开发机是 macOS；本切片没有在本机执行 Windows binary。
+  - 本切片不创建 COM apartment、ATL AxWin、`MsRdpClient12`、event sink、child `HWND` 或 RDP session，因此没有可声称通过的 ActiveX create/query/show/connect runtime smoke。
+- Known limitations:
+  - 当前 `NativeRdpHost` 只保存 lifecycle generation metadata；它不是 ActiveX host，也不是 framebuffer backend。
+  - generation 尚未进入 callback/event filtering；没有 explicit `Closing` callback gate、owned event queue、in-flight callback drain 或 callback-after-close 防护。
+  - 没有 server/Gateway secret 类型、credential apply、zeroize 或 crash/full-memory-dump policy 实现。
+  - `windows_rdp_host` 尚未接入 `RemoteDesktopView`、presentation factory、parent `HWND`、backend fallback 或 GPUI tab。
+- Decision changes:
+  - 早期草案中的“`abi_version` 首字段”改为固定的 `struct_size`/`abi_version` 双字段 prefix；后续字段 append-only。
+  - 早期草案中的 ABI `uint64_t generation` 改成两个 `uint32_t` 字段，Rust/C++ 内部再重组为 `u64`。
+  - parent `HWND`、callback、connect、credentials、bounds 和 settings 不提前加入 lifecycle prefix；它们在后续切片中通过独立 versioned contract 演进。
 
 **Acceptance:**
 
@@ -2070,25 +2164,43 @@ Probe contract：
 
 ## 13. 最终验证命令
 
-实际 package 名称和 feature 组合在 Task 0/2 冻结后更新；Task 2 完成条件之一是把本节占位命令替换成仓库真实可执行命令。所有命令应在仓库根目录运行。
+以下命令使用当前仓库真实 package/feature 名称。所有命令应在仓库根目录运行；后续 Task 引入新的 package、feature 或 release gate 时继续追加，不能恢复不存在的
+`windows_rdp_host/windows-native-rdp` feature。
 
 ```bash
-rtk cargo fmt --all -- --check
-rtk cargo test -p windows_rdp_host
-rtk cargo test -p windows_rdp_host --features windows-native-rdp
-rtk cargo test -p remote_desktop_view
-rtk cargo test -p remote_desktop_view --features windows-native-rdp
-rtk cargo test -p remote_desktop
-rtk cargo test -p one-core
-rtk cargo check -p main --features windows-native-rdp
-rtk cargo clippy -p windows_rdp_host --all-targets -- -D warnings
-rtk cargo clippy -p remote_desktop_view --all-targets -- -D warnings
-rtk cargo check --target x86_64-pc-windows-msvc --features windows-native-rdp
-rtk cargo check --target i686-pc-windows-msvc --features windows-native-rdp
-rtk cargo check --workspace --all-targets
+rtk cargo fmt --all --check
+rtk cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings
+rtk cargo test --locked -p windows_rdp_host
+rtk cargo test --locked -p windows-rdp-probe --test contract
+rtk cargo test --locked -p remote_desktop_view
+rtk cargo test --locked -p remote_desktop_view --features windows-native-rdp
+rtk cargo test --locked -p remote_desktop
+rtk cargo test --locked -p one-core
+rtk cargo check --locked -p main
+rtk cargo check --locked -p main --features windows-native-rdp
+rtk cargo clippy --locked -p remote_desktop_view --all-targets -- -D warnings
+rtk cargo check --locked --workspace --all-targets
 rtk node script/test-release-packaging.mjs
 rtk git diff --check
 ```
+
+Windows x64/x86 的当前 host ABI gate 必须在 Windows-hosted MSVC/ATL 环境执行：
+
+```powershell
+./script/build-windows-rdp-probe.ps1 `
+  -Target x86_64-pc-windows-msvc,i686-pc-windows-msvc
+```
+
+脚本对每个 target 执行：
+
+```powershell
+cargo build --locked -p windows-rdp-probe --target $RustTarget
+cargo test --locked -p windows_rdp_host --target $RustTarget --no-run
+```
+
+该 gate 是 compile/link-only，不运行 probe 或 host test executable。macOS 本地测试不能替代
+Windows linker 结果；GitHub-hosted runner 的 compile/link 成功也不能替代有交互桌面的
+ActiveX runtime smoke。
 
 还必须执行：
 
