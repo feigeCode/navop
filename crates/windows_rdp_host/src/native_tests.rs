@@ -3,9 +3,10 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi::{
-    ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult, NavopRdpCreateOptions,
-    NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT,
-    RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_WRONG_THREAD,
+    ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult, NavopRdpBorrowedSecret,
+    NavopRdpCreateOptions, NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions,
+    RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK,
+    RESULT_WRONG_THREAD,
 };
 
 unsafe extern "C" {
@@ -20,6 +21,10 @@ unsafe extern "C" {
         callback_context: *mut c_void,
     ) -> NativeResult;
     fn navop_rdp_unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult;
+    fn navop_rdp_apply_credentials(
+        host: *mut NativeRdpHost,
+        credentials: *const NavopRdpCredentialBundle,
+    ) -> NativeResult;
     fn navop_rdp_destroy(host: *mut *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_test_dispatch_event(
         host: *mut NativeRdpHost,
@@ -118,6 +123,29 @@ fn assert_invalid_events_rejected(
         RESULT_INVALID_ARGUMENT,
         context,
     );
+}
+
+fn credential_bundle(server: Option<&[u16]>, gateway: Option<&[u16]>) -> NavopRdpCredentialBundle {
+    fn borrowed_secret(secret: Option<&[u16]>) -> NavopRdpBorrowedSecret {
+        match secret {
+            Some(secret) if !secret.is_empty() => NavopRdpBorrowedSecret {
+                data: secret.as_ptr(),
+                len: secret.len() as u32,
+            },
+            _ => NavopRdpBorrowedSecret {
+                data: ptr::null(),
+                len: 0,
+            },
+        }
+    }
+
+    NavopRdpCredentialBundle {
+        struct_size: size_of::<NavopRdpCredentialBundle>() as u32,
+        abi_version: ABI_VERSION,
+        server_password: borrowed_secret(server),
+        gateway_password: borrowed_secret(gateway),
+        flags: 0,
+    }
 }
 
 #[derive(Default)]
@@ -364,6 +392,122 @@ fn wrong_thread_dispatch_unregister_and_destroy_are_rejected() {
         RESULT_OK
     );
     assert_eq!(context.calls, 1);
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_credentials_accept_empty_and_separate_server_gateway_secrets() {
+    let server = [0x0073, 0x0065, 0x0072, 0x0076, 0x0065, 0x0072];
+    let gateway = [0x0067, 0x0061, 0x0074, 0x0065];
+    let mut host = unsafe { create_host(42) };
+    let cases = [
+        credential_bundle(None, None),
+        credential_bundle(Some(&server), None),
+        credential_bundle(None, Some(&gateway)),
+        credential_bundle(Some(&server), Some(&gateway)),
+    ];
+
+    for credentials in &cases {
+        assert_eq!(
+            unsafe { navop_rdp_apply_credentials(host, credentials) },
+            RESULT_OK
+        );
+    }
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_credentials_reject_invalid_layout_and_borrowed_secrets() {
+    let server = [0x0073, 0x0065, 0x0072, 0x0076, 0x0065, 0x0072];
+    let mut host = unsafe { create_host(42) };
+    let valid = credential_bundle(Some(&server), None);
+
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(ptr::null_mut(), &valid) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut short = credential_bundle(Some(&server), None);
+    short.struct_size -= 1;
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &short) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut wrong_abi = credential_bundle(Some(&server), None);
+    wrong_abi.abi_version += 1;
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &wrong_abi) },
+        RESULT_ABI_MISMATCH
+    );
+
+    let mut flags = credential_bundle(Some(&server), None);
+    flags.flags = 1;
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &flags) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_server = credential_bundle(Some(&server), None);
+    null_server.server_password = NavopRdpBorrowedSecret {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_server) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_gateway = credential_bundle(Some(&server), None);
+    null_gateway.gateway_password = NavopRdpBorrowedSecret {
+        data: ptr::null(),
+        len: 1,
+    };
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &null_gateway) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_credentials_preserve_owner_thread_and_open_gate_rules() {
+    let generation = 42;
+    let mut host = unsafe { create_host(generation) };
+    let host_address = host as usize;
+
+    let wrong_thread_result = std::thread::spawn(move || {
+        let host = host_address as *mut NativeRdpHost;
+        let credentials = credential_bundle(None, None);
+        unsafe { navop_rdp_apply_credentials(host, &credentials) }
+    })
+    .join()
+    .expect("wrong-thread credential test worker should not panic");
+    assert_eq!(wrong_thread_result, RESULT_WRONG_THREAD);
+
+    let credentials = credential_bundle(None, None);
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &credentials) },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_apply_credentials(host, &credentials) },
+        RESULT_INVALID_ARGUMENT
+    );
+
     assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
     assert!(host.is_null());
 }

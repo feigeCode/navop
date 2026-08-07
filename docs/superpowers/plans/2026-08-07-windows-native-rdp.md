@@ -1177,8 +1177,42 @@ Task 2 lifecycle review 尚未完成。
     `./script/build-windows-rdp-probe.ps1 -Target
     x86_64-pc-windows-msvc,i686-pc-windows-msvc`，确认 `/W4 /WX` compile/link 和
     native test executable 的真实结果。
-  - 即使该 runner 通过，也不证明 ActiveX create/query/connect、COM apartment、
-    child `HWND`、GPUI tab 嵌入或有交互桌面的 runtime smoke。
+- 即使该 runner 通过，也不证明 ActiveX create/query/connect、COM apartment、
+  child `HWND`、GPUI tab 嵌入或有交互桌面的 runtime smoke。
+
+**Execution Notes (2026-08-07) — 第五最小切片：credential native runtime contract：**
+
+- Red evidence:
+  - 现有 Rust/fake 与源码 contract 已覆盖 credential layout、校验顺序、独立的
+    server/Gateway borrowed UTF-16 和 RAII wipe 文本，但 Windows-only native test
+    模块没有实际调用 `navop_rdp_apply_credentials`。
+  - 因此补充 native runtime matrix，不能把 Rust fake 的 `RESULT_OK` 误报成
+    C++ scratch copy 已在 Windows 执行；也不把 `RESULT_OK` 解释成 ActiveX
+    `ClearTextPassword` 或 Gateway setter 已成功。
+- Green implementation:
+  - `src/native_tests.rs` 新增 native credential ABI declaration 和 helper，使用
+    `size_of::<NavopRdpCredentialBundle>()`，不硬编码 x64/x86 bundle size。
+  - native tests 覆盖空 bundle、server-only、Gateway-only、双 secret 的同步成功
+    路径；null host/credentials、尺寸不足、ABI mismatch、非零 flags、server/Gateway
+    null pointer 加非零长度的拒绝路径；wrong-thread 拒绝后 owner-thread 仍可 apply；
+    unregister 关闭 callback gate 后 apply 被拒绝；每条路径在 owner thread 清理 host。
+- Refactor/review:
+  - 测试只借用仍存活的 UTF-16 backing arrays 到同步 native 调用返回，不把 borrowed
+    pointer 跨调用保存；不尝试观察不可由当前 ABI 导出的 `SecureZeroMemory` 内容。
+  - 保持本切片 transport-only，不引入 BSTR、ATL、COM、`ClearTextPassword`、
+    Gateway setter、`Connect` 或 Task 3 child `HWND`。
+- Automated verification:
+  - macOS 可执行现有 Rust/fake/contract tests；Windows-only native tests 仅在
+    Windows MSVC target 编译/运行。
+  - 本机只执行格式化、普通 crate tests、Clippy、cargo check、cfg native test
+    type-check 和 diff check；Windows x64/x86 runner 仍需实际执行 native test
+    executable，当前没有伪造其结果。
+- Manual verification:
+  - 当前开发机没有 Windows MSVC、Windows SDK 或 PowerShell，因此没有声称本切片
+    已通过 Windows native runtime。
+- Known limitations:
+  - 未注入 native OOM，未观察 allocator/OS/未来 COM 内部副本的清除；真实
+    ActiveX setter、COM event sink/Unadvise/drain 和完整 lifecycle review 仍未完成。
 
 **Acceptance:**
 
