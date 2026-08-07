@@ -1043,8 +1043,17 @@ quiescence 和完整 Task 2 lifecycle review 尚未完成。
   - `Drop` 在 unregister 永久失败时会保守泄漏 `EventBridge`，避免 native 保留的 callback context 变成悬垂指针；registration cleanup 或 destroy 永久失败也可能保留 native allocation。后续完整 lifecycle review 必须决定可观测错误与最终释放策略。
   - `event.rs` 和 `error.rs` 已分离；lifecycle 仍位于 `handle.rs`，所以完整 Refactor checklist 暂不勾选。
 - Automated verification:
-  - 本地提交前需要重新运行 `cargo fmt --all -- --check`、`cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`、`cargo test --locked -p windows_rdp_host`、`cargo test --locked -p windows-rdp-probe --test contract` 和 `git diff --check`。
-  - Windows x64/x86 compile/link-only 证据将在本切片提交并推送后，通过 GitHub-hosted `windows-2022` runner 补录。
+  - Commit：`b21671a709c923637f109eb129f6476be64d8a5b`。
+  - `cargo fmt --all -- --check`：通过。
+  - `cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`：通过。
+  - `cargo test --locked -p windows_rdp_host`：unit tests 26 passed，contract tests 9 passed。
+  - `cargo test --locked -p windows-rdp-probe --test contract`：11 passed。
+  - `git diff --check`：通过。
+  - GitHub workflow run：[`31181437917`](https://github.com/feigeCode/navop/actions/runs/31181437917)，head SHA 为 `b21671a709c923637f109eb129f6476be64d8a5b`。
+  - x64 job：[`Windows RDP probe (x86_64-pc-windows-msvc)` / `92875420648`](https://github.com/feigeCode/navop/actions/runs/31181437917/job/92875420648)，成功完成 locked probe build 和 `windows_rdp_host --no-run` compile/link。
+  - x86 job：[`Windows RDP probe (i686-pc-windows-msvc)` / `92875420645`](https://github.com/feigeCode/navop/actions/runs/31181437917/job/92875420645)，成功完成 locked probe build 和 `windows_rdp_host --no-run` compile/link。
+  - 两个目标 job 成功后，为节省 runner 主动取消了该 workflow 的其他无关 job，因此 workflow 最终 conclusion 为 `cancelled`；这不表示上述两个目标 job 失败。
+  - 该证据证明 MSVC/ATL C++、Rust/C++ FFI symbols、callback ABI 和 x64/i686 layout assertions 可编译链接；它不运行 test executable，也不证明 ActiveX runtime、COM apartment、child `HWND`、show/hide/focus、RDP connect 或 GPUI tab 嵌入。
 - Manual verification:
   - 当前开发机是 macOS；本切片不创建 COM apartment、ATL AxWin、`MsRdpClient12`、event sink、child `HWND` 或 RDP session。
   - GitHub-hosted runner 只能证明 MSVC/ATL C++、Rust FFI symbols 和 x64/i686 ABI 完成 compile/link；不能替代有交互桌面的 Windows ActiveX runtime smoke。
