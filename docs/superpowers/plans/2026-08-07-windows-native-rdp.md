@@ -1240,6 +1240,33 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
     source、connection-point `Unadvise`、真实 in-flight drain/timeout 和永久失败后的
     process-level observability 仍属于后续 lifecycle/COM 工作。
 
+**Execution Notes (2026-08-07) — 第七最小切片：cleanup ownership matrix：**
+
+- Red/review evidence:
+  - 现有 fake tests 分别覆盖 unregister 或 destroy 的单一失败重试，但没有冻结
+    “第一次 unregister 失败、第二次 unregister 成功后第一次 destroy 失败、第三次
+    close 完成 destroy”的完整调用序列，也没有断言第二次 unregister 成功后 native
+    callback/context 已被清除。
+  - registration 失败后的 cleanup 已覆盖 destroy 返回错误，但没有覆盖 destroy 返回
+    `OK` 却不清空 opaque handle 的错误实现。
+- Green implementation:
+  - 新增 cleanup ownership matrix fake regression：第一次 unregister 失败时保持
+    `Closing`、不调用 destroy，Rust callback gate 不重新打开；第二次 unregister 成功
+    后释放 native callback/context，但 destroy 失败仍保持 `Closing`；后续 close 只重试
+    destroy，最终清空 handle 后进入 `Closed`。
+  - 新增 registration failure + non-clearing destroy regression：保留原始
+    registration error，记录 `register -> destroy` 顺序，并冻结“不确定 native
+    handle 是否已释放时保守泄漏 native allocation”的 policy。
+  - 强化 `handle.rs` unsafe contract comments，并在 Rust contract tests 中检查
+    unregister 成功后的 callback/context quiescence、registration 失败不保留 callback/
+    context、原始错误优先级及 `Box::leak(event_bridge)` 的保守 Drop policy。
+- Verification boundary:
+  - 本切片仍只改变 Rust facade fake backend、source contract 和计划文档；不声称已
+    实现真实 COM connection-point `Advise/Unadvise`、异步 callback drain/timeout、
+    ActiveX setter 或 Task 3 child `HWND`。
+  - macOS 可以执行全部 38 个 Rust unit tests 与 14 个 contract tests；Windows-only
+    native C++ runtime、ATL/COM/ActiveX 以及交互桌面 smoke 仍需 Windows 环境。
+
 **Acceptance:**
 
 - fake backend 可在无真实 RDP server 下覆盖 ABI 和生命周期。

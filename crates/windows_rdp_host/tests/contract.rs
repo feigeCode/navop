@@ -748,6 +748,11 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "WindowsRdpHostLifecycle::Closed",
             "begin_closing",
             "unregister_event_callback",
+            "close_retries_unregister_then_destroy_failures_without_reopening_callback_gate",
+            "registration_failure_preserves_original_error_when_destroy_does_not_clear_handle",
+            "drop_preserves_callback_context_when_unregister_keeps_failing",
+            "if self.close().is_err() && self.callback_registered",
+            "Box::leak(event_bridge)",
         ],
     );
     assert_contains_all(

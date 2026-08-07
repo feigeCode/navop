@@ -95,10 +95,10 @@ impl WindowsRdpHost {
 
         if self.callback_registered {
             // SAFETY: WindowsRdpHost is !Send + !Sync, so lifecycle calls stay
-            // on its owner thread. The native ABI guarantees that successful
-            // unregistration retains no callback/context and leaves no callback
-            // in flight, which keeps EventBridge alive for the full callback
-            // lifetime and makes it safe to release after this call.
+            // on its owner thread. The native ABI guarantees that successful unregistration
+            // retains no callback/context and leaves no callback in flight,
+            // which keeps EventBridge alive for the full callback lifetime and
+            // makes it safe to release after this call.
             let result = unsafe { (self.bindings.unregister_event_callback)(self.raw) };
             check_native_result(result)?;
             self.callback_registered = false;
@@ -133,6 +133,10 @@ impl WindowsRdpHost {
     ) -> Result<WindowsRdpHostCapabilities, WindowsRdpHostError> {
         let options = NavopRdpProbeOptions::current();
         let mut result = NavopRdpProbeResult::current();
+        // SAFETY: options and result are current-layout stack values that stay
+        // live for the entire synchronous call. The probe contract only reads
+        // options, writes within result's caller-provided size, and retains
+        // neither pointer after returning.
         let native_result = unsafe { (bindings.probe)(&options, &mut result) };
         check_native_result(native_result)?;
         if !result.has_current_layout() {
@@ -148,9 +152,10 @@ impl WindowsRdpHost {
     ) -> Result<Self, WindowsRdpHostError> {
         let native_options = NavopRdpCreateOptions::current(options.generation());
         let mut raw = ptr::null_mut();
-        // SAFETY: native_options and out_host remain valid for the duration of
-        // the synchronous call. A successful create transfers one opaque handle
-        // into raw; all error paths leave raw null by ABI contract.
+        // SAFETY: native_options and raw's out-pointer remain valid for the
+        // synchronous call and this owner-thread facade is the only caller that
+        // can receive the result. A successful create transfers one opaque
+        // handle into raw; all error paths leave raw null by ABI contract.
         let result = unsafe { (bindings.create)(&native_options, &mut raw) };
         check_native_result(result)?;
         if raw.is_null() {
@@ -162,9 +167,10 @@ impl WindowsRdpHost {
         let callback_context = event_bridge.as_ref() as *const EventBridge as *mut c_void;
         // SAFETY: EventBridge has a stable Box allocation and remains alive
         // while native retains callback_context. Registration is owner-thread
-        // serialized. On success, close() releases the callback only after the
-        // native quiescence guarantee; on failure, the ABI guarantees that the
-        // callback and context were not retained.
+        // serialized. The native callback may borrow that context only during
+        // synchronous dispatch. On success, close() releases the callback only
+        // after the native quiescence guarantee; on failure, the ABI guarantees
+        // that the callback and context were not retained.
         let registration_result = unsafe {
             (bindings.register_event_callback)(
                 raw,
@@ -177,10 +183,12 @@ impl WindowsRdpHost {
             event_bridge.begin_closing();
             // SAFETY: failed registration atomically retains neither callback
             // nor context, so EventBridge can be dropped after this best-effort
-            // owner-thread cleanup. If destroy fails or violates its success
-            // clear contract, the opaque native allocation is intentionally
-            // leaked rather than risking an unsafe release or hiding the
-            // original registration error.
+            // owner-thread cleanup. raw still denotes the sole opaque native
+            // allocation and remains valid for destroy. If destroy fails or
+            // violates its success clear contract, no Rust owner can safely
+            // reclaim the allocation, so it is conservatively leaked rather
+            // than hiding the original registration error or risking a second
+            // release through an uncertain handle state.
             let _ = unsafe { (bindings.destroy)(&mut raw) };
             return Err(error);
         }
@@ -358,6 +366,20 @@ mod tests {
 
     fn call_order() -> Vec<&'static str> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().call_order.clone())
+    }
+
+    fn active_callback_is_cleared() -> bool {
+        FAKE_NATIVE_STATE.with(|state| {
+            let state = state.borrow();
+            state.active_callback.is_none() && state.active_context.is_null()
+        })
+    }
+
+    fn active_callback_is_retained() -> bool {
+        FAKE_NATIVE_STATE.with(|state| {
+            let state = state.borrow();
+            state.active_callback.is_some() && !state.active_context.is_null()
+        })
     }
 
     unsafe fn fake_probe(
@@ -852,6 +874,43 @@ mod tests {
     }
 
     #[test]
+    fn close_retries_unregister_then_destroy_failures_without_reopening_callback_gate() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.unregister_failures_remaining = 1;
+            state.destroy_failures_remaining = 1;
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert!(active_callback_is_retained());
+        assert_eq!(destroy_calls(), 0);
+        emit_active_callback(fake_event(42, 9, 90, &[9]));
+        assert!(drain_events(&host).is_empty());
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert!(active_callback_is_cleared());
+        assert_eq!(unregister_calls(), 2);
+        assert_eq!(destroy_calls(), 1);
+
+        host.close()
+            .expect("destroy failure should remain retryable after unregister");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
+        assert!(host.is_closed());
+        assert_eq!(unregister_calls(), 2);
+        assert_eq!(destroy_calls(), 2);
+        assert_eq!(
+            call_order(),
+            vec!["register", "unregister", "unregister", "destroy", "destroy",]
+        );
+    }
+
+    #[test]
     fn drop_retries_a_prior_explicit_close_failure() {
         reset_fake_state();
         FAKE_NATIVE_STATE.with(|state| {
@@ -1054,6 +1113,29 @@ mod tests {
         assert_eq!(call_order(), vec!["register", "destroy"]);
         assert_eq!(unregister_calls(), 0);
         assert_eq!(destroy_calls(), 1);
+    }
+
+    #[test]
+    fn registration_failure_preserves_original_error_when_destroy_does_not_clear_handle() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().nonclearing_destroy_calls_remaining = 1;
+        });
+        let failed_registration_bindings = NativeBindings {
+            register_event_callback: fake_invalid_register_event_callback,
+            ..bindings(fake_create)
+        };
+
+        let result = WindowsRdpHost::create_with(
+            WindowsRdpHostOptions::new(42),
+            failed_registration_bindings,
+        );
+
+        assert!(matches!(result, Err(WindowsRdpHostError::InvalidArgument)));
+        assert_eq!(call_order(), vec!["register", "destroy"]);
+        assert_eq!(unregister_calls(), 0);
+        assert_eq!(destroy_calls(), 1);
+        assert!(active_callback_is_cleared());
     }
 
     #[cfg(not(windows_rdp_host_native))]
