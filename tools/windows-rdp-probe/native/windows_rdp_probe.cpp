@@ -7,7 +7,7 @@
 #include <atlhost.h>
 
 #import "libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489" \
-    raw_interfaces_only, named_guids, no_namespace
+    raw_interfaces_only, named_guids, no_namespace, exclude("UINT_PTR")
 #include "mstscax.tlh"
 
 #include <cstdio>
@@ -15,6 +15,22 @@
 #include <vector>
 
 namespace {
+
+// MsRdpClient12 CLSID: 945EE98E-B376-4EC2-B2E5-64C9410F93B7
+constexpr CLSID kMsRdpClient12Clsid = {
+    0x945ee98e,
+    0xb376,
+    0x4ec2,
+    {0xb2, 0xe5, 0x64, 0xc9, 0x41, 0x0f, 0x93, 0xb7},
+};
+
+// IMsRdpClientNonScriptable8 IID: B2B3FA47-3F11-4148-AD24-DFF8684A16D0
+constexpr IID kMsRdpClientNonScriptable8Iid = {
+    0xb2b3fa47,
+    0x3f11,
+    0x4148,
+    {0xad, 0x24, 0xdf, 0xf8, 0x68, 0x4a, 0x16, 0xd0},
+};
 
 struct DllVersion {
     WORD major = 0;
@@ -108,7 +124,7 @@ HWND create_parent_window() {
 HWND create_host_window(HWND parent) {
     return CreateWindowExW(
         0,
-        ATLAXWIN_CLASS,
+        ATLAXWIN_CLASSW,
         L"",
         WS_CHILD,
         0,
@@ -123,7 +139,7 @@ HWND create_host_window(HWND parent) {
 
 HRESULT create_rdp_control(ProbeResources& resources) {
     LPOLESTR class_id = nullptr;
-    HRESULT result = StringFromCLSID(CLSID_MsRdpClient12, &class_id);
+    HRESULT result = StringFromCLSID(kMsRdpClient12Clsid, &class_id);
     if (FAILED(result)) {
         return result;
     }
@@ -203,10 +219,14 @@ int inspect_control(IUnknown* control) {
         return 7;
     }
 
-    CComPtr<IMsRdpClientNonScriptable8> non_scriptable;
-    result = control->QueryInterface(IID_PPV_ARGS(&non_scriptable));
+    CComPtr<IUnknown> non_scriptable;
+    void* non_scriptable_raw = nullptr;
+    result = control->QueryInterface(
+        kMsRdpClientNonScriptable8Iid, &non_scriptable_raw);
     const bool has_non_scriptable8 = SUCCEEDED(result);
-    if (!has_non_scriptable8) {
+    if (has_non_scriptable8) {
+        non_scriptable.Attach(static_cast<IUnknown*>(non_scriptable_raw));
+    } else {
         log_hresult("query-nonscriptable8", "unavailable", result);
     }
 

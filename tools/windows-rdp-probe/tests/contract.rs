@@ -76,12 +76,15 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
             "raw_interfaces_only",
             "named_guids",
             "no_namespace",
+            "exclude(\"UINT_PTR\")",
             "#include \"mstscax.tlh\"",
             "AtlAxWinInit",
+            "ATLAXWIN_CLASSW",
             "AtlAxCreateControlEx",
-            "CLSID_MsRdpClient12",
+            "945EE98E-B376-4EC2-B2E5-64C9410F93B7",
+            "B2B3FA47-3F11-4148-AD24-DFF8684A16D0",
             "IMsRdpClient10",
-            "IMsRdpClientNonScriptable8",
+            "CComPtr<IUnknown>",
             "QueryInterface",
             "get_Version",
             "VS_FFI_SIGNATURE",
@@ -103,6 +106,79 @@ fn native_probe_uses_supported_atl_and_rdp_interfaces() {
             "#include \"mstscax.h\"",
             "#import \"mstscax.dll\"",
             "#import <mstscax.dll>",
+            "CLSID_MsRdpClient12",
+            "ATLAXWIN_CLASS,",
+            "CComPtr<IMsRdpClientNonScriptable8>",
+            "struct IMsRdpClientNonScriptable8",
+            "interface IMsRdpClientNonScriptable8",
+        ],
+    );
+
+    let path = "tools/windows-rdp-probe/native/windows_rdp_probe.cpp";
+    assert_tokens_in_scope(
+        path,
+        &format!("#import \"libid:{RDP_TYPELIB_LIBID}\""),
+        "#include \"mstscax.tlh\"",
+        &[
+            "raw_interfaces_only",
+            "named_guids",
+            "no_namespace",
+            "exclude(\"UINT_PTR\")",
+        ],
+    );
+    assert_tokens_in_scope(
+        path,
+        "HWND create_host_window(HWND parent) {",
+        "\n}\n\nHRESULT create_rdp_control",
+        &["CreateWindowExW(", "ATLAXWIN_CLASSW"],
+    );
+}
+
+#[test]
+fn native_probe_uses_the_published_msrdpclient12_and_nonscriptable8_guids() {
+    let path = "tools/windows-rdp-probe/native/windows_rdp_probe.cpp";
+
+    assert_tokens_in_scope(
+        path,
+        "constexpr CLSID kMsRdpClient12Clsid = {",
+        "\n};",
+        &[
+            "0x945ee98e",
+            "0xb376",
+            "0x4ec2",
+            "{0xb2, 0xe5, 0x64, 0xc9, 0x41, 0x0f, 0x93, 0xb7}",
+        ],
+    );
+    assert_tokens_in_scope(
+        path,
+        "constexpr IID kMsRdpClientNonScriptable8Iid = {",
+        "\n};",
+        &[
+            "0xb2b3fa47",
+            "0x3f11",
+            "0x4148",
+            "{0xad, 0x24, 0xdf, 0xf8, 0x68, 0x4a, 0x16, 0xd0}",
+        ],
+    );
+}
+
+#[test]
+fn optional_nonscriptable8_probe_uses_an_explicit_iid_without_a_generated_vtable() {
+    let path = "tools/windows-rdp-probe/native/windows_rdp_probe.cpp";
+
+    assert_tokens_in_scope(
+        path,
+        "int inspect_control(IUnknown* control) {",
+        "\n}\n\nint run_probe",
+        &[
+            "CComPtr<IMsRdpClient10>",
+            "IID_PPV_ARGS(&client)",
+            "CComPtr<IUnknown>",
+            "QueryInterface",
+            "kMsRdpClientNonScriptable8Iid",
+            "Attach(",
+            "query-nonscriptable8",
+            "get_Version",
         ],
     );
 }
