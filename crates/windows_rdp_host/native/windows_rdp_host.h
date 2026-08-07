@@ -59,6 +59,19 @@ typedef struct NavopRdpEventCallbackOptions {
     uint32_t generation_high;
 } NavopRdpEventCallbackOptions;
 
+typedef struct NavopRdpBorrowedSecret {
+    const uint16_t* data;
+    uint32_t len;
+} NavopRdpBorrowedSecret;
+
+typedef struct NavopRdpCredentialBundle {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    NavopRdpBorrowedSecret server_password;
+    NavopRdpBorrowedSecret gateway_password;
+    uint32_t flags;
+} NavopRdpCredentialBundle;
+
 /*
  * The callback payload is borrowed only for the duration of the callback.
  * Consumers must copy payload_len bytes before returning and must not free the
@@ -73,6 +86,12 @@ typedef struct NavopRdpEventCallbackOptions {
  * A callback must not synchronously call callback unregistration or destroy
  * the host. It may only copy/queue data and schedule lifecycle work for a later
  * owner-thread turn.
+ */
+/*
+ * Credential code units are borrowed only for the synchronous call. A zero
+ * length accepts a null pointer; a non-zero length requires a non-null pointer.
+ * The native host must not retain either pointer after apply returns. Server
+ * and Gateway passwords remain separate fields and flags must be zero.
  */
 #ifdef __cplusplus
 extern "C" {
@@ -121,6 +140,30 @@ static_assert(offsetof(NavopRdpEventCallbackOptions, struct_size) == 0);
 static_assert(offsetof(NavopRdpEventCallbackOptions, abi_version) == 4);
 static_assert(offsetof(NavopRdpEventCallbackOptions, generation_low) == 8);
 static_assert(offsetof(NavopRdpEventCallbackOptions, generation_high) == 12);
+static_assert(offsetof(NavopRdpBorrowedSecret, data) == 0);
+static_assert(offsetof(NavopRdpCredentialBundle, struct_size) == 0);
+static_assert(offsetof(NavopRdpCredentialBundle, abi_version) == 4);
+static_assert(offsetof(NavopRdpCredentialBundle, server_password) == 8);
+
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(NavopRdpBorrowedSecret) == 16);
+static_assert(alignof(NavopRdpBorrowedSecret) == 8);
+static_assert(offsetof(NavopRdpBorrowedSecret, len) == 8);
+static_assert(sizeof(NavopRdpCredentialBundle) == 48);
+static_assert(alignof(NavopRdpCredentialBundle) == 8);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 24);
+static_assert(offsetof(NavopRdpCredentialBundle, flags) == 40);
+#elif INTPTR_MAX == INT32_MAX
+static_assert(sizeof(NavopRdpBorrowedSecret) == 8);
+static_assert(alignof(NavopRdpBorrowedSecret) == 4);
+static_assert(offsetof(NavopRdpBorrowedSecret, len) == 4);
+static_assert(sizeof(NavopRdpCredentialBundle) == 28);
+static_assert(alignof(NavopRdpCredentialBundle) == 4);
+static_assert(offsetof(NavopRdpCredentialBundle, gateway_password) == 16);
+static_assert(offsetof(NavopRdpCredentialBundle, flags) == 24);
+#else
+#error Unsupported pointer width for the Windows RDP credential ABI
+#endif
 
 #define NAVOP_RDP_NOEXCEPT noexcept
 extern "C" {
@@ -144,6 +187,10 @@ NavopRdpResult navop_rdp_register_event_callback(
 
 NavopRdpResult navop_rdp_unregister_event_callback(
     NativeRdpHost* host) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_apply_credentials(
+    NativeRdpHost* host,
+    const NavopRdpCredentialBundle* credentials) NAVOP_RDP_NOEXCEPT;
 
 /*
  * For a non-null owned host, destroy may release the native object only after

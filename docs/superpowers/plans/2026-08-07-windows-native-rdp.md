@@ -938,9 +938,9 @@ Probe contract：
 
 **Depends on:** Task 1。
 
-**Status:** 进行中。ABI v1 lifecycle prefix 第一最小切片和 event/callback owned-queue
-第二最小切片已实现；credentials/zeroize、真实 COM event sink、in-flight callback
-quiescence 和完整 Task 2 lifecycle review 尚未完成。
+**Status:** 进行中。ABI v1 lifecycle prefix、event/callback owned-queue 和
+credentials/zeroize transport 三个最小切片已实现；真实 COM event sink、in-flight
+callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle review 尚未完成。
 
 **Files:**
 
@@ -970,12 +970,13 @@ quiescence 和完整 Task 2 lifecycle review 尚未完成。
 - [x] **Red:** 写 fake bindings 测试 create failure、null handle、double destroy 和 native 未清空 handle。
 - [x] **Red:** 写 callback-after-close、stale generation 和 owned payload 测试。
 - [ ] **Red:** 接入真实 native event dispatch 前，写 callback reentrancy、in-flight callback drain 和 owner-thread quiescence 测试。
-- [ ] **Red:** 写 server/Gateway secret borrowed-until-return、异常/OOM/取消/重复 apply、两端 zeroize 和禁止 full-memory dump 的 contract test。
+- [x] **Red:** 写 server/Gateway secret borrowed-until-return、OOM/内部失败/重复 apply、两端 zeroize contract 和禁止新增 full-memory dump collection 的测试。
+- [ ] **Red:** 在真实 ActiveX credential setter/connect 引入异步或可取消流程时，补取消竞态、setter 部分成功和 COM 内部副本边界测试。
 - [x] **Green:** 使用 `cc::Build` 编译 C++17 shim；非 Windows target 完全不运行 build。
 - [x] **Green:** 实现 RAII Rust wrapper，`Drop` 只调幂等 destroy。
 - [x] **Green:** C++ 入口捕获异常并转换为固定 result。
 - [x] **Green:** callback 转成 owned event queue，不从 callback 直接访问 GPUI。
-- [ ] **Green:** 实现独立的一次性 credential apply API，server 和 Gateway secret 不进入普通 connect options。
+- [x] **Green:** 实现独立的一次性 credential apply API，server 和 Gateway secret 不进入普通 connect options。
 - [ ] **Refactor:** 将 lifecycle、event、error 分文件，保持文件/函数复杂度约束。
 - [ ] **Review:** 对所有 `unsafe` 添加 safety invariant；检查 pointer lifetime、string length、thread ownership。
 - [x] **Verify（第一最小切片）:** 通过本地 crate/contract tests、C/C++ warning-as-error 配置，以及 GitHub Windows x64/x86 compile/link-only gate。
@@ -1058,8 +1059,72 @@ quiescence 和完整 Task 2 lifecycle review 尚未完成。
   - 当前开发机是 macOS；本切片不创建 COM apartment、ATL AxWin、`MsRdpClient12`、event sink、child `HWND` 或 RDP session。
   - GitHub-hosted runner 只能证明 MSVC/ATL C++、Rust FFI symbols 和 x64/i686 ABI 完成 compile/link；不能替代有交互桌面的 Windows ActiveX runtime smoke。
 - Remaining Task 2 scope:
-  - server/Gateway secret 类型、一次性 credential apply、Rust/native 临时内存 zeroize、OOM/取消/失败路径和 crash/full-memory-dump policy contract 尚未实现。
+  - credentials/zeroize transport 已在下一最小切片补齐；真实 ActiveX property
+    setter、异步 connect/cancel 语义、COM/ActiveX 内部副本边界和完整 crash/full-memory
+    dump policy 仍未实现。
   - 真实 COM event sink、callback in-flight drain 和完整 lifecycle review 尚未实现。
+
+**Execution Notes (2026-08-07) — 第三最小切片：credentials/zeroize transport：**
+
+- Red evidence:
+  - 首先新增 contract test 冻结独立的 `NavopRdpBorrowedSecret` /
+    `NavopRdpCredentialBundle`、server/Gateway 双字段、UTF-16 code-unit length、
+    borrowed-until-return lifetime、x64/x86 layout 和 versioned apply entrypoint。
+  - 首次定向执行
+    `cargo test --locked -p windows_rdp_host --test contract credential_transport_is_versioned_borrowed_and_architecture_specific -- --exact`
+    按预期失败，原因是 public header 尚不存在 `NavopRdpBorrowedSecret`；实现是在该
+    Red evidence 之后加入。
+  - fake bindings 覆盖 server-only、Gateway-only、双 secret 且值不同、空 bundle、
+    重复 apply、allocation/internal failure mapping、failure 后 lifecycle 保持 Open，
+    以及 Closing/Closed 在调用 native 前拒绝。
+- Green implementation:
+  - 新增不可 `Clone`/serde 的 `WindowsRdpCredentialBundle`。server password 和
+    Gateway password 分别由 `Zeroizing<Vec<u16>>` 持有；接管的 UTF-8 `String`
+    在 UTF-16 编码后也由 `Zeroizing` 清理。
+  - 自定义 `Debug` 只暴露 absent/redacted 和 UTF-16 code-unit 数，不输出 secret。
+    credential 不进入 `WindowsRdpHost` 字段、普通 options、event、error、log、
+    panic message、snapshot 或 telemetry。
+  - Rust 只在同步 `apply_credentials` 调用期间建立 borrowed UTF-16 C ABI view；
+    `len` 是 code units，`len == 0` 使用 null pointer，`len > 0` 要求 non-null，
+    native 不得保留 Rust pointer。
+  - C++ 在完成 null、`struct_size`、`abi_version`、flags、lifecycle 和两个 borrowed
+    slice 的校验后，分别建立 `SensitiveUtf16Buffer` scratch copy；析构通过
+    `SecureZeroMemory` 后 `delete[]`，覆盖成功、第二次分配失败和 C++ 异常展开路径。
+  - `NativeRdpHost` 私有定义移入 `host_internal.h`，public header 仍只暴露 opaque
+    handle；所有 C++ ABI 入口继续保持 `noexcept`/异常转固定 result。
+- Automated verification:
+  - `cargo fmt --all -- --check`：通过。
+  - `cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`：通过。
+  - `cargo test --locked -p windows_rdp_host`：unit tests 35 passed，contract tests
+    13 passed。
+  - `cargo test --locked -p windows-rdp-probe --test contract`：11 passed。
+  - `git diff --check`：通过。
+  - 两轮独立只读审查未发现本切片阻断问题；确认 Rust owner/borrow lifetime、
+    C++ RAII wipe、x64/x86 layout、C linkage 和 Open/Closing/Closed gate 一致。
+- Windows compile/link verification:
+  - 当前开发机是 macOS，本地没有编译 `credential.cpp`。本切片提交并推送后，
+    必须在 GitHub-hosted Windows runner 分别执行
+    `x86_64-pc-windows-msvc` 和 `i686-pc-windows-msvc` 的 locked probe build 与
+    `windows_rdp_host --no-run`；run/head SHA/job evidence 在 runner 完成后回写。
+  - compile/link-only 只能证明 MSVC `/W4 /WX`、Rust/C++ symbols 和 x64/i686 ABI
+    assertions 可构建链接；不能证明 `SecureZeroMemory` runtime、ActiveX setter、
+    COM apartment、child `HWND`、RDP connect 或 GPUI tab 嵌入。
+- Security boundary and known limitations:
+  - 本切片是 transport-only；`credential.cpp` 明确不调用 `ClearTextPassword`、
+    Gateway setter、BSTR、ATL 或 ActiveX。真实 server/Gateway property application
+    属于后续 ActiveX 切片。
+  - 本切片保证 Rust owner 和 native scratch 按既定 ownership/RAII contract 清理，
+    但不声称能清除 allocator、OS、未来 COM/ActiveX 内部或进程其他位置的所有副本。
+  - 仓库当前没有完整 crash/full-memory-dump scrub policy。本切片只验证没有新增
+    `MiniDumpWriteDump`、full-memory dump 或把 credential 放入普通输出；完整
+    crash-dump policy 仍是后续安全工作。
+  - C ABI 调用者必须提供在声明长度内可读的 borrowed pointer。普通 C++ `catch (...)`
+    不保证捕获非法 pointer 引发的 Windows SEH access violation；safe Rust facade
+    只生成指向其活跃 owner buffer 的 pointer。
+  - 真实 native OOM/fault injection、第二个 scratch 分配失败后的内存观察、异常路径
+    内存观察和 future event payload 脱敏策略尚未由 Windows runtime test 覆盖。
+  - 同步 transport 当前没有 cancellation 状态；取消竞态应在真实 setter/connect
+    出现异步或部分提交语义时设计并测试，不能用当前 fake result 冒充已经验证。
 
 **Acceptance:**
 

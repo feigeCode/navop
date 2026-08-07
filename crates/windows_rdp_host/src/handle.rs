@@ -4,6 +4,7 @@ use std::ptr;
 use std::rc::Rc;
 
 use crate::capabilities::WindowsRdpHostCapabilities;
+use crate::credential::WindowsRdpCredentialBundle;
 use crate::error::{WindowsRdpHostError, check_native_result};
 use crate::event::{EventBridge, native_event_callback};
 use crate::ffi::{
@@ -54,6 +55,30 @@ impl WindowsRdpHost {
 
     pub fn is_closed(&self) -> bool {
         matches!(self.lifecycle, HostLifecycle::Closed)
+    }
+
+    /// Applies borrowed UTF-16 credentials during one synchronous native call.
+    ///
+    /// The native boundary copies each supplied secret into a temporary
+    /// zeroizing buffer and must not retain either Rust-owned pointer after
+    /// this method returns. Credentials are intentionally not stored on the
+    /// host and do not change the host lifecycle.
+    pub fn apply_credentials(
+        &mut self,
+        credentials: &WindowsRdpCredentialBundle,
+    ) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, HostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let native_credentials = credentials.as_native()?;
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - native_credentials borrows only from credentials for this call.
+        // - the native contract does not retain either borrowed pointer after
+        //   returning from the synchronous ABI entrypoint.
+        let result = unsafe { (self.bindings.apply_credentials)(self.raw, &native_credentials) };
+        check_native_result(result)
     }
 
     /// Stops callbacks and destroys the native handle. Repeated calls are safe.
@@ -191,8 +216,8 @@ mod tests {
 
     use super::*;
     use crate::ffi::{
-        NativeEventCallback, NativeResult, NavopRdpEvent, ProbeFn, RESULT_ALLOCATION_FAILED,
-        RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_OK,
+        NativeEventCallback, NativeResult, NavopRdpCredentialBundle, NavopRdpEvent, ProbeFn,
+        RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_OK,
     };
 
     #[derive(Clone)]
@@ -215,6 +240,9 @@ mod tests {
         nonclearing_destroy_calls_remaining: usize,
         unregister_calls: usize,
         destroy_calls: usize,
+        credential_calls: usize,
+        credential_results: std::collections::VecDeque<NativeResult>,
+        captured_credentials: Vec<(Vec<u16>, Vec<u16>)>,
         call_order: Vec<&'static str>,
     }
 
@@ -232,6 +260,9 @@ mod tests {
                 nonclearing_destroy_calls_remaining: 0,
                 unregister_calls: 0,
                 destroy_calls: 0,
+                credential_calls: 0,
+                credential_results: std::collections::VecDeque::new(),
+                captured_credentials: Vec::new(),
                 call_order: Vec::new(),
             }
         }
@@ -299,6 +330,14 @@ mod tests {
 
     fn unregister_calls() -> usize {
         FAKE_NATIVE_STATE.with(|state| state.borrow().unregister_calls)
+    }
+
+    fn credential_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().credential_calls)
+    }
+
+    fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>)> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_credentials.clone())
     }
 
     fn call_order() -> Vec<&'static str> {
@@ -481,6 +520,62 @@ mod tests {
         RESULT_OK
     }
 
+    unsafe fn fake_apply_credentials(
+        host: *mut NativeRdpHost,
+        credentials: *const NavopRdpCredentialBundle,
+    ) -> NativeResult {
+        if host.is_null() || credentials.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+
+        let result = FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.credential_calls += 1;
+            state.credential_results.pop_front().unwrap_or(RESULT_OK)
+        });
+        if result != RESULT_OK {
+            return result;
+        }
+
+        // SAFETY: the production facade passes a valid current-layout bundle
+        // whose borrowed pointers remain valid for the duration of this fake
+        // synchronous call. The fake copies both slices and retains no pointer.
+        let credentials = unsafe { &*credentials };
+        let server = if credentials.server_password.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: non-empty credential slices are backed by the owner
+            // bundle's live UTF-16 vectors during this synchronous call.
+            unsafe {
+                std::slice::from_raw_parts(
+                    credentials.server_password.data,
+                    credentials.server_password.len as usize,
+                )
+                .to_vec()
+            }
+        };
+        let gateway = if credentials.gateway_password.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: non-empty credential slices are backed by the owner
+            // bundle's live UTF-16 vectors during this synchronous call.
+            unsafe {
+                std::slice::from_raw_parts(
+                    credentials.gateway_password.data,
+                    credentials.gateway_password.len as usize,
+                )
+                .to_vec()
+            }
+        };
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .captured_credentials
+                .push((server, gateway));
+        });
+        RESULT_OK
+    }
+
     fn bindings_with_probe(probe: ProbeFn, create: crate::ffi::CreateFn) -> NativeBindings {
         NativeBindings {
             probe,
@@ -488,6 +583,7 @@ mod tests {
             destroy: fake_destroy,
             register_event_callback: fake_register_event_callback,
             unregister_event_callback: fake_unregister_event_callback,
+            apply_credentials: fake_apply_credentials,
         }
     }
 
@@ -604,6 +700,104 @@ mod tests {
         );
         assert_eq!(unregister_calls(), 1);
         assert_eq!(destroy_calls(), 2);
+    }
+
+    #[test]
+    fn credentials_are_applied_as_separate_borrowed_utf16_values() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        host.apply_credentials(
+            &WindowsRdpCredentialBundle::new().with_server_password("server-only".to_owned()),
+        )
+        .expect("server-only credentials should apply");
+        host.apply_credentials(
+            &WindowsRdpCredentialBundle::new().with_gateway_password("gateway-only".to_owned()),
+        )
+        .expect("Gateway-only credentials should apply");
+        let both = WindowsRdpCredentialBundle::new()
+            .with_server_password("server-secret".to_owned())
+            .with_gateway_password("gateway-secret".to_owned());
+        host.apply_credentials(&both)
+            .expect("server and Gateway credentials should apply");
+        host.apply_credentials(&WindowsRdpCredentialBundle::new())
+            .expect("empty credentials should apply");
+
+        assert_eq!(credential_calls(), 4);
+        assert_eq!(
+            captured_credentials(),
+            vec![
+                ("server-only".encode_utf16().collect(), Vec::new()),
+                (Vec::new(), "gateway-only".encode_utf16().collect()),
+                (
+                    "server-secret".encode_utf16().collect(),
+                    "gateway-secret".encode_utf16().collect(),
+                ),
+                (Vec::new(), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn credential_failures_map_without_changing_lifecycle_or_storing_owner() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state
+                .credential_results
+                .extend([RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR]);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let credentials = WindowsRdpCredentialBundle::new()
+            .with_server_password("allocation-failure".to_owned())
+            .with_gateway_password("internal-failure".to_owned());
+
+        assert_eq!(
+            host.apply_credentials(&credentials),
+            Err(WindowsRdpHostError::AllocationFailed)
+        );
+        assert_eq!(
+            host.apply_credentials(&credentials),
+            Err(WindowsRdpHostError::Internal)
+        );
+        assert!(!host.is_closed());
+        assert_eq!(credential_calls(), 2);
+        assert!(captured_credentials().is_empty());
+        drop(credentials);
+        host.close().expect("host should still close normally");
+    }
+
+    #[test]
+    fn credentials_are_rejected_before_native_call_when_host_is_closing_or_closed() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().unregister_failures_remaining = 1;
+        });
+        let mut closing_host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let credentials =
+            WindowsRdpCredentialBundle::new().with_server_password("closing".to_owned());
+
+        assert_eq!(closing_host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(
+            closing_host.apply_credentials(&credentials),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(credential_calls(), 0);
+        closing_host
+            .close()
+            .expect("closing host should be retryable");
+        assert!(closing_host.is_closed());
+        assert_eq!(
+            closing_host.apply_credentials(&credentials),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(credential_calls(), 0);
     }
 
     #[test]

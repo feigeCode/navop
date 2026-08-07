@@ -317,6 +317,232 @@ fn event_callback_layout_is_frozen_without_pointer_sized_struct_fields() {
 }
 
 #[test]
+fn credential_transport_is_versioned_borrowed_and_architecture_specific() {
+    let header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+
+    assert_contains_all(
+        header,
+        &[
+            "typedef struct NavopRdpBorrowedSecret",
+            "const uint16_t* data;",
+            "uint32_t len;",
+            "typedef struct NavopRdpCredentialBundle",
+            "uint32_t struct_size;",
+            "uint32_t abi_version;",
+            "NavopRdpBorrowedSecret server_password;",
+            "NavopRdpBorrowedSecret gateway_password;",
+            "uint32_t flags;",
+            "borrowed only for the synchronous call",
+            "must not retain",
+            "navop_rdp_apply_credentials(",
+            "const NavopRdpCredentialBundle* credentials",
+            "INTPTR_MAX == INT64_MAX",
+            "sizeof(NavopRdpBorrowedSecret) == 16",
+            "alignof(NavopRdpBorrowedSecret) == 8",
+            "offsetof(NavopRdpBorrowedSecret, data) == 0",
+            "offsetof(NavopRdpBorrowedSecret, len) == 8",
+            "sizeof(NavopRdpCredentialBundle) == 48",
+            "alignof(NavopRdpCredentialBundle) == 8",
+            "offsetof(NavopRdpCredentialBundle, struct_size) == 0",
+            "offsetof(NavopRdpCredentialBundle, abi_version) == 4",
+            "offsetof(NavopRdpCredentialBundle, server_password) == 8",
+            "offsetof(NavopRdpCredentialBundle, gateway_password) == 24",
+            "offsetof(NavopRdpCredentialBundle, flags) == 40",
+            "INTPTR_MAX == INT32_MAX",
+            "sizeof(NavopRdpBorrowedSecret) == 8",
+            "alignof(NavopRdpBorrowedSecret) == 4",
+            "offsetof(NavopRdpBorrowedSecret, len) == 4",
+            "sizeof(NavopRdpCredentialBundle) == 28",
+            "alignof(NavopRdpCredentialBundle) == 4",
+            "offsetof(NavopRdpCredentialBundle, server_password) == 8",
+            "offsetof(NavopRdpCredentialBundle, gateway_password) == 16",
+            "offsetof(NavopRdpCredentialBundle, flags) == 24",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/ffi.rs"),
+        &[
+            "struct NavopRdpBorrowedSecret",
+            "data: *const u16",
+            "len: u32",
+            "struct NavopRdpCredentialBundle",
+            "server_password: NavopRdpBorrowedSecret",
+            "gateway_password: NavopRdpBorrowedSecret",
+            "type ApplyCredentialsFn",
+            "apply_credentials: ApplyCredentialsFn",
+            "navop_rdp_apply_credentials(",
+            "target_pointer_width = \"64\"",
+            "size_of::<NavopRdpBorrowedSecret>() == 16",
+            "size_of::<NavopRdpCredentialBundle>() == 48",
+            "target_pointer_width = \"32\"",
+            "size_of::<NavopRdpBorrowedSecret>() == 8",
+            "size_of::<NavopRdpCredentialBundle>() == 28",
+        ],
+    );
+}
+
+#[test]
+fn rust_credentials_are_zeroizing_redacted_and_not_persisted_in_the_host() {
+    assert_contains_all(
+        &format!("{HOST_CRATE}/Cargo.toml"),
+        &["[dependencies]", "zeroize.workspace = true"],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/credential.rs"),
+        &[
+            "pub struct WindowsRdpCredentialBundle",
+            "Zeroizing<Vec<u16>>",
+            "Zeroizing::new(password)",
+            "encode_utf16()",
+            "impl fmt::Debug for WindowsRdpCredentialBundle",
+            "\"<redacted",
+            "NavopRdpBorrowedSecret",
+            "NavopRdpCredentialBundle",
+            "u32::try_from",
+        ],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/credential.rs"),
+        &[
+            "derive(Clone",
+            "derive(Serialize",
+            "derive(Deserialize",
+            "impl Clone for WindowsRdpCredentialBundle",
+            "impl serde::Serialize",
+            "impl serde::Deserialize",
+            "use serde",
+            "serde::",
+            "log::",
+            "tracing::",
+            "println!",
+            "eprintln!",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/handle.rs"),
+        &[
+            "pub fn apply_credentials(",
+            "credentials.as_native()",
+            "(self.bindings.apply_credentials)(self.raw, &native_credentials)",
+            "HostLifecycle::Open",
+        ],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/handle.rs"),
+        &[
+            "server_password:",
+            "gateway_password:",
+            "credentials: WindowsRdpCredentialBundle",
+        ],
+    );
+}
+
+#[test]
+fn native_credentials_validate_copy_and_wipe_on_every_exit_path() {
+    let source = &format!("{HOST_CRATE}/native/credential.cpp");
+
+    assert_contains_all(
+        source,
+        &[
+            "#include <windows.h>",
+            "class SensitiveUtf16Buffer",
+            "~SensitiveUtf16Buffer() noexcept",
+            "SecureZeroMemory(",
+            "delete[]",
+            "std::memcpy(",
+            "std::nothrow",
+            "validate_borrowed_secret(",
+            "secret.len == UINT32_C(0)",
+            "secret.data == nullptr",
+            "(std::numeric_limits<size_t>::max)()",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_apply_credentials(",
+        "\n}",
+        &[
+            "try {",
+            "host == nullptr",
+            "credentials == nullptr",
+            "validate_struct_size(",
+            "credentials->struct_size",
+            "validate_abi_version(",
+            "credentials->abi_version",
+            "credentials->flags != UINT32_C(0)",
+            "host->callback_state != CallbackState::Open",
+            "validate_borrowed_secret(credentials->server_password)",
+            "validate_borrowed_secret(credentials->gateway_password)",
+            "SensitiveUtf16Buffer server_password;",
+            "SensitiveUtf16Buffer gateway_password;",
+            "server_password.copy_from(credentials->server_password)",
+            "gateway_password.copy_from(credentials->gateway_password)",
+            "return NAVOP_RDP_RESULT_OK;",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+    assert_excludes_all(
+        source,
+        &[
+            "std::wstring",
+            "std::u16string",
+            "wcslen",
+            "lstrlenW",
+            "ClearTextPassword",
+            "GatewayPassword",
+            "CComBSTR",
+            "BSTR",
+            "IMsRdp",
+            "AtlAx",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/build.rs"),
+        &[
+            "cargo:rerun-if-changed=native/credential.cpp",
+            ".file(\"native/credential.cpp\")",
+        ],
+    );
+}
+
+#[test]
+fn credentials_do_not_expand_options_events_errors_or_dump_collection() {
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/options.rs"),
+        &["password", "credential", "secret"],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/event.rs"),
+        &["password", "credential", "secret"],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/error.rs"),
+        &["password", "credential", "secret"],
+    );
+    for path in [
+        "src/lib.rs",
+        "src/ffi.rs",
+        "src/credential.rs",
+        "src/handle.rs",
+        "native/windows_rdp_host.h",
+        "native/host.cpp",
+        "native/credential.cpp",
+        "build.rs",
+    ] {
+        assert_excludes_all(
+            &format!("{HOST_CRATE}/{path}"),
+            &[
+                "MiniDumpWriteDump",
+                "MiniDumpWithFullMemory",
+                "WER_DUMP_TYPE",
+                "DumpType = 2",
+            ],
+        );
+    }
+}
+
+#[test]
 fn native_entrypoints_validate_headers_and_contain_failures() {
     let source = &format!("{HOST_CRATE}/native/host.cpp");
 

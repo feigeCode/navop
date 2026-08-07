@@ -114,6 +114,22 @@ pub(crate) struct NavopRdpEventCallbackOptions {
     pub(crate) generation_high: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct NavopRdpBorrowedSecret {
+    pub(crate) data: *const u16,
+    pub(crate) len: u32,
+}
+
+#[repr(C)]
+pub(crate) struct NavopRdpCredentialBundle {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) server_password: NavopRdpBorrowedSecret,
+    pub(crate) gateway_password: NavopRdpBorrowedSecret,
+    pub(crate) flags: u32,
+}
+
 const _: () = {
     assert!(size_of::<NativeResult>() == 4);
 
@@ -153,6 +169,33 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, abi_version) == 4);
     assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_low) == 8);
     assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_high) == 12);
+
+    assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, data) == 0);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, server_password) == 8);
+};
+
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    assert!(size_of::<NavopRdpBorrowedSecret>() == 16);
+    assert!(align_of::<NavopRdpBorrowedSecret>() == 8);
+    assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 8);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 48);
+    assert!(align_of::<NavopRdpCredentialBundle>() == 8);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 24);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 40);
+};
+
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    assert!(size_of::<NavopRdpBorrowedSecret>() == 8);
+    assert!(align_of::<NavopRdpBorrowedSecret>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 4);
+    assert!(size_of::<NavopRdpCredentialBundle>() == 28);
+    assert!(align_of::<NavopRdpCredentialBundle>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 16);
+    assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 24);
 };
 
 impl NavopRdpEventCallbackOptions {
@@ -185,6 +228,10 @@ pub(crate) type RegisterEventCallbackFn = unsafe fn(
     callback_context: *mut c_void,
 ) -> NativeResult;
 pub(crate) type UnregisterEventCallbackFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
+pub(crate) type ApplyCredentialsFn = unsafe fn(
+    host: *mut NativeRdpHost,
+    credentials: *const NavopRdpCredentialBundle,
+) -> NativeResult;
 
 #[derive(Clone, Copy)]
 pub(crate) struct NativeBindings {
@@ -193,6 +240,7 @@ pub(crate) struct NativeBindings {
     pub(crate) destroy: DestroyFn,
     pub(crate) register_event_callback: RegisterEventCallbackFn,
     pub(crate) unregister_event_callback: UnregisterEventCallbackFn,
+    pub(crate) apply_credentials: ApplyCredentialsFn,
 }
 
 pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
@@ -201,6 +249,7 @@ pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     destroy,
     register_event_callback,
     unregister_event_callback,
+    apply_credentials,
 };
 
 #[cfg(windows_rdp_host_native)]
@@ -220,6 +269,10 @@ unsafe extern "C" {
         callback_context: *mut c_void,
     ) -> NativeResult;
     fn navop_rdp_unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult;
+    fn navop_rdp_apply_credentials(
+        host: *mut NativeRdpHost,
+        credentials: *const NavopRdpCredentialBundle,
+    ) -> NativeResult;
     fn navop_rdp_destroy(host: *mut *mut NativeRdpHost) -> NativeResult;
 }
 
@@ -252,6 +305,14 @@ unsafe fn register_event_callback(
 #[cfg(windows_rdp_host_native)]
 unsafe fn unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult {
     unsafe { navop_rdp_unregister_event_callback(host) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn apply_credentials(
+    host: *mut NativeRdpHost,
+    credentials: *const NavopRdpCredentialBundle,
+) -> NativeResult {
+    unsafe { navop_rdp_apply_credentials(host, credentials) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -356,6 +417,40 @@ unsafe fn unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult {
 }
 
 #[cfg(not(windows_rdp_host_native))]
+unsafe fn apply_credentials(
+    host: *mut NativeRdpHost,
+    credentials: *const NavopRdpCredentialBundle,
+) -> NativeResult {
+    if host.is_null() || credentials.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let struct_size = unsafe { std::ptr::addr_of!((*credentials).struct_size).read() };
+    if struct_size < size_of::<NavopRdpCredentialBundle>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let abi_version = unsafe { std::ptr::addr_of!((*credentials).abi_version).read() };
+    if abi_version != ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
+    }
+    let flags = unsafe { std::ptr::addr_of!((*credentials).flags).read() };
+    if flags != 0 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let server_password = unsafe { std::ptr::addr_of!((*credentials).server_password).read() };
+    if server_password.len > 0 && server_password.data.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let gateway_password = unsafe { std::ptr::addr_of!((*credentials).gateway_password).read() };
+    if gateway_password.len > 0 && gateway_password.data.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
 unsafe fn destroy(host: *mut *mut NativeRdpHost) -> NativeResult {
     if host.is_null() {
         return RESULT_INVALID_ARGUMENT;
@@ -385,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn abi_struct_layout_is_architecture_independent() {
+    fn fixed_width_abi_struct_layout_is_architecture_independent() {
         assert_eq!(size_of::<NavopRdpProbeOptions>(), 8);
         assert_eq!(align_of::<NavopRdpProbeOptions>(), 4);
         assert_eq!(size_of::<NavopRdpProbeResult>(), 16);
@@ -423,6 +518,51 @@ mod tests {
     }
 
     #[test]
+    fn credential_layout_matches_the_current_pointer_width() {
+        assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, data), 0);
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpCredentialBundle, struct_size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpCredentialBundle, abi_version),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpCredentialBundle, server_password),
+            8
+        );
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 16);
+            assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 8);
+            assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 8);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 48);
+            assert_eq!(align_of::<NavopRdpCredentialBundle>(), 8);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
+                24
+            );
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 40);
+        }
+
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert_eq!(size_of::<NavopRdpBorrowedSecret>(), 8);
+            assert_eq!(align_of::<NavopRdpBorrowedSecret>(), 4);
+            assert_eq!(std::mem::offset_of!(NavopRdpBorrowedSecret, len), 4);
+            assert_eq!(size_of::<NavopRdpCredentialBundle>(), 28);
+            assert_eq!(align_of::<NavopRdpCredentialBundle>(), 4);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password),
+                16
+            );
+            assert_eq!(std::mem::offset_of!(NavopRdpCredentialBundle, flags), 24);
+        }
+    }
+
+    #[test]
     fn create_options_split_the_generation_without_abi_alignment_risk() {
         let options = NavopRdpCreateOptions::current(0x1122_3344_aabb_ccdd);
 
@@ -454,5 +594,50 @@ mod tests {
         );
         assert_eq!(result.abi_version, ABI_VERSION);
         assert_eq!(result.reserved, 0);
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_credentials_validate_size_before_version_and_borrowed_pointers() {
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let mut credentials = NavopRdpCredentialBundle {
+            struct_size: size_of::<NavopRdpCredentialBundle>() as u32,
+            abi_version: ABI_VERSION,
+            server_password: NavopRdpBorrowedSecret {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            gateway_password: NavopRdpBorrowedSecret {
+                data: std::ptr::null(),
+                len: 0,
+            },
+            flags: 0,
+        };
+
+        credentials.struct_size = 4;
+        credentials.abi_version += 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+
+        credentials.struct_size = size_of::<NavopRdpCredentialBundle>() as u32;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_ABI_MISMATCH
+        );
+
+        credentials.abi_version = ABI_VERSION;
+        credentials.server_password.len = 1;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_INVALID_ARGUMENT
+        );
+
+        credentials.server_password.len = 0;
+        assert_eq!(
+            unsafe { apply_credentials(host, &credentials) },
+            RESULT_UNAVAILABLE
+        );
     }
 }
