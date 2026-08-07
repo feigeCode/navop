@@ -120,6 +120,12 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "NativeRdpHost** out_host",
             "navop_rdp_destroy(",
             "NativeRdpHost** host",
+            "may release the native object only after",
+            "leaves",
+            "handle non-null",
+            "retains ownership for the caller",
+            "must not",
+            "safe to retry",
         ],
     );
     assert_excludes_all(
@@ -174,6 +180,138 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "align_of::<NavopRdpProbeResult>()",
             "size_of::<NavopRdpCreateOptions>()",
             "align_of::<NavopRdpCreateOptions>()",
+        ],
+    );
+}
+
+#[test]
+fn event_callback_abi_is_versioned_owned_and_architecture_independent() {
+    let header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+
+    assert_contains_all(
+        header,
+        &[
+            "typedef struct NavopRdpEvent",
+            "typedef struct NavopRdpEventCallbackOptions",
+            "typedef void (*NavopRdpEventCallback)(",
+            "void* context",
+            "const NavopRdpEvent* event",
+            "const uint8_t* payload",
+            "uint32_t kind;",
+            "uint32_t reserved;",
+            "int32_t code;",
+            "uint32_t payload_len;",
+            "callback payload is borrowed only for the duration",
+            "owner thread",
+            "does not retain callback or callback_context",
+            "no callback is in flight",
+            "must not synchronously call",
+            "navop_rdp_register_event_callback(",
+            "navop_rdp_unregister_event_callback(",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/event.rs"),
+        &[
+            "struct OwnedNativeEvent",
+            "struct EventBridge",
+            "VecDeque<OwnedNativeEvent>",
+            "AtomicU8",
+            "Mutex<VecDeque<OwnedNativeEvent>>",
+            "unsafe extern \"C\" fn native_event_callback",
+            "catch_unwind",
+            "payload.to_vec()",
+            "event_generation != self.generation",
+            "CallbackLifecycle::Closing",
+            "CallbackLifecycle::Closed",
+        ],
+    );
+}
+
+#[test]
+fn native_callback_gate_validates_before_retaining_and_closes_before_destroy() {
+    let source = &format!("{HOST_CRATE}/native/host.cpp");
+
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_register_event_callback(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_unregister_event_callback(",
+        &[
+            "try {",
+            "host == nullptr",
+            "options == nullptr",
+            "callback == nullptr",
+            "validate_struct_size(",
+            "options->struct_size",
+            "validate_abi_version(",
+            "options->abi_version",
+            "join_generation(",
+            "generation != host->generation",
+            "host->callback_state != CallbackState::Open",
+            "host->callback != nullptr",
+            "host->callback = callback;",
+            "host->callback_context = callback_context;",
+            "return NAVOP_RDP_RESULT_OK;",
+            "catch (...)",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_unregister_event_callback(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_destroy(",
+        &[
+            "try {",
+            "host == nullptr",
+            "close_callback_gate(host);",
+            "return NAVOP_RDP_RESULT_OK;",
+            "catch (...)",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_destroy(",
+        "\n}",
+        &[
+            "NativeRdpHost* owned = *host;",
+            "close_callback_gate(owned);",
+            "*host = nullptr;",
+            "delete owned;",
+        ],
+    );
+}
+
+#[test]
+fn event_callback_layout_is_frozen_without_pointer_sized_struct_fields() {
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/windows_rdp_host.h"),
+        &[
+            "static_assert(sizeof(NavopRdpEvent) == 32)",
+            "static_assert(alignof(NavopRdpEvent) == 4)",
+            "static_assert(offsetof(NavopRdpEvent, struct_size) == 0)",
+            "static_assert(offsetof(NavopRdpEvent, abi_version) == 4)",
+            "static_assert(offsetof(NavopRdpEvent, kind) == 8)",
+            "static_assert(offsetof(NavopRdpEvent, reserved) == 12)",
+            "static_assert(offsetof(NavopRdpEvent, generation_low) == 16)",
+            "static_assert(offsetof(NavopRdpEvent, generation_high) == 20)",
+            "static_assert(offsetof(NavopRdpEvent, code) == 24)",
+            "static_assert(offsetof(NavopRdpEvent, payload_len) == 28)",
+            "static_assert(sizeof(NavopRdpEventCallbackOptions) == 16)",
+            "static_assert(alignof(NavopRdpEventCallbackOptions) == 4)",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/ffi.rs"),
+        &[
+            "struct NavopRdpEvent",
+            "struct NavopRdpEventCallbackOptions",
+            "size_of::<NavopRdpEvent>()",
+            "align_of::<NavopRdpEvent>()",
+            "size_of::<NavopRdpEventCallbackOptions>()",
+            "align_of::<NavopRdpEventCallbackOptions>()",
+            "const _: () = {",
+            "unsafe extern \"C\" fn(",
+            "register_event_callback",
+            "unregister_event_callback",
         ],
     );
 }
@@ -261,6 +399,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub use error::WindowsRdpHostError;",
             "pub use handle::WindowsRdpHost;",
             "pub use options::WindowsRdpHostOptions;",
+            "mod event;",
         ],
     );
     assert_contains_all(
@@ -273,12 +412,18 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn close(&mut self)",
             "impl Drop for WindowsRdpHost",
             "(self.bindings.destroy)(&mut self.raw)",
+            "HostLifecycle::Open",
+            "HostLifecycle::Closing",
+            "HostLifecycle::Closed",
+            "begin_closing",
+            "unregister_event_callback",
         ],
     );
     for path in [
         "src/lib.rs",
         "src/ffi.rs",
         "src/handle.rs",
+        "src/event.rs",
         "src/options.rs",
         "src/capabilities.rs",
         "src/error.rs",

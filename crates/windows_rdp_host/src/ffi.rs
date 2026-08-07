@@ -1,5 +1,6 @@
+use std::ffi::c_void;
 use std::marker::PhantomData;
-use std::mem::size_of;
+use std::mem::{align_of, size_of};
 
 pub(crate) const ABI_VERSION: u32 = 1;
 
@@ -77,6 +78,97 @@ impl NavopRdpCreateOptions {
     }
 }
 
+#[repr(C)]
+pub(crate) struct NavopRdpEvent {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) kind: u32,
+    pub(crate) reserved: u32,
+    pub(crate) generation_low: u32,
+    pub(crate) generation_high: u32,
+    pub(crate) code: i32,
+    pub(crate) payload_len: u32,
+}
+
+impl NavopRdpEvent {
+    #[cfg(test)]
+    pub(crate) fn current(generation: u64, kind: u32, code: i32, payload_len: u32) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: ABI_VERSION,
+            kind,
+            reserved: 0,
+            generation_low: generation as u32,
+            generation_high: (generation >> 32) as u32,
+            code,
+            payload_len,
+        }
+    }
+}
+
+#[repr(C)]
+pub(crate) struct NavopRdpEventCallbackOptions {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) generation_low: u32,
+    pub(crate) generation_high: u32,
+}
+
+const _: () = {
+    assert!(size_of::<NativeResult>() == 4);
+
+    assert!(size_of::<NavopRdpProbeOptions>() == 8);
+    assert!(align_of::<NavopRdpProbeOptions>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpProbeOptions, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpProbeOptions, abi_version) == 4);
+
+    assert!(size_of::<NavopRdpProbeResult>() == 16);
+    assert!(align_of::<NavopRdpProbeResult>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpProbeResult, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpProbeResult, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpProbeResult, available) == 8);
+    assert!(std::mem::offset_of!(NavopRdpProbeResult, reserved) == 12);
+
+    assert!(size_of::<NavopRdpCreateOptions>() == 16);
+    assert!(align_of::<NavopRdpCreateOptions>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpCreateOptions, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpCreateOptions, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpCreateOptions, generation_low) == 8);
+    assert!(std::mem::offset_of!(NavopRdpCreateOptions, generation_high) == 12);
+
+    assert!(size_of::<NavopRdpEvent>() == 32);
+    assert!(align_of::<NavopRdpEvent>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpEvent, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpEvent, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpEvent, kind) == 8);
+    assert!(std::mem::offset_of!(NavopRdpEvent, reserved) == 12);
+    assert!(std::mem::offset_of!(NavopRdpEvent, generation_low) == 16);
+    assert!(std::mem::offset_of!(NavopRdpEvent, generation_high) == 20);
+    assert!(std::mem::offset_of!(NavopRdpEvent, code) == 24);
+    assert!(std::mem::offset_of!(NavopRdpEvent, payload_len) == 28);
+
+    assert!(size_of::<NavopRdpEventCallbackOptions>() == 16);
+    assert!(align_of::<NavopRdpEventCallbackOptions>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_low) == 8);
+    assert!(std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_high) == 12);
+};
+
+impl NavopRdpEventCallbackOptions {
+    pub(crate) fn current(generation: u64) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: ABI_VERSION,
+            generation_low: generation as u32,
+            generation_high: (generation >> 32) as u32,
+        }
+    }
+}
+
+pub(crate) type NativeEventCallback =
+    unsafe extern "C" fn(context: *mut c_void, event: *const NavopRdpEvent, payload: *const u8);
+
 pub(crate) type ProbeFn = unsafe fn(
     options: *const NavopRdpProbeOptions,
     out_result: *mut NavopRdpProbeResult,
@@ -86,18 +178,29 @@ pub(crate) type CreateFn = unsafe fn(
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult;
 pub(crate) type DestroyFn = unsafe fn(host: *mut *mut NativeRdpHost) -> NativeResult;
+pub(crate) type RegisterEventCallbackFn = unsafe fn(
+    host: *mut NativeRdpHost,
+    options: *const NavopRdpEventCallbackOptions,
+    callback: Option<NativeEventCallback>,
+    callback_context: *mut c_void,
+) -> NativeResult;
+pub(crate) type UnregisterEventCallbackFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
 
 #[derive(Clone, Copy)]
 pub(crate) struct NativeBindings {
     pub(crate) probe: ProbeFn,
     pub(crate) create: CreateFn,
     pub(crate) destroy: DestroyFn,
+    pub(crate) register_event_callback: RegisterEventCallbackFn,
+    pub(crate) unregister_event_callback: UnregisterEventCallbackFn,
 }
 
 pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     probe,
     create,
     destroy,
+    register_event_callback,
+    unregister_event_callback,
 };
 
 #[cfg(windows_rdp_host_native)]
@@ -110,6 +213,13 @@ unsafe extern "C" {
         options: *const NavopRdpCreateOptions,
         out_host: *mut *mut NativeRdpHost,
     ) -> NativeResult;
+    fn navop_rdp_register_event_callback(
+        host: *mut NativeRdpHost,
+        options: *const NavopRdpEventCallbackOptions,
+        callback: Option<NativeEventCallback>,
+        callback_context: *mut c_void,
+    ) -> NativeResult;
+    fn navop_rdp_unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_destroy(host: *mut *mut NativeRdpHost) -> NativeResult;
 }
 
@@ -127,6 +237,21 @@ unsafe fn create(
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult {
     unsafe { navop_rdp_create(options, out_host) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn register_event_callback(
+    host: *mut NativeRdpHost,
+    options: *const NavopRdpEventCallbackOptions,
+    callback: Option<NativeEventCallback>,
+    callback_context: *mut c_void,
+) -> NativeResult {
+    unsafe { navop_rdp_register_event_callback(host, options, callback, callback_context) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult {
+    unsafe { navop_rdp_unregister_event_callback(host) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -200,6 +325,37 @@ unsafe fn create(
 }
 
 #[cfg(not(windows_rdp_host_native))]
+unsafe fn register_event_callback(
+    host: *mut NativeRdpHost,
+    options: *const NavopRdpEventCallbackOptions,
+    callback: Option<NativeEventCallback>,
+    _callback_context: *mut c_void,
+) -> NativeResult {
+    if host.is_null() || options.is_null() || callback.is_none() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let options_struct_size = unsafe { std::ptr::addr_of!((*options).struct_size).read() };
+    if options_struct_size < size_of::<NavopRdpEventCallbackOptions>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let options_abi_version = unsafe { std::ptr::addr_of!((*options).abi_version).read() };
+    if options_abi_version != ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
+    }
+
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn unregister_event_callback(host: *mut NativeRdpHost) -> NativeResult {
+    if host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_OK
+}
+
+#[cfg(not(windows_rdp_host_native))]
 unsafe fn destroy(host: *mut *mut NativeRdpHost) -> NativeResult {
     if host.is_null() {
         return RESULT_INVALID_ARGUMENT;
@@ -236,11 +392,47 @@ mod tests {
         assert_eq!(align_of::<NavopRdpProbeResult>(), 4);
         assert_eq!(size_of::<NavopRdpCreateOptions>(), 16);
         assert_eq!(align_of::<NavopRdpCreateOptions>(), 4);
+        assert_eq!(size_of::<NavopRdpEvent>(), 32);
+        assert_eq!(align_of::<NavopRdpEvent>(), 4);
+        assert_eq!(size_of::<NavopRdpEventCallbackOptions>(), 16);
+        assert_eq!(align_of::<NavopRdpEventCallbackOptions>(), 4);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, struct_size), 0);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, abi_version), 4);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, kind), 8);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, reserved), 12);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, generation_low), 16);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, generation_high), 20);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, code), 24);
+        assert_eq!(std::mem::offset_of!(NavopRdpEvent, payload_len), 28);
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpEventCallbackOptions, struct_size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpEventCallbackOptions, abi_version),
+            4
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_low),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpEventCallbackOptions, generation_high),
+            12
+        );
     }
 
     #[test]
     fn create_options_split_the_generation_without_abi_alignment_risk() {
         let options = NavopRdpCreateOptions::current(0x1122_3344_aabb_ccdd);
+
+        assert_eq!(options.generation_low, 0xaabb_ccdd);
+        assert_eq!(options.generation_high, 0x1122_3344);
+    }
+
+    #[test]
+    fn callback_options_split_the_generation_without_abi_alignment_risk() {
+        let options = NavopRdpEventCallbackOptions::current(0x1122_3344_aabb_ccdd);
 
         assert_eq!(options.generation_low, 0xaabb_ccdd);
         assert_eq!(options.generation_high, 0x1122_3344);

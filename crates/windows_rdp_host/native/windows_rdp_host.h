@@ -41,6 +41,52 @@ typedef struct NavopRdpCreateOptions {
     uint32_t generation_high;
 } NavopRdpCreateOptions;
 
+typedef struct NavopRdpEvent {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t kind;
+    uint32_t reserved;
+    uint32_t generation_low;
+    uint32_t generation_high;
+    int32_t code;
+    uint32_t payload_len;
+} NavopRdpEvent;
+
+typedef struct NavopRdpEventCallbackOptions {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t generation_low;
+    uint32_t generation_high;
+} NavopRdpEventCallbackOptions;
+
+/*
+ * The callback payload is borrowed only for the duration of the callback.
+ * Consumers must copy payload_len bytes before returning and must not free the
+ * payload pointer.
+ *
+ * NativeRdpHost entrypoints and callbacks are owner thread/thread-affine and
+ * must be serialized by the caller.
+ * A failed callback registration does not retain callback or callback_context.
+ * Successful unregistration guarantees no callback is in flight and neither
+ * callback pointer is retained, so callback_context may be released afterward.
+ *
+ * A callback must not synchronously call callback unregistration or destroy
+ * the host. It may only copy/queue data and schedule lifecycle work for a later
+ * owner-thread turn.
+ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef void (*NavopRdpEventCallback)(
+    void* context,
+    const NavopRdpEvent* event,
+    const uint8_t* payload);
+
+#ifdef __cplusplus
+}
+#endif
+
 #ifdef __cplusplus
 static_assert(sizeof(NavopRdpResult) == 4);
 static_assert(sizeof(NavopRdpProbeOptions) == 8);
@@ -59,6 +105,22 @@ static_assert(offsetof(NavopRdpCreateOptions, struct_size) == 0);
 static_assert(offsetof(NavopRdpCreateOptions, abi_version) == 4);
 static_assert(offsetof(NavopRdpCreateOptions, generation_low) == 8);
 static_assert(offsetof(NavopRdpCreateOptions, generation_high) == 12);
+static_assert(sizeof(NavopRdpEvent) == 32);
+static_assert(alignof(NavopRdpEvent) == 4);
+static_assert(offsetof(NavopRdpEvent, struct_size) == 0);
+static_assert(offsetof(NavopRdpEvent, abi_version) == 4);
+static_assert(offsetof(NavopRdpEvent, kind) == 8);
+static_assert(offsetof(NavopRdpEvent, reserved) == 12);
+static_assert(offsetof(NavopRdpEvent, generation_low) == 16);
+static_assert(offsetof(NavopRdpEvent, generation_high) == 20);
+static_assert(offsetof(NavopRdpEvent, code) == 24);
+static_assert(offsetof(NavopRdpEvent, payload_len) == 28);
+static_assert(sizeof(NavopRdpEventCallbackOptions) == 16);
+static_assert(alignof(NavopRdpEventCallbackOptions) == 4);
+static_assert(offsetof(NavopRdpEventCallbackOptions, struct_size) == 0);
+static_assert(offsetof(NavopRdpEventCallbackOptions, abi_version) == 4);
+static_assert(offsetof(NavopRdpEventCallbackOptions, generation_low) == 8);
+static_assert(offsetof(NavopRdpEventCallbackOptions, generation_high) == 12);
 
 #define NAVOP_RDP_NOEXCEPT noexcept
 extern "C" {
@@ -74,6 +136,21 @@ NavopRdpResult navop_rdp_create(
     const NavopRdpCreateOptions* options,
     NativeRdpHost** out_host) NAVOP_RDP_NOEXCEPT;
 
+NavopRdpResult navop_rdp_register_event_callback(
+    NativeRdpHost* host,
+    const NavopRdpEventCallbackOptions* options,
+    NavopRdpEventCallback callback,
+    void* callback_context) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_unregister_event_callback(
+    NativeRdpHost* host) NAVOP_RDP_NOEXCEPT;
+
+/*
+ * For a non-null owned host, destroy may release the native object only after
+ * clearing the caller's handle. Any non-OK return, or any return that leaves
+ * the caller's handle non-null, retains ownership for the caller, must not
+ * release the native object, and is safe to retry.
+ */
 NavopRdpResult navop_rdp_destroy(NativeRdpHost** host) NAVOP_RDP_NOEXCEPT;
 
 #ifdef __cplusplus

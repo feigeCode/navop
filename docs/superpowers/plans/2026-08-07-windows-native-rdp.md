@@ -938,8 +938,9 @@ Probe contract：
 
 **Depends on:** Task 1。
 
-**Status:** 进行中。当前只交付并验证 ABI v1 lifecycle prefix 第一最小切片；event/callback、
-credentials/zeroize 和完整 lifecycle review 尚未完成。
+**Status:** 进行中。ABI v1 lifecycle prefix 第一最小切片和 event/callback owned-queue
+第二最小切片已实现；credentials/zeroize、真实 COM event sink、in-flight callback
+quiescence 和完整 Task 2 lifecycle review 尚未完成。
 
 **Files:**
 
@@ -967,12 +968,13 @@ credentials/zeroize 和完整 lifecycle review 尚未完成。
 
 - [x] **Red:** 写 ABI layout test，覆盖 Rust/C++ struct size、alignment、固定 32-bit result width 和 `abi_version` mismatch。
 - [x] **Red:** 写 fake bindings 测试 create failure、null handle、double destroy 和 native 未清空 handle。
-- [ ] **Red:** 写 callback-after-close、stale generation、owned payload 和 callback reentrancy 测试。
+- [x] **Red:** 写 callback-after-close、stale generation 和 owned payload 测试。
+- [ ] **Red:** 接入真实 native event dispatch 前，写 callback reentrancy、in-flight callback drain 和 owner-thread quiescence 测试。
 - [ ] **Red:** 写 server/Gateway secret borrowed-until-return、异常/OOM/取消/重复 apply、两端 zeroize 和禁止 full-memory dump 的 contract test。
 - [x] **Green:** 使用 `cc::Build` 编译 C++17 shim；非 Windows target 完全不运行 build。
 - [x] **Green:** 实现 RAII Rust wrapper，`Drop` 只调幂等 destroy。
 - [x] **Green:** C++ 入口捕获异常并转换为固定 result。
-- [ ] **Green:** callback 转成 owned event queue，不从 callback 直接访问 GPUI。
+- [x] **Green:** callback 转成 owned event queue，不从 callback 直接访问 GPUI。
 - [ ] **Green:** 实现独立的一次性 credential apply API，server 和 Gateway secret 不进入普通 connect options。
 - [ ] **Refactor:** 将 lifecycle、event、error 分文件，保持文件/函数复杂度约束。
 - [ ] **Review:** 对所有 `unsafe` 添加 safety invariant；检查 pointer lifetime、string length、thread ownership。
@@ -1023,6 +1025,32 @@ credentials/zeroize 和完整 lifecycle review 尚未完成。
   - 早期草案中的“`abi_version` 首字段”改为固定的 `struct_size`/`abi_version` 双字段 prefix；后续字段 append-only。
   - 早期草案中的 ABI `uint64_t generation` 改成两个 `uint32_t` 字段，Rust/C++ 内部再重组为 `u64`。
   - parent `HWND`、callback、connect、credentials、bounds 和 settings 不提前加入 lifecycle prefix；它们在后续切片中通过独立 versioned contract 演进。
+
+**Execution Notes (2026-08-07) — 第二最小切片：event/callback bridge：**
+
+- Red evidence:
+  - 新增 fake native callback bindings，覆盖 callback 注册失败、同步注册回调、按序 owned event、stale generation、unregister 期间 callback、callback-after-close、malformed payload、unregister-before-destroy，以及 unregister/destroy 可重试错误路径。
+  - ABI contract 冻结 `NavopRdpEvent` 和 `NavopRdpEventCallbackOptions` 的固定宽度 layout；C++ `static_assert` 与 Rust const assertions 分别覆盖 x64/x86 size、alignment 和 field offset。
+  - callback reentrancy 和真实 in-flight callback drain 尚未进入自动化测试；该项必须在 COM event sink 开始 dispatch native events 前完成，不能由当前 fake callback tests 代替。
+- Green implementation:
+  - 新增 `EventBridge`，callback 只校验 versioned event prefix、复制 borrowed payload、按 generation 过滤并写入 owned Rust queue，不访问 GPUI entity。
+  - Rust host 使用 `Open -> Closing -> Closed` gate；关闭时先关闭 Rust queue，再成功 unregister native callback，最后 destroy opaque handle。
+  - native shim 保存 callback/context 并提供注册/注销 ABI；注册失败不保留 callback/context，destroy 统一先关闭 callback gate。
+  - callback payload、event pointer 和 callback context 均只在 ABI 约定的同步调用生命周期内读取；Rust callback 使用 `catch_unwind` 防止 panic 穿过 C ABI。
+- Lifecycle/review:
+  - 当前 native shim 不 dispatch 任何 native event，因此成功 unregister 时没有真实 in-flight callback；现有 quiescence contract 在本切片中只依赖这一限制成立。
+  - 接入真实 COM connection-point sink 前，必须增加 event-source detach/Unadvise、in-flight callback 计数、close gate 和 drain/wait，并重新审查 callback reentrancy、owner-thread/STA 约束和 COM reference cycle。
+  - `Drop` 在 unregister 永久失败时会保守泄漏 `EventBridge`，避免 native 保留的 callback context 变成悬垂指针；registration cleanup 或 destroy 永久失败也可能保留 native allocation。后续完整 lifecycle review 必须决定可观测错误与最终释放策略。
+  - `event.rs` 和 `error.rs` 已分离；lifecycle 仍位于 `handle.rs`，所以完整 Refactor checklist 暂不勾选。
+- Automated verification:
+  - 本地提交前需要重新运行 `cargo fmt --all -- --check`、`cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`、`cargo test --locked -p windows_rdp_host`、`cargo test --locked -p windows-rdp-probe --test contract` 和 `git diff --check`。
+  - Windows x64/x86 compile/link-only 证据将在本切片提交并推送后，通过 GitHub-hosted `windows-2022` runner 补录。
+- Manual verification:
+  - 当前开发机是 macOS；本切片不创建 COM apartment、ATL AxWin、`MsRdpClient12`、event sink、child `HWND` 或 RDP session。
+  - GitHub-hosted runner 只能证明 MSVC/ATL C++、Rust FFI symbols 和 x64/i686 ABI 完成 compile/link；不能替代有交互桌面的 Windows ActiveX runtime smoke。
+- Remaining Task 2 scope:
+  - server/Gateway secret 类型、一次性 credential apply、Rust/native 临时内存 zeroize、OOM/取消/失败路径和 crash/full-memory-dump policy contract 尚未实现。
+  - 真实 COM event sink、callback in-flight drain 和完整 lifecycle review 尚未实现。
 
 **Acceptance:**
 
