@@ -939,9 +939,9 @@ Probe contract：
 **Depends on:** Task 1。
 
 **Status:** 进行中。ABI v1 lifecycle prefix、event/callback owned-queue、
-credentials/zeroize transport 和 native callback dispatch/quiescent gate 四个最小切片
-已实现；真实 COM event sink/event-source detach、ActiveX credential setter 和完整
-Task 2 lifecycle review 尚未完成。
+credentials/zeroize transport、native callback dispatch/quiescent gate 和 Rust facade
+lifecycle observability 已实现；真实 COM event sink/event-source detach、ActiveX
+credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Files:**
 
@@ -1213,6 +1213,32 @@ Task 2 lifecycle review 尚未完成。
 - Known limitations:
   - 未注入 native OOM，未观察 allocator/OS/未来 COM 内部副本的清除；真实
     ActiveX setter、COM event sink/Unadvise/drain 和完整 lifecycle review 仍未完成。
+
+**Execution Notes (2026-08-07) — 第六最小切片：Rust facade lifecycle observability：**
+
+- Red/review evidence:
+  - `WindowsRdpHost::is_closed()` 无法区分仍可接收 callback/credential 的 `Open`，
+    与 callback gate 已关闭但 unregister/destroy 仍需重试的 `Closing`；该差异会影响
+    后续 owner-thread shutdown 调度和失败可观测性。
+  - 现有 fake tests 已覆盖 unregister/destroy failure retry，但没有直接冻结
+    `Open -> Closing -> Closed` 的公开状态序列，也没有覆盖 `Drop` 连续 unregister
+    失败时 callback context 必须继续存活的保守 ownership contract。
+- Green implementation:
+  - 新增公开只读 `WindowsRdpHostLifecycle::{Open, Closing, Closed}` 和
+    `WindowsRdpHost::lifecycle()`；状态只描述 Rust facade ownership/callback admission，
+    不声称 ActiveX control 或 RDP session 达到相同状态。
+  - lifecycle state type 移入独立 `lifecycle.rs`；`close()` 仍在第一次尝试时关闭
+    event gate，失败后保持 `Closing`，成功 unregister/destroy 且 native 清空 handle
+    后才进入 `Closed`。
+  - 新增 fake regression：当显式 close 和 `Drop` 的 unregister 都失败时，不调用
+    destroy，并保守泄漏 `EventBridge`，使 fake native 保留的 callback/context 在
+    host drop 后仍可安全同步调用；该行为优先避免 dangling callback context。
+- Verification boundary:
+  - 本切片只改变 Rust facade、fake tests 和静态 contract，不改变 C ABI/C++ native
+    实现，不引入 COM、ATL、ActiveX、`HWND` 或 Windows runtime 声明。
+  - macOS 可完整执行该状态机/fake ownership contract；Windows native callback
+    source、connection-point `Unadvise`、真实 in-flight drain/timeout 和永久失败后的
+    process-level observability 仍属于后续 lifecycle/COM 工作。
 
 **Acceptance:**
 

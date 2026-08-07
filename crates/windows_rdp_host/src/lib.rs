@@ -11,6 +11,7 @@ mod error;
 mod event;
 mod ffi;
 mod handle;
+mod lifecycle;
 #[cfg(all(test, windows_rdp_host_native))]
 mod native_tests;
 mod options;
@@ -19,4 +20,5 @@ pub use capabilities::WindowsRdpHostCapabilities;
 pub use credential::WindowsRdpCredentialBundle;
 pub use error::WindowsRdpHostError;
 pub use handle::WindowsRdpHost;
+pub use lifecycle::WindowsRdpHostLifecycle;
 pub use options::WindowsRdpHostOptions;

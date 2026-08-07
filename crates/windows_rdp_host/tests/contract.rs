@@ -726,8 +726,10 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub use capabilities::WindowsRdpHostCapabilities;",
             "pub use error::WindowsRdpHostError;",
             "pub use handle::WindowsRdpHost;",
+            "pub use lifecycle::WindowsRdpHostLifecycle;",
             "pub use options::WindowsRdpHostOptions;",
             "mod event;",
+            "mod lifecycle;",
         ],
     );
     assert_contains_all(
@@ -738,19 +740,31 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn probe()",
             "pub fn create(",
             "pub fn close(&mut self)",
+            "pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle",
             "impl Drop for WindowsRdpHost",
             "(self.bindings.destroy)(&mut self.raw)",
-            "HostLifecycle::Open",
-            "HostLifecycle::Closing",
-            "HostLifecycle::Closed",
+            "WindowsRdpHostLifecycle::Open",
+            "WindowsRdpHostLifecycle::Closing",
+            "WindowsRdpHostLifecycle::Closed",
             "begin_closing",
             "unregister_event_callback",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/lifecycle.rs"),
+        &[
+            "pub enum WindowsRdpHostLifecycle",
+            "Open",
+            "Closing",
+            "Closed",
+            "callback admission",
         ],
     );
     for path in [
         "src/lib.rs",
         "src/ffi.rs",
         "src/handle.rs",
+        "src/lifecycle.rs",
         "src/event.rs",
         "src/options.rs",
         "src/capabilities.rs",

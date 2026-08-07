@@ -11,14 +11,8 @@ use crate::ffi::{
     NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpCreateOptions,
     NavopRdpEventCallbackOptions, NavopRdpProbeOptions, NavopRdpProbeResult,
 };
+use crate::lifecycle::WindowsRdpHostLifecycle;
 use crate::options::WindowsRdpHostOptions;
-
-#[derive(Clone, Copy)]
-enum HostLifecycle {
-    Open,
-    Closing,
-    Closed,
-}
 
 /// Owns one opaque native RDP host handle.
 ///
@@ -27,7 +21,7 @@ enum HostLifecycle {
 pub struct WindowsRdpHost {
     raw: *mut NativeRdpHost,
     generation: u64,
-    lifecycle: HostLifecycle,
+    lifecycle: WindowsRdpHostLifecycle,
     event_bridge: Option<Box<EventBridge>>,
     callback_registered: bool,
     bindings: NativeBindings,
@@ -53,8 +47,13 @@ impl WindowsRdpHost {
         self.generation
     }
 
+    /// Returns the Rust facade's current ownership and callback-admission state.
+    pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle {
+        self.lifecycle
+    }
+
     pub fn is_closed(&self) -> bool {
-        matches!(self.lifecycle, HostLifecycle::Closed)
+        matches!(self.lifecycle, WindowsRdpHostLifecycle::Closed)
     }
 
     /// Applies borrowed UTF-16 credentials during one synchronous native call.
@@ -67,7 +66,7 @@ impl WindowsRdpHost {
         &mut self,
         credentials: &WindowsRdpCredentialBundle,
     ) -> Result<(), WindowsRdpHostError> {
-        if !matches!(self.lifecycle, HostLifecycle::Open) || self.raw.is_null() {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
             return Err(WindowsRdpHostError::InvalidArgument);
         }
 
@@ -83,12 +82,12 @@ impl WindowsRdpHost {
 
     /// Stops callbacks and destroys the native handle. Repeated calls are safe.
     pub fn close(&mut self) -> Result<(), WindowsRdpHostError> {
-        if matches!(self.lifecycle, HostLifecycle::Closed) {
+        if matches!(self.lifecycle, WindowsRdpHostLifecycle::Closed) {
             return Ok(());
         }
 
-        if matches!(self.lifecycle, HostLifecycle::Open) {
-            self.lifecycle = HostLifecycle::Closing;
+        if matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) {
+            self.lifecycle = WindowsRdpHostLifecycle::Closing;
             if let Some(event_bridge) = self.event_bridge.as_ref() {
                 event_bridge.begin_closing();
             }
@@ -126,7 +125,7 @@ impl WindowsRdpHost {
         if let Some(event_bridge) = self.event_bridge.as_ref() {
             event_bridge.mark_closed();
         }
-        self.lifecycle = HostLifecycle::Closed;
+        self.lifecycle = WindowsRdpHostLifecycle::Closed;
     }
 
     fn probe_with(
@@ -189,7 +188,7 @@ impl WindowsRdpHost {
         Ok(Self {
             raw,
             generation: options.generation(),
-            lifecycle: HostLifecycle::Open,
+            lifecycle: WindowsRdpHostLifecycle::Open,
             event_bridge: Some(event_bridge),
             callback_registered: true,
             bindings,
@@ -314,6 +313,23 @@ mod tests {
                 state.last_context,
             )
         });
+        emit_callback(callback, context, event);
+    }
+
+    fn emit_active_callback(event: FakeEvent) {
+        let (callback, context) = FAKE_NATIVE_STATE.with(|state| {
+            let state = state.borrow();
+            (
+                state
+                    .active_callback
+                    .expect("native callback should still be retained"),
+                state.active_context,
+            )
+        });
+        assert!(
+            !context.is_null(),
+            "native callback context must be retained"
+        );
         emit_callback(callback, context, event);
     }
 
@@ -636,8 +652,10 @@ mod tests {
                 .expect("fake create should succeed");
 
         assert_eq!(host.generation(), 42);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
         assert!(!host.is_closed());
         host.close().expect("first close should succeed");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
         assert!(host.is_closed());
         assert_eq!(destroy_calls(), 1);
 
@@ -673,9 +691,11 @@ mod tests {
             host.close(),
             Err(WindowsRdpHostError::NativeDidNotClearHandle)
         );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
         assert!(!host.is_closed());
         host.close()
             .expect("non-clearing destroy should be retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
         assert!(host.is_closed());
         assert_eq!(destroy_calls(), 2);
     }
@@ -691,8 +711,10 @@ mod tests {
                 .expect("fake create should succeed");
 
         assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
         assert!(!host.is_closed());
         host.close().expect("destroy failure should be retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
         assert!(host.is_closed());
         assert_eq!(
             call_order(),
@@ -811,6 +833,7 @@ mod tests {
                 .expect("fake create should succeed");
 
         assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
         assert!(!host.is_closed());
         emit_last_callback(fake_event(42, 9, 90, &[9]));
         assert!(drain_events(&host).is_empty());
@@ -818,6 +841,7 @@ mod tests {
         host.close()
             .expect("unregister failure should be retryable");
 
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
         assert!(host.is_closed());
         assert_eq!(unregister_calls(), 2);
         assert_eq!(destroy_calls(), 1);
@@ -846,6 +870,26 @@ mod tests {
             call_order(),
             vec!["register", "unregister", "destroy", "destroy"]
         );
+    }
+
+    #[test]
+    fn drop_preserves_callback_context_when_unregister_keeps_failing() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().unregister_failures_remaining = 2;
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        drop(host);
+
+        assert_eq!(unregister_calls(), 2);
+        assert_eq!(destroy_calls(), 0);
+        emit_active_callback(fake_event(42, 8, 80, &[8]));
+        assert_eq!(call_order(), vec!["register", "unregister", "unregister"]);
     }
 
     #[test]
