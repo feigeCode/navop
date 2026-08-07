@@ -37,6 +37,7 @@ members = [
     "crates/process-util",
     "crates/remote_desktop",
     "crates/remote_desktop_view",
+    "crates/windows_rdp_host",
     "crates/notes",
     "crates/api_tools",
     "crates/json_view",

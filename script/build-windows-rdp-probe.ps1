@@ -101,6 +101,8 @@ function Invoke-ProbeBuild {
         "if errorlevel 1 exit /b %errorlevel%",
         "cd /d `"$RepoRoot`"",
         "cargo build --locked -p windows-rdp-probe --target $RustTarget",
+        "if errorlevel 1 exit /b %errorlevel%",
+        "cargo test --locked -p windows_rdp_host --target $RustTarget --no-run",
         "exit /b %errorlevel%"
     )
     $tempScript = Join-Path ([IO.Path]::GetTempPath()) `
@@ -139,11 +141,15 @@ Write-Host (
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Write-Host (
-    "Compile-only probe gate: builds the ATL shim but does not run or package it."
+    "Compile-only probe gate and host gate: builds the ATL shim and versioned " +
+    "native host ABI but does not run or package them."
 )
 foreach ($rustTarget in $Target) {
     $architecture = Get-VcVarsArchitecture -RustTarget $rustTarget
-    Write-Host "Building Windows RDP probe for $rustTarget ($architecture)"
+    Write-Host (
+        "Building Windows RDP probe and native host for " +
+        "$rustTarget ($architecture)"
+    )
     Invoke-ProbeBuild `
         -VcVarsAll $vcvarsall `
         -Architecture $architecture `
