@@ -93,6 +93,7 @@ github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []
 screenshot-safe = []
 wasm-components = ["extension-runtime/wasm-components"]
+windows-native-rdp = ["remote_desktop_view/windows-native-rdp"]
 
 [lints]
 workspace = true

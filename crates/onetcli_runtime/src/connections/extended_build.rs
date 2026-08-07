@@ -3,8 +3,8 @@ use super::input::{
     optional_value_str, required_object, required_value_str,
 };
 use one_core::storage::{
-    PortForwardingKind, PortForwardingParams, RemoteDesktopParams, RemoteDesktopProtocol,
-    SerialFlowControl, SerialParams, SerialParity, StoredConnection,
+    PortForwardingKind, PortForwardingParams, RemoteDesktopBackendPreference, RemoteDesktopParams,
+    RemoteDesktopProtocol, SerialFlowControl, SerialParams, SerialParity, StoredConnection,
 };
 use serde_json::Value;
 use tool_runtime::ToolError;
@@ -73,6 +73,7 @@ pub(super) fn build_remote_desktop(
             && optional_bool(values, "audio_playback").unwrap_or(false),
         proxy: None,
         credential_reference: None,
+        backend_preference: RemoteDesktopBackendPreference::Auto,
     };
     Ok(with_common_fields(
         StoredConnection::new_remote_desktop(

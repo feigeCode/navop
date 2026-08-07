@@ -30,6 +30,8 @@ mod frames;
 mod input;
 mod notifications;
 mod output;
+// Task 0 freezes this contract before later tasks wire it into the view runtime.
+#[allow(dead_code)]
 mod presentation;
 mod render;
 mod resize;
@@ -279,6 +281,10 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 #[cfg(test)]
 #[path = "view/render_contract_tests.rs"]
 mod render_contract_tests;
+
+#[cfg(test)]
+#[path = "view/presentation_tests.rs"]
+mod presentation_tests;
 
 #[cfg(test)]
 #[path = "view/view_tests.rs"]

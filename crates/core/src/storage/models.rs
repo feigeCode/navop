@@ -521,6 +521,21 @@ impl RemoteDesktopProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteDesktopBackendPreference {
+    #[default]
+    Auto,
+    WindowsNative,
+    Canvas,
+}
+
+impl RemoteDesktopBackendPreference {
+    fn is_auto(value: &Self) -> bool {
+        *value == Self::Auto
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteDesktopParams {
     pub protocol: RemoteDesktopProtocol,
@@ -537,6 +552,11 @@ pub struct RemoteDesktopParams {
     pub audio_playback: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+    #[serde(
+        default,
+        skip_serializing_if = "RemoteDesktopBackendPreference::is_auto"
+    )]
+    pub backend_preference: RemoteDesktopBackendPreference,
 }
 
 /// 跳板机配置
@@ -2216,6 +2236,7 @@ mod tests {
             audio_playback: false,
             proxy: None,
             credential_reference: None,
+            backend_preference: RemoteDesktopBackendPreference::Auto,
         };
         assert_eq!(
             "winhost:3389",
@@ -2802,6 +2823,7 @@ mod serial_tests {
             audio_playback: false,
             proxy: None,
             credential_reference: None,
+            backend_preference: RemoteDesktopBackendPreference::Auto,
         };
 
         let conn = StoredConnection::new_remote_desktop("win-rdp".to_string(), params, Some(42));
@@ -2820,6 +2842,7 @@ mod serial_tests {
             serde_json::from_str::<Value>(&conn.params).expect("RDP params parse as JSON");
         assert!(raw_params.get("width").is_none());
         assert!(raw_params.get("height").is_none());
+        assert!(raw_params.get("backend_preference").is_none());
         assert_eq!(RemoteDesktopProtocol::Vnc.default_port(), 5900);
     }
 
@@ -2839,6 +2862,10 @@ mod serial_tests {
 
         assert!(params.proxy.is_none());
         assert!(!params.audio_playback);
+        assert_eq!(
+            RemoteDesktopBackendPreference::Auto,
+            params.backend_preference
+        );
     }
 
     #[test]
@@ -2863,6 +2890,33 @@ mod serial_tests {
     }
 
     #[test]
+    fn remote_desktop_params_round_trip_preserves_backend_preference() {
+        let json = r#"{
+            "protocol":"Rdp",
+            "host":"10.0.0.8",
+            "port":3389,
+            "username":null,
+            "password":null,
+            "domain":null,
+            "read_only":false,
+            "backend_preference":"windows_native"
+        }"#;
+
+        let params: RemoteDesktopParams = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            RemoteDesktopBackendPreference::WindowsNative,
+            params.backend_preference
+        );
+
+        let restored: RemoteDesktopParams =
+            serde_json::from_str(&serde_json::to_string(&params).unwrap()).unwrap();
+        assert_eq!(
+            RemoteDesktopBackendPreference::WindowsNative,
+            restored.backend_preference
+        );
+    }
+
+    #[test]
     fn remote_desktop_params_round_trip_preserves_proxy() {
         let params = RemoteDesktopParams {
             protocol: RemoteDesktopProtocol::Vnc,
@@ -2882,6 +2936,7 @@ mod serial_tests {
                 credential_reference: None,
             }),
             credential_reference: None,
+            backend_preference: RemoteDesktopBackendPreference::Auto,
         };
 
         let json = serde_json::to_string(&params).unwrap();

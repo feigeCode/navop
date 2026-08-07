@@ -722,6 +722,7 @@ mod tests {
                     password: Some("secret".to_string()),
                     credential_reference: None,
                 }),
+                backend_preference: Default::default(),
             },
             None,
         );
@@ -750,6 +751,7 @@ mod tests {
                 read_only: false,
                 audio_playback: true,
                 proxy: None,
+                backend_preference: Default::default(),
             },
             None,
         );

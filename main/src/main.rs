@@ -535,6 +535,21 @@ mod native_driver_feature_contract_tests {
             .is_none_or(|line| line.contains("optional = true"))
     }
 
+    fn dependency_is_windows_only_optional_or_absent(manifest: &str, dependency: &str) -> bool {
+        let dependency_prefix = format!("{dependency} =");
+        let mut current_section = "";
+        for line in manifest.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                current_section = line;
+            } else if line.starts_with(&dependency_prefix) {
+                return current_section == r#"[target.'cfg(target_os = "windows")'.dependencies]"#
+                    && line.contains("optional = true");
+            }
+        }
+        true
+    }
+
     #[test]
     fn builtin_native_driver_features_are_declared_and_default_off() {
         let manifest = include_str!("../Cargo.toml");
@@ -548,6 +563,38 @@ mod native_driver_feature_contract_tests {
         assert!(features.contains("builtin-mongodb ="));
         assert!(!default_line.contains("builtin-redis"));
         assert!(!default_line.contains("builtin-mongodb"));
+    }
+
+    #[test]
+    fn windows_native_rdp_feature_is_declared_and_default_off() {
+        let main_manifest = include_str!("../Cargo.toml");
+        let remote_desktop_view_manifest =
+            include_str!("../../crates/remote_desktop_view/Cargo.toml");
+        let main_features = feature_block(main_manifest);
+        let remote_desktop_view_features = feature_block(remote_desktop_view_manifest);
+        let main_default = main_features
+            .lines()
+            .find(|line| line.trim_start().starts_with("default ="))
+            .expect("main must declare default features");
+        let remote_desktop_view_default = remote_desktop_view_features
+            .lines()
+            .find(|line| line.trim_start().starts_with("default ="))
+            .expect("remote_desktop_view must declare default features");
+
+        assert!(
+            main_features
+                .contains("windows-native-rdp = [\"remote_desktop_view/windows-native-rdp\"]")
+        );
+        assert!(!main_default.contains("windows-native-rdp"));
+        assert!(
+            remote_desktop_view_features.contains("windows-native-rdp = []"),
+            "the native host dependency is added by a later task"
+        );
+        assert_eq!("default = []", remote_desktop_view_default.trim());
+        assert!(dependency_is_windows_only_optional_or_absent(
+            remote_desktop_view_manifest,
+            "windows_rdp_host"
+        ));
     }
 
     #[test]
