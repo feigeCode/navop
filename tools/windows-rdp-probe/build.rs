@@ -56,12 +56,12 @@ fn atl_library_dir() -> PathBuf {
         other => panic!("unsupported ATL library architecture {other}"),
     };
     let library_dir = vc_tools.join("atlmfc").join("lib").join(architecture);
-    let atl_library = library_dir.join("atl.lib");
+    let atl_static_library = library_dir.join("atls.lib");
 
     assert!(
-        atl_library.is_file(),
-        "ATL library not found: {}",
-        atl_library.display()
+        atl_static_library.is_file(),
+        "ATL static library not found: {}. Install the matching Visual C++ ATL component.",
+        atl_static_library.display()
     );
     library_dir
 }
@@ -88,7 +88,8 @@ fn build_native_probe() {
         "cargo:rustc-link-search=native={}",
         atl_library_dir.display()
     );
-    for library in ["atl", "ole32", "oleaut32", "user32", "uuid", "version"] {
+    println!("cargo:rustc-link-lib=static=atls");
+    for library in ["ole32", "oleaut32", "user32", "uuid", "version"] {
         println!("cargo:rustc-link-lib={library}");
     }
     println!("cargo:rustc-cfg=windows_rdp_probe_native");

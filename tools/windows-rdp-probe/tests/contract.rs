@@ -265,8 +265,9 @@ fn build_contract_is_windows_hosted_msvc_only() {
             "cpp(true)",
             "include(&out_dir)",
             "atlmfc",
-            "atl.lib",
+            "atls.lib",
             "cargo:rustc-link-search=native=",
+            "cargo:rustc-link-lib=static=atls",
             "windows_rdp_probe_native",
             "x86_64",
             "\"x64\"",
@@ -285,7 +286,7 @@ fn build_contract_is_windows_hosted_msvc_only() {
             "join(\"atlmfc\")",
             "join(\"lib\")",
             "join(architecture)",
-            "join(\"atl.lib\")",
+            "join(\"atls.lib\")",
         ],
     );
     assert_tokens_in_scope(
@@ -296,7 +297,16 @@ fn build_contract_is_windows_hosted_msvc_only() {
             "atl_library_dir()",
             ".compile(\"windows_rdp_probe\")",
             "cargo:rustc-link-search=native=",
+            "cargo:rustc-link-lib=static=atls",
             "cargo:rustc-link-lib={library}",
+        ],
+    );
+    assert_excludes_all(
+        "tools/windows-rdp-probe/build.rs",
+        &[
+            "join(\"atl.lib\")",
+            "[\"atl\", \"ole32\"",
+            "println!(\"cargo:rustc-link-lib=atl\");",
         ],
     );
     assert_contains_all(
