@@ -802,7 +802,8 @@ Probe contract：
 
 - Visual Studio 2022 C++ desktop workload。
 - ATL component：`Microsoft.VisualStudio.Component.VC.ATL`。
-- Windows SDK 中 `mstscax.h`、type library 和 CLSID/IID 定义。
+- 系统注册的 Remote Desktop ActiveX type library；Windows SDK 不提供可直接包含的 `mstscax.h`，由 MSVC `#import "libid:..."` 生成 `mstscax.tlh`。
+- Microsoft 公开文档中的 `MsRdpClient12` CLSID 和 optional `IMsRdpClientNonScriptable8` IID；不手写 COM interface vtable。
 - `AtlAxWinInit` 链接依赖。
 - `CoInitializeEx`/现有 UI thread apartment 状态。
 - x64/x86 CoClass 注册和创建。
@@ -814,14 +815,14 @@ Probe contract：
 - 控件 `Version` 和 DLL file version。
 
 - [ ] **Red:** 在缺失 ATL component 的干净 Windows runner/VM 运行 probe，记录预期构建失败。
-- [ ] **Green:** 更新安装脚本或 runner setup，确保 x64/x86 probe 编译。
+- [x] **Green:** 更新安装脚本或 runner setup，确保 x64/x86 probe 编译和链接。
 - [ ] **Green:** 在有桌面 Windows 环境创建隐藏 parent window 和 ActiveX control，读取 version 后销毁。
 - [x] **Green:** 明确 `MsRdpClient12 → IMsRdpClient10`，禁止引入 `IMsRdpClient11/12`。
 - [ ] **Green:** 在 clean Windows 10/11 x64 WoW64 环境运行 Navop x86 进程，验证 32-bit ATL、32-bit COM 注册表视图、CoClass create/query、connect/disconnect 和安装后 probe；若产品继续支持 Windows 10 x86 OS，再增加对应 VM。
 - [x] **Green:** 记录 public-key pin 和文件 clipboard 的 API proof；无法证明时从 GA 承诺降级为系统托管/unsupported。
 - [x] **Refactor:** spike 只保留可复用 SDK/ABI 探测代码；删除一次性调试代码。
 - [x] **Review:** 检查不依赖机器上的非系统注册、不复制 mstscax DLL。
-- [ ] **Verify:** 分别运行 `rtk cargo check --target x86_64-pc-windows-msvc` 和 `rtk cargo check --target i686-pc-windows-msvc`。
+- [x] **Verify:** 在 GitHub-hosted Windows runner 分别执行 locked `cargo build`，完成 `x86_64-pc-windows-msvc` 和 `i686-pc-windows-msvc` 的 C++/Rust 编译与链接。
 
 上述已勾选项的证据边界：
 
@@ -832,24 +833,31 @@ Probe contract：
 
 - Local/static completed:
   - 在 `tools/windows-rdp-probe/` 增加临时 probe crate，并作为 workspace member 管理，但不加入 `default-members`，因此不会改变默认产品构建入口。
-  - 首次 contract Red 固定为 5 个失败；实现后扩展为 9 个通过的契约测试，覆盖 Windows-only MSVC/ATL build boundary、临时 C ABI 一致性、初始化/逆序清理顺序、DLL version 非致命诊断回退、x64/x86 workflow、禁止运行/打包 probe、禁止复制/注册 `mstscax.dll`，以及非 Windows no-op 的固定退出码和输出。
+  - 首次 contract Red 固定为 5 个失败；实现和 Windows runner 修复后扩展为 11 个通过的契约测试，覆盖 Windows-only MSVC/ATL build boundary、临时 C ABI 一致性、初始化/逆序清理顺序、DLL version 非致命诊断回退、x64/x86 workflow、系统 type library 导入、公开 GUID、`atls.lib` 静态链接、禁止运行/打包 probe、禁止复制/注册 `mstscax.dll`，以及非 Windows no-op 的固定退出码和输出。
   - 非 Windows 本地可 build/test/run；输出固定为 `windows-rdp-probe status=unsupported reason=requires-windows-msvc-atl`，退出码为 0。该结果只证明 unsupported contract，不证明任何 Windows COM 能力。
-  - native spike 源码声明并由 contract 断言使用 C++17、ATL AxHost、`CLSID_MsRdpClient12`、`IMsRdpClient10`、可选 `IMsRdpClientNonScriptable8`、控件 `Version` 和已加载系统 `mstscax.dll` file version；只通过单个临时 `extern "C" int32_t windows_rdp_probe_run(void)` 进入 Rust，没有提前实现 Task 2 的 opaque host、版本化 ABI 或 callback API。
+  - Windows SDK 不提供 `mstscax.h`。native spike 通过 `#import "libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489" raw_interfaces_only, named_guids, no_namespace, exclude("UINT_PTR")` 从目标架构对应的系统注册 type library 生成 `mstscax.tlh`；`exclude("UINT_PTR")` 避免 i686 generated declarations 与 Windows headers 重定义。
+  - native spike 源码声明并由 contract 断言使用 C++17、ATL AxHost、注册类名 `L"AtlAxWin"`、Microsoft 公开的 `MsRdpClient12` CLSID、generated `IMsRdpClient10`、以公开 IID + `IUnknown` 探测的 optional `IMsRdpClientNonScriptable8`、控件 `Version` 和已加载系统 `mstscax.dll` file version。没有复制第三方 header、没有手写 COM interface vtable；只通过单个临时 `extern "C" int32_t windows_rdp_probe_run(void)` 进入 Rust，没有提前实现 Task 2 的 opaque host、版本化 ABI 或 callback API。
   - `script/install-window.ps1` 限定 Visual Studio 2022 `[17.0,18.0)`，显式安装 Native Desktop 与 `VC.ATL`，并为 Scoop/current-process PATH、extras bucket 和 CMake 增加可重复执行的静态 contract。
-  - `script/build-windows-rdp-probe.ps1` 显式探测 `atlbase.h`、`mstscax.h` 和 `vcvarsall.bat`，将 x64/i686 分别映射到 `vcvarsall.bat x64`/`x86`，只执行 locked `cargo build`。CI matrix 和 release Windows build 都调用同一个 compile-only gate；probe 不运行、不上传、不进入发行包。
-  - C++ source 显式执行 `OleInitialize → AtlAxWinInit → hidden parent → ATLAXWIN child → ActiveX control → interface/version inspection`，RAII cleanup 固定为 control/container release、child/parent destroy、`AtlAxWinTerm`、`OleUninitialize` 的逆序释放。该项目前只完成源码和 contract 审查，不能替代 Windows runtime 结果。
+  - `script/build-windows-rdp-probe.ps1` 显式探测 `atlbase.h` 和 `vcvarsall.bat`，将 x64/i686 分别映射到 `vcvarsall.bat x64`/`x86`，只执行 locked `cargo build`。`build.rs` 按 `VCToolsInstallDir/atlmfc/lib/{x64|x86}/atls.lib` 验证并静态链接现代 ATL 支持库 `atls.lib`；CI matrix 和 release Windows build 都调用同一个 compile-only gate，probe 不运行、不上传、不进入发行包。
+  - C++ source 显式执行 `OleInitialize → AtlAxWinInit → hidden parent → AtlAxWin child → ActiveX control → interface/version inspection`，RAII cleanup 固定为 control/container release、child/parent destroy、`AtlAxWinTerm`、`OleUninitialize` 的逆序释放。源码和 contract 已审查，Windows runner 已完成 compile/link；由于 runner 未执行 probe executable，这些证据仍不能替代 Windows runtime 结果。
   - 静态源码检查确认 Navop 经 `gpui_platform::application()` 构造 Windows platform，`gpui_windows::WindowsPlatform::new` 调用 `OleInitialize(None)`，随后 `run` 进入 `GetMessageW`/`TranslateMessage`/`DispatchMessageW` 消息循环；这只说明现有初始化路径，不证明实际 owner thread/apartment。正式 host 仍须在 Windows 上用 `CoGetApartmentType` 或等价断言确认创建、调用和销毁线程；当前检查也未在该 platform 路径发现对应的显式 `OleUninitialize`，后续生命周期实现必须明确 apartment ownership。
   - 已进行独立只读审查，并按审查结果补充 VS 2022 版本范围、Scoop 幂等标记、UTF-8 cmd code page、生命周期/ABI contract、`VS_FFI_SIGNATURE` 校验，以及保持 probe 成功状态的 `dll_version=unavailable dll_version_reason=<reason>` 非致命诊断。
 - Local/static verification:
   - `rtk cargo fmt --all -- --check`：通过。
-  - `rtk cargo test --locked -p windows-rdp-probe`：9 passed。
+  - `rtk cargo test --locked -p windows-rdp-probe`：11 passed。
   - `rtk cargo run --locked -p windows-rdp-probe`：退出码 0，输出固定为 `windows-rdp-probe status=unsupported reason=requires-windows-msvc-atl`。
   - `rtk cargo metadata --locked --no-deps --format-version 1`：确认 probe 属于 workspace 且不属于 `workspace_default_members`。
   - `.github/workflows/ci.yml`、`.github/workflows/release.yml`：YAML 静态解析通过。
   - `rtk git diff --check`：通过。
   - 当前 macOS 环境没有 `pwsh`，未执行 PowerShell parser、安装脚本或 Windows probe；这些结果不得由上述静态验证替代。
+- GitHub-hosted Windows compile/link verification:
+  - Commit：`9cbdea736794c09f93a818d1df3dab92c0dc97b8`。
+  - Workflow run：[`31168540082`](https://github.com/feigeCode/navop/actions/runs/31168540082)。
+  - x64 job：[`Windows RDP probe (x86_64-pc-windows-msvc)` / `92834877253`](https://github.com/feigeCode/navop/actions/runs/31168540082/job/92834877253)，`Build ATL/MSVC probe` 成功。
+  - x86 job：[`Windows RDP probe (i686-pc-windows-msvc)` / `92834877285`](https://github.com/feigeCode/navop/actions/runs/31168540082/job/92834877285)，`Build ATL/MSVC probe` 成功。
+  - 两个 job 证明对应 MSVC/ATL C++ 和 Rust 最终链接成功，能从各自注册表视图解析系统 RDP type library、生成并编译 `mstscax.tlh`，并正确链接 `atls.lib`。该 workflow 的无关通用 Windows test job 在目标 probe job 完成后被取消以节省 runner；不能把 workflow 最终的 cancelled 状态解释为 probe 失败。
+  - compile-only runner 没有交互桌面，未执行生成的 probe executable；因此不能证明 ActiveX runtime create/query/destroy、COM apartment、控件/DLL runtime version、WoW64 runtime、connect/disconnect、安装包或 GPUI tab 嵌入行为。
 - Windows CI/VM still required:
-  - 在 Windows host 上实际完成 x64 MSVC/ATL compile/link 和 i686 MSVC/ATL compile/link，确认 runner/SDK 中的 `mstscax.h`、ATL headers、`atl.lib` 及所用 CLSID/IID 声明。
   - 在有交互桌面的 Windows 10/11 x64 native 环境验证 COM 注册、hidden ActiveX create/destroy、`MsRdpClient12 → IMsRdpClient10` QueryInterface、`IMsRdpClientNonScriptable8` capability、控件/DLL 实际版本和最小 connect/disconnect。
   - 在 Windows 10/11 x64 WoW64 下运行 x86 probe/Navop，验证 32-bit ATL、32-bit COM 注册表视图、安装后 create/query/connect/disconnect；Windows 10 x86 OS 是否纳入仍按产品支持策略决定。
   - 在缺失 ATL component 的干净 Windows runner/VM 记录预期 Red，并在执行安装脚本后重复 probe，证明安装步骤的真实幂等性；当前 macOS 环境没有 `pwsh`，因此没有伪造 PowerShell parser 或 installer 结果。
@@ -2106,7 +2114,7 @@ rtk git diff --check
 - [Remote Desktop ActiveX control classes](https://learn.microsoft.com/en-us/windows/win32/termserv/remote-desktop-activex-control-classes)：系统 Remote Desktop ActiveX CoClass 清单。
 - [ATL Composite Control Global Functions](https://learn.microsoft.com/en-us/cpp/atl/reference/composite-control-global-functions?view=msvc-170)：`AtlAxWinInit`、`AtlAxCreateControlEx`、`AtlAxGetControl` 和 ActiveX hosting functions。
 
-实现时以构建所用 Windows SDK 的 `mstscax.h`/type library 为编译期事实，以目标机器 runtime capability probe 为运行期事实。文档页面和系统控件版本可能不同；任何属性都必须经 `QueryInterface`/HRESULT 验证后再向 UI 宣称可用。
+实现时以目标架构系统注册的 Remote Desktop ActiveX type library 及其由 MSVC `#import` 生成的 declarations 为编译期事实；Windows SDK 不提供本计划可依赖的 `mstscax.h`。以目标机器 runtime capability probe 为运行期事实。文档页面、编译机器 type library 和目标机器系统控件版本可能不同；任何属性都必须经 `QueryInterface`/HRESULT 验证后再向 UI 宣称可用。
 
 ---
 
