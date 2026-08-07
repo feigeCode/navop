@@ -3147,6 +3147,7 @@ impl AgentChatView {
             input.set_target_options(target_options, cx);
             input.set_context(ctx, cx);
         });
+        self.request_scroll_to_bottom();
         cx.notify();
     }
 
@@ -5038,6 +5039,23 @@ mod tests {
             assert!(state.take_pending_for_render());
         }
         assert!(!state.take_pending_for_render());
+    }
+
+    #[gpui::test]
+    fn resource_context_change_requests_scroll_to_latest_message(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![]);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            let resource = ResourceRef::new("db-b", ResourceKind::Mysql, "secondary-db");
+            let resources = ResourceContext::new().with_resource(resource.clone());
+
+            assert_eq!(0, view.auto_scroll.pending_bottom_scroll_frames);
+            view.set_resource_context_with_catalog(resources, Vec::new(), vec![resource], cx);
+            assert!(view.auto_scroll.take_pending_for_render());
+        });
     }
 
     #[test]
