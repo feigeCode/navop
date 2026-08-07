@@ -5,6 +5,7 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(windows_rdp_host_native)");
     println!("cargo:rerun-if-changed=native/credential.cpp");
+    println!("cargo:rerun-if-changed=native/event_dispatch.cpp");
     println!("cargo:rerun-if-changed=native/host.cpp");
     println!("cargo:rerun-if-changed=native/host_internal.h");
     println!("cargo:rerun-if-changed=native/windows_rdp_host.h");
@@ -54,6 +55,7 @@ fn build_native_host() {
     cc::Build::new()
         .cpp(true)
         .file("native/credential.cpp")
+        .file("native/event_dispatch.cpp")
         .file("native/host.cpp")
         .include("native")
         .out_dir(&out_dir)

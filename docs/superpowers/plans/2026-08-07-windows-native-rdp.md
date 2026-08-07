@@ -938,9 +938,10 @@ Probe contract：
 
 **Depends on:** Task 1。
 
-**Status:** 进行中。ABI v1 lifecycle prefix、event/callback owned-queue 和
-credentials/zeroize transport 三个最小切片已实现；真实 COM event sink、in-flight
-callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle review 尚未完成。
+**Status:** 进行中。ABI v1 lifecycle prefix、event/callback owned-queue、
+credentials/zeroize transport 和 native callback dispatch/quiescent gate 四个最小切片
+已实现；真实 COM event sink/event-source detach、ActiveX credential setter 和完整
+Task 2 lifecycle review 尚未完成。
 
 **Files:**
 
@@ -954,6 +955,8 @@ callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle revie
 - Create: `crates/windows_rdp_host/src/capabilities.rs`
 - Create: `crates/windows_rdp_host/src/error.rs`
 - Create: `crates/windows_rdp_host/native/windows_rdp_host.h`
+- Create: `crates/windows_rdp_host/native/event_dispatch.cpp`
+- Create: `crates/windows_rdp_host/src/native_tests.rs`
 - Create initial C++ source files under `crates/windows_rdp_host/native/`
 - Modify: root `Cargo.toml`
 
@@ -969,7 +972,7 @@ callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle revie
 - [x] **Red:** 写 ABI layout test，覆盖 Rust/C++ struct size、alignment、固定 32-bit result width 和 `abi_version` mismatch。
 - [x] **Red:** 写 fake bindings 测试 create failure、null handle、double destroy 和 native 未清空 handle。
 - [x] **Red:** 写 callback-after-close、stale generation 和 owned payload 测试。
-- [ ] **Red:** 接入真实 native event dispatch 前，写 callback reentrancy、in-flight callback drain 和 owner-thread quiescence 测试。
+- [x] **Red:** 接入真实 COM event sink 前，写 native callback dispatch、callback reentrancy、in-flight close rejection/retry 和 owner-thread quiescence 测试。
 - [x] **Red:** 写 server/Gateway secret borrowed-until-return、OOM/内部失败/重复 apply、两端 zeroize contract 和禁止新增 full-memory dump collection 的测试。
 - [ ] **Red:** 在真实 ActiveX credential setter/connect 引入异步或可取消流程时，补取消竞态、setter 部分成功和 COM 内部副本边界测试。
 - [x] **Green:** 使用 `cc::Build` 编译 C++17 shim；非 Windows target 完全不运行 build。
@@ -1130,6 +1133,52 @@ callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle revie
     内存观察和 future event payload 脱敏策略尚未由 Windows runtime test 覆盖。
   - 同步 transport 当前没有 cancellation 状态；取消竞态应在真实 setter/connect
     出现异步或部分提交语义时设计并测试，不能用当前 fake result 冒充已经验证。
+
+**Execution Notes (2026-08-07) — 第四最小切片：native callback dispatch/quiescent gate：**
+
+- Red evidence:
+  - contract test 首先要求 public callback contract 明确禁止 callback 同步重入
+    `NativeRdpHost` entrypoint，并要求 unregister 成功只能发生在 callback gate
+    quiescent 之后；首次完整 crate 测试为 unit 35 passed、contract 12 passed /
+    2 failed。
+  - Windows-only native tests 覆盖 callback 单次同步 dispatch、callback 内重入
+    unregister/destroy、错误返回后 handle/callback 保留、wrong-thread dispatch /
+    unregister/destroy，以及 event size/version/reserved/generation/payload pointer
+    校验。非法 event 不得调用 callback，后续合法 event 仍必须成功。
+- Green implementation:
+  - `NativeRdpHost` 记录创建线程 ID 和 `callbacks_in_flight`；所有 callback lifecycle、
+    credential 和 dispatch entrypoint 在改变状态前校验 owner thread。
+  - `event_dispatch.cpp` 在保留 callback/context 前完成 event header、generation、
+    payload、gate 和 counter overflow 校验，并用 RAII scope 包围同步 callback，
+    保证正常返回或 C++ 异常展开时 in-flight counter 都恢复。
+  - unregister/destroy 在 callback in flight 时不阻塞，返回
+    `NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT`；callback、context、host 和调用方 handle
+    均保持不变，可在 callback 返回后的后续 owner-thread turn 重试。
+  - test-only `navop_rdp_test_dispatch_event` 不进入 public header；真实 COM event
+    source、connection-point `Unadvise` 和 drain/timeout 仍属于后续切片。
+  - Windows probe gate 保留 probe executable 的 compile/link-only 边界，但
+    `windows_rdp_host` 已从 `cargo test --no-run` 改为实际执行非 ActiveX native
+    host tests。
+- Automated verification:
+  - `cargo fmt --all -- --check`：通过。
+  - `cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`：通过。
+  - `cargo test --locked -p windows_rdp_host`：unit tests 35 passed，contract tests
+    14 passed。
+  - `cargo check --locked -p windows_rdp_host`：通过。
+  - `RUSTFLAGS='--cfg windows_rdp_host_native' cargo check --locked -p
+    windows_rdp_host --tests`：通过；仅额外 type-check Windows-only Rust test module，
+    不编译或链接 MSVC C++。
+  - `git diff --check`：通过。
+  - 独立只读审查未发现本切片的 correctness、ABI、memory/thread safety 阻断问题。
+- Windows verification boundary:
+  - 当前开发机是 macOS，不能编译或运行 MSVC C++ native tests，也没有 PowerShell；
+    上述本地结果只覆盖 Rust/fake/源码 contract。
+  - x64/i686 Windows runner 仍必须执行
+    `./script/build-windows-rdp-probe.ps1 -Target
+    x86_64-pc-windows-msvc,i686-pc-windows-msvc`，确认 `/W4 /WX` compile/link 和
+    native test executable 的真实结果。
+  - 即使该 runner 通过，也不证明 ActiveX create/query/connect、COM apartment、
+    child `HWND`、GPUI tab 嵌入或有交互桌面的 runtime smoke。
 
 **Acceptance:**
 
@@ -2302,12 +2351,13 @@ Windows x64/x86 的当前 host ABI gate 必须在 Windows-hosted MSVC/ATL 环境
 
 ```powershell
 cargo build --locked -p windows-rdp-probe --target $RustTarget
-cargo test --locked -p windows_rdp_host --target $RustTarget --no-run
+cargo test --locked -p windows_rdp_host --target $RustTarget
 ```
 
-该 gate 是 compile/link-only，不运行 probe 或 host test executable。macOS 本地测试不能替代
-Windows linker 结果；GitHub-hosted runner 的 compile/link 成功也不能替代有交互桌面的
-ActiveX runtime smoke。
+该 gate 不运行 `windows-rdp-probe` executable，因此 probe/ActiveX 部分仍是
+compile/link-only；它会实际运行 `windows_rdp_host` 的非 ActiveX native host tests。
+macOS 本地测试不能替代 Windows compiler/linker/native-test 结果；GitHub-hosted runner
+的成功也不能替代有交互桌面的 ActiveX runtime smoke。
 
 还必须执行：
 

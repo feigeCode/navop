@@ -12,6 +12,8 @@ pub(crate) const RESULT_ABI_MISMATCH: NativeResult = 2;
 pub(crate) const RESULT_ALLOCATION_FAILED: NativeResult = 3;
 pub(crate) const RESULT_INTERNAL_ERROR: NativeResult = 4;
 pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
+pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
+pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 
 #[repr(C)]
 pub(crate) struct NativeRdpHost {
@@ -476,6 +478,8 @@ mod tests {
         assert_eq!(RESULT_ALLOCATION_FAILED, 3);
         assert_eq!(RESULT_INTERNAL_ERROR, 4);
         assert_eq!(RESULT_UNAVAILABLE, 5);
+        assert_eq!(RESULT_WRONG_THREAD, 6);
+        assert_eq!(RESULT_CALLBACK_IN_FLIGHT, 7);
         assert_eq!(size_of::<NativeResult>(), 4);
     }
 

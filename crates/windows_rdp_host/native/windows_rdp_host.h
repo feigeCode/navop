@@ -15,6 +15,8 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_RESULT_ALLOCATION_FAILED INT32_C(3)
 #define NAVOP_RDP_RESULT_INTERNAL_ERROR INT32_C(4)
 #define NAVOP_RDP_RESULT_UNAVAILABLE INT32_C(5)
+#define NAVOP_RDP_RESULT_WRONG_THREAD INT32_C(6)
+#define NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT INT32_C(7)
 
 /*
  * Versioned structs accept struct_size values greater than or equal to the
@@ -79,13 +81,19 @@ typedef struct NavopRdpCredentialBundle {
  *
  * NativeRdpHost entrypoints and callbacks are owner thread/thread-affine and
  * must be serialized by the caller.
+ * Callbacks must not synchronously call NativeRdpHost entrypoints; they may
+ * only copy or queue data and schedule lifecycle work for a later owner-thread
+ * turn.
+ * Wrong-thread calls fail without changing the host, callback registration,
+ * callback context, or caller-owned handle.
  * A failed callback registration does not retain callback or callback_context.
  * Successful unregistration guarantees no callback is in flight and neither
  * callback pointer is retained, so callback_context may be released afterward.
  *
- * A callback must not synchronously call callback unregistration or destroy
- * the host. It may only copy/queue data and schedule lifecycle work for a later
- * owner-thread turn.
+ * If callback unregistration or destroy is called while a callback is in flight,
+ * the operation fails without blocking and must preserve the callback,
+ * callback_context, host, and caller-owned handle. The caller may retry from a
+ * later owner-thread turn after the callback returns.
  */
 /*
  * Credential code units are borrowed only for the synchronous call. A zero

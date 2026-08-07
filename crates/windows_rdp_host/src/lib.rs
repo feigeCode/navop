@@ -11,6 +11,8 @@ mod error;
 mod event;
 mod ffi;
 mod handle;
+#[cfg(all(test, windows_rdp_host_native))]
+mod native_tests;
 mod options;
 
 pub use capabilities::WindowsRdpHostCapabilities;

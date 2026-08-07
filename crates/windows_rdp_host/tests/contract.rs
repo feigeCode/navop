@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 const HOST_CRATE: &str = "crates/windows_rdp_host";
 const ABI_VERSION: &str = "NAVOP_RDP_ABI_VERSION UINT32_C(1)";
-const HOST_BUILD: &str = "cargo test --locked -p windows_rdp_host --target $RustTarget --no-run";
+const HOST_TEST: &str = "cargo test --locked -p windows_rdp_host --target $RustTarget";
 
 fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -276,6 +276,108 @@ fn native_callback_gate_validates_before_retaining_and_closes_before_destroy() {
             "close_callback_gate(owned);",
             "*host = nullptr;",
             "delete owned;",
+        ],
+    );
+}
+
+#[test]
+fn native_callback_dispatch_enforces_owner_thread_and_quiescent_close() {
+    let header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+    let internal_header = &format!("{HOST_CRATE}/native/host_internal.h");
+    let dispatch_source = &format!("{HOST_CRATE}/native/event_dispatch.cpp");
+
+    assert_contains_all(
+        header,
+        &[
+            "NAVOP_RDP_RESULT_WRONG_THREAD",
+            "NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT",
+            "Wrong-thread calls",
+            "callback is in flight",
+            "preserve",
+            "later owner-thread turn",
+        ],
+    );
+    assert_contains_all(
+        internal_header,
+        &[
+            "uint32_t owner_thread_id;",
+            "uint32_t callbacks_in_flight;",
+            "ensure_owner_thread(",
+            "close_callback_gate(",
+            "dispatch_event(",
+        ],
+    );
+    assert_contains_all(
+        dispatch_source,
+        &[
+            "#include <windows.h>",
+            "class CallbackDispatchScope",
+            "host_->callbacks_in_flight += UINT32_C(1);",
+            "host_->callbacks_in_flight -= UINT32_C(1);",
+            "GetCurrentThreadId()",
+            "NAVOP_RDP_RESULT_WRONG_THREAD",
+            "NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT",
+            "host->callback_state != CallbackState::Open",
+            "host->callback == nullptr",
+            "host->callbacks_in_flight == UINT32_MAX",
+            "NavopRdpEventCallback callback = host->callback;",
+            "void* callback_context = host->callback_context;",
+            "CallbackDispatchScope callback_scope(host);",
+            "callback(callback_context, event, payload);",
+            "host->callback = nullptr;",
+            "host->callback_context = nullptr;",
+            "host->callback_state = CallbackState::Closed;",
+            "extern \"C\" NavopRdpResult navop_rdp_test_dispatch_event(",
+            "try {",
+            "catch (...)",
+        ],
+    );
+    assert_excludes_all(
+        header,
+        &["navop_rdp_test_dispatch_event(", "callbacks_in_flight"],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/host.cpp"),
+        &[
+            "GetCurrentThreadId()",
+            "ensure_owner_thread(host)",
+            "NavopRdpResult close_result = close_callback_gate(owned);",
+            "if (close_result != NAVOP_RDP_RESULT_OK)",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/credential.cpp"),
+        &["ensure_owner_thread(host)"],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/ffi.rs"),
+        &["RESULT_WRONG_THREAD", "RESULT_CALLBACK_IN_FLIGHT"],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/error.rs"),
+        &[
+            "WrongThread",
+            "CallbackInFlight",
+            "ffi::RESULT_WRONG_THREAD",
+            "ffi::RESULT_CALLBACK_IN_FLIGHT",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/native_tests.rs"),
+        &[
+            "native_dispatch_invokes_the_registered_callback_once",
+            "reentrant_unregister_is_rejected_until_callback_returns",
+            "reentrant_destroy_preserves_the_handle_until_callback_returns",
+            "wrong_thread_dispatch_unregister_and_destroy_are_rejected",
+            "native_dispatch_rejects_invalid_events_without_poisoning_callback",
+            "navop_rdp_test_dispatch_event",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/build.rs"),
+        &[
+            "cargo:rerun-if-changed=native/event_dispatch.cpp",
+            ".file(\"native/event_dispatch.cpp\")",
         ],
     );
 }
@@ -669,7 +771,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
 }
 
 #[test]
-fn build_is_windows_hosted_msvc_only_and_ci_links_without_running() {
+fn build_is_windows_hosted_msvc_only_and_ci_runs_non_activex_host_tests() {
     assert_contains_all(
         &format!("{HOST_CRATE}/build.rs"),
         &[
@@ -701,8 +803,8 @@ fn build_is_windows_hosted_msvc_only_and_ci_links_without_running() {
         script_path,
         &[
             "cargo build --locked -p windows-rdp-probe --target $RustTarget",
-            HOST_BUILD,
-            "Compile-only probe gate and host gate",
+            HOST_TEST,
+            "Compile-only probe gate and native host runtime tests",
         ],
     );
     let script = read(script_path);
@@ -711,13 +813,14 @@ fn build_is_windows_hosted_msvc_only_and_ci_links_without_running() {
             .matches("cargo test --locked -p windows_rdp_host --target $RustTarget")
             .count(),
         1,
-        "{script_path} must contain exactly one host test command, and it must be the --no-run gate"
+        "{script_path} must contain exactly one host test command"
     );
     assert_excludes_all(
         script_path,
         &[
-            "cargo test --locked -p windows_rdp_host --target $RustTarget\n",
+            "cargo test --locked -p windows_rdp_host --target $RustTarget --no-run",
             "windows_rdp_host.exe",
+            "windows-rdp-probe.exe",
         ],
     );
 }

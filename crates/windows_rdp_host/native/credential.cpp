@@ -107,7 +107,12 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
             return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
         }
 
-        NavopRdpResult result = validate_struct_size(
+        NavopRdpResult result = ensure_owner_thread(host);
+        if (result != NAVOP_RDP_RESULT_OK) {
+            return result;
+        }
+
+        result = validate_struct_size(
             credentials->struct_size,
             static_cast<uint32_t>(sizeof(NavopRdpCredentialBundle)));
         if (result != NAVOP_RDP_RESULT_OK) {
