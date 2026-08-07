@@ -258,6 +258,12 @@ impl PopoverState {
         }
     }
 
+    fn active_focus_handle(&self) -> FocusHandle {
+        self.tracked_focus_handle
+            .clone()
+            .unwrap_or_else(|| self.focus_handle.clone())
+    }
+
     fn toggle_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let opening = !self.open;
         if opening {
@@ -267,13 +273,7 @@ impl PopoverState {
         self.set_open(opening, cx);
         if self.open {
             let state = cx.entity();
-            let focus_handle = if let Some(tracked_focus_handle) = self.tracked_focus_handle.clone()
-            {
-                tracked_focus_handle
-            } else {
-                self.focus_handle.clone()
-            };
-            focus_handle.focus(window, cx);
+            self.active_focus_handle().focus(window, cx);
 
             self._dismiss_subscription =
                 Some(
@@ -288,7 +288,7 @@ impl PopoverState {
             self._dismiss_subscription = None;
             // Restore focus to the element that was focused before the popover opened.
             if let Some(prev) = self.previous_focus_handle.take() {
-                if self.focus_handle.contains_focused(window, cx) {
+                if self.active_focus_handle().contains_focused(window, cx) {
                     prev.focus(window, cx);
                 }
             }
@@ -369,9 +369,7 @@ impl RenderOnce for Popover {
         });
 
         state.update(cx, |state, cx| {
-            if let Some(tracked_focus_handle) = tracked_focus_handle {
-                state.tracked_focus_handle = Some(tracked_focus_handle);
-            }
+            state.tracked_focus_handle = tracked_focus_handle;
             state.on_open_change = self.on_open_change.clone();
             if let Some(force_open) = force_open {
                 state.set_open(force_open, cx);
@@ -379,7 +377,7 @@ impl RenderOnce for Popover {
         });
 
         let open = state.read(cx).open;
-        let focus_handle = state.read(cx).focus_handle.clone();
+        let focus_handle = state.read(cx).active_focus_handle();
         let trigger_bounds = state.read(cx).trigger_bounds;
         let trigger_bounds_captured = state.read(cx).trigger_bounds_captured;
 
@@ -471,7 +469,7 @@ impl RenderOnce for Popover {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::MouseButton;
+    use gpui::{AppContext, MouseButton, TestAppContext};
 
     #[test]
     fn test_popover_builder_chaining() {
@@ -527,5 +525,28 @@ mod tests {
         let pos = Popover::resolved_corner(Anchor::BottomRight, bounds);
         assert_eq!(pos.x, px(300.));
         assert_eq!(pos.y, px(50.));
+    }
+
+    #[gpui::test]
+    fn test_tracked_focus_is_restored_after_dismiss(cx: &mut TestAppContext) {
+        cx.update(crate::global_state::init);
+        let cx = cx.add_empty_window();
+        let (state, previous_focus, tracked_focus) = cx.update(|window, cx| {
+            let previous_focus = cx.focus_handle();
+            let tracked_focus = cx.focus_handle();
+            previous_focus.focus(window, cx);
+
+            let state = cx.new(|cx| PopoverState::new(false, cx));
+            (state, previous_focus, tracked_focus)
+        });
+
+        state.update_in(cx, |state, window, cx| {
+            state.tracked_focus_handle = Some(tracked_focus.clone());
+            state.show(window, cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&tracked_focus));
+
+            state.dismiss(window, cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&previous_focus));
+        });
     }
 }
