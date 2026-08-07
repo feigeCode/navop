@@ -1101,14 +1101,19 @@ callback quiescence、ActiveX credential setter 和完整 Task 2 lifecycle revie
   - `git diff --check`：通过。
   - 两轮独立只读审查未发现本切片阻断问题；确认 Rust owner/borrow lifetime、
     C++ RAII wipe、x64/x86 layout、C linkage 和 Open/Closing/Closed gate 一致。
-- Windows compile/link verification:
-  - 当前开发机是 macOS，本地没有编译 `credential.cpp`。本切片提交并推送后，
-    必须在 GitHub-hosted Windows runner 分别执行
-    `x86_64-pc-windows-msvc` 和 `i686-pc-windows-msvc` 的 locked probe build 与
-    `windows_rdp_host --no-run`；run/head SHA/job evidence 在 runner 完成后回写。
-  - compile/link-only 只能证明 MSVC `/W4 /WX`、Rust/C++ symbols 和 x64/i686 ABI
-    assertions 可构建链接；不能证明 `SecureZeroMemory` runtime、ActiveX setter、
-    COM apartment、child `HWND`、RDP connect 或 GPUI tab 嵌入。
+- GitHub-hosted Windows compile/link verification:
+  - Workflow run：[`31184912814`](https://github.com/feigeCode/navop/actions/runs/31184912814)，
+    head SHA 为 `4cb2ccf26a7b614d11ae06e814f3c97a7752a11c`。
+  - x64 job：[`Windows RDP probe (x86_64-pc-windows-msvc)` / `92886928118`](https://github.com/feigeCode/navop/actions/runs/31184912814/job/92886928118)，
+    成功完成 locked probe build 和 `windows_rdp_host --no-run` compile/link。
+  - x86 job：[`Windows RDP probe (i686-pc-windows-msvc)` / `92886928091`](https://github.com/feigeCode/navop/actions/runs/31184912814/job/92886928091)，
+    成功完成 locked probe build 和 `windows_rdp_host --no-run` compile/link。
+  - 两个目标 job 成功后，为节省 runner 主动取消其余无关 job，因此 workflow 最终
+    conclusion 为 `cancelled`；这不表示上述两个目标 job 失败。
+  - 该证据证明 MSVC C++17 `/W4 /WX`、`credential.cpp`、Rust/C++ FFI symbols、
+    `SecureZeroMemory` linkage 和 x64/i686 ABI assertions 可编译链接；它不运行 test
+    executable，也不证明 native scratch runtime、ActiveX setter、COM apartment、
+    child `HWND`、RDP connect 或 GPUI tab 嵌入。
 - Security boundary and known limitations:
   - 本切片是 transport-only；`credential.cpp` 明确不调用 `ClearTextPassword`、
     Gateway setter、BSTR、ATL 或 ActiveX。真实 server/Gateway property application
