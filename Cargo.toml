@@ -42,6 +42,7 @@ members = [
     "crates/json_view",
     "crates/declarative_ui_demo",
     "tools/icon-audit",
+    "tools/windows-rdp-probe",
     "main", "crates/ssh", "crates/x11_forwarding", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis-runtime", "crates/mongodb-runtime", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 

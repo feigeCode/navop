@@ -1,0 +1,151 @@
+[CmdletBinding()]
+param(
+    [ValidateSet(
+        "x86_64-pc-windows-msvc",
+        "i686-pc-windows-msvc"
+    )]
+    [string[]] $Target = @(
+        "x86_64-pc-windows-msvc",
+        "i686-pc-windows-msvc"
+    )
+)
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+$nativeDesktop = "Microsoft.VisualStudio.Workload.NativeDesktop"
+$atlComponent = "Microsoft.VisualStudio.Component.VC.ATL"
+$vs2022VersionRange = "[17.0,18.0)"
+$vswhere = Join-Path ${env:ProgramFiles(x86)} `
+    "Microsoft Visual Studio\Installer\vswhere.exe"
+
+function Get-VisualStudioInstallation {
+    if (-not (Test-Path -LiteralPath $vswhere)) {
+        throw "vswhere.exe not found: $vswhere"
+    }
+
+    $arguments = @(
+        "-latest",
+        "-products",
+        "*",
+        "-version",
+        $vs2022VersionRange,
+        "-requires",
+        $nativeDesktop,
+        $atlComponent,
+        "-format",
+        "json"
+    )
+    $json = & $vswhere @arguments
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        throw "vswhere failed with exit code $exitCode"
+    }
+
+    $instances = @($json | ConvertFrom-Json)
+    $installation = $instances | Select-Object -First 1
+    if (
+        $null -eq $installation -or
+        [string]::IsNullOrWhiteSpace($installation.installationPath)
+    ) {
+        throw "Visual Studio with NativeDesktop and VC.ATL was not found"
+    }
+    return $installation.installationPath
+}
+
+function Assert-HeaderExists {
+    param(
+        [string] $Root,
+        [string] $Header
+    )
+
+    if (-not (Test-Path -LiteralPath $Root)) {
+        throw "Header search root not found: $Root"
+    }
+
+    $match = Get-ChildItem `
+        -LiteralPath $Root `
+        -Filter $Header `
+        -File `
+        -Recurse `
+        -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $match) {
+        throw "$Header not found under $Root"
+    }
+    Write-Host "Found $Header at $($match.FullName)"
+}
+
+function Get-VcVarsArchitecture {
+    param([string] $RustTarget)
+
+    switch ($RustTarget) {
+        "x86_64-pc-windows-msvc" { return "x64" }
+        "i686-pc-windows-msvc" { return "x86" }
+        default { throw "Unsupported Windows RDP probe target: $RustTarget" }
+    }
+}
+
+function Invoke-ProbeBuild {
+    param(
+        [string] $VcVarsAll,
+        [string] $Architecture,
+        [string] $RustTarget,
+        [string] $RepoRoot
+    )
+
+    $commands = @(
+        "@echo off",
+        "chcp 65001 >nul",
+        "call `"$VcVarsAll`" $Architecture",
+        "if errorlevel 1 exit /b %errorlevel%",
+        "cd /d `"$RepoRoot`"",
+        "cargo build --locked -p windows-rdp-probe --target $RustTarget",
+        "exit /b %errorlevel%"
+    )
+    $tempScript = Join-Path ([IO.Path]::GetTempPath()) `
+        ("navop-rdp-probe-{0}.cmd" -f [guid]::NewGuid())
+
+    try {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllLines($tempScript, $commands, $encoding)
+        & $env:ComSpec /d /s /c "`"$tempScript`""
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            throw "Probe build failed for $RustTarget with exit code $exitCode"
+        }
+    }
+    finally {
+        Remove-Item `
+            -LiteralPath $tempScript `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
+}
+
+$installationPath = Get-VisualStudioInstallation
+$vcvarsall = Join-Path $installationPath `
+    "VC\Auxiliary\Build\vcvarsall.bat"
+if (-not (Test-Path -LiteralPath $vcvarsall)) {
+    throw "vcvarsall.bat not found: $vcvarsall"
+}
+
+$msvcRoot = Join-Path $installationPath "VC\Tools\MSVC"
+$windowsKits = Join-Path ${env:ProgramFiles(x86)} `
+    "Windows Kits\10\Include"
+Assert-HeaderExists -Root $msvcRoot -Header "atlbase.h"
+Assert-HeaderExists -Root $windowsKits -Header "mstscax.h"
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Write-Host (
+    "Compile-only probe gate: builds the ATL shim but does not run or package it."
+)
+foreach ($rustTarget in $Target) {
+    $architecture = Get-VcVarsArchitecture -RustTarget $rustTarget
+    Write-Host "Building Windows RDP probe for $rustTarget ($architecture)"
+    Invoke-ProbeBuild `
+        -VcVarsAll $vcvarsall `
+        -Architecture $architecture `
+        -RustTarget $rustTarget `
+        -RepoRoot $repoRoot
+}

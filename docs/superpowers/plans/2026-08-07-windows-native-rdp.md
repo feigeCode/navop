@@ -157,10 +157,10 @@ Navop GPUI window
 
 | 能力 | 默认值 | 计划阶段 |
 | --- | --- | --- |
-| 证书严格验证、证书变更警告、可选 TS server public-key pinning | 严格；pinning 仅在 API proof 通过后开放 | Task 16 |
+| 证书严格验证、证书变更警告、系统托管信任流程 | 严格；公开 API 将 `NotifyTSPublicKey` 标记为 unsupported，首个 GA 不提供自定义 TS public-key pinning | Task 16 |
 | RD Gateway 主机、认证、usage/profile method | 关闭 | Task 17 |
 | 文本剪贴板 | 开启，可关闭 | Task 12 |
-| 文件/目录剪贴板 | 默认关闭；仅按 Task 1/18 证明的真实 ActiveX 控制边界开放 | Task 18 |
+| 文件/目录剪贴板 | 与文本剪贴板共用 `RedirectClipboard` 安全开关；首个 GA 不提供虚假的独立 toggle | Task 18 |
 | 本地驱动器/指定共享目录 | 关闭，按项授权 | Task 19 |
 | 打印机 | 关闭 | Task 19 |
 | 智能卡 | 关闭 | Task 19 |
@@ -709,11 +709,9 @@ Probe contract：
 
 **Files:**
 
-- Modify: `Cargo.toml`
 - Modify: `main/Cargo.toml`
 - Modify: `crates/remote_desktop_view/Cargo.toml`
 - Modify: `crates/remote_desktop_view/src/view.rs`
-- Modify: `crates/remote_desktop_view/src/view/render.rs`
 - Modify: `crates/core/src/storage/models.rs`
 - Add focused tests near the modified modules
 
@@ -769,7 +767,8 @@ Probe contract：
   - `windows-native-rdp` 当前是空 feature，尚未依赖 `windows_rdp_host`，factory 因此不会创建 native presentation。
   - feature-off 的 canvas 行为通过“不接线现有 render/runtime”和现有 view 测试保持；真实 backend 切换测试将在 presentation 接线时补充。
 - Decision changes:
-  - 根 `Cargo.toml` 延后到 Task 2 修改：virtual workspace 在 Task 0 没有需要声明的 package feature，创建 `windows_rdp_host` 时再加入 workspace member/dependency。
+  - Task 0 本身没有修改根 `Cargo.toml`：virtual workspace 在该 Task 没有需要声明的 package feature。
+  - Task 1 为管理临时 `windows-rdp-probe` workspace tool 提前修改根 `Cargo.toml`/`Cargo.lock`；正式 `windows_rdp_host` member、dependency 和 feature 接线仍延后到 Task 2。
   - `crates/remote_desktop_view/src/view/render.rs` 本 Task 不修改，避免在 native host 存在前提前改变 canvas render tree。
 
 **Acceptance:**
@@ -790,7 +789,10 @@ Probe contract：
 
 **Files:**
 
-- Add temporary/probe code under: `crates/windows_rdp_host/` or `tools/windows-rdp-probe/`
+- Add: `tools/windows-rdp-probe/`
+- Modify: `Cargo.toml`
+- Modify: `Cargo.lock`
+- Add: `script/build-windows-rdp-probe.ps1`
 - Modify: `script/install-window.ps1`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/release.yml`
@@ -799,7 +801,7 @@ Probe contract：
 **Probe checklist:**
 
 - Visual Studio 2022 C++ desktop workload。
-- ATL/MFC component，例如适用的 `Microsoft.VisualStudio.Component.VC.ATLMFC`。
+- ATL component：`Microsoft.VisualStudio.Component.VC.ATL`。
 - Windows SDK 中 `mstscax.h`、type library 和 CLSID/IID 定义。
 - `AtlAxWinInit` 链接依赖。
 - `CoInitializeEx`/现有 UI thread apartment 状态。
@@ -814,12 +816,55 @@ Probe contract：
 - [ ] **Red:** 在缺失 ATL component 的干净 Windows runner/VM 运行 probe，记录预期构建失败。
 - [ ] **Green:** 更新安装脚本或 runner setup，确保 x64/x86 probe 编译。
 - [ ] **Green:** 在有桌面 Windows 环境创建隐藏 parent window 和 ActiveX control，读取 version 后销毁。
-- [ ] **Green:** 明确 `MsRdpClient12 → IMsRdpClient10`，禁止引入 `IMsRdpClient11/12`。
+- [x] **Green:** 明确 `MsRdpClient12 → IMsRdpClient10`，禁止引入 `IMsRdpClient11/12`。
 - [ ] **Green:** 在 clean Windows 10/11 x64 WoW64 环境运行 Navop x86 进程，验证 32-bit ATL、32-bit COM 注册表视图、CoClass create/query、connect/disconnect 和安装后 probe；若产品继续支持 Windows 10 x86 OS，再增加对应 VM。
-- [ ] **Green:** 记录 public-key pin 和文件 clipboard 的 API proof；无法证明时从 GA 承诺降级为系统托管/unsupported。
-- [ ] **Refactor:** spike 只保留可复用 SDK/ABI 探测代码；删除一次性调试代码。
-- [ ] **Review:** 检查不依赖机器上的非系统注册、不复制 mstscax DLL。
+- [x] **Green:** 记录 public-key pin 和文件 clipboard 的 API proof；无法证明时从 GA 承诺降级为系统托管/unsupported。
+- [x] **Refactor:** spike 只保留可复用 SDK/ABI 探测代码；删除一次性调试代码。
+- [x] **Review:** 检查不依赖机器上的非系统注册、不复制 mstscax DLL。
 - [ ] **Verify:** 分别运行 `rtk cargo check --target x86_64-pc-windows-msvc` 和 `rtk cargo check --target i686-pc-windows-msvc`。
+
+上述已勾选项的证据边界：
+
+- public-key/clipboard 的 `[x]` 只表示已依据 Microsoft 公开文档完成静态 API proof 和产品降级决策，不表示对应 Windows runtime capability 已验证。
+- Refactor/Review 的 `[x]` 只表示 spike 源码、静态 contract 和发行边界已审查，不表示 Windows MSVC/ATL compile/link、ActiveX create/query/destroy 或 connect/disconnect 已审查通过。
+
+**Execution Notes (2026-08-07):**
+
+- Local/static completed:
+  - 在 `tools/windows-rdp-probe/` 增加临时 probe crate，并作为 workspace member 管理，但不加入 `default-members`，因此不会改变默认产品构建入口。
+  - 首次 contract Red 固定为 5 个失败；实现后扩展为 9 个通过的契约测试，覆盖 Windows-only MSVC/ATL build boundary、临时 C ABI 一致性、初始化/逆序清理顺序、DLL version 非致命诊断回退、x64/x86 workflow、禁止运行/打包 probe、禁止复制/注册 `mstscax.dll`，以及非 Windows no-op 的固定退出码和输出。
+  - 非 Windows 本地可 build/test/run；输出固定为 `windows-rdp-probe status=unsupported reason=requires-windows-msvc-atl`，退出码为 0。该结果只证明 unsupported contract，不证明任何 Windows COM 能力。
+  - native spike 源码声明并由 contract 断言使用 C++17、ATL AxHost、`CLSID_MsRdpClient12`、`IMsRdpClient10`、可选 `IMsRdpClientNonScriptable8`、控件 `Version` 和已加载系统 `mstscax.dll` file version；只通过单个临时 `extern "C" int32_t windows_rdp_probe_run(void)` 进入 Rust，没有提前实现 Task 2 的 opaque host、版本化 ABI 或 callback API。
+  - `script/install-window.ps1` 限定 Visual Studio 2022 `[17.0,18.0)`，显式安装 Native Desktop 与 `VC.ATL`，并为 Scoop/current-process PATH、extras bucket 和 CMake 增加可重复执行的静态 contract。
+  - `script/build-windows-rdp-probe.ps1` 显式探测 `atlbase.h`、`mstscax.h` 和 `vcvarsall.bat`，将 x64/i686 分别映射到 `vcvarsall.bat x64`/`x86`，只执行 locked `cargo build`。CI matrix 和 release Windows build 都调用同一个 compile-only gate；probe 不运行、不上传、不进入发行包。
+  - C++ source 显式执行 `OleInitialize → AtlAxWinInit → hidden parent → ATLAXWIN child → ActiveX control → interface/version inspection`，RAII cleanup 固定为 control/container release、child/parent destroy、`AtlAxWinTerm`、`OleUninitialize` 的逆序释放。该项目前只完成源码和 contract 审查，不能替代 Windows runtime 结果。
+  - 静态源码检查确认 Navop 经 `gpui_platform::application()` 构造 Windows platform，`gpui_windows::WindowsPlatform::new` 调用 `OleInitialize(None)`，随后 `run` 进入 `GetMessageW`/`TranslateMessage`/`DispatchMessageW` 消息循环；这只说明现有初始化路径，不证明实际 owner thread/apartment。正式 host 仍须在 Windows 上用 `CoGetApartmentType` 或等价断言确认创建、调用和销毁线程；当前检查也未在该 platform 路径发现对应的显式 `OleUninitialize`，后续生命周期实现必须明确 apartment ownership。
+  - 已进行独立只读审查，并按审查结果补充 VS 2022 版本范围、Scoop 幂等标记、UTF-8 cmd code page、生命周期/ABI contract、`VS_FFI_SIGNATURE` 校验，以及保持 probe 成功状态的 `dll_version=unavailable dll_version_reason=<reason>` 非致命诊断。
+- Local/static verification:
+  - `rtk cargo fmt --all -- --check`：通过。
+  - `rtk cargo test --locked -p windows-rdp-probe`：9 passed。
+  - `rtk cargo run --locked -p windows-rdp-probe`：退出码 0，输出固定为 `windows-rdp-probe status=unsupported reason=requires-windows-msvc-atl`。
+  - `rtk cargo metadata --locked --no-deps --format-version 1`：确认 probe 属于 workspace 且不属于 `workspace_default_members`。
+  - `.github/workflows/ci.yml`、`.github/workflows/release.yml`：YAML 静态解析通过。
+  - `rtk git diff --check`：通过。
+  - 当前 macOS 环境没有 `pwsh`，未执行 PowerShell parser、安装脚本或 Windows probe；这些结果不得由上述静态验证替代。
+- Windows CI/VM still required:
+  - 在 Windows host 上实际完成 x64 MSVC/ATL compile/link 和 i686 MSVC/ATL compile/link，确认 runner/SDK 中的 `mstscax.h`、ATL headers、`atl.lib` 及所用 CLSID/IID 声明。
+  - 在有交互桌面的 Windows 10/11 x64 native 环境验证 COM 注册、hidden ActiveX create/destroy、`MsRdpClient12 → IMsRdpClient10` QueryInterface、`IMsRdpClientNonScriptable8` capability、控件/DLL 实际版本和最小 connect/disconnect。
+  - 在 Windows 10/11 x64 WoW64 下运行 x86 probe/Navop，验证 32-bit ATL、32-bit COM 注册表视图、安装后 create/query/connect/disconnect；Windows 10 x86 OS 是否纳入仍按产品支持策略决定。
+  - 在缺失 ATL component 的干净 Windows runner/VM 记录预期 Red，并在执行安装脚本后重复 probe，证明安装步骤的真实幂等性；当前 macOS 环境没有 `pwsh`，因此没有伪造 PowerShell parser 或 installer 结果。
+  - 确认 Navop Windows UI thread 的实际 COM apartment，并决定是否需要显式 STA 初始化；GitHub-hosted runner 的 compile-only 成功也不能替代该 UI/runtime 验证。
+- Capability decisions/degradations:
+  - `MsRdpClient12` 只按其公开主接口 `IMsRdpClient10` 使用；禁止生成或引用不存在的 `IMsRdpClient11/12`。若 CoClass 不可创建，probe 必须报告 unavailable/class-not-registered；fallback 策略留给后续 Task。
+  - `IMsRdpClientNonScriptable8` 是可选 capability；低版本系统允许 QueryInterface unavailable，不因此伪装成主控件创建成功。
+  - Microsoft 公开 API 将 `NotifyTSPublicKey` 标记为不受支持，因此 Navop 不承诺自定义 TS server public-key SHA-256 pin decision；证书信任继续由系统 RDP 安全模型管理，UI 不得暗示存在自定义 pin。
+  - 已证明的公开 clipboard 配置边界是 `RedirectClipboard`；`ManualClipboardSyncEnabled`/`IMsRdpClipboard` 不能证明“保留文本但单独禁用文件/目录 clipboard”。首个 GA 将文本和文件 clipboard 视为同一安全开关，不提供虚假的独立 file clipboard toggle。
+  - Restricted Admin、Remote Credential Guard、admin/console 和 child-session 相关属性只作为 capability-gated enterprise 选项，必须等待目标 SDK、OS 和服务器行为验证；不猜测或承诺 arbitrary session-id attach。
+- API proof references:
+  - [IMsRdpClientAdvancedSettings interface](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings-interface)：其 `NotifyTSPublicKey` 属性条目明确标记为不受支持，因此首个 GA 不提供自定义 TS public-key pinning。
+  - [IMsRdpClientAdvancedSettings5::RedirectClipboard](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings5-redirectclipboard)：公开的 clipboard redirection 总开关。
+  - [IMsRdpExtendedSettings::Property](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpextendedsettings-property) 与 [IMsRdpClipboard](https://learn.microsoft.com/en-us/windows/win32/api/mstscax/nn-mstscax-imsrdpclipboard)：公开手动同步能力不能证明“保留文本 clipboard、单独禁用文件/目录 clipboard”，因此 UI 不暴露独立 file clipboard toggle。
+  - [IMsRdpExtendedSettings::Property](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpextendedsettings-property) 与 [IMsRdpClientAdvancedSettings6::ConnectToAdministerServer](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings6-connecttoadministerserver)：仅作为 Restricted Logon、Redirected Authentication、child/admin session 等 enterprise capability 的属性依据；实际可用性仍须按 SDK、OS 和服务器逐项验证。
 
 **Acceptance:**
 
@@ -1434,11 +1479,11 @@ Probe contract：
 
 ---
 
-### Task 16: 证书验证、认证警告与 server public-key pinning
+### Task 16: 证书验证、认证警告与系统托管信任策略
 
 **Goal:** 建立严格、可解释、可审计的服务器身份验证策略。
 
-**Depends on:** Task 1 的 public-key API proof、Task 9、Task 15。
+**Depends on:** Task 1 的 public-key API 降级结论、Task 9、Task 15。
 
 **Files:**
 
@@ -1453,26 +1498,24 @@ Probe contract：
 
 - 默认 `Strict`。
 - 不可信/名称不匹配/过期证书显示 ActiveX 系统警告或 Navop 受控提示。
-- 如果 Task 1 已证明 `NotifyTSPublicKey`/`OnReceivedTSPublicKey` 可在继续连接前作出 accept/reject，用户允许的例外记录 **TS server public key 的 SHA-256**，不是无法从 ActiveX 取得的 X.509 certificate fingerprint。
-- pinned server public key 变化必须重新确认。
-- 如果目标系统/控件版本无法在连接继续前提供可拒绝的 public-key callback，GA 只提供系统 `Strict`/系统提示；不得伪装成 Navop pinning。
+- Task 1 已确认公开 `NotifyTSPublicKey` 属性被标记为 unsupported；首个 GA 只提供系统 `Strict`/系统提示，不存储或展示自定义 TS public-key pin。
+- `OnReceivedTSPublicKey` 事件的存在不覆盖 unsupported 的配置入口，也不构成可承诺的 pre-connect pinning contract。
 - 系统认证警告窗口必须正确 owner 到 Navop。
 
 - [ ] **Red:** Strict 遇到自签名证书不自动继续。
-- [ ] **Red:** 在 capability 可用时，pinned public-key SHA-256 mismatch 阻止连接并显示变更。
 - [ ] **Red:** certificate data 日志只保留允许字段。
+- [ ] **Red:** UI 和持久化模型不展示或保存自定义 TS public-key pinning capability。
 - [ ] **Green:** 配置 authentication level/相关 non-scriptable capability。
-- [ ] **Green:** 处理 authentication warning displayed/dismissed、`NotifyTSPublicKey` 和 `OnReceivedTSPublicKey` 的 accept/reject。
-- [ ] **Green:** capability 可用时安全存储 per-endpoint public-key SHA-256。
+- [ ] **Green:** 处理 authentication warning displayed/dismissed、owner、取消、超时和关闭状态。
 - [ ] **Refactor:** 证书策略与 ActiveX 对话框 adapter 分离。
-- [ ] **Review:** 安全审查 trust-on-first-use、domain/Gateway endpoint 区分。
+- [ ] **Review:** 安全审查系统信任流程、domain/Gateway endpoint 区分及日志脱敏。
 - [ ] **Verify:** 受信任、自签名、过期、名称不匹配、证书轮换、中间人场景。
 
 **Acceptance:**
 
 - 默认不绕过证书错误。
 - 用户能看懂风险和 endpoint。
-- capability 可用时 public-key pin 变更被检测；不可用时 UI 不展示 pinning 选项。
+- UI 不展示或暗示自定义 TS public-key pinning。
 
 **Rollback:** 只保留系统 ActiveX 安全对话框和 Strict；不得加入全局忽略开关。
 
@@ -1534,26 +1577,27 @@ Probe contract：
 
 **Security contract:**
 
-- 默认关闭。
-- 优先与 drive/shared-folder redirection 分开。
+- 不提供独立 file clipboard toggle；文件/目录能力继承统一 `RedirectClipboard` 开关。
+- 当前计划中的统一剪贴板默认开启，因此 UI 必须明确该开关可能同时允许文本和文件/目录传输；用户关闭时两者一起关闭。
+- drive/shared-folder redirection 仍使用独立授权，不得与 clipboard redirection 混为一谈。
 - 显示来源和目标风险。
 - 大文件/目录、取消、重连和路径冲突有明确行为。
 - 不把文件内容加载到 Navop 日志或普通内存快照。
-- 如果 ActiveX 只提供统一 `RedirectClipboard`，无法分别控制 text 与 file transfer，则不得在 UI 中声称两个独立安全开关；产品必须选择“统一剪贴板开关并明确包含文件”或“首个 GA 不支持文件复制”。
+- 如果 Windows runtime 证明目标控件不支持可靠文件/目录复制，则将该能力标记为 unsupported；不得用未文档化 hook 伪造独立控制。
 
-- [ ] **Red:** disabled/allowed policy tests。
+- [ ] **Red:** 统一 clipboard disabled/allowed policy tests，固定关闭时文本和文件/目录都不可重定向。
 - [ ] **Red:** Unicode 文件名、长路径、目录、多个文件和冲突场景。
-- [ ] **Red:** API proof test 固定“独立 file toggle”或“与文本共用 RedirectClipboard”的真实结果。
-- [ ] **Green:** 根据真实 capability 实现独立 file policy，或将统一 clipboard 开关文案改为明确包含文本和文件。
+- [ ] **Red:** contract test 禁止新增独立 file clipboard toggle，并固定其与 `RedirectClipboard` 共用安全边界。
+- [ ] **Green:** 统一 clipboard 开关文案明确包含文本和文件/目录；runtime 不支持文件传输时显示 unsupported。
 - [ ] **Green:** UI 显示进行中、失败和安全开关。
-- [ ] **Refactor:** 文本和文件 clipboard capability 分离。
+- [ ] **Refactor:** clipboard redirection、drive redirection 与 shared-folder redirection 的 capability/policy 分离。
 - [ ] **Review:** 检查路径遍历、symlink/reparse point、超大文件和取消。
 - [ ] **Verify:** 本地↔远端复制单文件、多文件、目录、大文件、中文路径。
 
 **Acceptance:**
 
-- 真实 API 能独立控制时：显式开启后文件/目录可复制，关闭时不会意外重定向。
-- 真实 API 只能统一控制时：UI 和文档准确表达安全边界，不提供虚假的独立开关。
+- UI 和文档准确表达统一 `RedirectClipboard` 安全边界，不提供虚假的独立 file clipboard 开关。
+- 统一开关关闭时文本和文件/目录都不会重定向；开启时用户已被告知可能包含文件/目录传输。
 - ActiveX 无可靠文件复制路径时：功能明确标记 unsupported，文本剪贴板和 session 不受影响。
 
 **Rollback:** 保留文本剪贴板；文件/目录复制标记 unavailable/unsupported，不使用未文档化 hook。
@@ -2054,8 +2098,11 @@ rtk git diff --check
 - [MsRdpClient12 class](https://learn.microsoft.com/en-us/windows/win32/termserv/msrdpclient12)：列出 `MsRdpClient12` 实现的 `IMsRdpClient10` 至旧版本接口、non-scriptable interfaces、事件、属性、DLL 和 CLSID。
 - [IMsRdpClient10 interface](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclient10)：最高主客户端接口和 display/session methods。
 - [IMsRdpClient9 interface](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclient9)：`UpdateSessionDisplaySettings`、`SyncSessionDisplaySettings` 等 display contract。
-- [IMsTscAxEvents::OnReceivedTSPublicKey](https://learn.microsoft.com/en-us/windows/win32/termserv/imstscaxevents-onreceivedtspublickey)：TS server public key 回调及 accept/reject 返回值，pinning 仍需按目标控件版本实测。
-- [IMsRdpClientAdvancedSettings::RedirectClipboard](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings-redirectclipboard)：基础 clipboard redirection 开关；是否能单独控制文件复制必须通过 Task 1 实证。
+- [IMsRdpClientAdvancedSettings interface](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings-interface)：`NotifyTSPublicKey` 属性明确标记为 unsupported；事件页面不能把不受支持的配置入口提升为 GA pinning contract。
+- [IMsRdpClientAdvancedSettings5::RedirectClipboard](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings5-redirectclipboard)：公开 clipboard redirection 总开关。
+- [IMsRdpExtendedSettings::Property](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpextendedsettings-property)：包括 `ManualClipboardSyncEnabled`、Restricted Logon、Redirected Authentication 和 child-session 等扩展属性；均须 capability-gate。
+- [IMsRdpClipboard](https://learn.microsoft.com/en-us/windows/win32/api/mstscax/nn-mstscax-imsrdpclipboard)：手动 clipboard 同步接口；不能据此宣称文本与文件/目录 clipboard 可独立授权。
+- [IMsRdpClientAdvancedSettings6::ConnectToAdministerServer](https://learn.microsoft.com/en-us/windows/win32/termserv/imsrdpclientadvancedsettings6-connecttoadministerserver)：admin session 配置入口，不等同 arbitrary session-id attach。
 - [Remote Desktop ActiveX control classes](https://learn.microsoft.com/en-us/windows/win32/termserv/remote-desktop-activex-control-classes)：系统 Remote Desktop ActiveX CoClass 清单。
 - [ATL Composite Control Global Functions](https://learn.microsoft.com/en-us/cpp/atl/reference/composite-control-global-functions?view=msvc-170)：`AtlAxWinInit`、`AtlAxCreateControlEx`、`AtlAxGetControl` 和 ActiveX hosting functions。
 
