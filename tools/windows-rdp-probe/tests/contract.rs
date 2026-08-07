@@ -260,13 +260,43 @@ fn build_contract_is_windows_hosted_msvc_only() {
             "HOST",
             "TARGET",
             "OUT_DIR",
+            "VCToolsInstallDir",
             "windows_rdp_probe.cpp",
             "cpp(true)",
             "include(&out_dir)",
+            "atlmfc",
+            "atl.lib",
+            "cargo:rustc-link-search=native=",
             "windows_rdp_probe_native",
             "x86_64",
+            "\"x64\"",
             "\"x86\"",
             "msvc",
+        ],
+    );
+    assert_tokens_in_scope(
+        "tools/windows-rdp-probe/build.rs",
+        "#[cfg(windows)]\nfn atl_library_dir() -> PathBuf {",
+        "\n}\n\n#[cfg(windows)]\nfn build_native_probe()",
+        &[
+            "VCToolsInstallDir",
+            "\"x86_64\" => \"x64\"",
+            "\"x86\" => \"x86\"",
+            "join(\"atlmfc\")",
+            "join(\"lib\")",
+            "join(architecture)",
+            "join(\"atl.lib\")",
+        ],
+    );
+    assert_tokens_in_scope(
+        "tools/windows-rdp-probe/build.rs",
+        "#[cfg(windows)]\nfn build_native_probe() {",
+        "\n}",
+        &[
+            "atl_library_dir()",
+            ".compile(\"windows_rdp_probe\")",
+            "cargo:rustc-link-search=native=",
+            "cargo:rustc-link-lib={library}",
         ],
     );
     assert_contains_all(
