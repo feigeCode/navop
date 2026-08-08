@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, ExternalPaths, Focusable, InteractiveElement, IntoElement,
-    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    AnyElement, App, AppContext, Context, Entity, ExternalPaths, Focusable, InteractiveElement,
+    IntoElement, KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -1111,6 +1111,21 @@ enum MainContent {
     Tabs,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MainContentPresentation {
+    HomeOnly,
+    HomeWithTabs,
+    Tabs,
+}
+
+fn main_content_presentation(main_content: MainContent, has_tabs: bool) -> MainContentPresentation {
+    match (main_content, has_tabs) {
+        (MainContent::Home, false) => MainContentPresentation::HomeOnly,
+        (MainContent::Home, true) => MainContentPresentation::HomeWithTabs,
+        (MainContent::Tabs, _) => MainContentPresentation::Tabs,
+    }
+}
+
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
     home_page: Entity<HomePage>,
@@ -1274,6 +1289,7 @@ impl OnetCliApp {
                 TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
                     this.show_home_if_tab_container_is_empty(cx);
                     this.sync_connection_sidebar_theme(cx);
+                    cx.notify();
                 }
             },
         )
@@ -1324,6 +1340,45 @@ impl OnetCliApp {
         };
         if tab_container_is_empty {
             self.set_main_content(MainContent::Home, cx);
+        }
+    }
+
+    fn render_main_content(&self, cx: &App) -> AnyElement {
+        let has_tabs = {
+            let tabs = self.tab_container.read(cx);
+            tabs.has_pinned_tab() || !tabs.tabs().is_empty()
+        };
+
+        match main_content_presentation(self.main_content, has_tabs) {
+            MainContentPresentation::HomeOnly => self.home_page.clone().into_any_element(),
+            MainContentPresentation::HomeWithTabs => div()
+                .flex()
+                .flex_col()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .id("home-tab-bar-slot")
+                        .relative()
+                        .w_full()
+                        .h(cx.theme().geometry.layout.tab_bar)
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .child(self.tab_container.clone()),
+                )
+                .child(
+                    div()
+                        .id("home-page-content")
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(self.home_page.clone()),
+                )
+                .into_any_element(),
+            MainContentPresentation::Tabs => self.tab_container.clone().into_any_element(),
         }
     }
 
@@ -1495,8 +1550,9 @@ impl OnetCliApp {
 #[cfg(test)]
 mod tests {
     use super::{
-        GlobalSshSessionService, configured_log_file_path, default_log_file_path,
-        init_ssh_session_service, initial_content_layout, log_file_appender,
+        GlobalSshSessionService, MainContent, MainContentPresentation, configured_log_file_path,
+        default_log_file_path, init_ssh_session_service, initial_content_layout, log_file_appender,
+        main_content_presentation,
     };
     use one_core::gpui_tokio::Tokio;
     use one_core::settings::StartupDefaultPage;
@@ -1550,10 +1606,35 @@ mod tests {
         let app_source = include_str!("onetcli_app.rs");
         let home_render_source = include_str!("home_tab/render.rs");
 
-        assert!(app_source.contains("MainContent::Home => self.home_page.clone()"));
-        assert!(app_source.contains("MainContent::Tabs => self.tab_container.clone()"));
+        assert!(app_source.contains(
+            "MainContentPresentation::HomeOnly => self.home_page.clone().into_any_element()"
+        ));
+        assert!(app_source.contains("MainContentPresentation::HomeWithTabs => div()"));
+        assert!(app_source.contains(".id(\"home-tab-bar-slot\")"));
+        assert!(app_source.contains(".h(cx.theme().geometry.layout.tab_bar)"));
+        assert!(app_source.contains(".id(\"home-page-content\")"));
+        assert!(!app_source.contains(".id(\"home-content-overlay\")"));
+        assert!(app_source.contains(
+            "MainContentPresentation::Tabs => self.tab_container.clone().into_any_element()"
+        ));
         assert!(!home_render_source.contains("impl TabContent for HomePage"));
         assert!(!home_render_source.contains("impl EventEmitter<TabContentEvent> for HomePage"));
+    }
+
+    #[test]
+    fn home_keeps_the_tab_bar_visible_when_tabs_exist() {
+        assert_eq!(
+            MainContentPresentation::HomeOnly,
+            main_content_presentation(MainContent::Home, false)
+        );
+        assert_eq!(
+            MainContentPresentation::HomeWithTabs,
+            main_content_presentation(MainContent::Home, true)
+        );
+        assert_eq!(
+            MainContentPresentation::Tabs,
+            main_content_presentation(MainContent::Tabs, true)
+        );
     }
 
     #[test]
@@ -1948,10 +2029,7 @@ impl Render for OnetCliApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
         let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
-        let main_content = match self.main_content {
-            MainContent::Home => self.home_page.clone().into_any_element(),
-            MainContent::Tabs => self.tab_container.clone().into_any_element(),
-        };
+        let main_content = self.render_main_content(cx);
         div()
             .size_full()
             .relative()
