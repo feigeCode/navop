@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use gpui::{ClipboardEntry, ClipboardItem, Context, ExternalPaths, Window};
+#[cfg(not(target_os = "macos"))]
+use gpui::ExternalPaths;
+use gpui::{ClipboardEntry, ClipboardItem, Context, Window};
 use remote_desktop::{RemoteDesktopInput, RemoteDesktopProtocol};
 
 use super::RemoteDesktopView;
@@ -64,6 +66,27 @@ fn validate_remote_clipboard_paths_in_root(
         validated.push(canonical_path);
     }
     Ok(validated)
+}
+
+#[cfg(target_os = "macos")]
+fn write_remote_clipboard_files(
+    paths: &[PathBuf],
+    _cx: &mut Context<RemoteDesktopView>,
+) -> anyhow::Result<()> {
+    super::clipboard_macos::write_files_to_system_clipboard(paths)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_remote_clipboard_files(
+    paths: &[PathBuf],
+    cx: &mut Context<RemoteDesktopView>,
+) -> anyhow::Result<()> {
+    cx.write_to_clipboard(ClipboardItem {
+        entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
+            paths.iter().cloned().collect(),
+        ))],
+    });
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -145,11 +168,14 @@ impl RemoteDesktopView {
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         let count = paths.len();
-        cx.write_to_clipboard(ClipboardItem {
-            entries: vec![ClipboardEntry::ExternalPaths(ExternalPaths(
-                paths.into_iter().collect(),
-            ))],
-        });
+        if let Err(error) = write_remote_clipboard_files(&paths, cx) {
+            tracing::warn!(
+                error = %error,
+                "failed to install remote files on the system clipboard"
+            );
+            self.notify_clipboard_install_failed(window, cx);
+            return;
+        }
         self.last_clipboard_files = Some(path_strings);
         self.last_clipboard_text = None;
         self.last_clipboard_sync_at = Some(Instant::now());

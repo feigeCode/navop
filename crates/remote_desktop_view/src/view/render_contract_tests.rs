@@ -222,3 +222,30 @@ fn session_takeover_notifies_the_user_and_requests_tab_close_without_reconnectin
     assert!(notifications.contains("RemoteDesktopSessionNotification"));
     assert!(notifications.contains("localized_session_taken_over"));
 }
+
+#[test]
+fn remote_output_wakes_render_without_fixed_interval_polling() {
+    let view = include_str!("../view.rs");
+    let output = include_str!("output.rs");
+
+    assert!(
+        !view.contains("Duration::from_millis(33)"),
+        "remote output must not wait for the former 33ms render polling interval"
+    );
+    assert!(
+        !view.contains("_output_poll_task"),
+        "the fixed-interval output polling task must stay removed"
+    );
+    assert!(
+        output.contains("runtime.output_rx.subscribe()"),
+        "the view must subscribe to mailbox output-ready events"
+    );
+    assert!(
+        output.contains("output_ready.wait().await"),
+        "the view must wait for mailbox output-ready events"
+    );
+    assert!(
+        output.contains("this.update(cx, |_, cx| cx.notify())"),
+        "mailbox output-ready events must request a GPUI render"
+    );
+}

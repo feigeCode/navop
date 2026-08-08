@@ -15,6 +15,10 @@ fn keeps_only_latest_pending_frame() {
 
     assert_eq!(Vec::<RemoteDesktopOutput>::new(), batch.control);
     assert_eq!(Some(frame(3)), batch.latest_frame);
+    assert_eq!(3, batch.stats.full_frames_received);
+    assert_eq!(2, batch.stats.full_frames_coalesced);
+    assert_eq!(2, batch.stats.frames_dropped);
+    assert_eq!(1, batch.stats.wakeups);
 }
 
 #[test]
@@ -286,6 +290,73 @@ fn send_fails_after_receiver_is_dropped() {
     drop(rx);
 
     assert!(tx.send(frame(1)).is_err());
+}
+
+#[tokio::test]
+async fn output_ready_is_observed_when_send_precedes_subscription() {
+    let (tx, rx) = output_mailbox();
+    tx.send(frame(1)).unwrap();
+    let mut subscription = rx.subscribe();
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), subscription.wait())
+        .await
+        .expect("pending output should be observed without waiting")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn output_ready_wakes_a_waiting_subscription() {
+    let (tx, rx) = output_mailbox();
+    let mut subscription = rx.subscribe();
+
+    let send = tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        tx.send(frame(1)).unwrap();
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), subscription.wait())
+        .await
+        .expect("output should wake the subscription")
+        .unwrap();
+    send.await.unwrap();
+}
+
+#[tokio::test]
+async fn frame_burst_coalesces_to_one_wakeup_until_drain() {
+    let (tx, rx) = output_mailbox();
+    let mut subscription = rx.subscribe();
+
+    tx.send(frame(1)).unwrap();
+    tx.send(frame(2)).unwrap();
+    tx.send(frame(3)).unwrap();
+
+    subscription.wait().await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), subscription.wait())
+            .await
+            .is_err(),
+        "a non-empty mailbox must not schedule duplicate wakeups"
+    );
+
+    let batch = rx.drain();
+    assert_eq!(Some(frame(3)), batch.latest_frame);
+    assert_eq!(1, batch.stats.wakeups);
+
+    tx.send(frame(4)).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), subscription.wait())
+        .await
+        .expect("the first output after drain should schedule another wakeup")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn dropping_receiver_closes_output_ready_subscription() {
+    let (_tx, rx) = output_mailbox();
+    let mut subscription = rx.subscribe();
+
+    drop(rx);
+
+    assert_eq!(Err(OutputMailboxClosed), subscription.wait().await);
 }
 
 fn frame(value: u8) -> RemoteDesktopOutput {

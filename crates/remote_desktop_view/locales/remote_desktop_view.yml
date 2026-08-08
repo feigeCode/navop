@@ -65,6 +65,10 @@ RemoteDesktop:
     en: Remote clipboard file transfer failed
     zh-CN: 远端剪贴板文件传输失败
     zh-HK: 遠端剪貼簿檔案傳輸失敗
+  clipboard_install_failed:
+    en: Could not place the received files on the system clipboard
+    zh-CN: 无法将接收的文件写入系统剪贴板
+    zh-HK: 無法將接收的檔案寫入系統剪貼簿
   clipboard_files_invalid:
     en: Rejected unsafe remote clipboard files
     zh-CN: 已拒绝不安全的远端剪贴板文件

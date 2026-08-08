@@ -4,9 +4,9 @@ use remote_desktop::{
 };
 
 use super::{
-    localized_clipboard_files_received_for_locale, localized_failure_message_for_locale,
-    localized_reconnect_notification_for_locale, localized_session_taken_over_for_locale,
-    localized_vnc_clipboard_ascii_warning_for_locale,
+    localized_clipboard_files_received_for_locale, localized_clipboard_install_failed_for_locale,
+    localized_failure_message_for_locale, localized_reconnect_notification_for_locale,
+    localized_session_taken_over_for_locale, localized_vnc_clipboard_ascii_warning_for_locale,
 };
 
 #[test]
@@ -79,6 +79,18 @@ fn clipboard_notifications_are_localized_for_all_supported_locales() {
     assert_eq!(
         "已從遠端剪貼簿接收 2 個項目",
         localized_clipboard_files_received_for_locale("zh-HK", 2)
+    );
+    assert_eq!(
+        "Could not place the received files on the system clipboard",
+        localized_clipboard_install_failed_for_locale("en")
+    );
+    assert_eq!(
+        "无法将接收的文件写入系统剪贴板",
+        localized_clipboard_install_failed_for_locale("zh-CN")
+    );
+    assert_eq!(
+        "無法將接收的檔案寫入系統剪貼簿",
+        localized_clipboard_install_failed_for_locale("zh-HK")
     );
 }
 

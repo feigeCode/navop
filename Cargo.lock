@@ -10138,6 +10138,7 @@ name = "remote_desktop_view"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cocoa 0.26.0",
  "connection-form",
  "gpui",
  "gpui-component",

@@ -3,7 +3,7 @@ use super::*;
 use remote_desktop::RemoteDesktopCursor;
 
 impl RemoteDesktopView {
-    pub(super) fn start_runtime(&mut self, size: (u16, u16)) {
+    pub(super) fn start_runtime(&mut self, size: (u16, u16), cx: &mut Context<Self>) {
         if self.input_tx.is_some() {
             return;
         }
@@ -19,8 +19,17 @@ impl RemoteDesktopView {
                 scale_factor: self.display_scale_factor,
             })
             .unwrap_or_else(failed_runtime);
+        let mut output_ready = runtime.output_rx.subscribe();
+        let output_ready_task = cx.spawn(async move |this, cx| {
+            while output_ready.wait().await.is_ok() {
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
         self.input_tx = Some(runtime.input_tx);
         self.output_rx = Some(runtime.output_rx);
+        self._output_ready_task = Some(output_ready_task);
         self.last_resize_size = Some(size);
         self.connected = false;
         self.status = SharedString::from(t!("RemoteDesktop.status_connecting").to_string());
@@ -31,6 +40,8 @@ impl RemoteDesktopView {
             return;
         };
         let batch = output_rx.drain();
+        let stats = batch.stats;
+        let before = self.frame_sync.snapshot();
         for output in batch
             .control
             .into_iter()
@@ -38,6 +49,26 @@ impl RemoteDesktopView {
             .chain(batch.latest_delta)
         {
             self.apply_output(output, window, cx);
+        }
+        if stats.outputs_received > 0 {
+            let after = self.frame_sync.snapshot();
+            tracing::debug!(
+                protocol = self.options.protocol.label(),
+                session_generation = after.session_generation,
+                outputs_received = stats.outputs_received,
+                frame_received = stats.full_frames_received,
+                delta_received = stats.delta_frames_received,
+                frame_coalesced = stats.full_frames_coalesced,
+                delta_merged = stats.delta_frames_merged,
+                frame_dropped = stats.frames_dropped,
+                frame_applied = after.full_frames.saturating_sub(before.full_frames),
+                delta_applied = after.deltas.saturating_sub(before.deltas),
+                delta_rejected = after.dropped_deltas.saturating_sub(before.dropped_deltas),
+                payload_bytes = stats.payload_bytes,
+                dirty_rects = stats.dirty_rects,
+                output_wakeups = stats.wakeups,
+                "remote desktop output batch applied"
+            );
         }
     }
 
@@ -219,6 +250,7 @@ impl RemoteDesktopView {
         &mut self,
         bounds: Bounds<Pixels>,
         display_scale_factor: f32,
+        cx: &mut Context<Self>,
     ) {
         self.content_bounds = Some(bounds);
         self.display_scale_factor = resize::scale_factor_percent(display_scale_factor);
@@ -230,7 +262,7 @@ impl RemoteDesktopView {
                 .observe(size, self.display_scale_factor, Instant::now());
             return;
         }
-        self.start_runtime(size);
+        self.start_runtime(size, cx);
         if !resize::is_meaningful_delta(self.last_resize_size, size)
             || self.pending_resize_size == Some(size)
         {
@@ -240,7 +272,7 @@ impl RemoteDesktopView {
         self.pending_resize_updated_at = Some(Instant::now());
     }
 
-    pub(super) fn flush_pending_start(&mut self) {
+    pub(super) fn flush_pending_start(&mut self, cx: &mut Context<Self>) {
         if self.input_tx.is_some() {
             return;
         }
@@ -251,7 +283,7 @@ impl RemoteDesktopView {
             return;
         };
         self.display_scale_factor = scale_factor;
-        self.start_runtime(size);
+        self.start_runtime(size, cx);
     }
 
     pub(super) fn flush_pending_resize(&mut self) {

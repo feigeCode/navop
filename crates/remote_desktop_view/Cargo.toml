@@ -18,6 +18,9 @@ image = { workspace = true }
 smallvec = { workspace = true }
 rust-i18n = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "=0.26.0"
+
 [dev-dependencies]
 tempfile = "3"
 

@@ -108,6 +108,8 @@ impl TabContent for RemoteDesktopView {
     ) -> Task<bool> {
         self.cursor.reset_session();
         close_runtime_once(&mut self.input_tx);
+        self.output_rx.take();
+        self._output_ready_task.take();
         Task::ready(true)
     }
 }
@@ -130,13 +132,26 @@ impl Render for RemoteDesktopView {
         }
         self.drain_output(window, cx);
         self.sync_local_clipboard(window, cx);
-        self.flush_pending_start();
+        self.flush_pending_start(cx);
         self.flush_pending_resize();
-        if let Some(latest_frame) = self.latest_frame.clone()
-            && let Some(retired) = self.rendered_frames.promote(latest_frame)
-            && let Err(error) = window.drop_image(retired)
-        {
-            tracing::warn!(?error, "failed to retire remote desktop frame");
+        if let Some(latest_frame) = self.latest_frame.clone() {
+            let frame_presented = self.rendered_frames.current() != Some(&latest_frame);
+            if let Some(retired) = self.rendered_frames.promote(latest_frame)
+                && let Err(error) = window.drop_image(retired)
+            {
+                tracing::warn!(?error, "failed to retire remote desktop frame");
+            }
+            if frame_presented {
+                let snapshot = self.frame_sync.snapshot();
+                tracing::trace!(
+                    protocol = self.options.protocol.label(),
+                    session_generation = snapshot.session_generation,
+                    frame_presented = 1,
+                    full_frames = snapshot.full_frames,
+                    deltas = snapshot.deltas,
+                    "remote desktop frame presented"
+                );
+            }
         }
         if let Some(retired) = self.cursor.promote_latest()
             && let Err(error) = window.drop_image(retired)
@@ -257,8 +272,8 @@ impl Render for RemoteDesktopView {
             .overflow_hidden()
             .on_children_prepainted(move |bounds, window, cx| {
                 if let Some(bounds) = bounds.first().copied() {
-                    view.update(cx, |view, _| {
-                        view.update_content_bounds(bounds, window.scale_factor());
+                    view.update(cx, |view, cx| {
+                        view.update_content_bounds(bounds, window.scale_factor(), cx);
                     });
                 }
             })

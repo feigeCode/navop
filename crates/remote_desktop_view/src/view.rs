@@ -21,6 +21,8 @@ use crate::shortcuts::{
 use crate::view::frame_lifecycle::RenderedFrameLifecycle;
 
 mod clipboard;
+#[cfg(target_os = "macos")]
+mod clipboard_macos;
 mod cursor;
 mod frame_lifecycle;
 mod frame_sync;
@@ -105,7 +107,7 @@ pub struct RemoteDesktopView {
     status: SharedString,
     connected: bool,
     tab_index: Option<usize>,
-    _output_poll_task: Task<()>,
+    _output_ready_task: Option<Task<()>>,
 }
 
 impl RemoteDesktopView {
@@ -116,19 +118,11 @@ impl RemoteDesktopView {
     ) -> Self {
         let manage_native_cursor = config.options.protocol == RemoteDesktopProtocol::Rdp;
         let focus_handle = cx.focus_handle();
-        let output_poll_task = cx.spawn(async move |this, cx| {
-            loop {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    break;
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(33))
-                    .await;
-            }
-        });
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
+            this.output_rx.take();
+            this._output_ready_task.take();
             let mut images = std::mem::take(&mut this.pending_frame_drops);
             images.extend(
                 this.rendered_frames
@@ -174,7 +168,7 @@ impl RemoteDesktopView {
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             connected: false,
             tab_index: config.tab_index,
-            _output_poll_task: output_poll_task,
+            _output_ready_task: None,
         }
     }
 }

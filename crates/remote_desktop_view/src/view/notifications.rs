@@ -96,6 +96,23 @@ impl RemoteDesktopView {
         });
     }
 
+    pub(super) fn notify_clipboard_install_failed(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let message = localized_clipboard_install_failed();
+        let notification_id = ("remote-desktop-clipboard", cx.entity_id());
+        window.defer(cx, move |window, cx| {
+            window.push_notification(
+                Notification::error(message)
+                    .id1::<RemoteDesktopClipboardNotification>(notification_id)
+                    .autohide(true),
+                cx,
+            );
+        });
+    }
+
     pub(super) fn notify_clipboard_files_invalid(
         &self,
         window: &mut Window,
@@ -267,6 +284,15 @@ fn localized_clipboard_files_received_for_locale(locale: &str, count: usize) -> 
 fn localized_clipboard_transfer_failed() -> String {
     let locale = rust_i18n::locale();
     t!("RemoteDesktop.clipboard_transfer_failed", locale = locale).to_string()
+}
+
+fn localized_clipboard_install_failed() -> String {
+    let locale = rust_i18n::locale();
+    localized_clipboard_install_failed_for_locale(locale.as_ref())
+}
+
+fn localized_clipboard_install_failed_for_locale(locale: &str) -> String {
+    t!("RemoteDesktop.clipboard_install_failed", locale = locale).to_string()
 }
 
 fn localized_clipboard_files_invalid() -> String {
