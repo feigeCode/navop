@@ -1293,23 +1293,33 @@ fn native_connection_entrypoints_validate_gate_outputs_and_exceptions() {
         "extern \"C\" NavopRdpResult navop_rdp_get_connection_state(",
         "extern \"C\" NavopRdpResult navop_rdp_request_close(",
         &[
+            "out_state == nullptr",
+            "*out_state = UINT32_C(0)",
             "host == nullptr",
             "NavopRdpResult result = ensure_owner_thread(host)",
             "if (result != NAVOP_RDP_RESULT_OK)",
             "clear_last_error(host)",
-            "out_state == nullptr",
-            "*out_state = UINT32_C(0)",
             "callback_state != CallbackState::Open",
+        ],
+    );
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/lifecycle.cpp"),
+        "extern \"C\" NavopRdpResult navop_rdp_request_close(",
+        "extern \"C\" NavopRdpResult navop_rdp_disconnect(",
+        &[
+            "out_status == nullptr",
+            "*out_status = UINT32_C(0)",
+            "host == nullptr",
+            "NavopRdpResult result = ensure_owner_thread(host)",
+            "if (result != NAVOP_RDP_RESULT_OK)",
+            "clear_last_error(host)",
+            "callback_state != CallbackState::Open",
+            "return request_close_active_x(host, host->active_x_resources, out_status);",
         ],
     );
     assert_contains_all(
         &format!("{HOST_CRATE}/native/lifecycle.cpp"),
-        &[
-            "out_status == nullptr",
-            "*out_status = UINT32_C(0)",
-            "return request_close_active_x(host, host->active_x_resources, out_status);",
-            "return disconnect_active_x(host, host->active_x_resources);",
-        ],
+        &["return disconnect_active_x(host, host->active_x_resources);"],
     );
 }
 
@@ -1555,7 +1565,9 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
         &[
             "cargo build --locked -p windows-rdp-probe --target $RustTarget",
             HOST_TEST,
-            "Compile-only probe gate and native host runtime tests",
+            "cargo test --locked -p remote_desktop_view ",
+            "--features windows-native-rdp --target $RustTarget",
+            "Compile-only probe gate and native runtime tests",
         ],
     );
     let script = read(script_path);
@@ -1566,12 +1578,36 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
         1,
         "{script_path} must contain exactly one host test command"
     );
+    assert_eq!(
+        script
+            .matches("cargo test --locked -p remote_desktop_view ")
+            .count(),
+        1,
+        "{script_path} must contain exactly one presentation feature test command"
+    );
     assert_excludes_all(
         script_path,
         &[
             "cargo test --locked -p windows_rdp_host --target $RustTarget --no-run",
             "windows_rdp_host.exe",
             "windows-rdp-probe.exe",
+        ],
+    );
+    assert_contains_all(
+        ".github/workflows/ci.yml",
+        &[
+            "\"run_on\":\"windows-2022\"",
+            "run: ./script/test-windows.ps1",
+        ],
+    );
+    assert_contains_all(
+        "script/test-windows.ps1",
+        &[
+            "Microsoft.VisualStudio.Workload.NativeDesktop",
+            "Microsoft.VisualStudio.Component.VC.ATL",
+            "vcvarsall.bat",
+            "\"call `\"$vcvarsall`\" x64\"",
+            "\"cargo test --all\"",
         ],
     );
 }

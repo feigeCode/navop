@@ -43,7 +43,7 @@ jobs:
           set -euo pipefail
           platform="${REQUESTED_PLATFORM:-all}"
           linux='{"target":"x86_64-unknown-linux-gnu","run_on":"ubuntu-latest","platform":"linux"}'
-          windows='{"target":"x86_64-pc-windows-msvc","run_on":"windows-latest","platform":"windows"}'
+          windows='{"target":"x86_64-pc-windows-msvc","run_on":"windows-2022","platform":"windows"}'
           macos='{"target":"aarch64-apple-darwin","run_on":"macos-latest","platform":"macos"}'
           case "$platform" in
             all) matrix="[$macos,$linux,$windows]" ;;
@@ -139,20 +139,20 @@ jobs:
             navop-cargo-inputs-v1-${{ runner.os }}-
             release-cargo-inputs-${{ runner.os }}-${{ matrix.target }}-
       - name: Install system dependencies
-        if: ${{ matrix.run_on != 'windows-latest' }}
+        if: ${{ matrix.platform != 'windows' }}
         run: script/bootstrap
       - name: Install wasm-tools
         run: cargo install wasm-tools --locked --version 1.251.0
       - name: Test Linux
-        if: ${{ matrix.run_on == 'ubuntu-latest' }}
+        if: ${{ matrix.platform == 'linux' }}
         run: |
           cargo test --all
       - name: Test Windows
-        if: ${{ matrix.run_on == 'windows-latest' }}
-        run: |
-          cargo test --all
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: ./script/test-windows.ps1
       - name: Test MacOS
-        if: ${{ matrix.run_on == 'macos-latest' }}
+        if: ${{ matrix.platform == 'macos' }}
         run: |
           cargo test --all
           cargo test -p gpui-component --doc

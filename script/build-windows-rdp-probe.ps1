@@ -103,8 +103,16 @@ function Invoke-ProbeBuild {
         "cargo build --locked -p windows-rdp-probe --target $RustTarget",
         "if errorlevel 1 exit /b %errorlevel%",
         "cargo test --locked -p windows_rdp_host --target $RustTarget",
-        "exit /b %errorlevel%"
+        "if errorlevel 1 exit /b %errorlevel%"
     )
+    if ($RustTarget -eq "x86_64-pc-windows-msvc") {
+        $commands += (
+            "cargo test --locked -p remote_desktop_view " +
+            "--features windows-native-rdp --target $RustTarget"
+        )
+        $commands += "if errorlevel 1 exit /b %errorlevel%"
+    }
+    $commands += "exit /b 0"
     $tempScript = Join-Path ([IO.Path]::GetTempPath()) `
         ("navop-rdp-probe-{0}.cmd" -f [guid]::NewGuid())
 
@@ -141,8 +149,8 @@ Write-Host (
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Write-Host (
-    "Compile-only probe gate and native host runtime tests: builds the ATL " +
-    "shim, then runs non-ActiveX native host tests without packaging."
+    "Compile-only probe gate and native runtime tests: builds the ATL shim, " +
+    "runs non-ActiveX host tests, and validates the x64 presentation feature."
 )
 foreach ($rustTarget in $Target) {
     $architecture = Get-VcVarsArchitecture -RustTarget $rustTarget

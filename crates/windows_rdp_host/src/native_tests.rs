@@ -718,7 +718,9 @@ fn native_last_error_preserves_extended_output_and_rejects_invalid_layout() {
         RESULT_ABI_MISMATCH
     );
     assert_eq!(wrong_abi, original_wrong_abi);
-    assert_eq!(unsafe { read_last_error(host) }, extended.base);
+    let mut current_sized_expected = extended.base;
+    current_sized_expected.struct_size = size_of::<NavopRdpLastError>() as u32;
+    assert_eq!(unsafe { read_last_error(host) }, current_sized_expected);
 
     assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
     assert!(host.is_null());
