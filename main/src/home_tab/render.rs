@@ -6,30 +6,6 @@ impl Focusable for HomePage {
     }
 }
 
-impl EventEmitter<TabContentEvent> for HomePage {}
-
-impl TabContent for HomePage {
-    fn content_key(&self) -> &'static str {
-        "Home"
-    }
-
-    fn title(&self, _cx: &App) -> SharedString {
-        SharedString::from(t!("Home.title"))
-    }
-
-    fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::Home.color())
-    }
-
-    fn closeable(&self, _cx: &App) -> bool {
-        false
-    }
-
-    fn width_size(&self, _cx: &App) -> Option<Size> {
-        Some(Size::Small)
-    }
-}
-
 impl Render for HomePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let global_user = GlobalCurrentUser::get_user(cx);

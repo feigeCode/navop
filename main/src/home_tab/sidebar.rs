@@ -150,7 +150,7 @@ impl HomePage {
                                 footer.items_center().child(
                                     IconButton::new(
                                         "legacy-home-user",
-                                        ObjectIcon::new(IconName::User),
+                                        FunctionalIcon::new(IconName::User),
                                     )
                                     .hit_size(rail_item_size)
                                     .glyph_size(IconSize::Medium)

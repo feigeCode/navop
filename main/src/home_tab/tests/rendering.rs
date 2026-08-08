@@ -246,7 +246,8 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
-    assert!(sidebar.contains("ObjectIcon::new(IconName::User)"));
+    assert!(sidebar.contains("FunctionalIcon::new(IconName::User)"));
+    assert!(!sidebar.contains("ObjectIcon::new(IconName::User)"));
 }
 
 #[test]

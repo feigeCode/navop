@@ -68,18 +68,21 @@ impl HomePage {
                 return;
             }
         };
-        self.tab_container.update(cx, |container, cx| {
-            let item_id = tab_id.clone();
-            container.activate_or_add_tab_lazy_with_mode(
-                tab_id,
-                mode,
-                move |_window, cx| {
-                    let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
-                    TabItem::new(item_id, "home", tab)
-                },
-                window,
-                cx,
-            );
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |container, cx| {
+                let item_id = tab_id.clone();
+                container.activate_or_add_tab_lazy_with_mode(
+                    tab_id,
+                    mode,
+                    move |_window, cx| {
+                        let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
+                        TabItem::new(item_id, "home", tab)
+                    },
+                    window,
+                    cx,
+                );
+            });
         });
     }
 

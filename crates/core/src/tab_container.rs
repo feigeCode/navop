@@ -1074,11 +1074,31 @@ impl TabContainer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pinned) = self.pinned_tabs.get(index) else {
+        if self.pinned_tabs.get(index).is_none() {
             return;
-        };
+        }
+        if self.active_pinned_index == Some(index) {
+            if let Some(pinned) = self.pinned_tabs.get(index) {
+                pinned.content().focus_handle(cx).focus(window, cx);
+                cx.emit(TabContainerEvent::TabActivated {
+                    index,
+                    id: pinned.id().to_string(),
+                });
+                cx.notify();
+            }
+            return;
+        }
+
+        self.deactivate_active_content(window, cx);
         self.active_pinned_index = Some(index);
-        pinned.content().focus_handle(cx).focus(window, cx);
+        if let Some(pinned) = self.pinned_tabs.get(index) {
+            pinned.content().on_activate(window, cx);
+            pinned.content().focus_handle(cx).focus(window, cx);
+            cx.emit(TabContainerEvent::TabActivated {
+                index,
+                id: pinned.id().to_string(),
+            });
+        }
         cx.emit(TabContainerEvent::LayoutChanged);
         cx.notify();
     }
@@ -1205,6 +1225,14 @@ impl TabContainer {
             .and_then(|index| self.pinned_tabs.get(index))
     }
 
+    fn deactivate_active_content(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pinned) = self.active_pinned_tab() {
+            pinned.content().on_deactivate(window, cx);
+        } else if let Some(tab) = self.active_tab() {
+            tab.content().on_deactivate(window, cx);
+        }
+    }
+
     /// Add a new tab and activate it
     pub fn add_and_activate_tab(&mut self, tab: TabItem, cx: &mut Context<Self>) {
         let id = tab.id().to_string();
@@ -1271,6 +1299,7 @@ impl TabContainer {
     ) {
         let id = tab.id().to_string();
         let focus_handle = tab.content.focus_handle(cx);
+        self.deactivate_active_content(window, cx);
         self.subscribe_tab_content(&tab, window, cx);
         self.tabs.push(tab);
         self.active_index = self.tabs.len() - 1;
@@ -1316,14 +1345,17 @@ impl TabContainer {
         let tab_id_string = tab_id.to_string();
         let content = self.tabs[index].content().clone();
         let entity = cx.entity();
+        let window_handle = window.window_handle();
 
         let close_task = content.try_close(&tab_id_string, window, cx);
 
         cx.spawn(async move |_handle, cx| {
             let can_close = close_task.await;
             if can_close {
-                let _ = entity.update(cx, |this, cx| {
-                    this.do_remove_tab_by_id(&tab_id_string, cx);
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.do_remove_tab_by_id(&tab_id_string, window, cx);
+                    })
                 });
             } else {
                 let _ = entity.update(cx, |this, _cx| {
@@ -1334,17 +1366,23 @@ impl TabContainer {
         })
     }
 
-    fn do_remove_tab_by_id(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+    fn do_remove_tab_by_id(&mut self, tab_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.tabs.iter().position(|t| t.id() == tab_id) {
+            let was_active = self.regular_tab_is_active(index);
             let removed_tab_id = self.tabs[index].id();
             self.tabs.remove(index);
             self.closing_tabs.remove(&removed_tab_id);
             clear_tab_activity(&mut self.activity_tabs, removed_tab_id.as_ref());
 
             if self.tabs.is_empty() {
-                // All regular tabs closed, activate pinned tab if present
                 self.active_index = 0;
-                self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
+                if was_active {
+                    self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
+                    if let Some(pinned) = self.active_pinned_tab() {
+                        pinned.content().on_activate(window, cx);
+                        pinned.content().focus_handle(cx).focus(window, cx);
+                    }
+                }
             } else if index < self.active_index {
                 self.active_index -= 1;
             } else if index == self.active_index {
@@ -1365,7 +1403,7 @@ impl TabContainer {
     pub fn close_other_tabs(
         &mut self,
         keep_index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
         if keep_index >= self.tabs.len() {
@@ -1385,22 +1423,21 @@ impl TabContainer {
         }
 
         let entity = cx.entity();
-        let window_id = cx.active_window();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |_handle, cx| {
             for tab_id in tab_ids {
-                let should_close =
-                    cx.update_window(window_id.expect("No active window"), |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
-                                this.set_active_index(index, window, cx);
-                                let content = this.tabs[index].content().clone();
-                                Some(content.try_close(&tab_id, window, cx))
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(index, window, cx);
+                            let content = this.tabs[index].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 match should_close {
                     Ok(Some(task)) => {
@@ -1408,8 +1445,10 @@ impl TabContainer {
                         if !can_close {
                             return false;
                         }
-                        let _ = entity.update(cx, |this, cx| {
-                            this.do_remove_tab_by_id(&tab_id, cx);
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
                         });
                     }
                     Ok(None) => continue,
@@ -1421,7 +1460,7 @@ impl TabContainer {
     }
 
     /// Close all tabs
-    pub fn close_all_tabs(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+    pub fn close_all_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
         let tab_ids: Vec<String> = self
             .tabs
             .iter()
@@ -1434,22 +1473,21 @@ impl TabContainer {
         }
 
         let entity = cx.entity();
-        let window_id = cx.active_window();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |_handle, cx| {
             for tab_id in tab_ids {
-                let should_close =
-                    cx.update_window(window_id.expect("No active window"), |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
-                                this.set_active_index(index, window, cx);
-                                let content = this.tabs[index].content().clone();
-                                Some(content.try_close(&tab_id, window, cx))
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(index, window, cx);
+                            let content = this.tabs[index].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 match should_close {
                     Ok(Some(task)) => {
@@ -1457,8 +1495,10 @@ impl TabContainer {
                         if !can_close {
                             return false;
                         }
-                        let _ = entity.update(cx, |this, cx| {
-                            this.do_remove_tab_by_id(&tab_id, cx);
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
                         });
                     }
                     Ok(None) => continue,
@@ -1473,7 +1513,7 @@ impl TabContainer {
     pub fn close_tabs_to_left(
         &mut self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
         if index == 0 || index >= self.tabs.len() {
@@ -1493,22 +1533,21 @@ impl TabContainer {
         }
 
         let entity = cx.entity();
-        let window_id = cx.active_window();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |_handle, cx| {
             for tab_id in tab_ids {
-                let should_close =
-                    cx.update_window(window_id.expect("No active window"), |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            if let Some(idx) = this.tabs.iter().position(|t| t.id() == tab_id) {
-                                this.set_active_index(idx, window, cx);
-                                let content = this.tabs[idx].content().clone();
-                                Some(content.try_close(&tab_id, window, cx))
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(idx) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(idx, window, cx);
+                            let content = this.tabs[idx].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 match should_close {
                     Ok(Some(task)) => {
@@ -1516,8 +1555,10 @@ impl TabContainer {
                         if !can_close {
                             return false;
                         }
-                        let _ = entity.update(cx, |this, cx| {
-                            this.do_remove_tab_by_id(&tab_id, cx);
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
                         });
                     }
                     Ok(None) => continue,
@@ -1532,7 +1573,7 @@ impl TabContainer {
     pub fn close_tabs_to_right(
         &mut self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
         if index >= self.tabs.len() - 1 {
@@ -1552,22 +1593,21 @@ impl TabContainer {
         }
 
         let entity = cx.entity();
-        let window_id = cx.active_window();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |_handle, cx| {
             for tab_id in tab_ids {
-                let should_close =
-                    cx.update_window(window_id.expect("No active window"), |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            if let Some(idx) = this.tabs.iter().position(|t| t.id() == tab_id) {
-                                this.set_active_index(idx, window, cx);
-                                let content = this.tabs[idx].content().clone();
-                                Some(content.try_close(&tab_id, window, cx))
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(idx) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(idx, window, cx);
+                            let content = this.tabs[idx].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 match should_close {
                     Ok(Some(task)) => {
@@ -1575,8 +1615,10 @@ impl TabContainer {
                         if !can_close {
                             return false;
                         }
-                        let _ = entity.update(cx, |this, cx| {
-                            this.do_remove_tab_by_id(&tab_id, cx);
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
                         });
                     }
                     Ok(None) => continue,
@@ -1605,7 +1647,7 @@ impl TabContainer {
     pub fn close_tabs_by_tab_from(
         &mut self,
         tab_from: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
         let tab_ids: Vec<String> = self
@@ -1620,22 +1662,21 @@ impl TabContainer {
         }
 
         let entity = cx.entity();
-        let window_id = cx.active_window();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |_handle, cx| {
             for tab_id in tab_ids {
-                let should_close =
-                    cx.update_window(window_id.expect("No active window"), |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
-                                this.set_active_index(index, window, cx);
-                                let content = this.tabs[index].content().clone();
-                                Some(content.try_close(&tab_id, window, cx))
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let should_close = cx.update_window(window_handle, |_, window, cx| {
+                    entity.update(cx, |this, cx| {
+                        if let Some(index) = this.tabs.iter().position(|t| t.id() == tab_id) {
+                            this.set_active_index(index, window, cx);
+                            let content = this.tabs[index].content().clone();
+                            Some(content.try_close(&tab_id, window, cx))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 match should_close {
                     Ok(Some(task)) => {
@@ -1643,8 +1684,10 @@ impl TabContainer {
                         if !can_close {
                             return false;
                         }
-                        let _ = entity.update(cx, |this, cx| {
-                            this.do_remove_tab_by_id(&tab_id, cx);
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.do_remove_tab_by_id(&tab_id, window, cx);
+                            })
                         });
                     }
                     Ok(None) => continue,
@@ -1656,39 +1699,34 @@ impl TabContainer {
     }
 
     /// Force close a tab by ID, skipping try_close
-    pub fn force_close_tab_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.do_remove_tab_by_id(id, cx);
+    pub fn force_close_tab_by_id(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.do_remove_tab_by_id(id, window, cx);
     }
 
     /// Set the active tab by index
     pub fn set_active_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.tabs.len()
-            && (index != self.active_index || self.active_pinned_index.is_some())
-        {
-            if self.active_pinned_index.is_some() {
-                // Deactivate pinned tab
-                if let Some(pinned) = self.active_pinned_tab() {
-                    pinned.content().on_deactivate(window, cx);
-                }
+        if index < self.tabs.len() {
+            let switching_content =
+                index != self.active_index || self.active_pinned_index.is_some();
+            if switching_content {
+                self.deactivate_active_content(window, cx);
+                self.active_index = index;
                 self.active_pinned_index = None;
-            } else if let Some(old_tab) = self.tabs.get(self.active_index) {
-                old_tab.content().on_deactivate(window, cx);
             }
 
             self.tab_bar_scroll_handle.scroll_to_item(index);
-            self.active_index = index;
-
-            let tab_id = if let Some(new_tab) = self.tabs.get(self.active_index) {
+            let new_tab = &self.tabs[index];
+            if switching_content {
                 new_tab.content().on_activate(window, cx);
-                new_tab.content().focus_handle(cx).focus(window, cx);
-                new_tab.id().to_string()
-            } else {
-                String::new()
-            };
+            }
+            new_tab.content().focus_handle(cx).focus(window, cx);
+            let tab_id = new_tab.id().to_string();
             clear_tab_activity(&mut self.activity_tabs, &tab_id);
 
             cx.emit(TabContainerEvent::TabActivated { index, id: tab_id });
-            cx.emit(TabContainerEvent::LayoutChanged);
+            if switching_content {
+                cx.emit(TabContainerEvent::LayoutChanged);
+            }
             cx.notify();
         }
     }
@@ -1971,15 +2009,18 @@ impl TabContainer {
             return None;
         }
 
-        let was_active = self.active_pinned_index.is_none() && index == self.active_index;
+        let was_active = self.regular_tab_is_active(index);
         let tab = self.tabs.remove(index);
         clear_tab_activity(&mut self.activity_tabs, tab.id().as_ref());
 
         if self.tabs.is_empty() {
             self.active_index = 0;
-            self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
-            if let Some(pinned) = self.active_pinned_tab() {
-                pinned.content().on_activate(window, cx);
+            if was_active {
+                self.active_pinned_index = (!self.pinned_tabs.is_empty()).then_some(0);
+                if let Some(pinned) = self.active_pinned_tab() {
+                    pinned.content().on_activate(window, cx);
+                    pinned.content().focus_handle(cx).focus(window, cx);
+                }
             }
         } else {
             if index < self.active_index {
@@ -3888,6 +3929,7 @@ impl Render for TabContainer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle(cx);
         let tab_bar_height = cx.theme().geometry.layout.tab_bar;
+        let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();
 
         div()
             .id("tab-container")
@@ -3926,11 +3968,11 @@ impl Render for TabContainer {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .child(self.render_tab_bar(window, cx))
+            .when(has_tabs, |this| this.child(self.render_tab_bar(window, cx)))
             .child(
                 v_flex()
                     .absolute()
-                    .top(tab_bar_height)
+                    .top(if has_tabs { tab_bar_height } else { px(0.0) })
                     .right_0()
                     .bottom_0()
                     .left_0()
@@ -3953,6 +3995,7 @@ mod tests {
     };
     use gpui_component::{Root, Theme, h_flex};
     use image::{ImageBuffer, Rgba};
+    use std::sync::Mutex;
 
     struct TestTab {
         title: SharedString,
@@ -4254,6 +4297,120 @@ mod tests {
     }
 
     #[gpui::test]
+    fn reactivating_current_regular_tab_emits_tab_activated(cx: &mut TestAppContext) {
+        let activations = Arc::new(Mutex::new(Vec::new()));
+        let activations_for_window = activations.clone();
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let regular = cx.new(|cx| TestTab::new("regular", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+                let activations_for_subscription = activations_for_window.clone();
+                cx.subscribe(&container, move |_, event: &TabContainerEvent, _| {
+                    if let TabContainerEvent::TabActivated { index, id } = event {
+                        activations_for_subscription
+                            .lock()
+                            .expect("activations lock")
+                            .push((*index, id.clone()));
+                    }
+                })
+                .detach();
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("regular", "test", regular.clone()),
+                        window,
+                        cx,
+                    );
+                });
+
+                container.update(cx, |container, cx| {
+                    container.set_active_index(0, window, cx);
+                });
+
+                assert!(regular.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            vec![(0, "regular".to_string()), (0, "regular".to_string())],
+            *activations.lock().expect("activations lock")
+        );
+    }
+
+    #[gpui::test]
+    fn reactivating_current_pinned_tab_emits_tab_activated(cx: &mut TestAppContext) {
+        let activations = Arc::new(Mutex::new(Vec::new()));
+        let activations_for_window = activations.clone();
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let pinned = cx.new(|cx| TestTab::new("pinned", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+                let activations_for_subscription = activations_for_window.clone();
+                cx.subscribe(&container, move |_, event: &TabContainerEvent, _| {
+                    if let TabContainerEvent::TabActivated { index, id } = event {
+                        activations_for_subscription
+                            .lock()
+                            .expect("activations lock")
+                            .push((*index, id.clone()));
+                    }
+                })
+                .detach();
+
+                container.update(cx, |container, cx| {
+                    container.add_pinned_tab(TabItem::new("pinned", "test", pinned.clone()), cx);
+                    container.activate_pinned_tab_at(0, window, cx);
+                });
+
+                container.update(cx, |container, cx| {
+                    container.activate_pinned_tab_at(0, window, cx);
+                });
+
+                assert!(pinned.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            vec![(0, "pinned".to_string()), (0, "pinned".to_string())],
+            *activations.lock().expect("activations lock")
+        );
+    }
+
+    #[gpui::test]
+    fn closing_last_regular_tab_activates_first_pinned_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let pinned = cx.new(|cx| TestTab::new("pinned", cx));
+                let regular = cx.new(|cx| TestTab::new("regular", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_pinned_tab(TabItem::new("pinned", "test", pinned.clone()), cx);
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("regular", "test", regular),
+                        window,
+                        cx,
+                    );
+                    container.force_close_tab_by_id("regular", window, cx);
+                });
+
+                let container_ref = container.read(cx);
+                assert!(container_ref.tabs().is_empty());
+                assert_eq!(Some(0), container_ref.active_pinned_index());
+                assert!(pinned.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
     fn macos_tab_dropdown_stays_anchored_to_the_main_slot_right_edge(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
@@ -4268,14 +4425,14 @@ mod tests {
                     ..Default::default()
                 },
                 |window, cx| {
-                    let home = cx.new(|cx| TestTab::new("home", cx));
+                    let overview = cx.new(|cx| TestTab::new("overview", cx));
                     let notes = cx.new(|cx| TestTab::new("notes", cx));
                     let tabs = cx.new(|cx| {
                         TabContainer::new(window, cx).with_navigation_sidebar_toggle(true)
                     });
                     tabs.update(cx, |tabs, cx| {
                         tabs.add_and_activate_tab_with_focus(
-                            TabItem::new("home", "test", home),
+                            TabItem::new("overview", "test", overview),
                             window,
                             cx,
                         );

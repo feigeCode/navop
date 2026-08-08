@@ -6,8 +6,8 @@ use crate::persistent_connection_sidebar::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, Context, Entity, ExternalPaths, InteractiveElement, IntoElement, KeyBinding,
-    Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
+    App, AppContext, Context, Entity, ExternalPaths, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, Keystroke, ParentElement, Render, Styled, Task, Window, actions, div,
 };
 use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::gpui_tokio::{JoinError, Tokio};
@@ -198,11 +198,9 @@ pub(crate) fn shutdown_ssh_sessions_and_quit(cx: &mut App, reason: &'static str)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct InitialPinnedTabLayout {
-    home_tab_id: &'static str,
+struct InitialContentLayout {
     workbench_tab_id: &'static str,
     pin_workbench: bool,
-    active_pinned_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,19 +244,10 @@ impl QuitRequestState {
     }
 }
 
-fn initial_home_tab_layout(startup_default_page: StartupDefaultPage) -> InitialPinnedTabLayout {
-    InitialPinnedTabLayout {
-        home_tab_id: "home",
+fn initial_content_layout(startup_default_page: StartupDefaultPage) -> InitialContentLayout {
+    InitialContentLayout {
         workbench_tab_id: "ai-workbench",
         pin_workbench: startup_default_page == StartupDefaultPage::AiWorkbench,
-        active_pinned_index: active_pinned_index_for_startup_default_page(startup_default_page),
-    }
-}
-
-fn active_pinned_index_for_startup_default_page(startup_default_page: StartupDefaultPage) -> usize {
-    match startup_default_page {
-        StartupDefaultPage::Home => 0,
-        StartupDefaultPage::AiWorkbench => 1,
     }
 }
 
@@ -1116,9 +1105,17 @@ fn init_action_handlers(cx: &mut App) {
     });
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MainContent {
+    Home,
+    Tabs,
+}
+
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
+    home_page: Entity<HomePage>,
     connection_sidebar: Entity<PersistentConnectionSidebar>,
+    main_content: MainContent,
     home_page_style: HomePageStyle,
     quit_state: QuitRequestState,
     main_window_size_save_task: Option<Task<()>>,
@@ -1232,31 +1229,33 @@ impl OnetCliApp {
         )
         .detach();
 
-        // Initialize fixed tabs before the scrollable workspace tabs.
-        {
-            let layout = initial_home_tab_layout(AppSettings::current(cx).startup_default_page);
+        let layout = initial_content_layout(AppSettings::current(cx).startup_default_page);
+        let main_content = if layout.pin_workbench {
+            MainContent::Tabs
+        } else {
+            MainContent::Home
+        };
+        home_page.update(cx, |home, cx| {
+            home.set_home_active(main_content == MainContent::Home, cx)
+        });
+        if layout.pin_workbench {
             tab_container.update(cx, |tc, cx| {
-                let home_tab = TabItem::new(layout.home_tab_id, "app", home_page.clone());
-                tc.add_pinned_tab(home_tab, cx);
-
-                if layout.pin_workbench {
-                    let connections = cx
-                        .global::<GlobalStorageState>()
-                        .storage
-                        .get::<ConnectionRepository>()
-                        .and_then(|repo| repo.list().ok())
-                        .unwrap_or_default();
-                    let (scope, catalog, mentions) =
-                        ai_chat_view::build_workbench_resource_state(&connections);
-                    let workbench = cx.new(|cx| {
-                        ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
-                            scope, catalog, mentions, window, cx,
-                        )
-                    });
-                    let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
-                    tc.add_pinned_tab(workbench_tab, cx);
-                }
-                tc.activate_pinned_tab_at(layout.active_pinned_index, window, cx);
+                let connections = cx
+                    .global::<GlobalStorageState>()
+                    .storage
+                    .get::<ConnectionRepository>()
+                    .and_then(|repo| repo.list().ok())
+                    .unwrap_or_default();
+                let (scope, catalog, mentions) =
+                    ai_chat_view::build_workbench_resource_state(&connections);
+                let workbench = cx.new(|cx| {
+                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
+                        scope, catalog, mentions, window, cx,
+                    )
+                });
+                let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
+                tc.add_pinned_tab(workbench_tab, cx);
+                tc.activate_pinned_tab_at(0, window, cx);
             });
         }
 
@@ -1268,9 +1267,12 @@ impl OnetCliApp {
                         this.set_connection_sidebar_expanded(*expanded, cx);
                     }
                 }
-                TabContainerEvent::LayoutChanged
-                | TabContainerEvent::TabActivated { .. }
-                | TabContainerEvent::TabClosed { .. } => {
+                TabContainerEvent::TabActivated { .. } => {
+                    this.set_main_content(MainContent::Tabs, cx);
+                    this.sync_connection_sidebar_theme(cx);
+                }
+                TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
+                    this.show_home_if_tab_container_is_empty(cx);
                     this.sync_connection_sidebar_theme(cx);
                 }
             },
@@ -1285,11 +1287,43 @@ impl OnetCliApp {
 
         Self {
             tab_container,
+            home_page: home_page.clone(),
             connection_sidebar,
+            main_content,
             home_page_style,
             quit_state: QuitRequestState::default(),
             main_window_size_save_task: None,
             _appearance_subscription: appearance_subscription,
+        }
+    }
+
+    pub(crate) fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_main_content(MainContent::Home, cx);
+        self.home_page.read(cx).focus_handle(cx).focus(window, cx);
+        self.sync_connection_sidebar_theme(cx);
+    }
+
+    fn set_main_content(&mut self, main_content: MainContent, cx: &mut Context<Self>) {
+        if self.main_content == main_content {
+            return;
+        }
+        self.main_content = main_content;
+        self.home_page.update(cx, |home, cx| {
+            home.set_home_active(main_content == MainContent::Home, cx)
+        });
+        cx.notify();
+    }
+
+    fn show_home_if_tab_container_is_empty(&mut self, cx: &mut Context<Self>) {
+        if self.main_content != MainContent::Tabs {
+            return;
+        }
+        let tab_container_is_empty = {
+            let tabs = self.tab_container.read(cx);
+            tabs.tabs().is_empty() && !tabs.is_pinned_tab_active()
+        };
+        if tab_container_is_empty {
+            self.set_main_content(MainContent::Home, cx);
         }
     }
 
@@ -1361,7 +1395,7 @@ impl OnetCliApp {
     fn sync_connection_sidebar_theme(&mut self, cx: &mut Context<Self>) {
         let terminal_active = {
             let tabs = self.tab_container.read(cx);
-            if tabs.is_pinned_tab_active() {
+            if self.main_content == MainContent::Home || tabs.is_pinned_tab_active() {
                 false
             } else {
                 tabs.active_tab()
@@ -1462,7 +1496,7 @@ impl OnetCliApp {
 mod tests {
     use super::{
         GlobalSshSessionService, configured_log_file_path, default_log_file_path,
-        init_ssh_session_service, initial_home_tab_layout, log_file_appender,
+        init_ssh_session_service, initial_content_layout, log_file_appender,
     };
     use one_core::gpui_tokio::Tokio;
     use one_core::settings::StartupDefaultPage;
@@ -1470,24 +1504,56 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn initial_layout_pins_home_and_ai_workbench_with_ai_active() {
-        let layout = initial_home_tab_layout(StartupDefaultPage::AiWorkbench);
+    fn initial_layout_only_pins_ai_workbench_when_it_is_the_startup_page() {
+        let layout = initial_content_layout(StartupDefaultPage::AiWorkbench);
 
-        assert_eq!("home", layout.home_tab_id);
         assert_eq!("ai-workbench", layout.workbench_tab_id);
         assert!(layout.pin_workbench);
-        assert_eq!(1, layout.active_pinned_index);
     }
 
     #[test]
-    fn initial_layout_uses_startup_default_page_for_active_pinned_tab() {
-        let home_layout = initial_home_tab_layout(StartupDefaultPage::Home);
-        let ai_layout = initial_home_tab_layout(StartupDefaultPage::AiWorkbench);
+    fn home_startup_does_not_create_a_pinned_home_tab() {
+        let home_layout = initial_content_layout(StartupDefaultPage::Home);
+        let ai_layout = initial_content_layout(StartupDefaultPage::AiWorkbench);
+        let source = include_str!("onetcli_app.rs");
+        let constructor = source
+            .split("pub fn new(window:")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("\n    pub(crate) fn set_home_page_style")
+                    .next()
+            })
+            .expect("OnetCliApp::new source");
 
         assert!(!home_layout.pin_workbench);
-        assert_eq!(0, home_layout.active_pinned_index);
         assert!(ai_layout.pin_workbench);
-        assert_eq!(1, ai_layout.active_pinned_index);
+        assert!(constructor.contains("home_page: home_page.clone()"));
+        assert!(constructor.contains("main_content"));
+        assert!(!constructor.contains("set_base_content"));
+        assert!(!constructor.contains("TabItem::new(\"home\""));
+        assert!(!constructor.contains("let home_tab ="));
+        assert!(!constructor.contains("tc.add_pinned_tab(home_tab, cx)"));
+    }
+
+    #[test]
+    fn home_content_cannot_inherit_a_background_terminal_sidebar_theme() {
+        let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
+
+        assert!(source.contains(
+            "if self.main_content == MainContent::Home || tabs.is_pinned_tab_active() {\n                false"
+        ));
+    }
+
+    #[test]
+    fn home_page_is_rendered_outside_the_tab_container() {
+        let app_source = include_str!("onetcli_app.rs");
+        let home_render_source = include_str!("home_tab/render.rs");
+
+        assert!(app_source.contains("MainContent::Home => self.home_page.clone()"));
+        assert!(app_source.contains("MainContent::Tabs => self.tab_container.clone()"));
+        assert!(!home_render_source.contains("impl TabContent for HomePage"));
+        assert!(!home_render_source.contains("impl EventEmitter<TabContentEvent> for HomePage"));
     }
 
     #[test]
@@ -1882,6 +1948,10 @@ impl Render for OnetCliApp {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
         let show_persistent_sidebar = self.home_page_style.uses_persistent_sidebar();
+        let main_content = match self.main_content {
+            MainContent::Home => self.home_page.clone().into_any_element(),
+            MainContent::Tabs => self.tab_container.clone().into_any_element(),
+        };
         div()
             .size_full()
             .relative()
@@ -1914,13 +1984,7 @@ impl Render for OnetCliApp {
                     .when(show_persistent_sidebar, |layout| {
                         layout.child(self.connection_sidebar.clone())
                     })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .child(self.tab_container.clone()),
-                    ),
+                    .child(div().flex_1().min_w_0().h_full().child(main_content)),
             )
             .children(sheet_layer)
             .children(dialog_layer)

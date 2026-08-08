@@ -77,6 +77,21 @@ fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
 }
 
 #[test]
+fn tab_bar_is_hidden_until_a_tab_exists() {
+    let source = include_str!("tab_container.rs").replace("\r\n", "\n");
+    let render_start = source
+        .find("impl Render for TabContainer")
+        .expect("tab container renderer");
+    let render = &source[render_start..];
+
+    assert!(
+        render.contains("let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();")
+    );
+    assert!(render.contains(".when(has_tabs, |this| this.child(self.render_tab_bar(window, cx)))"));
+    assert!(render.contains(".top(if has_tabs { tab_bar_height } else { px(0.0) })"));
+}
+
+#[test]
 fn sidebar_center_clips_active_view_intrinsic_size_at_every_flex_boundary() {
     let source = include_str!("tab_container.rs");
     let renderer_start = source

@@ -26,6 +26,7 @@ pub(super) fn render_navigation_rail(
     let rail_width = layout.global_rail;
     let rail_item_size = Size::Size(layout.global_rail_item);
     let home = home_page.read(cx);
+    let home_active = home.is_home_active();
     let selected_filter = home.selected_filter;
     let show_team =
         should_show_team_management_entry(is_feature_enabled(Feature::TeamManagement, cx));
@@ -73,6 +74,23 @@ pub(super) fn render_navigation_rail(
                 .min_h_0()
                 .items_center()
                 .bg(palette.rail_background)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .items_center()
+                        .p_1()
+                        .border_b_1()
+                        .border_color(palette.border)
+                        .child(selectable_rail_button(
+                            "persistent-open-home",
+                            IconName::Home,
+                            t!("Home.title").to_string(),
+                            RailButtonVisuals::new(palette, home_active),
+                            home_page,
+                            rail_item_size,
+                            |home, window, cx| HomePage::show_home(home, window, cx),
+                        )),
+                )
                 .child(render_filter_buttons(
                     home_page,
                     sidebar,
@@ -215,18 +233,58 @@ fn rail_button(
     rail_item_size: Size,
     on_click: impl Fn(&mut HomePage, &mut gpui::Window, &mut gpui::Context<HomePage>) + 'static,
 ) -> impl IntoElement {
+    selectable_rail_button(
+        id,
+        icon,
+        tooltip,
+        RailButtonVisuals::new(palette, false),
+        home_page,
+        rail_item_size,
+        move |home_page, window, cx| {
+            home_page.update(cx, |home, cx| on_click(home, window, cx));
+        },
+    )
+}
+
+struct RailButtonVisuals {
+    palette: SidebarPalette,
+    selected: bool,
+}
+
+impl RailButtonVisuals {
+    fn new(palette: SidebarPalette, selected: bool) -> Self {
+        Self { palette, selected }
+    }
+}
+
+fn selectable_rail_button(
+    id: &'static str,
+    icon: IconName,
+    tooltip: String,
+    visuals: RailButtonVisuals,
+    home_page: &Entity<HomePage>,
+    rail_item_size: Size,
+    on_click: impl Fn(&Entity<HomePage>, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
+    let RailButtonVisuals { palette, selected } = visuals;
     let home = home_page.clone();
     IconButton::new(
         id,
         Icon::new(icon)
-            .text_color(palette.muted_foreground)
+            .text_color(if selected {
+                palette.foreground
+            } else {
+                palette.muted_foreground
+            })
             .with_size(IconSize::Medium),
     )
     .hit_size(rail_item_size)
     .glyph_size(IconSize::Medium)
+    .selected(selected)
+    .when(selected, |button| button.bg(palette.selected))
     .tooltip(tooltip)
     .on_click(move |_, window, cx| {
-        home.update(cx, |home, cx| on_click(home, window, cx));
+        on_click(&home, window, cx);
     })
 }
 

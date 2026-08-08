@@ -7,7 +7,7 @@ use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindow
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
+    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
     ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
@@ -48,7 +48,7 @@ use one_core::storage::{
     RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, TeamMembershipState,
     Workspace, WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
+use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use port_forwarding::PortForwardingRuntime;
 use port_forwarding_view::{
     PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
@@ -135,6 +135,7 @@ impl From<ConnectionLayout> for HomeConnectionLayout {
 
 pub struct HomePage {
     focus_handle: FocusHandle,
+    pub(crate) home_active: bool,
     pub(crate) selected_filter: ConnectionType,
     connection_layout: ConnectionLayout,
     home_page_style: HomePageStyle,
