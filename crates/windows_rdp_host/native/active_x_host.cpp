@@ -165,7 +165,8 @@ NavopRdpResult create_active_x_resources(
     }
 
     const HRESULT ui_parent_result =
-        non_scriptable->put_UIParentWindowHandle(parent);
+        non_scriptable->put_UIParentWindowHandle(
+            reinterpret_cast<wireHWND>(parent));
     if (FAILED(ui_parent_result)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
