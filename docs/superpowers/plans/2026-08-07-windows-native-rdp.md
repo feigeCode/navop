@@ -454,6 +454,7 @@ pub enum WindowsRdpEvent {
     LogonError { generation: u64, code: i32 },
     Disconnected { generation: u64, reason: WindowsRdpDisconnectReason },
     CloseConfirmed { generation: u64 },
+    FocusReleased { generation: u64 },
 }
 ```
 
@@ -462,6 +463,9 @@ pub enum WindowsRdpEvent {
 - event sink 只转换必要参数，不执行长任务。
 - 回调进入 Rust 后复制数据，按 `generation` 过滤。
 - 状态机拒绝 `Closing`/`Released` 后的事件。
+- 同一 ABI version 内保留未知 event kind 和 malformed known payload；既有 kind 的
+  payload schema 不扩展，schema 变化必须分配新的 kind。
+- callback payload 最大 64 KiB，native dispatch 和 Rust callback 边界都拒绝超限长度。
 - `Disconnected` 区分用户关闭、网络、认证、证书、Gateway、服务端策略和未知错误。
 - 未知 code 保留原始数值，不能错误归类。
 

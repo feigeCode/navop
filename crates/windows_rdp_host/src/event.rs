@@ -7,7 +7,14 @@ use std::slice;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use crate::ffi::{ABI_VERSION, NavopRdpEvent};
+use crate::ffi::{
+    ABI_VERSION, EVENT_AUTHENTICATION_WARNING_DISMISSED, EVENT_AUTHENTICATION_WARNING_DISPLAYED,
+    EVENT_CLOSE_CONFIRMED, EVENT_CONNECTED, EVENT_CONNECTING, EVENT_DISCONNECTED,
+    EVENT_ENTER_FULLSCREEN, EVENT_FATAL_ERROR, EVENT_FOCUS_RELEASED, EVENT_LEAVE_FULLSCREEN,
+    EVENT_LOGIN_COMPLETE, EVENT_LOGON_ERROR, EVENT_NETWORK_STATUS_CHANGED, EVENT_RECONNECTED,
+    EVENT_RECONNECTING, EVENT_REMOTE_DESKTOP_SIZE_CHANGED, EVENT_WARNING, MAX_EVENT_PAYLOAD_BYTES,
+    NavopRdpEvent,
+};
 
 /// An owned event copied from the native callback boundary.
 ///
@@ -67,10 +74,11 @@ impl From<OwnedNativeEvent> for WindowsRdpRawEvent {
     }
 }
 
-/// Stable semantic event shape for the future ActiveX event sink.
+/// Stable semantic event shape for the ActiveX event sink.
 ///
-/// Native DISPID and payload decoding are deliberately not inferred here. A
-/// native event that is not yet understood remains available as `Unknown`.
+/// Native DISPID decoding stays on the native side. This layer decodes the
+/// architecture-independent byte protocol documented by `NavopRdpEvent`; an
+/// unknown kind or malformed known payload remains available as `Unknown`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsRdpEvent {
     HostReady {
@@ -140,8 +148,143 @@ pub enum WindowsRdpEvent {
 
 impl From<WindowsRdpRawEvent> for WindowsRdpEvent {
     fn from(event: WindowsRdpRawEvent) -> Self {
-        Self::Unknown { event }
+        let generation = event.generation;
+        let decoded = match event.kind {
+            EVENT_CONNECTING if has_no_code_or_payload(&event) => {
+                Some(Self::Connecting { generation })
+            }
+            EVENT_CONNECTED if has_no_code_or_payload(&event) => {
+                Some(Self::Connected { generation })
+            }
+            EVENT_LOGIN_COMPLETE if has_no_code_or_payload(&event) => {
+                Some(Self::LoginComplete { generation })
+            }
+            EVENT_RECONNECTING if event.code == 0 => {
+                decode_reconnecting(generation, &event.payload)
+            }
+            EVENT_RECONNECTED if has_no_code_or_payload(&event) => {
+                Some(Self::Reconnected { generation })
+            }
+            EVENT_NETWORK_STATUS_CHANGED if event.code == 0 => decode_optional_u32(&event.payload)
+                .map(|quality| Self::NetworkStatusChanged {
+                    generation,
+                    quality,
+                }),
+            EVENT_REMOTE_DESKTOP_SIZE_CHANGED if event.code == 0 => decode_u32_pair(&event.payload)
+                .map(|(width, height)| Self::RemoteDesktopSizeChanged {
+                    generation,
+                    width,
+                    height,
+                }),
+            EVENT_ENTER_FULLSCREEN if has_no_code_or_payload(&event) => {
+                Some(Self::FullscreenChanged {
+                    generation,
+                    fullscreen: true,
+                })
+            }
+            EVENT_LEAVE_FULLSCREEN if has_no_code_or_payload(&event) => {
+                Some(Self::FullscreenChanged {
+                    generation,
+                    fullscreen: false,
+                })
+            }
+            EVENT_AUTHENTICATION_WARNING_DISPLAYED if has_no_code_or_payload(&event) => {
+                Some(Self::AuthenticationWarning {
+                    generation,
+                    visible: true,
+                })
+            }
+            EVENT_AUTHENTICATION_WARNING_DISMISSED if has_no_code_or_payload(&event) => {
+                Some(Self::AuthenticationWarning {
+                    generation,
+                    visible: false,
+                })
+            }
+            EVENT_WARNING if event.payload.is_empty() => Some(Self::Warning {
+                generation,
+                code: event.code,
+            }),
+            EVENT_FATAL_ERROR if event.payload.is_empty() => Some(Self::FatalError {
+                generation,
+                code: event.code,
+            }),
+            EVENT_LOGON_ERROR if event.payload.is_empty() => Some(Self::LogonError {
+                generation,
+                code: event.code,
+            }),
+            EVENT_DISCONNECTED => {
+                decode_optional_i32(&event.payload).map(|extended_code| Self::Disconnected {
+                    generation,
+                    reason: crate::error::WindowsRdpDisconnectReason::unknown(
+                        event.code,
+                        extended_code,
+                    ),
+                })
+            }
+            EVENT_CLOSE_CONFIRMED if has_no_code_or_payload(&event) => {
+                Some(Self::CloseConfirmed { generation })
+            }
+            EVENT_FOCUS_RELEASED if has_no_code_or_payload(&event) => {
+                Some(Self::FocusReleased { generation })
+            }
+            _ => None,
+        };
+
+        decoded.unwrap_or(Self::Unknown { event })
     }
+}
+
+fn has_no_code_or_payload(event: &WindowsRdpRawEvent) -> bool {
+    event.code == 0 && event.payload.is_empty()
+}
+
+fn decode_reconnecting(generation: u64, payload: &[u8]) -> Option<WindowsRdpEvent> {
+    match payload.len() {
+        4 => Some(WindowsRdpEvent::Reconnecting {
+            generation,
+            attempt: decode_u32(payload)?,
+            max_attempts: None,
+        }),
+        8 => {
+            let (attempt, max_attempts) = decode_u32_pair(payload)?;
+            Some(WindowsRdpEvent::Reconnecting {
+                generation,
+                attempt,
+                max_attempts: Some(max_attempts),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn decode_optional_u32(payload: &[u8]) -> Option<Option<u32>> {
+    match payload.len() {
+        0 => Some(None),
+        4 => Some(Some(decode_u32(payload)?)),
+        _ => None,
+    }
+}
+
+fn decode_optional_i32(payload: &[u8]) -> Option<Option<i32>> {
+    match payload.len() {
+        0 => Some(None),
+        4 => Some(Some(i32::from_le_bytes(payload.try_into().ok()?))),
+        _ => None,
+    }
+}
+
+fn decode_u32(payload: &[u8]) -> Option<u32> {
+    Some(u32::from_le_bytes(payload.try_into().ok()?))
+}
+
+fn decode_u32_pair(payload: &[u8]) -> Option<(u32, u32)> {
+    if payload.len() != 8 {
+        return None;
+    }
+
+    let first = u32::from_le_bytes(payload[..4].try_into().ok()?);
+    let second = u32::from_le_bytes(payload[4..].try_into().ok()?);
+    Some((first, second))
 }
 
 impl EventBridge {
@@ -239,7 +382,11 @@ pub(crate) unsafe extern "C" fn native_event_callback(
         // SAFETY: The current layout was validated above.
         let code = unsafe { std::ptr::addr_of!((*event).code).read() };
         // SAFETY: The current layout was validated above.
-        let payload_len = unsafe { std::ptr::addr_of!((*event).payload_len).read() } as usize;
+        let payload_len = unsafe { std::ptr::addr_of!((*event).payload_len).read() };
+        if payload_len > MAX_EVENT_PAYLOAD_BYTES {
+            return;
+        }
+        let payload_len = payload_len as usize;
 
         let payload = if payload_len == 0 {
             &[]
@@ -262,6 +409,240 @@ pub(crate) unsafe extern "C" fn native_event_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn raw(kind: u32, code: i32, payload: impl Into<Vec<u8>>) -> WindowsRdpRawEvent {
+        WindowsRdpRawEvent {
+            generation: 42,
+            kind,
+            code,
+            payload: payload.into(),
+        }
+    }
+
+    #[test]
+    fn canonical_wire_events_decode_to_stable_semantics() {
+        let cases = [
+            (
+                raw(EVENT_CONNECTING, 0, []),
+                WindowsRdpEvent::Connecting { generation: 42 },
+            ),
+            (
+                raw(EVENT_CONNECTED, 0, []),
+                WindowsRdpEvent::Connected { generation: 42 },
+            ),
+            (
+                raw(EVENT_LOGIN_COMPLETE, 0, []),
+                WindowsRdpEvent::LoginComplete { generation: 42 },
+            ),
+            (
+                raw(EVENT_RECONNECTING, 0, 3_u32.to_le_bytes()),
+                WindowsRdpEvent::Reconnecting {
+                    generation: 42,
+                    attempt: 3,
+                    max_attempts: None,
+                },
+            ),
+            (
+                raw(
+                    EVENT_RECONNECTING,
+                    0,
+                    [3_u32.to_le_bytes(), 10_u32.to_le_bytes()].concat(),
+                ),
+                WindowsRdpEvent::Reconnecting {
+                    generation: 42,
+                    attempt: 3,
+                    max_attempts: Some(10),
+                },
+            ),
+            (
+                raw(EVENT_RECONNECTED, 0, []),
+                WindowsRdpEvent::Reconnected { generation: 42 },
+            ),
+            (
+                raw(EVENT_NETWORK_STATUS_CHANGED, 0, []),
+                WindowsRdpEvent::NetworkStatusChanged {
+                    generation: 42,
+                    quality: None,
+                },
+            ),
+            (
+                raw(EVENT_NETWORK_STATUS_CHANGED, 0, 87_u32.to_le_bytes()),
+                WindowsRdpEvent::NetworkStatusChanged {
+                    generation: 42,
+                    quality: Some(87),
+                },
+            ),
+            (
+                raw(
+                    EVENT_REMOTE_DESKTOP_SIZE_CHANGED,
+                    0,
+                    [1920_u32.to_le_bytes(), 1080_u32.to_le_bytes()].concat(),
+                ),
+                WindowsRdpEvent::RemoteDesktopSizeChanged {
+                    generation: 42,
+                    width: 1920,
+                    height: 1080,
+                },
+            ),
+            (
+                raw(EVENT_ENTER_FULLSCREEN, 0, []),
+                WindowsRdpEvent::FullscreenChanged {
+                    generation: 42,
+                    fullscreen: true,
+                },
+            ),
+            (
+                raw(EVENT_LEAVE_FULLSCREEN, 0, []),
+                WindowsRdpEvent::FullscreenChanged {
+                    generation: 42,
+                    fullscreen: false,
+                },
+            ),
+            (
+                raw(EVENT_AUTHENTICATION_WARNING_DISPLAYED, 0, []),
+                WindowsRdpEvent::AuthenticationWarning {
+                    generation: 42,
+                    visible: true,
+                },
+            ),
+            (
+                raw(EVENT_AUTHENTICATION_WARNING_DISMISSED, 0, []),
+                WindowsRdpEvent::AuthenticationWarning {
+                    generation: 42,
+                    visible: false,
+                },
+            ),
+            (
+                raw(EVENT_WARNING, -7, []),
+                WindowsRdpEvent::Warning {
+                    generation: 42,
+                    code: -7,
+                },
+            ),
+            (
+                raw(EVENT_FATAL_ERROR, i32::MIN, []),
+                WindowsRdpEvent::FatalError {
+                    generation: 42,
+                    code: i32::MIN,
+                },
+            ),
+            (
+                raw(EVENT_LOGON_ERROR, i32::MAX, []),
+                WindowsRdpEvent::LogonError {
+                    generation: 42,
+                    code: i32::MAX,
+                },
+            ),
+            (
+                raw(EVENT_DISCONNECTED, 2308, []),
+                WindowsRdpEvent::Disconnected {
+                    generation: 42,
+                    reason: crate::error::WindowsRdpDisconnectReason::unknown(2308, None),
+                },
+            ),
+            (
+                raw(EVENT_DISCONNECTED, 2308, (-55_i32).to_le_bytes()),
+                WindowsRdpEvent::Disconnected {
+                    generation: 42,
+                    reason: crate::error::WindowsRdpDisconnectReason::unknown(2308, Some(-55)),
+                },
+            ),
+            (
+                raw(EVENT_CLOSE_CONFIRMED, 0, []),
+                WindowsRdpEvent::CloseConfirmed { generation: 42 },
+            ),
+            (
+                raw(EVENT_FOCUS_RELEASED, 0, []),
+                WindowsRdpEvent::FocusReleased { generation: 42 },
+            ),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(WindowsRdpEvent::from(raw), expected);
+        }
+    }
+
+    #[test]
+    fn malformed_known_events_remain_complete_raw_events() {
+        let malformed = [
+            raw(EVENT_CONNECTING, 1, []),
+            raw(EVENT_CONNECTED, 0, [0]),
+            raw(EVENT_LOGIN_COMPLETE, 1, []),
+            raw(EVENT_RECONNECTING, 0, [1, 2, 3]),
+            raw(EVENT_RECONNECTING, 0, [0; 9]),
+            raw(EVENT_RECONNECTING, 1, 1_u32.to_le_bytes()),
+            raw(EVENT_RECONNECTED, 0, [0]),
+            raw(EVENT_NETWORK_STATUS_CHANGED, 0, [0; 3]),
+            raw(EVENT_NETWORK_STATUS_CHANGED, 0, [0; 5]),
+            raw(EVENT_NETWORK_STATUS_CHANGED, 1, []),
+            raw(EVENT_REMOTE_DESKTOP_SIZE_CHANGED, 0, [0; 7]),
+            raw(EVENT_REMOTE_DESKTOP_SIZE_CHANGED, 0, [0; 9]),
+            raw(
+                EVENT_REMOTE_DESKTOP_SIZE_CHANGED,
+                1,
+                [1_u32.to_le_bytes(), 2_u32.to_le_bytes()].concat(),
+            ),
+            raw(EVENT_ENTER_FULLSCREEN, 0, [0]),
+            raw(EVENT_LEAVE_FULLSCREEN, 1, []),
+            raw(EVENT_AUTHENTICATION_WARNING_DISPLAYED, 0, [0]),
+            raw(EVENT_AUTHENTICATION_WARNING_DISMISSED, 1, []),
+            raw(EVENT_WARNING, 9, [0]),
+            raw(EVENT_FATAL_ERROR, 9, [0]),
+            raw(EVENT_LOGON_ERROR, 9, [0]),
+            raw(EVENT_DISCONNECTED, 9, [0; 3]),
+            raw(EVENT_DISCONNECTED, 9, [0; 5]),
+            raw(EVENT_CLOSE_CONFIRMED, 0, [0]),
+            raw(EVENT_FOCUS_RELEASED, 1, []),
+        ];
+
+        for event in malformed {
+            let expected = event.clone();
+            assert_eq!(
+                WindowsRdpEvent::from(event),
+                WindowsRdpEvent::Unknown { event: expected }
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_event_kind_preserves_generation_code_and_payload() {
+        let event = raw(u32::MAX, i32::MIN, [1, 2, 3, 4]);
+        let expected = event.clone();
+
+        assert_eq!(
+            WindowsRdpEvent::from(event),
+            WindowsRdpEvent::Unknown { event: expected }
+        );
+    }
+
+    #[test]
+    fn disconnected_preserves_signed_32_bit_code_patterns() {
+        let event = raw(EVENT_DISCONNECTED, i32::MIN, i32::MAX.to_le_bytes());
+
+        assert_eq!(
+            WindowsRdpEvent::from(event),
+            WindowsRdpEvent::Disconnected {
+                generation: 42,
+                reason: crate::error::WindowsRdpDisconnectReason::unknown(i32::MIN, Some(i32::MAX),),
+            }
+        );
+    }
+
+    #[test]
+    fn callback_rejects_payloads_above_the_protocol_limit_before_reading_them() {
+        let bridge = EventBridge::new(42);
+        let event = NavopRdpEvent::current(42, EVENT_CONNECTED, 0, MAX_EVENT_PAYLOAD_BYTES + 1);
+
+        unsafe {
+            native_event_callback(
+                (&bridge as *const EventBridge).cast_mut().cast(),
+                &event,
+                std::ptr::dangling(),
+            );
+        }
+
+        assert!(bridge.drain().is_empty());
+    }
 
     #[test]
     fn raw_event_debug_redacts_opaque_payload_contents() {

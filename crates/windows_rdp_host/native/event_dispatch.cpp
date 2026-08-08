@@ -90,6 +90,9 @@ NavopRdpResult dispatch_event(
                 event->generation_high) != host->generation) {
             return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
         }
+        if (event->payload_len > NAVOP_RDP_MAX_EVENT_PAYLOAD_BYTES) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
         if (event->payload_len != UINT32_C(0) && payload == nullptr) {
             return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
         }

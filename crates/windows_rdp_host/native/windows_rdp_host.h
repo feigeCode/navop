@@ -96,6 +96,49 @@ typedef struct NavopRdpBounds {
     int32_t height;
 } NavopRdpBounds;
 
+#define NAVOP_RDP_EVENT_CONNECTING UINT32_C(1)
+#define NAVOP_RDP_EVENT_CONNECTED UINT32_C(2)
+#define NAVOP_RDP_EVENT_LOGIN_COMPLETE UINT32_C(3)
+#define NAVOP_RDP_EVENT_RECONNECTING UINT32_C(4)
+#define NAVOP_RDP_EVENT_RECONNECTED UINT32_C(5)
+#define NAVOP_RDP_EVENT_NETWORK_STATUS_CHANGED UINT32_C(6)
+#define NAVOP_RDP_EVENT_REMOTE_DESKTOP_SIZE_CHANGED UINT32_C(7)
+#define NAVOP_RDP_EVENT_ENTER_FULLSCREEN UINT32_C(8)
+#define NAVOP_RDP_EVENT_LEAVE_FULLSCREEN UINT32_C(9)
+#define NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISPLAYED UINT32_C(10)
+#define NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISMISSED UINT32_C(11)
+#define NAVOP_RDP_EVENT_WARNING UINT32_C(12)
+#define NAVOP_RDP_EVENT_FATAL_ERROR UINT32_C(13)
+#define NAVOP_RDP_EVENT_LOGON_ERROR UINT32_C(14)
+#define NAVOP_RDP_EVENT_DISCONNECTED UINT32_C(15)
+#define NAVOP_RDP_EVENT_CLOSE_CONFIRMED UINT32_C(16)
+#define NAVOP_RDP_EVENT_FOCUS_RELEASED UINT32_C(17)
+#define NAVOP_RDP_MAX_EVENT_PAYLOAD_BYTES UINT32_C(65536)
+
+/*
+ * Event payloads are an architecture-independent byte protocol, not copied C
+ * structs. Every integer is little-endian and every known event accepts only
+ * the exact payload forms listed below:
+ *
+ * - Connecting, Connected, LoginComplete, Reconnected, enter/leave fullscreen,
+ *   authentication warning displayed/dismissed, CloseConfirmed, FocusReleased:
+ *   code == 0 and payload_len == 0.
+ * - Reconnecting: code == 0 and payload is attempt:u32 followed by an optional
+ *   max_attempts:u32 (payload_len is 4 or 8).
+ * - NetworkStatusChanged: code == 0 and payload is an optional quality:u32
+ *   (payload_len is 0 or 4).
+ * - RemoteDesktopSizeChanged: code == 0 and payload is width:u32, height:u32
+ *   (payload_len is 8).
+ * - Warning, FatalError, LogonError: code carries the raw native code and
+ *   payload_len == 0.
+ * - Disconnected: code carries the raw signed 32-bit disconnect code and
+ *   payload is an optional extended_code:i32 (payload_len is 0 or 4).
+ *
+ * Within the same ABI version, unknown kinds and malformed known payloads must
+ * be preserved as opaque raw events by consumers. Existing kind values and
+ * payload schemas are immutable; additions or schema changes must use new kind
+ * values. payload_len must not exceed NAVOP_RDP_MAX_EVENT_PAYLOAD_BYTES.
+ */
 typedef struct NavopRdpEvent {
     uint32_t struct_size;
     uint32_t abi_version;

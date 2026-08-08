@@ -3,11 +3,13 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi::{
-    ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult,
-    NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds, NavopRdpConnectionOptions,
-    NavopRdpCreateOptions, NavopRdpCreateWithParentOptions, NavopRdpCredentialBundle,
-    NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT,
-    RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
+    ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, EVENT_CONNECTED,
+    EVENT_REMOTE_DESKTOP_SIZE_CHANGED, MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost,
+    NativeResult, NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds,
+    NavopRdpConnectionOptions, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
+    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH,
+    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE,
+    RESULT_WRONG_THREAD,
 };
 
 unsafe extern "C" {
@@ -160,6 +162,14 @@ fn assert_invalid_events_rejected(
         host,
         &invalid,
         ptr::null(),
+        RESULT_INVALID_ARGUMENT,
+        context,
+    );
+    invalid = event(generation, 1, 0, MAX_EVENT_PAYLOAD_BYTES + 1);
+    assert_dispatch_rejected(
+        host,
+        &invalid,
+        ptr::dangling(),
         RESULT_INVALID_ARGUMENT,
         context,
     );
@@ -438,7 +448,7 @@ fn native_dispatch_rejects_invalid_events_without_poisoning_callback() {
 
     assert_invalid_events_rejected(host, generation, &context);
 
-    let valid = event(generation, 2, 3, 0);
+    let valid = event(generation, EVENT_CONNECTED, 0, 0);
     assert_eq!(
         unsafe { navop_rdp_test_dispatch_event(host, &valid, ptr::null()) },
         RESULT_OK
@@ -470,8 +480,13 @@ fn native_dispatch_invokes_the_registered_callback_once() {
             (&mut context as *mut RecordingContext).cast(),
         );
     }
-    let payload = [1, 2, 3, 4];
-    let native_event = event(generation, 7, -9, payload.len() as u32);
+    let payload = [1920_u32.to_le_bytes(), 1080_u32.to_le_bytes()].concat();
+    let native_event = event(
+        generation,
+        EVENT_REMOTE_DESKTOP_SIZE_CHANGED,
+        0,
+        payload.len() as u32,
+    );
 
     assert_eq!(
         unsafe { navop_rdp_test_dispatch_event(host, &native_event, payload.as_ptr()) },
@@ -479,8 +494,8 @@ fn native_dispatch_invokes_the_registered_callback_once() {
     );
     assert_eq!(context.calls, 1);
     assert_eq!(context.generation, generation);
-    assert_eq!(context.kind, 7);
-    assert_eq!(context.code, -9);
+    assert_eq!(context.kind, EVENT_REMOTE_DESKTOP_SIZE_CHANGED);
+    assert_eq!(context.code, 0);
     assert_eq!(context.payload, payload);
 
     assert_eq!(

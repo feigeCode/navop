@@ -23,6 +23,25 @@ pub(crate) const CONNECTION_STATE_CONNECTING: u32 = 2;
 pub(crate) const REQUEST_CLOSE_CAN_PROCEED: u32 = 0;
 pub(crate) const REQUEST_CLOSE_WAIT_FOR_EVENTS: u32 = 1;
 
+pub(crate) const EVENT_CONNECTING: u32 = 1;
+pub(crate) const EVENT_CONNECTED: u32 = 2;
+pub(crate) const EVENT_LOGIN_COMPLETE: u32 = 3;
+pub(crate) const EVENT_RECONNECTING: u32 = 4;
+pub(crate) const EVENT_RECONNECTED: u32 = 5;
+pub(crate) const EVENT_NETWORK_STATUS_CHANGED: u32 = 6;
+pub(crate) const EVENT_REMOTE_DESKTOP_SIZE_CHANGED: u32 = 7;
+pub(crate) const EVENT_ENTER_FULLSCREEN: u32 = 8;
+pub(crate) const EVENT_LEAVE_FULLSCREEN: u32 = 9;
+pub(crate) const EVENT_AUTHENTICATION_WARNING_DISPLAYED: u32 = 10;
+pub(crate) const EVENT_AUTHENTICATION_WARNING_DISMISSED: u32 = 11;
+pub(crate) const EVENT_WARNING: u32 = 12;
+pub(crate) const EVENT_FATAL_ERROR: u32 = 13;
+pub(crate) const EVENT_LOGON_ERROR: u32 = 14;
+pub(crate) const EVENT_DISCONNECTED: u32 = 15;
+pub(crate) const EVENT_CLOSE_CONFIRMED: u32 = 16;
+pub(crate) const EVENT_FOCUS_RELEASED: u32 = 17;
+pub(crate) const MAX_EVENT_PAYLOAD_BYTES: u32 = 65_536;
+
 #[repr(C)]
 pub(crate) struct NativeRdpHost {
     _private: [u8; 0],
