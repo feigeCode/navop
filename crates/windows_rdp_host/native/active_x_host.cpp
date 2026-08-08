@@ -146,6 +146,20 @@ NavopRdpResult create_active_x_resources(
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
 
+    CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
+    const HRESULT non_scriptable_result =
+        resources->state.control->QueryInterface(
+            IID_PPV_ARGS(&non_scriptable));
+    if (FAILED(non_scriptable_result) || non_scriptable == nullptr) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    const HRESULT ui_parent_result =
+        non_scriptable->put_UIParentWindowHandle(parent);
+    if (FAILED(ui_parent_result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
     *out_resources = resources.release();
     return NAVOP_RDP_RESULT_OK;
 }

@@ -1378,6 +1378,25 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   parent rebuild、z-order/overlay、100x create/show/hide/resize/destroy smoke
   尚未完成，Task 3 整体仍未完成。
 
+**Execution Notes (2026-08-08) — 第三垂直切片：ActiveX UI parent window：**
+
+- `UIParentWindowHandle` 属于 `IMsRdpClientNonScriptable2`，不属于
+  `IMsRdpClientAdvancedSettings*`；创建流程在 query `IMsRdpClient10` 成功后，
+  从同一个 control query `IMsRdpClientNonScriptable2`。
+- `put_UIParentWindowHandle` 直接接收已校验的原生 `HWND`；不经过 `LONG`、`long`
+  或其他 32-bit 中间值，保持 x86/x64 pointer-width handle 语义。
+- UI parent setter 成功后才将 resources 从 `unique_ptr` 转交给 host；interface query
+  或 setter 失败会在 ownership transfer 前返回，并沿既有 RAII 路径销毁 child、
+  释放 COM references、终止 ATL/OLE。
+- contract test 锁定 control/client query、non-scriptable query、UI parent setter、
+  HRESULT 检查与 `resources.release()` 的顺序，并继续禁止 host 销毁 caller-owned
+  parent 或重挂载 child。
+- 本 macOS 环境没有目标 Windows 注册的 MSTSC type library、MSVC/ATL 或真实
+  ActiveX runtime；`mstscax.tlh` 的生成签名、Windows compile/link 与对话框 owner
+  runtime 行为仍须 Windows CI/VM 验证。
+- connect、DPI/GPUI integration、parent rebuild、z-order/overlay 与 100x
+  create/show/hide/resize/destroy resource smoke 尚未完成，Task 3 整体仍未完成。
+
 ---
 
 ### Task 4: host/port 最小连接垂直切片

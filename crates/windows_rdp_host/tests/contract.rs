@@ -855,6 +855,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "CComPtr<IUnknown> container;",
             "CComPtr<IUnknown> control;",
             "CComPtr<IMsRdpClient10> client;",
+            "CComPtr<IMsRdpClientNonScriptable2> non_scriptable;",
             "OleInitialize(nullptr)",
             "AtlAxWinInit()",
             "CreateWindowExW(",
@@ -864,6 +865,8 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}",
             "QueryInterface(",
             "IID_PPV_ARGS(&resources->state.client)",
+            "IID_PPV_ARGS(&non_scriptable)",
+            "put_UIParentWindowHandle(parent)",
             "*out_resources = resources.release();",
             "validate_resources(",
             "IsWindow(",
@@ -884,6 +887,26 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
     );
     assert_tokens_in_scope(
         source,
+        "NavopRdpResult create_active_x_resources(",
+        "\n}\n\nvoid destroy_active_x_resources",
+        &[
+            "const HWND parent = reinterpret_cast<HWND>(parent_hwnd);",
+            "resources->state.parent_window = parent;",
+            "OleInitialize(nullptr)",
+            "AtlAxWinInit()",
+            "CreateWindowExW(",
+            "const HRESULT control_result = create_rdp_control(resources->state);",
+            "IID_PPV_ARGS(&resources->state.client)",
+            "CComPtr<IMsRdpClientNonScriptable2> non_scriptable;",
+            "IID_PPV_ARGS(&non_scriptable)",
+            "if (FAILED(non_scriptable_result) || non_scriptable == nullptr)",
+            "const HRESULT ui_parent_result =\n        non_scriptable->put_UIParentWindowHandle(parent);",
+            "if (FAILED(ui_parent_result))",
+            "*out_resources = resources.release();",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
         "~ActiveXCleanup() noexcept",
         "\n    }\n};",
         &[
@@ -895,7 +918,21 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "OleUninitialize();",
         ],
     );
-    assert_excludes_all(source, &["DestroyWindow(parent)", "SetParent("]);
+    assert_excludes_all(
+        source,
+        &[
+            "DestroyWindow(parent)",
+            "SetParent(",
+            "put_UIParentWindowHandle(static_cast<LONG>",
+            "put_UIParentWindowHandle(static_cast<long>",
+            "put_UIParentWindowHandle(static_cast<LONG_PTR>",
+            "put_UIParentWindowHandle(static_cast<long long>",
+            "put_UIParentWindowHandle(reinterpret_cast<LONG>",
+            "put_UIParentWindowHandle(reinterpret_cast<LONG_PTR>",
+            "put_UIParentWindowHandle((LONG)",
+            "put_UIParentWindowHandle((long)",
+        ],
+    );
 }
 
 #[test]
