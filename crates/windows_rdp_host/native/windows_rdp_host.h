@@ -60,6 +60,18 @@ typedef struct NavopRdpCreateWithParentOptions {
     uintptr_t parent_hwnd;
 } NavopRdpCreateWithParentOptions;
 
+/*
+ * Bounds are expressed in the parent window's client-area physical pixels.
+ * x and y may be negative; width and height must be non-negative. Zero-sized
+ * bounds are valid and keep the child from presenting content.
+ */
+typedef struct NavopRdpBounds {
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+} NavopRdpBounds;
+
 typedef struct NavopRdpEvent {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -165,6 +177,12 @@ static_assert(alignof(NavopRdpCreateWithParentOptions) == 4);
 #else
 #error Unsupported pointer width for the Windows RDP create-with-parent ABI
 #endif
+static_assert(sizeof(NavopRdpBounds) == 16);
+static_assert(alignof(NavopRdpBounds) == 4);
+static_assert(offsetof(NavopRdpBounds, x) == 0);
+static_assert(offsetof(NavopRdpBounds, y) == 4);
+static_assert(offsetof(NavopRdpBounds, width) == 8);
+static_assert(offsetof(NavopRdpBounds, height) == 12);
 static_assert(sizeof(NavopRdpEvent) == 32);
 static_assert(alignof(NavopRdpEvent) == 4);
 static_assert(offsetof(NavopRdpEvent, struct_size) == 0);
@@ -223,6 +241,22 @@ NavopRdpResult navop_rdp_create(
 NavopRdpResult navop_rdp_create_with_parent(
     const NavopRdpCreateWithParentOptions* options,
     NativeRdpHost** out_host) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_set_bounds(
+    NativeRdpHost* host,
+    const NavopRdpBounds* bounds) NAVOP_RDP_NOEXCEPT;
+
+/*
+ * visible must be exactly 0 or 1. Showing uses non-activating Win32 semantics.
+ * Hiding first attempts to return keyboard focus to the caller-owned parent when
+ * focus is currently inside the ActiveX child subtree.
+ */
+NavopRdpResult navop_rdp_set_visible(
+    NativeRdpHost* host,
+    uint32_t visible) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_focus(
+    NativeRdpHost* host) NAVOP_RDP_NOEXCEPT;
 
 NavopRdpResult navop_rdp_register_event_callback(
     NativeRdpHost* host,

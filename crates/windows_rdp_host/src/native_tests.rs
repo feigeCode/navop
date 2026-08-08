@@ -4,9 +4,10 @@ use std::ptr;
 
 use crate::ffi::{
     ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult,
-    NavopRdpBorrowedSecret, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
+    NavopRdpBorrowedSecret, NavopRdpBounds, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
     NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH,
-    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_WRONG_THREAD,
+    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE,
+    RESULT_WRONG_THREAD,
 };
 
 unsafe extern "C" {
@@ -18,6 +19,12 @@ unsafe extern "C" {
         options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
     ) -> NativeResult;
+    fn navop_rdp_set_bounds(
+        host: *mut NativeRdpHost,
+        bounds: *const NavopRdpBounds,
+    ) -> NativeResult;
+    fn navop_rdp_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
+    fn navop_rdp_focus(host: *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_register_event_callback(
         host: *mut NativeRdpHost,
         options: *const NavopRdpEventCallbackOptions,
@@ -267,6 +274,103 @@ fn native_create_with_parent_rejects_a_parent_owned_by_another_thread() {
     assert!(result.1);
     assert_eq!(unsafe { IsWindow(parent) }, 1);
     assert_eq!(unsafe { DestroyWindow(parent) }, 1);
+}
+
+#[test]
+fn native_presentation_controls_validate_lifecycle_thread_and_arguments() {
+    let generation = 0x1122_3344_aabb_ccdd;
+    let bounds = NavopRdpBounds::new(-4, 8, 640, 480);
+
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(ptr::null_mut(), &bounds) },
+        RESULT_INVALID_ARGUMENT
+    );
+    let mut host = unsafe { create_host(generation) };
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    let negative_width = NavopRdpBounds::new(0, 0, -1, 1);
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, &negative_width) },
+        RESULT_INVALID_ARGUMENT
+    );
+    let negative_height = NavopRdpBounds::new(0, 0, 1, -1);
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, &negative_height) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, &bounds) },
+        RESULT_UNAVAILABLE
+    );
+
+    assert_eq!(
+        unsafe { navop_rdp_set_visible(ptr::null_mut(), 0) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_visible(host, 2) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_visible(host, 1) },
+        RESULT_UNAVAILABLE
+    );
+
+    assert_eq!(
+        unsafe { navop_rdp_focus(ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(unsafe { navop_rdp_focus(host) }, RESULT_UNAVAILABLE);
+
+    let host_address = host as usize;
+    let wrong_thread_bounds = bounds;
+    let wrong_thread_results = std::thread::spawn(move || {
+        let host = host_address as *mut NativeRdpHost;
+        (
+            unsafe { navop_rdp_set_bounds(host, &wrong_thread_bounds) },
+            unsafe { navop_rdp_set_visible(host, 1) },
+            unsafe { navop_rdp_focus(host) },
+        )
+    })
+    .join()
+    .expect("wrong-thread presentation test worker should finish");
+    assert_eq!(
+        wrong_thread_results,
+        (
+            RESULT_WRONG_THREAD,
+            RESULT_WRONG_THREAD,
+            RESULT_WRONG_THREAD
+        )
+    );
+
+    assert_eq!(
+        unsafe {
+            navop_rdp_register_event_callback(
+                host,
+                &NavopRdpEventCallbackOptions::current(generation),
+                Some(record_callback),
+                ptr::null_mut(),
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, &bounds) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_visible(host, 0) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(unsafe { navop_rdp_focus(host) }, RESULT_INVALID_ARGUMENT);
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
 }
 
 #[derive(Default)]

@@ -17,6 +17,7 @@ namespace {
 struct ActiveXCleanup {
     bool ole_initialized = false;
     bool atl_initialized = false;
+    HWND parent_window = nullptr;
     HWND child_window = nullptr;
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
@@ -53,11 +54,38 @@ HRESULT create_rdp_control(ActiveXCleanup& resources) noexcept {
         nullptr);
 }
 
+bool window_or_descendant_has_focus(HWND window) noexcept {
+    const HWND focused = GetFocus();
+    return focused != nullptr &&
+        (focused == window || IsChild(window, focused));
+}
+
+NavopRdpResult validate_resources(
+    NativeRdpActiveXResources* resources) noexcept;
+
 }  // namespace
 
 struct NativeRdpActiveXResources {
     ActiveXCleanup state;
 };
+
+namespace {
+
+NavopRdpResult validate_resources(
+    NativeRdpActiveXResources* resources) noexcept {
+    if (resources == nullptr ||
+        resources->state.parent_window == nullptr ||
+        resources->state.child_window == nullptr) {
+        return NAVOP_RDP_RESULT_UNAVAILABLE;
+    }
+    if (!IsWindow(resources->state.parent_window) ||
+        !IsWindow(resources->state.child_window)) {
+        return NAVOP_RDP_RESULT_UNAVAILABLE;
+    }
+    return NAVOP_RDP_RESULT_OK;
+}
+
+}  // namespace
 
 NavopRdpResult create_active_x_resources(
     uintptr_t parent_hwnd,
@@ -77,6 +105,7 @@ NavopRdpResult create_active_x_resources(
     if (!resources) {
         return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
     }
+    resources->state.parent_window = parent;
 
     const HRESULT ole_result = OleInitialize(nullptr);
     if (FAILED(ole_result)) {
@@ -124,4 +153,74 @@ NavopRdpResult create_active_x_resources(
 void destroy_active_x_resources(
     NativeRdpActiveXResources* resources) noexcept {
     delete resources;
+}
+
+NavopRdpResult set_active_x_bounds(
+    NativeRdpActiveXResources* resources,
+    const NavopRdpBounds& bounds) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+    if (bounds.width < 0 || bounds.height < 0) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+
+    if (!SetWindowPos(
+            resources->state.child_window,
+            nullptr,
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height,
+            SWP_NOZORDER | SWP_NOACTIVATE)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult set_active_x_visible(
+    NativeRdpActiveXResources* resources,
+    bool visible) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+
+    if (!visible &&
+        window_or_descendant_has_focus(resources->state.child_window)) {
+        SetFocus(resources->state.parent_window);
+    }
+    ShowWindow(
+        resources->state.child_window,
+        visible ? SW_SHOWNA : SW_HIDE);
+
+    const LONG_PTR style = GetWindowLongPtrW(
+        resources->state.child_window,
+        GWL_STYLE);
+    const bool has_visible_style = (style & WS_VISIBLE) != 0;
+    if (has_visible_style != visible) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult focus_active_x(
+    NativeRdpActiveXResources* resources) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+    if ((GetWindowLongPtrW(
+             resources->state.child_window,
+             GWL_STYLE) &
+         WS_VISIBLE) == 0) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+
+    SetFocus(resources->state.child_window);
+    if (!window_or_descendant_has_focus(resources->state.child_window)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    return NAVOP_RDP_RESULT_OK;
 }

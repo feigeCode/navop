@@ -192,6 +192,71 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent(
     }
 }
 
+extern "C" NavopRdpResult navop_rdp_set_bounds(
+    NativeRdpHost* host,
+    const NavopRdpBounds* bounds) noexcept {
+    try {
+        if (host == nullptr || bounds == nullptr ||
+            bounds->width < 0 || bounds->height < 0) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        const NavopRdpResult owner_result = ensure_owner_thread(host);
+        if (owner_result != NAVOP_RDP_RESULT_OK) {
+            return owner_result;
+        }
+        if (host->callback_state != CallbackState::Open) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        return set_active_x_bounds(host->active_x_resources, *bounds);
+    } catch (...) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+}
+
+extern "C" NavopRdpResult navop_rdp_set_visible(
+    NativeRdpHost* host,
+    uint32_t visible) noexcept {
+    try {
+        if (host == nullptr || visible > UINT32_C(1)) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        const NavopRdpResult owner_result = ensure_owner_thread(host);
+        if (owner_result != NAVOP_RDP_RESULT_OK) {
+            return owner_result;
+        }
+        if (host->callback_state != CallbackState::Open) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        return set_active_x_visible(
+            host->active_x_resources,
+            visible == UINT32_C(1));
+    } catch (...) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+}
+
+extern "C" NavopRdpResult navop_rdp_focus(
+    NativeRdpHost* host) noexcept {
+    try {
+        if (host == nullptr) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        const NavopRdpResult owner_result = ensure_owner_thread(host);
+        if (owner_result != NAVOP_RDP_RESULT_OK) {
+            return owner_result;
+        }
+        if (host->callback_state != CallbackState::Open) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        return focus_active_x(host->active_x_resources);
+    } catch (...) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+}
+
 extern "C" NavopRdpResult navop_rdp_register_event_callback(
     NativeRdpHost* host,
     const NavopRdpEventCallbackOptions* options,

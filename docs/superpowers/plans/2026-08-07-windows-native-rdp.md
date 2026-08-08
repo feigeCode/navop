@@ -1354,11 +1354,29 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - Known limitations:
   - Windows MSVC/ATL compile、`#import` type-library resolution、x86/x64 link、
     ActiveX create/query/destroy 与多 host ATL lifetime 仍需 Windows CI/VM 验证。
-  - `UIParentWindowHandle`、bounds、show/hide、focus、connect 与 repeated
-    create/destroy resource-leak smoke 留给 Task 3 后续切片。
+  - `UIParentWindowHandle`、connect、GPUI integration 与 repeated create/destroy
+    resource-leak smoke 留给 Task 3 后续切片。
 - Decision changes:
   - 不扩展既有 16-byte `NavopRdpCreateOptions`；parent create 使用独立 ABI version，
     以保持已发布布局不变。
+
+**Execution Notes (2026-08-08) — 第二垂直切片：ActiveX child presentation controls：**
+
+- 新增固定宽度 `NavopRdpBounds` ABI 与 `navop_rdp_set_bounds`、
+  `navop_rdp_set_visible`、`navop_rdp_focus` entrypoints；Rust FFI/facade、
+  fake bindings、contract tests 与 native lifecycle-only validation 已同步覆盖。
+- bounds 使用 parent client-area physical pixels；`x/y` 可为负，`width/height`
+  必须非负，zero-sized bounds 合法。
+- show 使用 `SW_SHOWNA`，hide 使用 `SW_HIDE`；隐藏前若焦点位于 child 或其
+  descendant，best-effort 将焦点交还 caller-owned parent；focus 只接受 visible
+  child，并允许最终焦点落在 child descendant。
+- 三个 presentation entrypoint 均要求 owner thread 与 `CallbackState::Open`；
+  lifecycle-only host 没有 ActiveX resources，因此 presentation 调用返回
+  `UNAVAILABLE`；关闭 gate 后返回 `INVALID_ARGUMENT`。
+- 本 macOS 环境仅验证 Rust/contract/cfg type-check；Windows MSVC/ATL/ActiveX
+  runtime 尚未验证。`UIParentWindowHandle`、connect、DPI/GPUI integration、
+  parent rebuild、z-order/overlay、100x create/show/hide/resize/destroy smoke
+  尚未完成，Task 3 整体仍未完成。
 
 ---
 

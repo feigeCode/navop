@@ -17,6 +17,17 @@ NavopRdpResult create_active_x_resources(
 void destroy_active_x_resources(
     NativeRdpActiveXResources* resources) noexcept;
 
+NavopRdpResult set_active_x_bounds(
+    NativeRdpActiveXResources* resources,
+    const NavopRdpBounds& bounds) noexcept;
+
+NavopRdpResult set_active_x_visible(
+    NativeRdpActiveXResources* resources,
+    bool visible) noexcept;
+
+NavopRdpResult focus_active_x(
+    NativeRdpActiveXResources* resources) noexcept;
+
 struct NativeRdpHost {
     ~NativeRdpHost() noexcept;
 

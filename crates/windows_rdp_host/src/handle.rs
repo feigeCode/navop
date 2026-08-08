@@ -8,7 +8,7 @@ use crate::credential::WindowsRdpCredentialBundle;
 use crate::error::{WindowsRdpHostError, check_native_result};
 use crate::event::{EventBridge, native_event_callback};
 use crate::ffi::{
-    NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpCreateOptions,
+    NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpBounds, NavopRdpCreateOptions,
     NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions, NavopRdpProbeOptions,
     NavopRdpProbeResult,
 };
@@ -93,6 +93,67 @@ impl WindowsRdpHost {
         // - the native contract does not retain either borrowed pointer after
         //   returning from the synchronous ABI entrypoint.
         let result = unsafe { (self.bindings.apply_credentials)(self.raw, &native_credentials) };
+        check_native_result(result)
+    }
+
+    /// Sets the ActiveX child bounds in physical pixels relative to the
+    /// caller-owned parent client area.
+    ///
+    /// `x` and `y` may be negative. `width` and `height` must be non-negative,
+    /// and zero-sized bounds are valid. This operation is owner-thread
+    /// serialized and does not change visibility or activation state.
+    pub fn set_bounds(
+        &mut self,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+        if width < 0 || height < 0 {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let bounds = NavopRdpBounds::new(x, y, width, height);
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - bounds is a current-layout stack value live for the synchronous call.
+        // - the native boundary does not retain the borrowed bounds pointer.
+        let result = unsafe { (self.bindings.set_bounds)(self.raw, &bounds) };
+        check_native_result(result)
+    }
+
+    /// Shows or hides the ActiveX child without activating it.
+    ///
+    /// Hiding attempts to return focus toward the caller-owned parent when focus is
+    /// currently inside the child subtree. This operation is owner-thread
+    /// serialized and does not change the Rust lifecycle.
+    pub fn set_visible(&mut self, visible: bool) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - the C ABI uses an explicit 0/1 integer rather than C++ bool.
+        let result = unsafe { (self.bindings.set_visible)(self.raw, u32::from(visible)) };
+        check_native_result(result)
+    }
+
+    /// Gives keyboard focus to the visible ActiveX child.
+    ///
+    /// The native control may transfer focus to a descendant window. This
+    /// operation is owner-thread serialized and does not change the lifecycle.
+    pub fn focus(&mut self) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        let result = unsafe { (self.bindings.focus)(self.raw) };
         check_native_result(result)
     }
 
@@ -293,6 +354,14 @@ mod tests {
         credential_calls: usize,
         credential_results: std::collections::VecDeque<NativeResult>,
         captured_credentials: Vec<(Vec<u16>, Vec<u16>)>,
+        bounds_calls: usize,
+        captured_bounds: Vec<(i32, i32, i32, i32)>,
+        bounds_results: std::collections::VecDeque<NativeResult>,
+        visible_calls: usize,
+        captured_visibility: Vec<bool>,
+        visible_results: std::collections::VecDeque<NativeResult>,
+        focus_calls: usize,
+        focus_results: std::collections::VecDeque<NativeResult>,
         parent_create_calls: usize,
         captured_parent_create: Option<(u64, usize)>,
         call_order: Vec<&'static str>,
@@ -315,6 +384,14 @@ mod tests {
                 credential_calls: 0,
                 credential_results: std::collections::VecDeque::new(),
                 captured_credentials: Vec::new(),
+                bounds_calls: 0,
+                captured_bounds: Vec::new(),
+                bounds_results: std::collections::VecDeque::new(),
+                visible_calls: 0,
+                captured_visibility: Vec::new(),
+                visible_results: std::collections::VecDeque::new(),
+                focus_calls: 0,
+                focus_results: std::collections::VecDeque::new(),
                 parent_create_calls: 0,
                 captured_parent_create: None,
                 call_order: Vec::new(),
@@ -417,6 +494,26 @@ mod tests {
 
     fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>)> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_credentials.clone())
+    }
+
+    fn bounds_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().bounds_calls)
+    }
+
+    fn captured_bounds() -> Vec<(i32, i32, i32, i32)> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_bounds.clone())
+    }
+
+    fn visible_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().visible_calls)
+    }
+
+    fn captured_visibility() -> Vec<bool> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_visibility.clone())
+    }
+
+    fn focus_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().focus_calls)
     }
 
     fn call_order() -> Vec<&'static str> {
@@ -715,11 +812,56 @@ mod tests {
         RESULT_OK
     }
 
+    unsafe fn fake_set_bounds(
+        host: *mut NativeRdpHost,
+        bounds: *const crate::ffi::NavopRdpBounds,
+    ) -> NativeResult {
+        if host.is_null() || bounds.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        let bounds = unsafe { &*bounds };
+        let result = FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.bounds_calls += 1;
+            state
+                .captured_bounds
+                .push((bounds.x, bounds.y, bounds.width, bounds.height));
+            state.bounds_results.pop_front().unwrap_or(RESULT_OK)
+        });
+        result
+    }
+
+    unsafe fn fake_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult {
+        if host.is_null() || visible > 1 {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.visible_calls += 1;
+            state.captured_visibility.push(visible == 1);
+            state.visible_results.pop_front().unwrap_or(RESULT_OK)
+        })
+    }
+
+    unsafe fn fake_focus(host: *mut NativeRdpHost) -> NativeResult {
+        if host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.focus_calls += 1;
+            state.focus_results.pop_front().unwrap_or(RESULT_OK)
+        })
+    }
+
     fn bindings_with_probe(probe: ProbeFn, create: crate::ffi::CreateFn) -> NativeBindings {
         NativeBindings {
             probe,
             create,
             create_with_parent: fake_create_with_parent,
+            set_bounds: fake_set_bounds,
+            set_visible: fake_set_visible,
+            focus: fake_focus,
             destroy: fake_destroy,
             register_event_callback: fake_register_event_callback,
             unregister_event_callback: fake_unregister_event_callback,
@@ -1019,6 +1161,108 @@ mod tests {
             Err(WindowsRdpHostError::InvalidArgument)
         );
         assert_eq!(credential_calls(), 0);
+    }
+
+    #[test]
+    fn presentation_controls_forward_bounds_visibility_and_focus() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        host.set_bounds(-10, 20, 800, 600)
+            .expect("bounds should be forwarded");
+        host.set_visible(true).expect("show should be forwarded");
+        host.focus().expect("focus should be forwarded");
+        host.set_visible(false).expect("hide should be forwarded");
+
+        assert_eq!(bounds_calls(), 1);
+        assert_eq!(captured_bounds(), vec![(-10, 20, 800, 600)]);
+        assert_eq!(visible_calls(), 2);
+        assert_eq!(captured_visibility(), vec![true, false]);
+        assert_eq!(focus_calls(), 1);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn negative_presentation_dimensions_are_rejected_before_native_call() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.set_bounds(0, 0, -1, 10),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.set_bounds(0, 0, 10, -1),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(bounds_calls(), 0);
+        assert!(captured_bounds().is_empty());
+    }
+
+    #[test]
+    fn presentation_failures_map_without_changing_lifecycle() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.bounds_results.push_back(RESULT_ALLOCATION_FAILED);
+            state.visible_results.push_back(RESULT_INTERNAL_ERROR);
+            state.focus_results.push_back(RESULT_INVALID_ARGUMENT);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.set_bounds(0, 0, 640, 480),
+            Err(WindowsRdpHostError::AllocationFailed)
+        );
+        assert_eq!(host.set_visible(true), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.focus(), Err(WindowsRdpHostError::InvalidArgument));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+        assert_eq!(bounds_calls(), 1);
+        assert_eq!(visible_calls(), 1);
+        assert_eq!(focus_calls(), 1);
+    }
+
+    #[test]
+    fn presentation_controls_are_rejected_before_native_when_closing_or_closed() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().unregister_failures_remaining = 1;
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert_eq!(
+            host.set_bounds(0, 0, 640, 480),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.set_visible(true),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(host.focus(), Err(WindowsRdpHostError::InvalidArgument));
+        assert_eq!((bounds_calls(), visible_calls(), focus_calls()), (0, 0, 0));
+
+        host.close().expect("closing host should remain retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
+        assert_eq!(
+            host.set_bounds(0, 0, 640, 480),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.set_visible(false),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(host.focus(), Err(WindowsRdpHostError::InvalidArgument));
+        assert_eq!((bounds_calls(), visible_calls(), focus_calls()), (0, 0, 0));
     }
 
     #[test]

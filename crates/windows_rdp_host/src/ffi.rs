@@ -103,6 +103,26 @@ impl NavopRdpCreateWithParentOptions {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NavopRdpBounds {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+}
+
+impl NavopRdpBounds {
+    pub(crate) const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+#[repr(C)]
 pub(crate) struct NavopRdpEvent {
     pub(crate) struct_size: u32,
     pub(crate) abi_version: u32,
@@ -182,6 +202,13 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, generation_high) == 12);
     assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, parent_hwnd) == 16);
 
+    assert!(size_of::<NavopRdpBounds>() == 16);
+    assert!(align_of::<NavopRdpBounds>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpBounds, x) == 0);
+    assert!(std::mem::offset_of!(NavopRdpBounds, y) == 4);
+    assert!(std::mem::offset_of!(NavopRdpBounds, width) == 8);
+    assert!(std::mem::offset_of!(NavopRdpBounds, height) == 12);
+
     assert!(size_of::<NavopRdpEvent>() == 32);
     assert!(align_of::<NavopRdpEvent>() == 4);
     assert!(std::mem::offset_of!(NavopRdpEvent, struct_size) == 0);
@@ -258,6 +285,10 @@ pub(crate) type CreateWithParentFn = unsafe fn(
     options: *const NavopRdpCreateWithParentOptions,
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult;
+pub(crate) type SetBoundsFn =
+    unsafe fn(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) -> NativeResult;
+pub(crate) type SetVisibleFn = unsafe fn(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
+pub(crate) type FocusFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
 pub(crate) type DestroyFn = unsafe fn(host: *mut *mut NativeRdpHost) -> NativeResult;
 pub(crate) type RegisterEventCallbackFn = unsafe fn(
     host: *mut NativeRdpHost,
@@ -276,6 +307,9 @@ pub(crate) struct NativeBindings {
     pub(crate) probe: ProbeFn,
     pub(crate) create: CreateFn,
     pub(crate) create_with_parent: CreateWithParentFn,
+    pub(crate) set_bounds: SetBoundsFn,
+    pub(crate) set_visible: SetVisibleFn,
+    pub(crate) focus: FocusFn,
     pub(crate) destroy: DestroyFn,
     pub(crate) register_event_callback: RegisterEventCallbackFn,
     pub(crate) unregister_event_callback: UnregisterEventCallbackFn,
@@ -286,6 +320,9 @@ pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     probe,
     create,
     create_with_parent,
+    set_bounds,
+    set_visible,
+    focus,
     destroy,
     register_event_callback,
     unregister_event_callback,
@@ -306,6 +343,12 @@ unsafe extern "C" {
         options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
     ) -> NativeResult;
+    fn navop_rdp_set_bounds(
+        host: *mut NativeRdpHost,
+        bounds: *const NavopRdpBounds,
+    ) -> NativeResult;
+    fn navop_rdp_set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult;
+    fn navop_rdp_focus(host: *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_register_event_callback(
         host: *mut NativeRdpHost,
         options: *const NavopRdpEventCallbackOptions,
@@ -342,6 +385,21 @@ unsafe fn create_with_parent(
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult {
     unsafe { navop_rdp_create_with_parent(options, out_host) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn set_bounds(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) -> NativeResult {
+    unsafe { navop_rdp_set_bounds(host, bounds) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult {
+    unsafe { navop_rdp_set_visible(host, visible) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn focus(host: *mut NativeRdpHost) -> NativeResult {
+    unsafe { navop_rdp_focus(host) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -468,6 +526,37 @@ unsafe fn create_with_parent(
 }
 
 #[cfg(not(windows_rdp_host_native))]
+unsafe fn set_bounds(host: *mut NativeRdpHost, bounds: *const NavopRdpBounds) -> NativeResult {
+    if host.is_null() || bounds.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let width = unsafe { std::ptr::addr_of!((*bounds).width).read() };
+    let height = unsafe { std::ptr::addr_of!((*bounds).height).read() };
+    if width < 0 || height < 0 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn set_visible(host: *mut NativeRdpHost, visible: u32) -> NativeResult {
+    if host.is_null() || visible > 1 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn focus(host: *mut NativeRdpHost) -> NativeResult {
+    if host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
 unsafe fn register_event_callback(
     host: *mut NativeRdpHost,
     options: *const NavopRdpEventCallbackOptions,
@@ -571,6 +660,12 @@ mod tests {
         assert_eq!(align_of::<NavopRdpProbeResult>(), 4);
         assert_eq!(size_of::<NavopRdpCreateOptions>(), 16);
         assert_eq!(align_of::<NavopRdpCreateOptions>(), 4);
+        assert_eq!(size_of::<NavopRdpBounds>(), 16);
+        assert_eq!(align_of::<NavopRdpBounds>(), 4);
+        assert_eq!(std::mem::offset_of!(NavopRdpBounds, x), 0);
+        assert_eq!(std::mem::offset_of!(NavopRdpBounds, y), 4);
+        assert_eq!(std::mem::offset_of!(NavopRdpBounds, width), 8);
+        assert_eq!(std::mem::offset_of!(NavopRdpBounds, height), 12);
         assert_eq!(size_of::<NavopRdpEvent>(), 32);
         assert_eq!(align_of::<NavopRdpEvent>(), 4);
         assert_eq!(size_of::<NavopRdpEventCallbackOptions>(), 16);

@@ -109,6 +109,13 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)",
             "typedef struct NavopRdpCreateWithParentOptions",
             "uintptr_t parent_hwnd;",
+            "typedef struct NavopRdpBounds",
+            "int32_t x;",
+            "int32_t y;",
+            "int32_t width;",
+            "int32_t height;",
+            "parent window's client-area physical pixels",
+            "width and height must be non-negative",
             "caller-owned",
             "non-owning native window handle",
             "owns only its hidden",
@@ -125,6 +132,10 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "navop_rdp_probe(",
             "navop_rdp_create(",
             "navop_rdp_create_with_parent(",
+            "navop_rdp_set_bounds(",
+            "navop_rdp_set_visible(",
+            "navop_rdp_focus(",
+            "visible must be exactly 0 or 1",
             "NativeRdpHost** out_host",
             "navop_rdp_destroy(",
             "NativeRdpHost** host",
@@ -183,6 +194,12 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "alignof(NavopRdpCreateWithParentOptions) == 8",
             "sizeof(NavopRdpCreateWithParentOptions) == 20",
             "alignof(NavopRdpCreateWithParentOptions) == 4",
+            "static_assert(sizeof(NavopRdpBounds) == 16)",
+            "static_assert(alignof(NavopRdpBounds) == 4)",
+            "static_assert(offsetof(NavopRdpBounds, x) == 0)",
+            "static_assert(offsetof(NavopRdpBounds, y) == 4)",
+            "static_assert(offsetof(NavopRdpBounds, width) == 8)",
+            "static_assert(offsetof(NavopRdpBounds, height) == 12)",
         ],
     );
     assert_contains_all(
@@ -207,6 +224,13 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "align_of::<NavopRdpCreateWithParentOptions>() == 8",
             "size_of::<NavopRdpCreateWithParentOptions>() == 20",
             "align_of::<NavopRdpCreateWithParentOptions>() == 4",
+            "struct NavopRdpBounds",
+            "size_of::<NavopRdpBounds>() == 16",
+            "align_of::<NavopRdpBounds>() == 4",
+            "offset_of!(NavopRdpBounds, x) == 0",
+            "offset_of!(NavopRdpBounds, y) == 4",
+            "offset_of!(NavopRdpBounds, width) == 8",
+            "offset_of!(NavopRdpBounds, height) == 12",
         ],
     );
 }
@@ -720,7 +744,7 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
     assert_tokens_in_scope(
         source,
         "extern \"C\" NavopRdpResult navop_rdp_create_with_parent(",
-        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_register_event_callback(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_set_bounds(",
         &[
             "try {",
             "out_host == nullptr",
@@ -739,6 +763,50 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
             "create_active_x_resources(",
             "delete host;",
             "*out_host = host;",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_set_bounds(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_set_visible(",
+        &[
+            "try {",
+            "host == nullptr || bounds == nullptr ||",
+            "bounds->width < 0 || bounds->height < 0",
+            "ensure_owner_thread(host)",
+            "host->callback_state != CallbackState::Open",
+            "set_active_x_bounds(host->active_x_resources, *bounds)",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_set_visible(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_focus(",
+        &[
+            "try {",
+            "host == nullptr || visible > UINT32_C(1)",
+            "ensure_owner_thread(host)",
+            "host->callback_state != CallbackState::Open",
+            "set_active_x_visible(",
+            "visible == UINT32_C(1)",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_focus(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_register_event_callback(",
+        &[
+            "try {",
+            "host == nullptr",
+            "ensure_owner_thread(host)",
+            "host->callback_state != CallbackState::Open",
+            "focus_active_x(host->active_x_resources)",
             "catch (...)",
             "NAVOP_RDP_RESULT_INTERNAL_ERROR",
         ],
@@ -783,6 +851,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\"",
             "#include \"mstscax.tlh\"",
             "struct ActiveXCleanup",
+            "HWND parent_window",
             "CComPtr<IUnknown> container;",
             "CComPtr<IUnknown> control;",
             "CComPtr<IMsRdpClient10> client;",
@@ -796,6 +865,21 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "QueryInterface(",
             "IID_PPV_ARGS(&resources->state.client)",
             "*out_resources = resources.release();",
+            "validate_resources(",
+            "IsWindow(",
+            "SetWindowPos(",
+            "SWP_NOZORDER | SWP_NOACTIVATE",
+            "window_or_descendant_has_focus",
+            "SetFocus(",
+            "ShowWindow(",
+            "SW_SHOWNA",
+            "SW_HIDE",
+            "GetWindowLongPtrW(",
+            "GWL_STYLE",
+            "WS_VISIBLE",
+            "set_active_x_bounds(",
+            "set_active_x_visible(",
+            "focus_active_x(",
         ],
     );
     assert_tokens_in_scope(
@@ -811,15 +895,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "OleUninitialize();",
         ],
     );
-    assert_excludes_all(
-        source,
-        &[
-            "WS_VISIBLE",
-            "DestroyWindow(parent)",
-            "SetParent(",
-            "ShowWindow(",
-        ],
-    );
+    assert_excludes_all(source, &["DestroyWindow(parent)", "SetParent("]);
 }
 
 #[test]
@@ -844,6 +920,9 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn probe()",
             "pub fn create(",
             "pub unsafe fn create_with_parent(",
+            "pub fn set_bounds(",
+            "pub fn set_visible(",
+            "pub fn focus(",
             "pub fn close(&mut self)",
             "pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle",
             "impl Drop for WindowsRdpHost",
@@ -858,6 +937,27 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "drop_preserves_callback_context_when_unregister_keeps_failing",
             "if self.close().is_err() && self.callback_registered",
             "Box::leak(event_bridge)",
+            "(self.bindings.set_bounds)(self.raw, &bounds)",
+            "(self.bindings.set_visible)",
+            "(self.bindings.focus)(self.raw)",
+            "presentation_controls_forward_bounds_visibility_and_focus",
+            "negative_presentation_dimensions_are_rejected_before_native_call",
+            "presentation_failures_map_without_changing_lifecycle",
+            "presentation_controls_are_rejected_before_native_when_closing_or_closed",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/ffi.rs"),
+        &[
+            "type SetBoundsFn",
+            "type SetVisibleFn",
+            "type FocusFn",
+            "set_bounds: SetBoundsFn",
+            "set_visible: SetVisibleFn",
+            "focus: FocusFn",
+            "navop_rdp_set_bounds(",
+            "navop_rdp_set_visible(",
+            "navop_rdp_focus(",
         ],
     );
     assert_contains_all(
