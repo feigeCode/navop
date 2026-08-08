@@ -67,6 +67,12 @@ unsafe extern "C" {
         variant_types: *const u16,
         argument_count: u32,
     ) -> NativeResult;
+    fn navop_rdp_test_dispatch_disconnect_event(
+        host: *mut NativeRdpHost,
+        disconnect_code: i32,
+        has_extended_code: u32,
+        extended_code: i32,
+    ) -> NativeResult;
 }
 
 unsafe extern "system" {
@@ -695,6 +701,61 @@ fn active_x_event_sink_maps_known_events_and_ignores_unknown_or_malformed_invoca
         RESULT_OK
     );
     assert_eq!(context.calls, 7);
+
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn active_x_disconnect_dispatch_encodes_optional_extended_reason() {
+    let generation = 0x8877_6655_4433_2211;
+    let mut context = RecordingContext::default();
+    let mut host = unsafe { create_host(generation) };
+    unsafe {
+        register_callback(
+            host,
+            generation,
+            record_callback,
+            (&mut context as *mut RecordingContext).cast(),
+        );
+    }
+
+    assert_eq!(
+        unsafe { navop_rdp_test_dispatch_disconnect_event(host, -1234, 1, 0x0102_0304,) },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 1);
+    assert_eq!(context.kind, EVENT_DISCONNECTED);
+    assert_eq!(context.code, -1234);
+    assert_eq!(context.payload, 0x0102_0304_i32.to_le_bytes());
+
+    assert_eq!(
+        unsafe { navop_rdp_test_dispatch_disconnect_event(host, i32::MAX, 1, i32::MIN,) },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 2);
+    assert_eq!(context.kind, EVENT_DISCONNECTED);
+    assert_eq!(context.code, i32::MAX);
+    assert_eq!(context.payload, i32::MIN.to_le_bytes());
+
+    assert_eq!(
+        unsafe { navop_rdp_test_dispatch_disconnect_event(host, i32::MIN, 0, i32::MAX,) },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
+    assert_eq!(context.kind, EVENT_DISCONNECTED);
+    assert_eq!(context.code, i32::MIN);
+    assert!(context.payload.is_empty());
+
+    assert_eq!(
+        unsafe { navop_rdp_test_dispatch_disconnect_event(host, 0, 2, 0,) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(context.calls, 3);
 
     assert_eq!(
         unsafe { navop_rdp_unregister_event_callback(host) },

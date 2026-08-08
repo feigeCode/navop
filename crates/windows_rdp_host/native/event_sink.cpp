@@ -95,6 +95,51 @@ bool set_bool_by_ref(VARIANTARG& argument, VARIANT_BOOL value) noexcept {
     return true;
 }
 
+void dispatch(
+    NativeRdpHost* host,
+    uint32_t kind,
+    int32_t code,
+    const uint8_t* payload,
+    uint32_t payload_length) noexcept {
+    const uint64_t generation = host->generation;
+    const NavopRdpEvent event{
+        static_cast<uint32_t>(sizeof(NavopRdpEvent)),
+        NAVOP_RDP_ABI_VERSION,
+        kind,
+        UINT32_C(0),
+        static_cast<uint32_t>(generation),
+        static_cast<uint32_t>(generation >> 32U),
+        code,
+        payload_length};
+    static_cast<void>(dispatch_event(host, &event, payload));
+}
+
+void dispatch_disconnected(
+    NativeRdpHost* host,
+    int32_t disconnect_code,
+    const int32_t* extended_code) noexcept {
+    if (extended_code == nullptr) {
+        dispatch(
+            host,
+            NAVOP_RDP_EVENT_DISCONNECTED,
+            disconnect_code,
+            nullptr,
+            0);
+        return;
+    }
+
+    std::array<uint8_t, 4> payload{};
+    encode_u32_le(
+        static_cast<uint32_t>(*extended_code),
+        payload.data());
+    dispatch(
+        host,
+        NAVOP_RDP_EVENT_DISCONNECTED,
+        disconnect_code,
+        payload.data(),
+        static_cast<uint32_t>(payload.size()));
+}
+
 class RdpEventSink final : public IDispatch {
 public:
     explicit RdpEventSink(NativeRdpHost* host) noexcept
@@ -195,10 +240,7 @@ public:
                     NAVOP_RDP_EVENT_LOGIN_COMPLETE);
                 break;
             case kOnDisconnected:
-                dispatch_code(
-                    host,
-                    parameters,
-                    NAVOP_RDP_EVENT_DISCONNECTED);
+                dispatch_disconnected_from_parameters(host, parameters);
                 break;
             case kOnEnterFullScreenMode:
                 dispatch_no_arguments(
@@ -397,25 +439,6 @@ public:
 private:
     ~RdpEventSink() noexcept = default;
 
-    static void dispatch(
-        NativeRdpHost* host,
-        uint32_t kind,
-        int32_t code,
-        const uint8_t* payload,
-        uint32_t payload_length) noexcept {
-        const uint64_t generation = host->generation;
-        const NavopRdpEvent event{
-            static_cast<uint32_t>(sizeof(NavopRdpEvent)),
-            NAVOP_RDP_ABI_VERSION,
-            kind,
-            UINT32_C(0),
-            static_cast<uint32_t>(generation),
-            static_cast<uint32_t>(generation >> 32U),
-            code,
-            payload_length};
-        static_cast<void>(dispatch_event(host, &event, payload));
-    }
-
     static void dispatch_no_arguments(
         NativeRdpHost* host,
         const DISPPARAMS* parameters,
@@ -436,6 +459,31 @@ private:
         if (read_i32(parameters->rgvarg[0], &code)) {
             dispatch(host, kind, static_cast<int32_t>(code), nullptr, 0);
         }
+    }
+
+    static void dispatch_disconnected_from_parameters(
+        NativeRdpHost* host,
+        const DISPPARAMS* parameters) noexcept {
+        if (!has_exact_arguments(parameters, 1)) {
+            return;
+        }
+
+        LONG disconnect_code = 0;
+        if (!read_i32(parameters->rgvarg[0], &disconnect_code)) {
+            return;
+        }
+
+        int32_t extended_code = 0;
+        const NavopRdpResult extended_result =
+            get_active_x_extended_disconnect_reason(
+                host->active_x_resources,
+                &extended_code);
+        dispatch_disconnected(
+            host,
+            static_cast<int32_t>(disconnect_code),
+            extended_result == NAVOP_RDP_RESULT_OK
+                ? &extended_code
+                : nullptr);
     }
 
     volatile LONG ref_count_;
@@ -610,4 +658,19 @@ extern "C" NavopRdpResult navop_rdp_test_invoke_active_x_event(
     } catch (...) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
+}
+
+extern "C" NavopRdpResult navop_rdp_test_dispatch_disconnect_event(
+    NativeRdpHost* host,
+    int32_t disconnect_code,
+    uint32_t has_extended_code,
+    int32_t extended_code) noexcept {
+    if (host == nullptr || has_extended_code > UINT32_C(1)) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+    dispatch_disconnected(
+        host,
+        disconnect_code,
+        has_extended_code == UINT32_C(1) ? &extended_code : nullptr);
+    return NAVOP_RDP_RESULT_OK;
 }

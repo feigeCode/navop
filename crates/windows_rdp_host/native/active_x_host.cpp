@@ -343,6 +343,28 @@ NavopRdpResult get_active_x_connection_state(
     return NAVOP_RDP_RESULT_OK;
 }
 
+NavopRdpResult get_active_x_extended_disconnect_reason(
+    NativeRdpActiveXResources* resources,
+    int32_t* out_extended_code) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+    if (out_extended_code == nullptr) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+
+    ExtendedDisconnectReasonCode extended_reason{};
+    const HRESULT result =
+        resources->state.client->get_ExtendedDisconnectReason(
+            &extended_reason);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    *out_extended_code = static_cast<int32_t>(extended_reason);
+    return NAVOP_RDP_RESULT_OK;
+}
+
 NavopRdpResult request_close_active_x(
     NativeRdpActiveXResources* resources,
     uint32_t* out_status) noexcept {

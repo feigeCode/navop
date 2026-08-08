@@ -1107,12 +1107,16 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "NAVOP_RDP_EVENT_DISCONNECTED",
             "NAVOP_RDP_EVENT_CLOSE_CONFIRMED",
             "NAVOP_RDP_EVENT_FOCUS_RELEASED",
+            "dispatch_disconnected_from_parameters(host, parameters);",
+            "get_active_x_extended_disconnect_reason(",
+            "extended_result == NAVOP_RDP_RESULT_OK",
             "parameters->rgvarg[1]",
             "parameters->rgvarg[0]",
             "encode_u32_le(",
             "default:",
             "return S_OK;",
             "extern \"C\" NavopRdpResult navop_rdp_test_invoke_active_x_event(",
+            "extern \"C\" NavopRdpResult navop_rdp_test_dispatch_disconnect_event(",
         ],
     );
     assert_tokens_in_scope(
@@ -1148,6 +1152,15 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
             "struct NativeRdpEventSubscription;",
             "NavopRdpResult create_event_subscription(",
             "void destroy_event_subscription(",
+            "NavopRdpResult get_active_x_extended_disconnect_reason(",
+        ],
+    );
+    assert_contains_all(
+        active_x,
+        &[
+            "ExtendedDisconnectReasonCode extended_reason{};",
+            "resources->state.client->get_ExtendedDisconnectReason(",
+            "*out_extended_code = static_cast<int32_t>(extended_reason);",
         ],
     );
     assert_excludes_all(
@@ -1155,6 +1168,7 @@ fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_con
         &[
             "NativeRdpEventSubscription",
             "navop_rdp_test_invoke_active_x_event",
+            "navop_rdp_test_dispatch_disconnect_event",
             "IConnectionPoint",
             "IMsTscAxEvents",
         ],
