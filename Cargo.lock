@@ -10635,6 +10635,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "windows_rdp_host",
 ]
 
 [[package]]

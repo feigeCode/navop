@@ -535,21 +535,6 @@ mod native_driver_feature_contract_tests {
             .is_none_or(|line| line.contains("optional = true"))
     }
 
-    fn dependency_is_windows_only_optional_or_absent(manifest: &str, dependency: &str) -> bool {
-        let dependency_prefix = format!("{dependency} =");
-        let mut current_section = "";
-        for line in manifest.lines() {
-            let line = line.trim();
-            if line.starts_with('[') {
-                current_section = line;
-            } else if line.starts_with(&dependency_prefix) {
-                return current_section == r#"[target.'cfg(target_os = "windows")'.dependencies]"#
-                    && line.contains("optional = true");
-            }
-        }
-        true
-    }
-
     #[test]
     fn builtin_native_driver_features_are_declared_and_default_off() {
         let manifest = include_str!("../Cargo.toml");
@@ -587,11 +572,12 @@ mod native_driver_feature_contract_tests {
         );
         assert!(!main_default.contains("windows-native-rdp"));
         assert!(
-            remote_desktop_view_features.contains("windows-native-rdp = []"),
-            "the native host dependency is added by a later task"
+            remote_desktop_view_features
+                .contains("windows-native-rdp = [\"dep:windows_rdp_host\"]"),
+            "the feature must enable only the optional native host facade"
         );
         assert_eq!("default = []", remote_desktop_view_default.trim());
-        assert!(dependency_is_windows_only_optional_or_absent(
+        assert!(dependency_is_optional_or_absent(
             remote_desktop_view_manifest,
             "windows_rdp_host"
         ));

@@ -146,6 +146,31 @@ pub enum WindowsRdpEvent {
     },
 }
 
+impl WindowsRdpEvent {
+    /// Returns the native host generation that produced this event.
+    pub const fn generation(&self) -> u64 {
+        match self {
+            Self::HostReady { generation, .. }
+            | Self::Connecting { generation }
+            | Self::Connected { generation }
+            | Self::LoginComplete { generation }
+            | Self::Reconnecting { generation, .. }
+            | Self::Reconnected { generation }
+            | Self::NetworkStatusChanged { generation, .. }
+            | Self::RemoteDesktopSizeChanged { generation, .. }
+            | Self::FullscreenChanged { generation, .. }
+            | Self::AuthenticationWarning { generation, .. }
+            | Self::Warning { generation, .. }
+            | Self::FatalError { generation, .. }
+            | Self::LogonError { generation, .. }
+            | Self::Disconnected { generation, .. }
+            | Self::CloseConfirmed { generation }
+            | Self::FocusReleased { generation } => *generation,
+            Self::Unknown { event } => event.generation,
+        }
+    }
+}
+
 impl From<WindowsRdpRawEvent> for WindowsRdpEvent {
     fn from(event: WindowsRdpRawEvent) -> Self {
         let generation = event.generation;
@@ -620,6 +645,21 @@ mod tests {
         assert_eq!(
             WindowsRdpEvent::from(event),
             WindowsRdpEvent::Unknown { event: expected }
+        );
+    }
+
+    #[test]
+    fn semantic_events_report_their_source_generation() {
+        assert_eq!(
+            WindowsRdpEvent::Connected { generation: 42 }.generation(),
+            42
+        );
+        assert_eq!(
+            WindowsRdpEvent::Unknown {
+                event: raw(u32::MAX, i32::MIN, [1, 2, 3, 4]),
+            }
+            .generation(),
+            42
         );
     }
 

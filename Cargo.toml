@@ -130,6 +130,7 @@ port_forwarding_view = { path = "crates/port_forwarding_view" }
 process-util = { path = "crates/process-util" }
 remote_desktop = { path = "crates/remote_desktop" }
 remote_desktop_view = { path = "crates/remote_desktop_view" }
+windows_rdp_host = { path = "crates/windows_rdp_host" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 mongodb_view = {path = "crates/mongodb_view"}

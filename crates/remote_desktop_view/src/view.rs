@@ -28,6 +28,11 @@ mod frame_lifecycle;
 mod frame_sync;
 mod frames;
 mod input;
+// Task 5 freezes the owner-thread event reducer before Task 6 creates and
+// presents the native child window.
+#[cfg(feature = "windows-native-rdp")]
+#[allow(dead_code)]
+mod native_events;
 mod notifications;
 mod output;
 // Task 0 freezes this contract before later tasks wire it into the view runtime.

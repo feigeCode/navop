@@ -1571,6 +1571,32 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   结果只证明 ATL/MSVC/type-library compile/link 和 Windows native tests，不得表述为
   真实 RDP runtime、ActiveX connect/disconnect 或交互桌面验证。
 
+#### Execution Notes (2026-08-08) — owner-thread event reducer contract 切片
+
+- **Dependency boundary:** workspace 现在把 `windows_rdp_host` 注册为
+  `remote_desktop_view` 的 optional dependency，并且只由显式
+  `windows-native-rdp` feature 启用；默认 feature 仍为空，不改变 canvas 默认构建路径。
+- **Green implementation:** 新增纯 Rust `NativeRdpEventState` reducer、
+  `NativeRdpEventSource` seam 和 `drain_native_events` owner-thread adapter。adapter
+  从 host-owned `EventBridge` queue drain owned raw events，在 Rust 层完成 typed decode，
+  同时要求 event generation、source 当前 generation 和 reducer generation 三者一致。
+  reducer 保存连接/reconnect 状态、remote size、network quality、authentication warning、
+  fullscreen、完整 disconnect reason 以及 warning/fatal/logon signed raw code；confirm-close
+  与 focus-released 只产生显式 UI effect，不在 native callback 内访问 GPUI context。
+- **Automated verification:** feature-enabled tests 覆盖 stale generation、source/state
+  generation mismatch、FIFO owned raw-event drain、malformed/unknown event no-op、连接与
+  reconnect 状态转换、disconnect category 与 primary/extended raw code 保留、signed
+  diagnostic raw code，以及 close/focus owner-thread effects。`WindowsRdpEvent` 新增统一
+  `generation()` accessor，typed 与 unknown raw event 都保留来源 generation。
+- **Integration boundary:** 本切片只冻结 callback queue → typed decode →
+  generation-filtered reducer 的 contract。`RemoteDesktopView` 尚未持有
+  `WindowsRdpHost`，也没有在 render/entity lifecycle 中创建、drain、show/hide、focus
+  或销毁真实 child `HWND`；这些属于 Task 6，因此当前不能把“Rust callback 投递 UI
+  queue，按 generation 过滤”整体勾选为完成。
+- **Still pending:** HRESULT/logon code 的稳定分类、真实 GPUI entity/event lifecycle、
+  有交互桌面的 ActiveX/RDP session，以及错误密码、服务端拒绝、网络中断和服务器重启
+  manual acceptance 均未完成；Task 5 整体继续保持未完成。
+
 ---
 
 ### Task 6: GPUI tab bounds、show/hide、focus 与 DPI 垂直集成
