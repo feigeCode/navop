@@ -168,6 +168,7 @@ impl SftpView {
                             modified: entry.modified,
                             is_dir: entry.is_dir,
                             permissions: format_permissions(entry.permissions, entry.is_dir),
+                            directory_size: crate::DirectorySizeState::Unknown,
                         })
                         .collect();
                     this.local_panel

@@ -2,6 +2,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod direct_copy;
 mod direct_copy_scripts;
+mod file_operations;
 mod russh_impl;
 mod server_copy;
 
@@ -12,6 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::SystemTime;
 
+pub use file_operations::{
+    calculate_directory_size, remote_path_is_same_or_descendant, total_file_size,
+};
 pub use russh_impl::RusshSftpClient;
 pub use server_copy::{
     CopyPlanEntry, CopyStrategy, ServerCopyItem, ServerCopyRequest, choose_copy_strategy,

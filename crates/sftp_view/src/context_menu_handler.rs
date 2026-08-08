@@ -2,6 +2,7 @@
 //!
 //! 本模块实现 FileListPanel 右键菜单的所有功能
 
+use crate::file_clipboard::{ClipboardEndpoint, FileClipboardKind};
 use crate::{
     ActiveExtract, ExtractConflictAction, FileListPanelEvent, PanelSide, SftpView, SftpViewEvent,
     build_remote_extract_command, build_remote_extract_conflict_check_command, exec_remote_command,
@@ -33,6 +34,41 @@ impl SftpView {
         cx: &mut Context<Self>,
     ) {
         match event {
+            FileListPanelEvent::CopyEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::RemoteLeft,
+                    FileClipboardKind::Copy,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::CutEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::RemoteLeft,
+                    FileClipboardKind::Cut,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::PasteInto { target_dir } => {
+                self.paste_file_clipboard(
+                    ClipboardEndpoint::RemoteLeft,
+                    target_dir.clone(),
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::Properties { item, full_path } => {
+                self.show_file_properties(item.clone(), full_path.clone(), window, cx);
+            }
+            FileListPanelEvent::CalculateSize { full_path } => {
+                self.calculate_size_for_endpoint(
+                    ClipboardEndpoint::RemoteLeft,
+                    full_path.clone(),
+                    window,
+                    cx,
+                );
+            }
             FileListPanelEvent::Download { .. } => {
                 self.transfer_left_selection_to_right(window, cx);
             }
@@ -268,6 +304,36 @@ impl ContextMenuHandler for SftpView {
             return;
         }
         match event {
+            FileListPanelEvent::CopyEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::Local,
+                    FileClipboardKind::Copy,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::CutEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::Local,
+                    FileClipboardKind::Cut,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::PasteInto { target_dir } => {
+                self.paste_file_clipboard(ClipboardEndpoint::Local, target_dir.clone(), window, cx);
+            }
+            FileListPanelEvent::Properties { item, full_path } => {
+                self.show_file_properties(item.clone(), full_path.clone(), window, cx);
+            }
+            FileListPanelEvent::CalculateSize { full_path } => {
+                self.calculate_size_for_endpoint(
+                    ClipboardEndpoint::Local,
+                    full_path.clone(),
+                    window,
+                    cx,
+                );
+            }
             FileListPanelEvent::NewFile => {
                 self.create_new_file(PanelSide::Local, window, cx);
             }
@@ -332,6 +398,41 @@ impl ContextMenuHandler for SftpView {
         cx: &mut Context<Self>,
     ) {
         match event {
+            FileListPanelEvent::CopyEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::RemoteRight,
+                    FileClipboardKind::Copy,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::CutEntries => {
+                self.store_file_clipboard(
+                    ClipboardEndpoint::RemoteRight,
+                    FileClipboardKind::Cut,
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::PasteInto { target_dir } => {
+                self.paste_file_clipboard(
+                    ClipboardEndpoint::RemoteRight,
+                    target_dir.clone(),
+                    window,
+                    cx,
+                );
+            }
+            FileListPanelEvent::Properties { item, full_path } => {
+                self.show_file_properties(item.clone(), full_path.clone(), window, cx);
+            }
+            FileListPanelEvent::CalculateSize { full_path } => {
+                self.calculate_size_for_endpoint(
+                    ClipboardEndpoint::RemoteRight,
+                    full_path.clone(),
+                    window,
+                    cx,
+                );
+            }
             FileListPanelEvent::NewFile => {
                 self.create_new_file(PanelSide::Remote, window, cx);
             }

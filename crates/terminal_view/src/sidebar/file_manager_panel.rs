@@ -44,7 +44,11 @@ use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
 use rust_i18n::t;
-use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
+use sftp::{
+    RusshSftpClient, ServerCopyItem, ServerCopyRequest, SftpClient, TransferCancelled,
+    TransferProgress, calculate_directory_size, copy_between_servers,
+    remote_path_is_same_or_descendant,
+};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
@@ -59,7 +63,7 @@ actions!(terminal_file_manager, [PasteUpload]);
 pub const FILE_MANAGER_CONTEXT: &str = "TerminalFileManager";
 
 const FILE_ROW_HEIGHT: gpui::Pixels = px(36.);
-const SIZE_COLUMN_WIDTH: gpui::Pixels = px(50.);
+const SIZE_COLUMN_WIDTH: gpui::Pixels = px(72.);
 const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(70.);
 
 pub fn init_keybindings() -> Vec<KeyBinding> {
@@ -384,6 +388,36 @@ struct RemoteFileItem {
     size: u64,
     modified: SystemTime,
     is_dir: bool,
+    permissions: String,
+    directory_size: DirectorySizeState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DirectorySizeState {
+    #[default]
+    Unknown,
+    Calculating,
+    Ready(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteClipboardKind {
+    Copy,
+    Cut,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteClipboardEntry {
+    name: String,
+    source_path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteFileClipboard {
+    kind: RemoteClipboardKind,
+    entries: Vec<RemoteClipboardEntry>,
 }
 
 /// 文件管理器面板事件
@@ -486,7 +520,7 @@ fn build_frame_options_menu(
 /// 格式化文件大小（紧凑格式，适合侧边栏窄列）
 fn format_file_size(size: u64) -> String {
     if size == 0 {
-        return "-".to_string();
+        return "0 B".to_string();
     }
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -501,6 +535,37 @@ fn format_file_size(size: u64) -> String {
     } else {
         format!("{}B", size)
     }
+}
+
+fn size_sort_key(item: &RemoteFileItem) -> (u8, u64) {
+    if !item.is_dir {
+        return (0, item.size);
+    }
+
+    match item.directory_size {
+        DirectorySizeState::Ready(size) => (0, size),
+        DirectorySizeState::Calculating => (1, 0),
+        DirectorySizeState::Unknown => (2, 0),
+    }
+}
+
+fn size_label(item: &RemoteFileItem) -> String {
+    if !item.is_dir {
+        return format_file_size(item.size);
+    }
+
+    match item.directory_size {
+        DirectorySizeState::Unknown => t!("FileManager.calculate").to_string(),
+        DirectorySizeState::Calculating => t!("FileManager.calculating").to_string(),
+        DirectorySizeState::Ready(size) => format_file_size(size),
+    }
+}
+
+fn property_row(label: String, value: String) -> impl IntoElement {
+    h_flex()
+        .gap_3()
+        .child(div().w(px(96.)).text_sm().child(label))
+        .child(div().flex_1().text_sm().child(value))
 }
 
 /// 格式化修改时间（短格式，适合侧边栏）
@@ -807,6 +872,30 @@ fn download_targets_for_selection(
         .collect()
 }
 
+fn clipboard_entries_for_selection(
+    current_path: &str,
+    items: &[RemoteFileItem],
+    filtered_indices: &[usize],
+    selected_indices: &HashSet<usize>,
+) -> Vec<RemoteClipboardEntry> {
+    let mut selected: Vec<_> = selected_indices.iter().copied().collect();
+    selected.sort_unstable();
+
+    selected
+        .into_iter()
+        .filter_map(|filtered_ix| {
+            let real_ix = *filtered_indices.get(filtered_ix)?;
+            let item = items.get(real_ix)?;
+            Some(RemoteClipboardEntry {
+                name: item.name.clone(),
+                source_path: join_remote_path(current_path, &item.name),
+                is_dir: item.is_dir,
+                size: item.size,
+            })
+        })
+        .collect()
+}
+
 fn should_use_context_selection(selected_indices: &HashSet<usize>, filtered_ix: usize) -> bool {
     selected_indices.contains(&filtered_ix) && selected_indices.len() > 1
 }
@@ -1010,6 +1099,8 @@ pub struct FileManagerPanel {
     focus_handle: FocusHandle,
     /// 是否正在加载目录
     loading: bool,
+    /// 文件复制/剪切缓冲区
+    file_clipboard: Option<RemoteFileClipboard>,
     favorite_paths: Vec<String>,
     favorite_connection_id: Option<i64>,
     favorite_connection_key: String,
@@ -1126,6 +1217,7 @@ impl FileManagerPanel {
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle,
             loading: false,
+            file_clipboard: None,
             favorite_paths,
             favorite_connection_id,
             favorite_connection_key,
@@ -1704,6 +1796,8 @@ impl FileManagerPanel {
                                 size: e.size,
                                 modified: e.modified,
                                 is_dir: e.is_dir,
+                                permissions: format!("{:o}", e.permissions & 0o7777),
+                                directory_size: DirectorySizeState::Unknown,
                             })
                             .collect();
                         this.sort_items();
@@ -1800,7 +1894,7 @@ impl FileManagerPanel {
 
             let cmp = match sort_column {
                 SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortColumn::Size => a.size.cmp(&b.size),
+                SortColumn::Size => size_sort_key(a).cmp(&size_sort_key(b)),
                 SortColumn::Modified => a.modified.cmp(&b.modified),
             };
 
@@ -1856,6 +1950,30 @@ impl FileManagerPanel {
         self.selection_anchor_index = None;
     }
 
+    fn set_directory_size_state(
+        &mut self,
+        full_path: &str,
+        state: DirectorySizeState,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| join_remote_path(&self.current_path, &item.name) == full_path)
+        else {
+            return false;
+        };
+
+        item.directory_size = state;
+        if self.sort_column == SortColumn::Size {
+            self.sort_items();
+            self.apply_filter();
+            self.clear_selection();
+        }
+        cx.notify();
+        true
+    }
+
     /// 更新选中状态
     fn select_row(&mut self, row_ix: usize, mode: SelectionMode) {
         apply_selection_mode(
@@ -1864,6 +1982,260 @@ impl FileManagerPanel {
             row_ix,
             mode,
         );
+    }
+
+    fn store_remote_file_clipboard(
+        &mut self,
+        filtered_ix: usize,
+        kind: RemoteClipboardKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_use_context_selection(&self.selected_indices, filtered_ix) {
+            self.selected_indices.clear();
+            self.selected_indices.insert(filtered_ix);
+            self.selection_anchor_index = Some(filtered_ix);
+        }
+
+        let entries = clipboard_entries_for_selection(
+            &self.current_path,
+            &self.items,
+            &self.filtered_indices,
+            &self.selected_indices,
+        );
+        if entries.is_empty() {
+            return;
+        }
+
+        self.file_clipboard = Some(RemoteFileClipboard { kind, entries });
+        window.push_notification(
+            Notification::success(match kind {
+                RemoteClipboardKind::Copy => t!("FileManager.copy_ready"),
+                RemoteClipboardKind::Cut => t!("FileManager.cut_ready"),
+            }),
+            cx,
+        );
+        cx.notify();
+    }
+
+    fn paste_remote_file_clipboard(
+        &mut self,
+        target_dir: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(clipboard) = self.file_clipboard.clone() else {
+            window.push_notification(Notification::info(t!("FileManager.clipboard_empty")), cx);
+            return;
+        };
+
+        if clipboard.entries.iter().any(|entry| {
+            entry.is_dir && remote_path_is_same_or_descendant(&entry.source_path, &target_dir)
+        }) {
+            window.push_notification(
+                Notification::error(t!("FileManager.invalid_paste_target")),
+                cx,
+            );
+            return;
+        }
+
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error(t!("FileManager.sftp_not_connected")),
+                cx,
+            );
+            return;
+        };
+
+        let config = self.session_manager.config();
+        let kind = clipboard.kind;
+        let task = Tokio::spawn(cx, async move {
+            let mut client_guard = client.lock().await;
+            let mut used_names = client_guard
+                .list_dir(&target_dir)
+                .await?
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect::<HashSet<_>>();
+            let items = clipboard
+                .entries
+                .iter()
+                .map(|entry| {
+                    let target_name = if used_names.contains(&entry.name) {
+                        generate_unique_name(&entry.name, &used_names)
+                    } else {
+                        entry.name.clone()
+                    };
+                    used_names.insert(target_name.clone());
+                    ServerCopyItem {
+                        source_path: entry.source_path.clone(),
+                        target_path: join_remote_path(&target_dir, &target_name),
+                        is_dir: entry.is_dir,
+                        size: entry.size,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            match kind {
+                RemoteClipboardKind::Cut => {
+                    for item in items {
+                        client_guard
+                            .rename(&item.source_path, &item.target_path)
+                            .await?;
+                    }
+                }
+                RemoteClipboardKind::Copy => {
+                    drop(client_guard);
+                    copy_between_servers(ServerCopyRequest {
+                        source_config: config.clone(),
+                        target_config: config,
+                        items,
+                        cancelled: Arc::new(AtomicBool::new(false)),
+                        progress: Arc::new(|_| {}),
+                    })
+                    .await?;
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+
+        let view = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let result = task.await;
+                let _ = view.update_in(cx, |this, window, cx| match result {
+                    Ok(Ok(())) => {
+                        if kind == RemoteClipboardKind::Cut {
+                            this.file_clipboard = None;
+                        }
+                        this.refresh_dir(cx);
+                        window.push_notification(
+                            Notification::success(t!("FileManager.paste_success")),
+                            cx,
+                        );
+                    }
+                    Ok(Err(error)) => window.push_notification(
+                        Notification::error(t!("FileManager.paste_failed", error = error)),
+                        cx,
+                    ),
+                    Err(error) => window.push_notification(
+                        Notification::error(t!("FileManager.paste_failed", error = error)),
+                        cx,
+                    ),
+                });
+            })
+            .detach();
+    }
+
+    fn show_file_properties(
+        &self,
+        item: RemoteFileItem,
+        full_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let size = size_label(&item);
+        let modified: DateTime<Local> = item.modified.into();
+        let permissions = if item.permissions.is_empty() {
+            "-".to_string()
+        } else {
+            item.permissions.clone()
+        };
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog
+                .title(t!("FileManager.properties").to_string())
+                .w(px(480.))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(property_row(
+                            t!("FileManager.property_name").to_string(),
+                            item.name.clone(),
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_path").to_string(),
+                            full_path.clone(),
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_type").to_string(),
+                            if item.is_dir {
+                                t!("FileManager.property_folder").to_string()
+                            } else {
+                                t!("FileManager.property_file").to_string()
+                            },
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_size").to_string(),
+                            size.clone(),
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_modified").to_string(),
+                            modified.format("%Y-%m-%d %H:%M:%S").to_string(),
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_permissions").to_string(),
+                            permissions.clone(),
+                        )),
+                )
+                .close_button(true)
+        });
+    }
+
+    fn calculate_remote_directory_size(
+        &mut self,
+        full_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.set_directory_size_state(&full_path, DirectorySizeState::Calculating, cx) {
+            return;
+        }
+
+        let Some(client) = self.sftp_client.clone() else {
+            self.set_directory_size_state(&full_path, DirectorySizeState::Unknown, cx);
+            return;
+        };
+        let path = full_path.clone();
+        let task = Tokio::spawn(cx, async move {
+            let mut client = client.lock().await;
+            calculate_directory_size(&mut *client, &path, Arc::new(AtomicBool::new(false))).await
+        });
+        let view = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let result = task.await;
+                let _ = view.update_in(cx, |this, window, cx| match result {
+                    Ok(Ok(size)) => {
+                        this.set_directory_size_state(
+                            &full_path,
+                            DirectorySizeState::Ready(size),
+                            cx,
+                        );
+                    }
+                    Ok(Err(error)) => {
+                        this.set_directory_size_state(&full_path, DirectorySizeState::Unknown, cx);
+                        window.push_notification(
+                            Notification::error(t!(
+                                "FileManager.calculate_size_failed",
+                                error = error
+                            )),
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        this.set_directory_size_state(&full_path, DirectorySizeState::Unknown, cx);
+                        window.push_notification(
+                            Notification::error(t!(
+                                "FileManager.calculate_size_failed",
+                                error = error
+                            )),
+                            cx,
+                        );
+                    }
+                });
+            })
+            .detach();
     }
 
     // ── 传输调度 ──────────────────────────────────────────────
@@ -4092,21 +4464,31 @@ impl FileManagerPanel {
         if is_flex {
             base.flex_1()
         } else {
-            base.w(MODIFIED_COLUMN_WIDTH)
+            match column {
+                SortColumn::Size => base.w(SIZE_COLUMN_WIDTH),
+                SortColumn::Modified => base.w(MODIFIED_COLUMN_WIDTH),
+                SortColumn::Name => base,
+            }
         }
     }
 
     /// 渲染单行文件项
     fn render_file_row(
         &self,
+        filtered_ix: usize,
         item: &RemoteFileItem,
+        full_path: &str,
         is_selected: bool,
-        _cx: &App,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let name = item.name.clone();
         let is_dir = item.is_dir;
+        let directory_size = item.directory_size;
+        let size = size_label(item);
+        let path_for_size = full_path.to_string();
         let foreground = self.colors.foreground;
         let muted_foreground = self.colors.muted_foreground;
+        let accent = self.colors.accent;
         let selection = self.colors.accent.opacity(0.24);
 
         h_flex()
@@ -4148,14 +4530,29 @@ impl FileManagerPanel {
             // 大小列
             .child(
                 div()
+                    .id(("fm-file-size", filtered_ix))
                     .w(SIZE_COLUMN_WIDTH)
                     .text_xs()
-                    .text_color(muted_foreground)
-                    .child(if is_dir {
-                        "-".to_string()
+                    .text_color(if is_dir && directory_size == DirectorySizeState::Unknown {
+                        accent
                     } else {
-                        format_file_size(item.size)
-                    }),
+                        muted_foreground
+                    })
+                    .when(
+                        is_dir && directory_size == DirectorySizeState::Unknown,
+                        |el| {
+                            el.cursor_pointer()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.calculate_remote_directory_size(
+                                        path_for_size.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                        },
+                    )
+                    .child(size),
             )
             // 时间列
             .child(
@@ -4216,8 +4613,66 @@ impl FileManagerPanel {
         let name_for_delete = name.to_string();
         let path_for_delete = full_path.to_string();
         let is_dir_for_delete = is_dir;
+        let target_dir_for_paste = if is_dir {
+            full_path.to_string()
+        } else {
+            view.read(cx).current_path.clone()
+        };
+        let item_for_properties = view
+            .read(cx)
+            .filtered_indices
+            .get(filtered_ix)
+            .and_then(|&real_ix| view.read(cx).items.get(real_ix))
+            .cloned();
 
         let mut menu = menu;
+
+        let view_copy_entries = view.clone();
+        let view_cut_entries = view.clone();
+        let view_paste = view.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::new(t!("FileManager.copy"))
+                    .icon(IconName::Copy)
+                    .on_click(window.listener_for(
+                        &view_copy_entries,
+                        move |this, _, window, cx| {
+                            this.store_remote_file_clipboard(
+                                filtered_ix,
+                                RemoteClipboardKind::Copy,
+                                window,
+                                cx,
+                            );
+                        },
+                    )),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.cut")).on_click(window.listener_for(
+                    &view_cut_entries,
+                    move |this, _, window, cx| {
+                        this.store_remote_file_clipboard(
+                            filtered_ix,
+                            RemoteClipboardKind::Cut,
+                            window,
+                            cx,
+                        );
+                    },
+                )),
+            )
+            .item(
+                PopupMenuItem::new(t!("FileManager.paste"))
+                    .icon(IconName::Paste)
+                    .on_click(
+                        window.listener_for(&view_paste, move |this, _, window, cx| {
+                            this.paste_remote_file_clipboard(
+                                target_dir_for_paste.clone(),
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
+            )
+            .separator();
 
         // 下载
         let view_download = view.clone();
@@ -4354,24 +4809,43 @@ impl FileManagerPanel {
         let view_upload_folder = view.clone();
         let view_delete = view.clone();
         let view_refresh = view.clone();
-        menu = menu
-            .separator()
-            .item(
-                PopupMenuItem::new(t!("FileManager.delete"))
-                    .icon(IconName::Remove)
+        menu = menu.separator().item(
+            PopupMenuItem::new(t!("FileManager.delete"))
+                .icon(IconName::Remove)
+                .on_click(
+                    window.listener_for(&view_delete, move |this, _, window, cx| {
+                        this.delete_context_item_or_selection(
+                            filtered_ix,
+                            name_for_delete.clone(),
+                            path_for_delete.clone(),
+                            is_dir_for_delete,
+                            window,
+                            cx,
+                        );
+                    }),
+                ),
+        );
+
+        if let Some(item) = item_for_properties {
+            let view_properties = view.clone();
+            let path_for_properties = full_path.to_string();
+            menu = menu.item(
+                PopupMenuItem::new(t!("FileManager.properties"))
+                    .icon(IconName::Info)
                     .on_click(
-                        window.listener_for(&view_delete, move |this, _, window, cx| {
-                            this.delete_context_item_or_selection(
-                                filtered_ix,
-                                name_for_delete.clone(),
-                                path_for_delete.clone(),
-                                is_dir_for_delete,
+                        window.listener_for(&view_properties, move |this, _, window, cx| {
+                            this.show_file_properties(
+                                item.clone(),
+                                path_for_properties.clone(),
                                 window,
                                 cx,
                             );
                         }),
                     ),
-            )
+            );
+        }
+
+        menu = menu
             .separator()
             .item(
                 PopupMenuItem::new(t!("FileManager.upload_file"))
@@ -4776,7 +5250,7 @@ impl FileManagerPanel {
                                                 let filtered_ix =
                                                     if has_parent { list_ix - 1 } else { list_ix };
                                                 let real_ix = state.filtered_indices[filtered_ix];
-                                                let item = &state.items[real_ix];
+                                                let item = state.items[real_ix].clone();
                                                 let is_selected =
                                                     state.selected_indices.contains(&filtered_ix);
                                                 let item_name = item.name.clone();
@@ -4848,7 +5322,9 @@ impl FileManagerPanel {
                                                         },
                                                     )
                                                     .child(state.render_file_row(
-                                                        item,
+                                                        filtered_ix,
+                                                        &item,
+                                                        &full_path,
                                                         is_selected,
                                                         cx,
                                                     ))
@@ -5055,6 +5531,45 @@ mod tests {
     }
 
     #[test]
+    fn zero_byte_files_display_zero_bytes() {
+        assert_eq!("0 B", super::format_file_size(0));
+    }
+
+    #[test]
+    fn size_sort_key_distinguishes_unknown_and_empty_directories() {
+        let file = super::RemoteFileItem {
+            name: "empty.txt".to_string(),
+            size: 0,
+            modified: std::time::UNIX_EPOCH,
+            is_dir: false,
+            permissions: String::new(),
+            directory_size: super::DirectorySizeState::Unknown,
+        };
+        let ready_directory = super::RemoteFileItem {
+            name: "empty-dir".to_string(),
+            size: 0,
+            modified: std::time::UNIX_EPOCH,
+            is_dir: true,
+            permissions: String::new(),
+            directory_size: super::DirectorySizeState::Ready(0),
+        };
+        let calculating_directory = super::RemoteFileItem {
+            directory_size: super::DirectorySizeState::Calculating,
+            ..ready_directory.clone()
+        };
+        let unknown_directory = super::RemoteFileItem {
+            directory_size: super::DirectorySizeState::Unknown,
+            ..ready_directory.clone()
+        };
+
+        assert_eq!((0, 0), super::size_sort_key(&file));
+        assert_eq!((0, 0), super::size_sort_key(&ready_directory));
+        assert_eq!((1, 0), super::size_sort_key(&calculating_directory));
+        assert_eq!((2, 0), super::size_sort_key(&unknown_directory));
+        assert_eq!("0 B", super::size_label(&ready_directory));
+    }
+
+    #[test]
     fn delete_targets_follow_filtered_selection_order() {
         let items = vec![
             super::RemoteFileItem {
@@ -5062,18 +5577,24 @@ mod tests {
                 size: 10,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
                 name: "conf".to_string(),
                 size: 0,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: true,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
                 name: "data.db".to_string(),
                 size: 20,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
         ];
         let filtered_indices = vec![1, 0, 2];
@@ -5103,18 +5624,24 @@ mod tests {
                 size: 10,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
                 name: "conf".to_string(),
                 size: 0,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: true,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
                 name: "data.db".to_string(),
                 size: 20,
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
             },
         ];
         let filtered_indices = vec![1, 0, 2];
@@ -5154,6 +5681,60 @@ mod tests {
 
         let single_selection = HashSet::from([0usize]);
         assert!(!super::should_use_context_selection(&single_selection, 0));
+    }
+
+    #[test]
+    fn clipboard_entries_follow_filtered_selection_order() {
+        let items = vec![
+            super::RemoteFileItem {
+                name: "a.txt".to_string(),
+                size: 10,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
+            },
+            super::RemoteFileItem {
+                name: "folder".to_string(),
+                size: 0,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: true,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
+            },
+            super::RemoteFileItem {
+                name: "b.txt".to_string(),
+                size: 20,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+                permissions: String::new(),
+                directory_size: super::DirectorySizeState::Unknown,
+            },
+        ];
+        let entries = super::clipboard_entries_for_selection(
+            "/srv",
+            &items,
+            &[1, 0, 2],
+            &HashSet::from([0usize, 2usize]),
+        );
+
+        assert_eq!(
+            vec![
+                super::RemoteClipboardEntry {
+                    name: "folder".to_string(),
+                    source_path: "/srv/folder".to_string(),
+                    is_dir: true,
+                    size: 0,
+                },
+                super::RemoteClipboardEntry {
+                    name: "b.txt".to_string(),
+                    source_path: "/srv/b.txt".to_string(),
+                    is_dir: false,
+                    size: 20,
+                },
+            ],
+            entries
+        );
     }
 
     #[test]

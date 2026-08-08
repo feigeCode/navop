@@ -3,6 +3,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod context_menu_handler;
 mod endpoint;
 mod endpoint_switcher;
+mod file_clipboard;
 mod file_list_panel;
 mod left_remote;
 mod left_remote_state;
@@ -12,8 +13,10 @@ use context_menu_handler::ContextMenuHandler;
 use endpoint::{
     DragSource, LeftEndpointKind, LeftEndpointValue, PaneSide, TransferRoute, transfer_route,
 };
+use file_clipboard::FileClipboard;
 pub use file_list_panel::{
-    DraggedFileItem, DraggedFileItems, FileItem, FileListPanel, FileListPanelEvent,
+    DirectorySizeState, DraggedFileItem, DraggedFileItems, FileItem, FileListPanel,
+    FileListPanelEvent,
 };
 
 use gpui::{
@@ -942,6 +945,7 @@ pub struct SftpView {
     local_panel: Entity<FileListPanel>,
     remote_panel: Entity<FileListPanel>,
     left_remote: Option<LeftRemoteEndpoint>,
+    file_clipboard: Option<FileClipboard>,
 
     local_path_editing: bool,
     remote_path_editing: bool,
@@ -1156,6 +1160,7 @@ impl SftpView {
             local_panel,
             remote_panel,
             left_remote: None,
+            file_clipboard: None,
             local_path_editing: false,
             remote_path_editing: false,
             local_path_input,
@@ -1358,6 +1363,7 @@ impl SftpView {
                             modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                             is_dir: metadata.is_dir(),
                             permissions: String::new(),
+                            directory_size: DirectorySizeState::Unknown,
                         });
                     }
                 }
@@ -1427,6 +1433,7 @@ impl SftpView {
                             modified: e.modified,
                             is_dir: e.is_dir,
                             permissions: format_permissions(e.permissions, e.is_dir),
+                            directory_size: DirectorySizeState::Unknown,
                         })
                         .collect();
                     let _ = view.update(cx, |this, cx| {
@@ -3022,6 +3029,7 @@ impl SftpView {
                         modified: e.modified,
                         is_dir: e.is_dir,
                         permissions: format_permissions(e.permissions, e.is_dir),
+                        directory_size: DirectorySizeState::Unknown,
                     })
                     .collect();
 
@@ -3173,6 +3181,7 @@ impl SftpView {
                         modified: e.modified,
                         is_dir: e.is_dir,
                         permissions: String::new(),
+                        directory_size: DirectorySizeState::Unknown,
                     })
                     .collect();
                 let local_dir_for_result = local_dir.clone();

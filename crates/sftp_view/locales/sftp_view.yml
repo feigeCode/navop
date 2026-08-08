@@ -18,6 +18,62 @@ Common:
     en: Rename
     zh-CN: 重命名
     zh-HK: 重命名
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  cut:
+    en: Cut
+    zh-CN: 剪切
+    zh-HK: 剪下
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  properties:
+    en: Properties
+    zh-CN: 属性
+    zh-HK: 屬性
+  calculate:
+    en: Calculate
+    zh-CN: 计算
+    zh-HK: 計算
+  calculating:
+    en: Calculating…
+    zh-CN: 计算中…
+    zh-HK: 計算中…
+  property_name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  property_path:
+    en: Path
+    zh-CN: 路径
+    zh-HK: 路徑
+  property_type:
+    en: Type
+    zh-CN: 类型
+    zh-HK: 類型
+  property_file:
+    en: File
+    zh-CN: 文件
+    zh-HK: 文件
+  property_folder:
+    en: Folder
+    zh-CN: 文件夹
+    zh-HK: 文件夾
+  property_size:
+    en: Size
+    zh-CN: 大小
+    zh-HK: 大小
+  property_modified:
+    en: Modified
+    zh-CN: 修改时间
+    zh-HK: 修改時間
+  property_permissions:
+    en: Permissions
+    zh-CN: 权限
+    zh-HK: 權限
   extract:
     en: Extract
     zh-CN: 解压
@@ -424,6 +480,18 @@ FavoritePath:
 
 # 提示信息
 Notification:
+  clipboard_copied:
+    en: Files copied. Choose a destination and paste.
+    zh-CN: 已复制文件，请选择目标位置后粘贴
+    zh-HK: 已複製文件，請選擇目標位置後貼上
+  clipboard_cut:
+    en: Files cut. Choose a destination and paste.
+    zh-CN: 已剪切文件，请选择目标位置后粘贴
+    zh-HK: 已剪下文件，請選擇目標位置後貼上
+  paste_success:
+    en: Paste completed
+    zh-CN: 粘贴完成
+    zh-HK: 貼上完成
   clipboard_upload_not_connected:
     en: SFTP is not connected, so clipboard content cannot be uploaded
     zh-CN: SFTP 未连接，无法上传剪贴板内容
@@ -463,6 +531,26 @@ Notification:
 
 # 错误信息
 Error:
+  clipboard_empty:
+    en: No files have been copied or cut
+    zh-CN: 尚未复制或剪切文件
+    zh-HK: 尚未複製或剪下文件
+  incompatible_paste_endpoint:
+    en: Pasting between different endpoints is not supported
+    zh-CN: 暂不支持在不同端点之间粘贴
+    zh-HK: 暫不支持在不同端點之間貼上
+  invalid_paste_target:
+    en: A folder cannot be pasted into itself or one of its descendants
+    zh-CN: 文件夹不能粘贴到自身或其子目录
+    zh-HK: 文件夾不能貼上到自身或其子目錄
+  paste_failed:
+    en: "Paste failed: %{error}"
+    zh-CN: "粘贴失败：%{error}"
+    zh-HK: "貼上失敗：%{error}"
+  calculate_size_failed:
+    en: "Failed to calculate folder size: %{error}"
+    zh-CN: "计算文件夹大小失败：%{error}"
+    zh-HK: "計算文件夾大小失敗：%{error}"
   sftp_not_connected:
     en: SFTP client is not connected
     zh-CN: SFTP 客户端未连接

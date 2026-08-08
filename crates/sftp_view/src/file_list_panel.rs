@@ -32,6 +32,15 @@ pub struct FileItem {
     pub modified: SystemTime,
     pub is_dir: bool,
     pub permissions: String,
+    pub directory_size: DirectorySizeState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectorySizeState {
+    #[default]
+    Unknown,
+    Calculating,
+    Ready(u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,9 +57,9 @@ pub enum SortOrder {
     Descending,
 }
 
-fn format_file_size(size: u64) -> String {
+pub(crate) fn format_file_size(size: u64) -> String {
     if size == 0 {
-        return "- -".to_string();
+        return "0 B".to_string();
     }
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -63,7 +72,31 @@ fn format_file_size(size: u64) -> String {
     } else if size >= KB {
         format!("{:.2} kB", size as f64 / KB as f64)
     } else {
-        format!("{} Bytes", size)
+        format!("{} B", size)
+    }
+}
+
+fn size_sort_key(item: &FileItem) -> (u8, u64) {
+    if !item.is_dir {
+        return (0, item.size);
+    }
+
+    match item.directory_size {
+        DirectorySizeState::Ready(size) => (0, size),
+        DirectorySizeState::Calculating => (1, 0),
+        DirectorySizeState::Unknown => (2, 0),
+    }
+}
+
+fn size_label(item: &FileItem) -> String {
+    if !item.is_dir {
+        return format_file_size(item.size);
+    }
+
+    match item.directory_size {
+        DirectorySizeState::Unknown => t!("File.calculate").to_string(),
+        DirectorySizeState::Calculating => t!("File.calculating").to_string(),
+        DirectorySizeState::Ready(size) => format_file_size(size),
     }
 }
 
@@ -265,6 +298,42 @@ impl FileListPanel {
         cx.notify();
     }
 
+    pub fn set_directory_size_state(
+        &mut self,
+        full_path: &str,
+        state: DirectorySizeState,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let is_remote = self.is_remote;
+        let current_path = self.current_path.clone();
+        let Some(item) = self.items.iter_mut().find(|item| {
+            let item_path = if is_remote {
+                if current_path.ends_with('/') {
+                    format!("{}{}", current_path, item.name)
+                } else {
+                    format!("{}/{}", current_path, item.name)
+                }
+            } else {
+                std::path::Path::new(&current_path)
+                    .join(&item.name)
+                    .to_string_lossy()
+                    .to_string()
+            };
+            item.is_dir && item_path == full_path
+        }) else {
+            return false;
+        };
+
+        item.directory_size = state;
+        if self.sort_column == SortColumn::Size {
+            self.sort_items();
+            self.apply_filter();
+            self.clear_selection();
+        }
+        cx.notify();
+        true
+    }
+
     pub fn set_path(&mut self, path: String, _window: &mut Window, cx: &mut Context<Self>) {
         self.current_path = path;
         self.path_editing = false;
@@ -447,7 +516,7 @@ impl FileListPanel {
             let cmp = match sort_column {
                 SortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
                 SortColumn::Modified => a.modified.cmp(&b.modified),
-                SortColumn::Size => a.size.cmp(&b.size),
+                SortColumn::Size => size_sort_key(a).cmp(&size_sort_key(b)),
                 SortColumn::Kind => get_file_kind(&a.name).cmp(&get_file_kind(&b.name)),
             };
 
@@ -593,14 +662,16 @@ impl FileListPanel {
         &self,
         ix: usize,
         item: &FileItem,
+        full_path: &str,
         is_selected: bool,
-        cx: &App,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let name = item.name.clone();
         let display_name = display_file_name(&name);
         let is_dir = item.is_dir;
-        let size = item.size;
         let modified = item.modified;
+        let directory_size = item.directory_size;
+        let size_path = full_path.to_string();
 
         h_flex()
             .h(FILE_ROW_HEIGHT)
@@ -668,6 +739,7 @@ impl FileListPanel {
             )
             .child(
                 div()
+                    .id(("file-size", ix))
                     .w(SIZE_COLUMN_WIDTH)
                     .min_w_0()
                     .overflow_hidden()
@@ -676,11 +748,20 @@ impl FileListPanel {
                     .text_color(cx.theme().muted_foreground)
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .child(if is_dir {
-                        "- -".to_string()
-                    } else {
-                        format_file_size(size)
-                    }),
+                    .when(
+                        is_dir && directory_size == DirectorySizeState::Unknown,
+                        |el| {
+                            el.cursor_pointer()
+                                .text_color(cx.theme().link)
+                                .on_click(cx.listener(move |_this, _, _window, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(FileListPanelEvent::CalculateSize {
+                                        full_path: size_path.clone(),
+                                    });
+                                }))
+                        },
+                    )
+                    .child(size_label(item)),
             )
             .child(
                 div()
@@ -793,10 +874,55 @@ impl FileListPanel {
         let path_for_delete = full_path.to_string();
         let path_for_upload_file = full_path.to_string();
         let path_for_upload_folder = full_path.to_string();
+        let target_dir_for_paste = if is_dir {
+            full_path.to_string()
+        } else {
+            view.read(cx).current_path.clone()
+        };
+        let item_for_properties = view
+            .read(cx)
+            .filtered_indices
+            .get(filtered_ix)
+            .and_then(|&real_ix| view.read(cx).items.get(real_ix))
+            .cloned();
 
         let view_ref = view.clone();
 
         let mut menu = menu;
+
+        let view_copy_entries = view_ref.clone();
+        let view_cut_entries = view_ref.clone();
+        let view_paste = view_ref.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::new(t!("File.copy").to_string())
+                    .icon(IconName::Copy)
+                    .on_click(
+                        window.listener_for(&view_copy_entries, move |this, _, _, cx| {
+                            this.select_context_target(filtered_ix, cx);
+                            cx.emit(FileListPanelEvent::CopyEntries);
+                        }),
+                    ),
+            )
+            .item(
+                PopupMenuItem::new(t!("File.cut").to_string()).on_click(window.listener_for(
+                    &view_cut_entries,
+                    move |this, _, _, cx| {
+                        this.select_context_target(filtered_ix, cx);
+                        cx.emit(FileListPanelEvent::CutEntries);
+                    },
+                )),
+            )
+            .item(
+                PopupMenuItem::new(t!("File.paste").to_string())
+                    .icon(IconName::Paste)
+                    .on_click(window.listener_for(&view_paste, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::PasteInto {
+                            target_dir: target_dir_for_paste.clone(),
+                        });
+                    })),
+            )
+            .separator();
 
         // 文件夹专属操作：新建文件、新建文件夹
         if is_dir {
@@ -1008,6 +1134,23 @@ impl FileListPanel {
                 })),
         );
 
+        if let Some(item) = item_for_properties {
+            let view_properties = view_ref.clone();
+            let properties_path = full_path.to_string();
+            menu = menu.item(
+                PopupMenuItem::new(t!("File.properties").to_string())
+                    .icon(IconName::Info)
+                    .on_click(
+                        window.listener_for(&view_properties, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::Properties {
+                                item: item.clone(),
+                                full_path: properties_path.clone(),
+                            });
+                        }),
+                    ),
+            );
+        }
+
         // 远程面板文件夹：上传文件、上传文件夹
         if is_remote && is_dir {
             let view_upload_file = view_ref.clone();
@@ -1118,6 +1261,18 @@ pub enum FileListPanelEvent {
     },
     /// 复制绝对路径
     CopyAbsolutePath {
+        full_path: String,
+    },
+    CopyEntries,
+    CutEntries,
+    PasteInto {
+        target_dir: String,
+    },
+    Properties {
+        item: FileItem,
+        full_path: String,
+    },
+    CalculateSize {
         full_path: String,
     },
     /// 删除文件/文件夹
@@ -1287,8 +1442,56 @@ impl Render for DraggedFileItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{FileListContentState, display_file_name, file_list_content_state};
+    use super::{
+        DirectorySizeState, FileItem, FileListContentState, display_file_name,
+        file_list_content_state, format_file_size, size_sort_key,
+    };
     use std::collections::HashSet;
+    use std::time::UNIX_EPOCH;
+
+    fn file_item(size: u64) -> FileItem {
+        FileItem {
+            name: "file".to_string(),
+            size,
+            modified: UNIX_EPOCH,
+            is_dir: false,
+            permissions: String::new(),
+            directory_size: DirectorySizeState::Unknown,
+        }
+    }
+
+    fn directory_item(state: DirectorySizeState) -> FileItem {
+        FileItem {
+            name: "folder".to_string(),
+            size: 0,
+            modified: UNIX_EPOCH,
+            is_dir: true,
+            permissions: String::new(),
+            directory_size: state,
+        }
+    }
+
+    #[test]
+    fn zero_byte_files_display_zero_bytes() {
+        assert_eq!("0 B", format_file_size(0));
+    }
+
+    #[test]
+    fn size_sort_key_distinguishes_unknown_and_empty_directories() {
+        assert_eq!((0, 0), size_sort_key(&file_item(0)));
+        assert_eq!(
+            (0, 0),
+            size_sort_key(&directory_item(DirectorySizeState::Ready(0)))
+        );
+        assert_eq!(
+            (1, 0),
+            size_sort_key(&directory_item(DirectorySizeState::Calculating))
+        );
+        assert_eq!(
+            (2, 0),
+            size_sort_key(&directory_item(DirectorySizeState::Unknown))
+        );
+    }
 
     #[test]
     fn display_file_name_replaces_line_breaks_and_tabs() {
@@ -1436,7 +1639,7 @@ impl Render for FileListPanel {
                                     let filtered_ix =
                                         if has_parent { list_ix - 1 } else { list_ix };
                                     let real_ix = state.filtered_indices[filtered_ix];
-                                    let item = &state.items[real_ix];
+                                    let item = state.items[real_ix].clone();
                                     let is_selected = state.selected_indices.contains(&filtered_ix);
                                     let item_name = item.name.clone();
                                     let is_dir = item.is_dir;
@@ -1559,7 +1762,8 @@ impl Render for FileListPanel {
                                         })
                                         .child(state.render_file_row(
                                             filtered_ix,
-                                            item,
+                                            &item,
+                                            &full_path,
                                             is_selected,
                                             cx,
                                         ))
