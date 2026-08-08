@@ -3,15 +3,19 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi::{
-    ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult, NavopRdpBorrowedSecret,
-    NavopRdpCreateOptions, NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions,
-    RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK,
-    RESULT_WRONG_THREAD,
+    ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult,
+    NavopRdpBorrowedSecret, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
+    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH,
+    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_WRONG_THREAD,
 };
 
 unsafe extern "C" {
     fn navop_rdp_create(
         options: *const NavopRdpCreateOptions,
+        out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult;
+    fn navop_rdp_create_with_parent(
+        options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
     ) -> NativeResult;
     fn navop_rdp_register_event_callback(
@@ -31,6 +35,25 @@ unsafe extern "C" {
         event: *const NavopRdpEvent,
         payload: *const u8,
     ) -> NativeResult;
+}
+
+unsafe extern "system" {
+    fn CreateWindowExW(
+        ex_style: u32,
+        class_name: *const u16,
+        window_name: *const u16,
+        style: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        parent: *mut c_void,
+        menu: *mut c_void,
+        instance: *mut c_void,
+        parameter: *mut c_void,
+    ) -> *mut c_void;
+    fn DestroyWindow(window: *mut c_void) -> i32;
+    fn IsWindow(window: *mut c_void) -> i32;
 }
 
 fn event(generation: u64, kind: u32, code: i32, payload_len: u32) -> NavopRdpEvent {
@@ -146,6 +169,104 @@ fn credential_bundle(server: Option<&[u16]>, gateway: Option<&[u16]>) -> NavopRd
         gateway_password: borrowed_secret(gateway),
         flags: 0,
     }
+}
+
+fn create_hidden_test_parent() -> *mut c_void {
+    const CLASS_NAME: &[u16] = &[
+        b'S' as u16,
+        b'T' as u16,
+        b'A' as u16,
+        b'T' as u16,
+        b'I' as u16,
+        b'C' as u16,
+        0,
+    ];
+    const WINDOW_NAME: &[u16] = &[b'n' as u16, b'a' as u16, b'v' as u16, 0];
+
+    unsafe {
+        CreateWindowExW(
+            0,
+            CLASS_NAME.as_ptr(),
+            WINDOW_NAME.as_ptr(),
+            0,
+            0,
+            0,
+            32,
+            32,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    }
+}
+
+#[test]
+fn native_create_with_parent_rejects_invalid_abi_and_never_returns_a_handle() {
+    let generation = 0x1122_3344_aabb_ccdd;
+    let mut options = NavopRdpCreateWithParentOptions::current(generation, 1);
+    let mut host = 1_usize as *mut NativeRdpHost;
+
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent(ptr::null(), &mut host) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert!(host.is_null());
+
+    host = 1_usize as *mut NativeRdpHost;
+    options.struct_size -= 1;
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent(&options, &mut host) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert!(host.is_null());
+
+    host = 1_usize as *mut NativeRdpHost;
+    options = NavopRdpCreateWithParentOptions::current(generation, 1);
+    options.abi_version = CREATE_WITH_PARENT_ABI_VERSION + 1;
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent(&options, &mut host) },
+        RESULT_ABI_MISMATCH
+    );
+    assert!(host.is_null());
+
+    host = 1_usize as *mut NativeRdpHost;
+    options = NavopRdpCreateWithParentOptions::current(generation, 0);
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent(&options, &mut host) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert!(host.is_null());
+
+    host = 1_usize as *mut NativeRdpHost;
+    options = NavopRdpCreateWithParentOptions::current(generation, 1);
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent(&options, &mut host) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_create_with_parent_rejects_a_parent_owned_by_another_thread() {
+    let parent = create_hidden_test_parent();
+    assert!(!parent.is_null(), "STATIC parent window should be created");
+    assert_eq!(unsafe { IsWindow(parent) }, 1);
+
+    let parent_raw = parent as usize;
+    let result = std::thread::spawn(move || {
+        let options = NavopRdpCreateWithParentOptions::current(7, parent_raw);
+        let mut host = ptr::null_mut();
+        let result = unsafe { navop_rdp_create_with_parent(&options, &mut host) };
+        (result, host.is_null())
+    })
+    .join()
+    .expect("wrong-thread test worker should finish");
+
+    assert_eq!(result.0, RESULT_WRONG_THREAD);
+    assert!(result.1);
+    assert_eq!(unsafe { IsWindow(parent) }, 1);
+    assert_eq!(unsafe { DestroyWindow(parent) }, 1);
 }
 
 #[derive(Default)]

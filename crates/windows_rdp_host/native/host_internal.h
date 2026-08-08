@@ -8,13 +8,25 @@ enum class CallbackState : uint32_t {
     Closed,
 };
 
+struct NativeRdpActiveXResources;
+
+NavopRdpResult create_active_x_resources(
+    uintptr_t parent_hwnd,
+    NativeRdpActiveXResources** out_resources) noexcept;
+
+void destroy_active_x_resources(
+    NativeRdpActiveXResources* resources) noexcept;
+
 struct NativeRdpHost {
+    ~NativeRdpHost() noexcept;
+
     uint64_t generation;
     uint32_t owner_thread_id;
     uint32_t callbacks_in_flight;
     NavopRdpEventCallback callback;
     void* callback_context;
     CallbackState callback_state;
+    NativeRdpActiveXResources* active_x_resources;
 };
 
 NavopRdpResult ensure_owner_thread(

@@ -29,6 +29,11 @@ uint64_t join_generation(uint32_t low, uint32_t high) noexcept {
 
 }  // namespace
 
+NativeRdpHost::~NativeRdpHost() noexcept {
+    destroy_active_x_resources(active_x_resources);
+    active_x_resources = nullptr;
+}
+
 extern "C" NavopRdpResult navop_rdp_probe(
     const NavopRdpProbeOptions* options,
     NavopRdpProbeResult* out_result) noexcept {
@@ -106,9 +111,78 @@ extern "C" NavopRdpResult navop_rdp_create(
             UINT32_C(0),
             nullptr,
             nullptr,
-            CallbackState::Open};
+            CallbackState::Open,
+            nullptr};
         if (host == nullptr) {
             return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+        }
+
+        *out_host = host;
+        return NAVOP_RDP_RESULT_OK;
+    } catch (...) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+}
+
+extern "C" NavopRdpResult navop_rdp_create_with_parent(
+    const NavopRdpCreateWithParentOptions* options,
+    NativeRdpHost** out_host) noexcept {
+    try {
+        if (out_host == nullptr) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+        *out_host = nullptr;
+
+        if (options == nullptr) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        NavopRdpResult result = validate_struct_size(
+            options->struct_size,
+            static_cast<uint32_t>(sizeof(NavopRdpCreateWithParentOptions)));
+        if (result != NAVOP_RDP_RESULT_OK) {
+            return result;
+        }
+
+        if (options->abi_version != NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION) {
+            return NAVOP_RDP_RESULT_ABI_MISMATCH;
+        }
+
+        if (options->parent_hwnd == 0) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        const HWND parent = reinterpret_cast<HWND>(options->parent_hwnd);
+        if (!IsWindow(parent)) {
+            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        }
+
+        const DWORD parent_thread = GetWindowThreadProcessId(parent, nullptr);
+        if (parent_thread == 0 ||
+            parent_thread != static_cast<DWORD>(GetCurrentThreadId())) {
+            return NAVOP_RDP_RESULT_WRONG_THREAD;
+        }
+
+        const uint64_t generation =
+            join_generation(options->generation_low, options->generation_high);
+        NativeRdpHost* host = new (std::nothrow) NativeRdpHost{
+            generation,
+            static_cast<uint32_t>(GetCurrentThreadId()),
+            UINT32_C(0),
+            nullptr,
+            nullptr,
+            CallbackState::Open,
+            nullptr};
+        if (host == nullptr) {
+            return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+        }
+
+        result = create_active_x_resources(
+            options->parent_hwnd,
+            &host->active_x_resources);
+        if (result != NAVOP_RDP_RESULT_OK) {
+            delete host;
+            return result;
         }
 
         *out_host = host;

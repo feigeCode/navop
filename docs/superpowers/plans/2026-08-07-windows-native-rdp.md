@@ -1324,6 +1324,42 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Rollback:** native presentation 仍未启用，禁用 feature 即回到 canvas。
 
+**Execution Notes (2026-08-07) — 第一垂直切片：borrowed parent 与 hidden ActiveX host：**
+
+- Red evidence:
+  - 增加独立 versioned `create_with_parent` ABI 的 layout、invalid parent、ABI mismatch、
+    wrong-thread、null handle、native failure 与 Rust facade forwarding 覆盖。
+  - Windows-only native tests 覆盖错误线程不返回 host，且 caller-owned parent 仍由 caller
+    销毁；macOS 使用 `--cfg windows_rdp_host_native` 仅 type-check Rust 侧测试。
+- Green implementation:
+  - 新增 `uintptr_t`/`usize` borrowed parent ABI；parent 为 caller-owned、non-owning，
+    host 仅拥有自身创建的 child。
+  - 创建 hidden、zero-sized `AtlAxWin` child，使用
+    `AtlAxCreateControlEx` 创建空 `MsRdpClient12`，并 query `IMsRdpClient10`。
+  - partial-create failure 与 host destroy 通过 RAII 依次销毁 child window、释放 COM
+    references、终止 ATL/OLE 初始化。
+- Refactor/review:
+  - `NativeRdpHost` 继续只向 Rust 暴露 opaque pointer，ActiveX resources 独立封装。
+  - versioned prefix 在读取 `parent_hwnd` 前先校验 `struct_size` 与 ABI version，避免短
+    caller layout 的越界读取。
+- Automated verification:
+  - `cargo fmt --all -- --check`
+  - `cargo test --locked -p windows_rdp_host`
+  - `cargo clippy --locked -p windows_rdp_host --all-targets -- -D warnings`
+  - `RUSTFLAGS='--cfg windows_rdp_host_native' cargo check --locked -p windows_rdp_host --tests`
+  - `git diff --check`
+- Manual verification:
+  - 当前 macOS 环境没有 MSVC、ATL、Windows COM registry 或真实 `HWND`，未执行
+    Windows runtime smoke。
+- Known limitations:
+  - Windows MSVC/ATL compile、`#import` type-library resolution、x86/x64 link、
+    ActiveX create/query/destroy 与多 host ATL lifetime 仍需 Windows CI/VM 验证。
+  - `UIParentWindowHandle`、bounds、show/hide、focus、connect 与 repeated
+    create/destroy resource-leak smoke 留给 Task 3 后续切片。
+- Decision changes:
+  - 不扩展既有 16-byte `NavopRdpCreateOptions`；parent create 使用独立 ABI version，
+    以保持已发布布局不变。
+
 ---
 
 ### Task 4: host/port 最小连接垂直切片

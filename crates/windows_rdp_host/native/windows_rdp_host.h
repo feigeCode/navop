@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define NAVOP_RDP_ABI_VERSION UINT32_C(1)
+#define NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)
 
 typedef struct NativeRdpHost NativeRdpHost;
 
@@ -42,6 +43,22 @@ typedef struct NavopRdpCreateOptions {
     uint32_t generation_low;
     uint32_t generation_high;
 } NavopRdpCreateOptions;
+
+/*
+ * parent_hwnd is a caller-owned, non-null, non-owning native window handle
+ * passed as a pointer-sized integer. The host creates and owns only its hidden
+ * child window. The caller must keep the parent window valid on the host
+ * owner/UI thread until the host has been successfully destroyed;
+ * navop_rdp_destroy never destroys or otherwise takes ownership of the parent
+ * window.
+ */
+typedef struct NavopRdpCreateWithParentOptions {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    uint32_t generation_low;
+    uint32_t generation_high;
+    uintptr_t parent_hwnd;
+} NavopRdpCreateWithParentOptions;
 
 typedef struct NavopRdpEvent {
     uint32_t struct_size;
@@ -132,6 +149,22 @@ static_assert(offsetof(NavopRdpCreateOptions, struct_size) == 0);
 static_assert(offsetof(NavopRdpCreateOptions, abi_version) == 4);
 static_assert(offsetof(NavopRdpCreateOptions, generation_low) == 8);
 static_assert(offsetof(NavopRdpCreateOptions, generation_high) == 12);
+static_assert(sizeof(NavopRdpCreateWithParentOptions) >= 20);
+static_assert(alignof(NavopRdpCreateWithParentOptions) == alignof(uintptr_t));
+static_assert(offsetof(NavopRdpCreateWithParentOptions, struct_size) == 0);
+static_assert(offsetof(NavopRdpCreateWithParentOptions, abi_version) == 4);
+static_assert(offsetof(NavopRdpCreateWithParentOptions, generation_low) == 8);
+static_assert(offsetof(NavopRdpCreateWithParentOptions, generation_high) == 12);
+static_assert(offsetof(NavopRdpCreateWithParentOptions, parent_hwnd) == 16);
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(NavopRdpCreateWithParentOptions) == 24);
+static_assert(alignof(NavopRdpCreateWithParentOptions) == 8);
+#elif INTPTR_MAX == INT32_MAX
+static_assert(sizeof(NavopRdpCreateWithParentOptions) == 20);
+static_assert(alignof(NavopRdpCreateWithParentOptions) == 4);
+#else
+#error Unsupported pointer width for the Windows RDP create-with-parent ABI
+#endif
 static_assert(sizeof(NavopRdpEvent) == 32);
 static_assert(alignof(NavopRdpEvent) == 4);
 static_assert(offsetof(NavopRdpEvent, struct_size) == 0);
@@ -185,6 +218,10 @@ NavopRdpResult navop_rdp_probe(
 
 NavopRdpResult navop_rdp_create(
     const NavopRdpCreateOptions* options,
+    NativeRdpHost** out_host) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_create_with_parent(
+    const NavopRdpCreateWithParentOptions* options,
     NativeRdpHost** out_host) NAVOP_RDP_NOEXCEPT;
 
 NavopRdpResult navop_rdp_register_event_callback(

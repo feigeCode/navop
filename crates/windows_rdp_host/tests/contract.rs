@@ -106,6 +106,13 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "typedef struct NavopRdpProbeOptions",
             "typedef struct NavopRdpProbeResult",
             "typedef struct NavopRdpCreateOptions",
+            "NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)",
+            "typedef struct NavopRdpCreateWithParentOptions",
+            "uintptr_t parent_hwnd;",
+            "caller-owned",
+            "non-owning native window handle",
+            "owns only its hidden",
+            "never destroys or otherwise takes ownership of the parent",
             "uint32_t struct_size;",
             "uint32_t abi_version;",
             "uint32_t generation_low;",
@@ -117,6 +124,7 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "extern \"C\"",
             "navop_rdp_probe(",
             "navop_rdp_create(",
+            "navop_rdp_create_with_parent(",
             "NativeRdpHost** out_host",
             "navop_rdp_destroy(",
             "NativeRdpHost** host",
@@ -164,6 +172,17 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "static_assert(offsetof(NavopRdpCreateOptions, abi_version) == 4)",
             "static_assert(offsetof(NavopRdpCreateOptions, generation_low) == 8)",
             "static_assert(offsetof(NavopRdpCreateOptions, generation_high) == 12)",
+            "static_assert(sizeof(NavopRdpCreateWithParentOptions) >= 20)",
+            "static_assert(alignof(NavopRdpCreateWithParentOptions) == alignof(uintptr_t))",
+            "static_assert(offsetof(NavopRdpCreateWithParentOptions, struct_size) == 0)",
+            "static_assert(offsetof(NavopRdpCreateWithParentOptions, abi_version) == 4)",
+            "static_assert(offsetof(NavopRdpCreateWithParentOptions, generation_low) == 8)",
+            "static_assert(offsetof(NavopRdpCreateWithParentOptions, generation_high) == 12)",
+            "static_assert(offsetof(NavopRdpCreateWithParentOptions, parent_hwnd) == 16)",
+            "sizeof(NavopRdpCreateWithParentOptions) == 24",
+            "alignof(NavopRdpCreateWithParentOptions) == 8",
+            "sizeof(NavopRdpCreateWithParentOptions) == 20",
+            "alignof(NavopRdpCreateWithParentOptions) == 4",
         ],
     );
     assert_contains_all(
@@ -174,12 +193,20 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "struct NavopRdpProbeOptions",
             "struct NavopRdpProbeResult",
             "struct NavopRdpCreateOptions",
+            "CREATE_WITH_PARENT_ABI_VERSION",
+            "struct NavopRdpCreateWithParentOptions",
+            "parent_hwnd: usize",
             "size_of::<NavopRdpProbeOptions>()",
             "align_of::<NavopRdpProbeOptions>()",
             "size_of::<NavopRdpProbeResult>()",
             "align_of::<NavopRdpProbeResult>()",
             "size_of::<NavopRdpCreateOptions>()",
             "align_of::<NavopRdpCreateOptions>()",
+            "offset_of!(NavopRdpCreateWithParentOptions, parent_hwnd) == 16",
+            "size_of::<NavopRdpCreateWithParentOptions>() == 24",
+            "align_of::<NavopRdpCreateWithParentOptions>() == 8",
+            "size_of::<NavopRdpCreateWithParentOptions>() == 20",
+            "align_of::<NavopRdpCreateWithParentOptions>() == 4",
         ],
     );
 }
@@ -673,7 +700,7 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
     assert_tokens_in_scope(
         source,
         "extern \"C\" NavopRdpResult navop_rdp_create(",
-        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_destroy(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_create_with_parent(",
         &[
             "try {",
             "out_host == nullptr",
@@ -685,6 +712,32 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
             "options->abi_version",
             "new (std::nothrow) NativeRdpHost",
             "NAVOP_RDP_RESULT_ALLOCATION_FAILED",
+            "*out_host = host;",
+            "catch (...)",
+            "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "extern \"C\" NavopRdpResult navop_rdp_create_with_parent(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_register_event_callback(",
+        &[
+            "try {",
+            "out_host == nullptr",
+            "*out_host = nullptr;",
+            "options == nullptr",
+            "validate_struct_size(",
+            "options->struct_size",
+            "NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION",
+            "options->parent_hwnd == 0",
+            "reinterpret_cast<HWND>(options->parent_hwnd)",
+            "IsWindow(parent)",
+            "GetWindowThreadProcessId(parent, nullptr)",
+            "GetCurrentThreadId()",
+            "NAVOP_RDP_RESULT_WRONG_THREAD",
+            "new (std::nothrow) NativeRdpHost",
+            "create_active_x_resources(",
+            "delete host;",
             "*out_host = host;",
             "catch (...)",
             "NAVOP_RDP_RESULT_INTERNAL_ERROR",
@@ -712,8 +765,59 @@ fn native_entrypoints_validate_headers_and_contain_failures() {
             "OleInitialize",
             "AtlAx",
             "mstscax",
-            "HWND",
             "CComPtr",
+        ],
+    );
+}
+
+#[test]
+fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources() {
+    let source = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+
+    assert_contains_all(
+        source,
+        &[
+            "#include <windows.h>",
+            "#include <atlbase.h>",
+            "#include <atlhost.h>",
+            "#import \"libid:8C11EFA1-92C3-11D1-BC1E-00C04FA31489\"",
+            "#include \"mstscax.tlh\"",
+            "struct ActiveXCleanup",
+            "CComPtr<IUnknown> container;",
+            "CComPtr<IUnknown> control;",
+            "CComPtr<IMsRdpClient10> client;",
+            "OleInitialize(nullptr)",
+            "AtlAxWinInit()",
+            "CreateWindowExW(",
+            "L\"AtlAxWin\"",
+            "WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS",
+            "AtlAxCreateControlEx(",
+            "CLSID:{945EE98E-B376-4EC2-B2E5-64C9410F93B7}",
+            "QueryInterface(",
+            "IID_PPV_ARGS(&resources->state.client)",
+            "*out_resources = resources.release();",
+        ],
+    );
+    assert_tokens_in_scope(
+        source,
+        "~ActiveXCleanup() noexcept",
+        "\n    }\n};",
+        &[
+            "DestroyWindow(child_window);",
+            "client.Release();",
+            "control.Release();",
+            "container.Release();",
+            "AtlAxWinTerm();",
+            "OleUninitialize();",
+        ],
+    );
+    assert_excludes_all(
+        source,
+        &[
+            "WS_VISIBLE",
+            "DestroyWindow(parent)",
+            "SetParent(",
+            "ShowWindow(",
         ],
     );
 }
@@ -727,7 +831,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub use error::WindowsRdpHostError;",
             "pub use handle::WindowsRdpHost;",
             "pub use lifecycle::WindowsRdpHostLifecycle;",
-            "pub use options::WindowsRdpHostOptions;",
+            "pub use options::{WindowsRdpHostOptions, WindowsRdpParentWindow};",
             "mod event;",
             "mod lifecycle;",
         ],
@@ -739,6 +843,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "raw: *mut NativeRdpHost",
             "pub fn probe()",
             "pub fn create(",
+            "pub unsafe fn create_with_parent(",
             "pub fn close(&mut self)",
             "pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle",
             "impl Drop for WindowsRdpHost",
@@ -753,6 +858,16 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "drop_preserves_callback_context_when_unregister_keeps_failing",
             "if self.close().is_err() && self.callback_registered",
             "Box::leak(event_bridge)",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/options.rs"),
+        &[
+            "pub struct WindowsRdpParentWindow(usize);",
+            "pub const unsafe fn from_raw(raw: usize) -> Self",
+            "pub const fn as_raw(self) -> usize",
+            "caller-owned native parent window handle",
+            "host owner/UI thread",
         ],
     );
     assert_contains_all(
@@ -790,7 +905,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
 }
 
 #[test]
-fn build_is_windows_hosted_msvc_only_and_ci_runs_non_activex_host_tests() {
+fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     assert_contains_all(
         &format!("{HOST_CRATE}/build.rs"),
         &[
@@ -802,6 +917,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_non_activex_host_tests() {
             "TARGET",
             "OUT_DIR",
             "host.cpp",
+            "active_x_host.cpp",
             "cpp(true)",
             "/std:c++17",
             "/EHsc",
@@ -811,11 +927,15 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_non_activex_host_tests() {
             "x86_64",
             "x86",
             "msvc",
+            "cargo:rerun-if-env-changed=VCToolsInstallDir",
+            "VCToolsInstallDir",
+            "atlmfc",
+            "atls.lib",
+            "cargo:rustc-link-lib=static=atls",
+            "\"ole32\", \"oleaut32\", \"user32\", \"uuid\"",
+            ".define(\"UNICODE\", None)",
+            ".define(\"_UNICODE\", None)",
         ],
-    );
-    assert_excludes_all(
-        &format!("{HOST_CRATE}/build.rs"),
-        &["atls", "ole32", "mstscax", "AtlAx"],
     );
     let script_path = "script/build-windows-rdp-probe.ps1";
     assert_contains_all(

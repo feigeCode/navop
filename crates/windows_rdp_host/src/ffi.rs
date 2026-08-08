@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::mem::{align_of, size_of};
 
 pub(crate) const ABI_VERSION: u32 = 1;
+pub(crate) const CREATE_WITH_PARENT_ABI_VERSION: u32 = 1;
 
 pub(crate) type NativeResult = i32;
 
@@ -81,6 +82,27 @@ impl NavopRdpCreateOptions {
 }
 
 #[repr(C)]
+pub(crate) struct NavopRdpCreateWithParentOptions {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) generation_low: u32,
+    pub(crate) generation_high: u32,
+    pub(crate) parent_hwnd: usize,
+}
+
+impl NavopRdpCreateWithParentOptions {
+    pub(crate) fn current(generation: u64, parent_hwnd: usize) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: CREATE_WITH_PARENT_ABI_VERSION,
+            generation_low: generation as u32,
+            generation_high: (generation >> 32) as u32,
+            parent_hwnd,
+        }
+    }
+}
+
+#[repr(C)]
 pub(crate) struct NavopRdpEvent {
     pub(crate) struct_size: u32,
     pub(crate) abi_version: u32,
@@ -154,6 +176,12 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpCreateOptions, generation_low) == 8);
     assert!(std::mem::offset_of!(NavopRdpCreateOptions, generation_high) == 12);
 
+    assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, generation_low) == 8);
+    assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, generation_high) == 12);
+    assert!(std::mem::offset_of!(NavopRdpCreateWithParentOptions, parent_hwnd) == 16);
+
     assert!(size_of::<NavopRdpEvent>() == 32);
     assert!(align_of::<NavopRdpEvent>() == 4);
     assert!(std::mem::offset_of!(NavopRdpEvent, struct_size) == 0);
@@ -180,6 +208,8 @@ const _: () = {
 
 #[cfg(target_pointer_width = "64")]
 const _: () = {
+    assert!(size_of::<NavopRdpCreateWithParentOptions>() == 24);
+    assert!(align_of::<NavopRdpCreateWithParentOptions>() == 8);
     assert!(size_of::<NavopRdpBorrowedSecret>() == 16);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 8);
@@ -191,6 +221,8 @@ const _: () = {
 
 #[cfg(target_pointer_width = "32")]
 const _: () = {
+    assert!(size_of::<NavopRdpCreateWithParentOptions>() == 20);
+    assert!(align_of::<NavopRdpCreateWithParentOptions>() == 4);
     assert!(size_of::<NavopRdpBorrowedSecret>() == 8);
     assert!(align_of::<NavopRdpBorrowedSecret>() == 4);
     assert!(std::mem::offset_of!(NavopRdpBorrowedSecret, len) == 4);
@@ -222,6 +254,10 @@ pub(crate) type CreateFn = unsafe fn(
     options: *const NavopRdpCreateOptions,
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult;
+pub(crate) type CreateWithParentFn = unsafe fn(
+    options: *const NavopRdpCreateWithParentOptions,
+    out_host: *mut *mut NativeRdpHost,
+) -> NativeResult;
 pub(crate) type DestroyFn = unsafe fn(host: *mut *mut NativeRdpHost) -> NativeResult;
 pub(crate) type RegisterEventCallbackFn = unsafe fn(
     host: *mut NativeRdpHost,
@@ -239,6 +275,7 @@ pub(crate) type ApplyCredentialsFn = unsafe fn(
 pub(crate) struct NativeBindings {
     pub(crate) probe: ProbeFn,
     pub(crate) create: CreateFn,
+    pub(crate) create_with_parent: CreateWithParentFn,
     pub(crate) destroy: DestroyFn,
     pub(crate) register_event_callback: RegisterEventCallbackFn,
     pub(crate) unregister_event_callback: UnregisterEventCallbackFn,
@@ -248,6 +285,7 @@ pub(crate) struct NativeBindings {
 pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     probe,
     create,
+    create_with_parent,
     destroy,
     register_event_callback,
     unregister_event_callback,
@@ -262,6 +300,10 @@ unsafe extern "C" {
     ) -> NativeResult;
     fn navop_rdp_create(
         options: *const NavopRdpCreateOptions,
+        out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult;
+    fn navop_rdp_create_with_parent(
+        options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
     ) -> NativeResult;
     fn navop_rdp_register_event_callback(
@@ -292,6 +334,14 @@ unsafe fn create(
     out_host: *mut *mut NativeRdpHost,
 ) -> NativeResult {
     unsafe { navop_rdp_create(options, out_host) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn create_with_parent(
+    options: *const NavopRdpCreateWithParentOptions,
+    out_host: *mut *mut NativeRdpHost,
+) -> NativeResult {
+    unsafe { navop_rdp_create_with_parent(options, out_host) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -382,6 +432,36 @@ unsafe fn create(
     let options_abi_version = unsafe { std::ptr::addr_of!((*options).abi_version).read() };
     if options_abi_version != ABI_VERSION {
         return RESULT_ABI_MISMATCH;
+    }
+
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn create_with_parent(
+    options: *const NavopRdpCreateWithParentOptions,
+    out_host: *mut *mut NativeRdpHost,
+) -> NativeResult {
+    if out_host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    unsafe {
+        *out_host = std::ptr::null_mut();
+    }
+    if options.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let options_struct_size = unsafe { std::ptr::addr_of!((*options).struct_size).read() };
+    if options_struct_size < size_of::<NavopRdpCreateWithParentOptions>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let options_abi_version = unsafe { std::ptr::addr_of!((*options).abi_version).read() };
+    if options_abi_version != CREATE_WITH_PARENT_ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
+    }
+    if unsafe { std::ptr::addr_of!((*options).parent_hwnd).read() } == 0 {
+        return RESULT_INVALID_ARGUMENT;
     }
 
     RESULT_UNAVAILABLE

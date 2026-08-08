@@ -9,10 +9,11 @@ use crate::error::{WindowsRdpHostError, check_native_result};
 use crate::event::{EventBridge, native_event_callback};
 use crate::ffi::{
     NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpCreateOptions,
-    NavopRdpEventCallbackOptions, NavopRdpProbeOptions, NavopRdpProbeResult,
+    NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions, NavopRdpProbeOptions,
+    NavopRdpProbeResult,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
-use crate::options::WindowsRdpHostOptions;
+use crate::options::{WindowsRdpHostOptions, WindowsRdpParentWindow};
 
 /// Owns one opaque native RDP host handle.
 ///
@@ -41,6 +42,21 @@ impl WindowsRdpHost {
     /// configuration are deliberately outside this initial ABI slice.
     pub fn create(options: WindowsRdpHostOptions) -> Result<Self, WindowsRdpHostError> {
         Self::create_with(options, NATIVE_BINDINGS)
+    }
+
+    /// Creates a hidden, zero-sized native ActiveX child below `parent`.
+    ///
+    /// # Safety
+    ///
+    /// The parent handle must be a valid caller-owned window on the current
+    /// owner/UI thread and must remain valid until this host has been
+    /// successfully closed or dropped. The host owns only its child window and
+    /// never destroys or otherwise takes ownership of `parent`.
+    pub unsafe fn create_with_parent(
+        parent: WindowsRdpParentWindow,
+        options: WindowsRdpHostOptions,
+    ) -> Result<Self, WindowsRdpHostError> {
+        Self::create_with_parent_with(parent, options, NATIVE_BINDINGS)
     }
 
     pub const fn generation(&self) -> u64 {
@@ -158,6 +174,33 @@ impl WindowsRdpHost {
         // handle into raw; all error paths leave raw null by ABI contract.
         let result = unsafe { (bindings.create)(&native_options, &mut raw) };
         check_native_result(result)?;
+        Self::finish_create(options, bindings, raw)
+    }
+
+    fn create_with_parent_with(
+        parent: WindowsRdpParentWindow,
+        options: WindowsRdpHostOptions,
+        bindings: NativeBindings,
+    ) -> Result<Self, WindowsRdpHostError> {
+        if parent.as_raw() == 0 {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+        let native_options =
+            NavopRdpCreateWithParentOptions::current(options.generation(), parent.as_raw());
+        let mut raw = ptr::null_mut();
+        // SAFETY: native_options and raw's out-pointer remain valid for the
+        // synchronous call. The caller's safety contract keeps the borrowed
+        // parent window alive for the returned host's full lifetime.
+        let result = unsafe { (bindings.create_with_parent)(&native_options, &mut raw) };
+        check_native_result(result)?;
+        Self::finish_create(options, bindings, raw)
+    }
+
+    fn finish_create(
+        options: WindowsRdpHostOptions,
+        bindings: NativeBindings,
+        mut raw: *mut NativeRdpHost,
+    ) -> Result<Self, WindowsRdpHostError> {
         if raw.is_null() {
             return Err(WindowsRdpHostError::NativeReturnedNullHandle);
         }
@@ -250,6 +293,8 @@ mod tests {
         credential_calls: usize,
         credential_results: std::collections::VecDeque<NativeResult>,
         captured_credentials: Vec<(Vec<u16>, Vec<u16>)>,
+        parent_create_calls: usize,
+        captured_parent_create: Option<(u64, usize)>,
         call_order: Vec<&'static str>,
     }
 
@@ -270,6 +315,8 @@ mod tests {
                 credential_calls: 0,
                 credential_results: std::collections::VecDeque::new(),
                 captured_credentials: Vec::new(),
+                parent_create_calls: 0,
+                captured_parent_create: None,
                 call_order: Vec::new(),
             }
         }
@@ -360,6 +407,14 @@ mod tests {
         FAKE_NATIVE_STATE.with(|state| state.borrow().credential_calls)
     }
 
+    fn parent_create_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().parent_create_calls)
+    }
+
+    fn captured_parent_create() -> Option<(u64, usize)> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_parent_create)
+    }
+
     fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>)> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_credentials.clone())
     }
@@ -407,6 +462,52 @@ mod tests {
             *out_host = NonNull::<NativeRdpHost>::dangling().as_ptr();
         }
         RESULT_OK
+    }
+
+    unsafe fn fake_create_with_parent(
+        options: *const NavopRdpCreateWithParentOptions,
+        out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult {
+        if options.is_null() || out_host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        let options = unsafe { &*options };
+        let generation =
+            u64::from(options.generation_low) | (u64::from(options.generation_high) << 32);
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.parent_create_calls += 1;
+            state.captured_parent_create = Some((generation, options.parent_hwnd));
+        });
+        unsafe {
+            *out_host = NonNull::<NativeRdpHost>::dangling().as_ptr();
+        }
+        RESULT_OK
+    }
+
+    unsafe fn fake_null_create_with_parent(
+        _options: *const NavopRdpCreateWithParentOptions,
+        out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult {
+        if out_host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        unsafe {
+            *out_host = ptr::null_mut();
+        }
+        RESULT_OK
+    }
+
+    unsafe fn fake_failed_create_with_parent(
+        _options: *const NavopRdpCreateWithParentOptions,
+        out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult {
+        if !out_host.is_null() {
+            unsafe {
+                *out_host = ptr::null_mut();
+            }
+        }
+        RESULT_ALLOCATION_FAILED
     }
 
     unsafe fn fake_wrong_abi_probe(
@@ -618,6 +719,7 @@ mod tests {
         NativeBindings {
             probe,
             create,
+            create_with_parent: fake_create_with_parent,
             destroy: fake_destroy,
             register_event_callback: fake_register_event_callback,
             unregister_event_callback: fake_unregister_event_callback,
@@ -627,6 +729,13 @@ mod tests {
 
     fn bindings(create: crate::ffi::CreateFn) -> NativeBindings {
         bindings_with_probe(fake_probe, create)
+    }
+
+    fn bindings_with_parent(create_with_parent: crate::ffi::CreateWithParentFn) -> NativeBindings {
+        NativeBindings {
+            create_with_parent,
+            ..bindings(fake_create)
+        }
     }
 
     #[test]
@@ -664,6 +773,74 @@ mod tests {
             result,
             Err(WindowsRdpHostError::NativeReturnedNullHandle)
         ));
+    }
+
+    #[test]
+    fn create_with_parent_rejects_a_zero_parent_before_native_call() {
+        reset_fake_state();
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(0) };
+
+        let result = WindowsRdpHost::create_with_parent_with(
+            parent,
+            WindowsRdpHostOptions::new(42),
+            bindings_with_parent(fake_create_with_parent),
+        );
+
+        assert!(matches!(result, Err(WindowsRdpHostError::InvalidArgument)));
+        assert_eq!(parent_create_calls(), 0);
+    }
+
+    #[test]
+    fn create_with_parent_forwards_generation_and_borrowed_parent() {
+        reset_fake_state();
+        let generation = 0x1122_3344_aabb_ccdd;
+        let parent_raw = 0x1234_usize;
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(parent_raw) };
+        let mut host = WindowsRdpHost::create_with_parent_with(
+            parent,
+            WindowsRdpHostOptions::new(generation),
+            bindings_with_parent(fake_create_with_parent),
+        )
+        .expect("fake parent create should succeed");
+
+        assert_eq!(captured_parent_create(), Some((generation, parent_raw)));
+        host.close().expect("fake host should close");
+        assert_eq!(destroy_calls(), 1);
+    }
+
+    #[test]
+    fn create_with_parent_maps_native_failure_without_registering_callback() {
+        reset_fake_state();
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(0x1234) };
+
+        let result = WindowsRdpHost::create_with_parent_with(
+            parent,
+            WindowsRdpHostOptions::default(),
+            bindings_with_parent(fake_failed_create_with_parent),
+        );
+
+        assert!(matches!(result, Err(WindowsRdpHostError::AllocationFailed)));
+        assert_eq!(parent_create_calls(), 0);
+        assert_eq!(unregister_calls(), 0);
+        assert_eq!(destroy_calls(), 0);
+    }
+
+    #[test]
+    fn create_with_parent_rejects_a_successful_null_handle() {
+        reset_fake_state();
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(0x1234) };
+
+        let result = WindowsRdpHost::create_with_parent_with(
+            parent,
+            WindowsRdpHostOptions::default(),
+            bindings_with_parent(fake_null_create_with_parent),
+        );
+
+        assert!(matches!(
+            result,
+            Err(WindowsRdpHostError::NativeReturnedNullHandle)
+        ));
+        assert_eq!(destroy_calls(), 0);
     }
 
     #[test]
