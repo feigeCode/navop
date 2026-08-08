@@ -445,6 +445,7 @@ unsafe extern "C" fn record_callback(
     context.generation = u64::from(event.generation_low) | (u64::from(event.generation_high) << 32);
     context.kind = event.kind;
     context.code = event.code;
+    context.payload.clear();
     if event.payload_len > 0 {
         context.payload =
             unsafe { std::slice::from_raw_parts(payload, event.payload_len as usize).to_vec() };
