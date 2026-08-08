@@ -182,6 +182,7 @@ impl Render for PersistentConnectionSidebar {
             .child(rail::render_navigation_rail(
                 &self.home_page,
                 cx.entity(),
+                self.tree_expanded,
                 palette,
                 cx,
             ))

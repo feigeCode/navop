@@ -19,6 +19,7 @@ use crate::license::is_feature_enabled;
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
     sidebar: Entity<PersistentConnectionSidebar>,
+    tree_expanded: bool,
     palette: SidebarPalette,
     cx: &gpui::App,
 ) -> AnyElement {
@@ -32,7 +33,6 @@ pub(super) fn render_navigation_rail(
         let tabs = home.tab_container.read(cx);
         tabs.has_pinned_tab() || !tabs.tabs().is_empty()
     };
-    let tree_expanded = sidebar.read(cx).is_expanded();
     let show_team =
         should_show_team_management_entry(is_feature_enabled(Feature::TeamManagement, cx));
     let show_ai_workbench_entry =
@@ -349,6 +349,8 @@ mod tests {
             .expect("filter button renderer");
         let renderer = &source[renderer_start..renderer_end];
 
+        assert!(renderer.contains("tree_expanded: bool"));
+        assert!(!renderer.contains("sidebar.read(cx)"));
         assert!(renderer.contains(".when(home_active && !has_tabs"));
         assert!(renderer.contains("connection_tree_toggle_button("));
         assert!(renderer.contains("\"persistent-toggle-connections\""));
