@@ -51,6 +51,18 @@ WorkspaceExplorer:
       en: Open
       zh-CN: 打开
       zh-HK: 開啟
+    cut:
+      en: Cut
+      zh-CN: 剪切
+      zh-HK: 剪下
+    copy:
+      en: Copy
+      zh-CN: 复制
+      zh-HK: 複製
+    paste:
+      en: Paste
+      zh-CN: 粘贴
+      zh-HK: 貼上
     new_file:
       en: New File
       zh-CN: 新建文件
@@ -103,6 +115,18 @@ WorkspaceExplorer:
       en: Entry deleted
       zh-CN: 已删除
       zh-HK: 已刪除
+    copied:
+      en: Entry copied
+      zh-CN: 已复制
+      zh-HK: 已複製
+    cut_ready:
+      en: Entry cut
+      zh-CN: 已剪切
+      zh-HK: 已剪下
+    pasted:
+      en: Entry pasted
+      zh-CN: 已粘贴
+      zh-HK: 已貼上
   git_action:
     open_changes:
       en: Open Changes

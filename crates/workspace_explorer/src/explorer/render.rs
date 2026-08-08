@@ -12,6 +12,7 @@ use gpui_component::{
 };
 use rust_i18n::t;
 
+use super::clipboard::WORKSPACE_EXPLORER_KEY_CONTEXT;
 use super::file_actions::{
     build_file_context_menu, build_files_context_menu, build_git_change_context_menu,
 };
@@ -98,11 +99,16 @@ impl WorkspaceExplorer {
             .when(selected, |this| this.bg(selection_background))
             .hover(move |style| style.bg(hover_background))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.focus_handle.focus(window, cx);
+                this.selected_path = None;
+                this.selected_change_path = Some(change_for_click.path.clone());
                 this.open_change(change_for_click.clone(), window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
+                    this.focus_handle.focus(window, cx);
+                    this.selected_path = None;
                     this.selected_change_path = Some(change_for_selection.path.clone());
                     cx.notify();
                 }),
@@ -184,7 +190,9 @@ impl WorkspaceExplorer {
             .when(selected, |this| this.bg(selection_background))
             .hover(move |style| style.bg(hover_background))
             .on_click(cx.listener(move |this, _, window, cx| {
+                this.focus_handle.focus(window, cx);
                 this.selected_path = Some(path.clone());
+                this.selected_change_path = None;
                 if is_dir {
                     this.toggle_directory(path.clone(), cx);
                 } else {
@@ -193,8 +201,10 @@ impl WorkspaceExplorer {
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
+                    this.focus_handle.focus(window, cx);
                     this.selected_path = Some(selection_path.clone());
+                    this.selected_change_path = None;
                     cx.notify();
                 }),
             )
@@ -249,6 +259,11 @@ impl Render for WorkspaceExplorer {
             }
         }
         v_flex()
+            .key_context(WORKSPACE_EXPLORER_KEY_CONTEXT)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::cut_selected_entry))
+            .on_action(cx.listener(Self::copy_selected_entry))
+            .on_action(cx.listener(Self::paste_entry))
             .size_full()
             .min_w_0()
             .min_h_0()

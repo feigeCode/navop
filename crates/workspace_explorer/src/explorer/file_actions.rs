@@ -1,5 +1,10 @@
-use super::WorkspaceExplorer;
-use crate::file_system::{create_directory, create_file, delete_entry, rename_entry};
+use super::{
+    WorkspaceExplorer,
+    clipboard::{FileClipboard, FileClipboardKind},
+};
+use crate::file_system::{
+    copy_entry, create_directory, create_file, delete_entry, move_entry, rename_entry,
+};
 use crate::git::{GitChange, GitRepository, discard_change, stage_change, unstage_change};
 use anyhow::Result;
 use gpui::{
@@ -57,6 +62,14 @@ enum ExplorerOperation {
         new_name: String,
     },
     Delete(PathBuf),
+    Copy {
+        source: PathBuf,
+        destination: PathBuf,
+    },
+    Move {
+        source: PathBuf,
+        destination: PathBuf,
+    },
     Stage {
         repository: GitRepository,
         change: GitChange,
@@ -73,8 +86,9 @@ enum ExplorerOperation {
 
 #[derive(Clone)]
 struct FileTreeRefresh {
-    parent: PathBuf,
-    remove_subtree: Option<PathBuf>,
+    parents: Vec<PathBuf>,
+    remove_subtrees: Vec<PathBuf>,
+    clear_clipboard: bool,
 }
 
 impl ExplorerOperation {
@@ -90,6 +104,18 @@ impl ExplorerOperation {
                 rename_entry(&path, &new_name)?;
             }
             Self::Delete(path) => delete_entry(&path)?,
+            Self::Copy {
+                source,
+                destination,
+            } => {
+                copy_entry(&source, &destination)?;
+            }
+            Self::Move {
+                source,
+                destination,
+            } => {
+                move_entry(&source, &destination)?;
+            }
             Self::Stage { repository, change } => stage_change(&repository, &change)?,
             Self::Unstage { repository, change } => unstage_change(&repository, &change)?,
             Self::Discard { repository, change } => discard_change(&repository, &change)?,
@@ -101,13 +127,31 @@ impl ExplorerOperation {
         match self {
             Self::CreateFile { parent, .. } | Self::CreateDirectory { parent, .. } => {
                 Some(FileTreeRefresh {
-                    parent: parent.clone(),
-                    remove_subtree: None,
+                    parents: vec![parent.clone()],
+                    remove_subtrees: Vec::new(),
+                    clear_clipboard: false,
                 })
             }
             Self::Rename { path, .. } | Self::Delete(path) => Some(FileTreeRefresh {
-                parent: path.parent()?.to_path_buf(),
-                remove_subtree: Some(path.clone()),
+                parents: vec![path.parent()?.to_path_buf()],
+                remove_subtrees: vec![path.clone()],
+                clear_clipboard: false,
+            }),
+            Self::Copy {
+                source,
+                destination,
+            } => Some(FileTreeRefresh {
+                parents: vec![destination.clone()],
+                remove_subtrees: vec![destination.join(source.file_name()?)],
+                clear_clipboard: false,
+            }),
+            Self::Move {
+                source,
+                destination,
+            } => Some(FileTreeRefresh {
+                parents: vec![source.parent()?.to_path_buf(), destination.clone()],
+                remove_subtrees: vec![source.clone(), destination.join(source.file_name()?)],
+                clear_clipboard: true,
             }),
             Self::Stage { .. } | Self::Unstage { .. } | Self::Discard { .. } => None,
         }
@@ -259,6 +303,31 @@ impl WorkspaceExplorer {
         );
     }
 
+    pub(super) fn execute_paste(
+        &mut self,
+        clipboard: FileClipboard,
+        destination: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let operation = match clipboard.kind {
+            FileClipboardKind::Copy => ExplorerOperation::Copy {
+                source: clipboard.source,
+                destination,
+            },
+            FileClipboardKind::Cut => ExplorerOperation::Move {
+                source: clipboard.source,
+                destination,
+            },
+        };
+        self.execute_explorer_operation(
+            operation,
+            t!("WorkspaceExplorer.file_action.pasted").to_string(),
+            window,
+            cx,
+        );
+    }
+
     fn submit_file_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.file_action_editor.clone() else {
             return;
@@ -360,10 +429,15 @@ impl WorkspaceExplorer {
                                 cx,
                             );
                             if let Some(refresh) = file_tree_refresh {
-                                if let Some(path) = refresh.remove_subtree {
+                                for path in refresh.remove_subtrees {
                                     this.remove_file_tree_state(&path);
                                 }
-                                this.reload_directory(refresh.parent, cx);
+                                if refresh.clear_clipboard {
+                                    this.file_clipboard = None;
+                                }
+                                for parent in refresh.parents {
+                                    this.reload_directory(parent, cx);
+                                }
                             }
                             this.refresh_git(cx);
                         }
@@ -418,10 +492,10 @@ impl WorkspaceExplorer {
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = task.await;
             let _ = entity.update(cx, |this, cx| {
+                this.loading_directories.remove(&path);
                 if this.refresh_generation != generation {
                     return;
                 }
-                this.loading_directories.remove(&path);
                 match result {
                     Ok(entries) => {
                         this.listings.insert(path, entries);
@@ -551,9 +625,14 @@ pub(super) fn build_files_context_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let directory_explorer = explorer.clone();
+    let paste_explorer = explorer.clone();
     let file_parent = parent.clone();
-    let directory_parent = parent;
-    let theme = explorer.read(cx).theme.menu_style();
+    let directory_parent = parent.clone();
+    let paste_parent = parent;
+    let explorer_state = explorer.read(cx);
+    let paste_disabled =
+        !explorer_state.has_file_clipboard() || explorer_state.file_operation_running;
+    let theme = explorer_state.theme.menu_style();
     menu.local_style(theme)
         .min_w(px(190.0))
         .item(
@@ -571,6 +650,17 @@ pub(super) fn build_files_context_menu(
                 .on_click(move |_, window, cx| {
                     directory_explorer.update(cx, |this, cx| {
                         this.prompt_create_directory(directory_parent.clone(), window, cx);
+                    });
+                }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.file_action.paste").to_string())
+                .icon(IconName::Paste)
+                .disabled(paste_disabled)
+                .on_click(move |_, window, cx| {
+                    paste_explorer.update(cx, |this, cx| {
+                        this.paste_into(paste_parent.clone(), window, cx);
                     });
                 }),
         )
@@ -594,16 +684,25 @@ pub(super) fn build_file_context_menu(
     let open_explorer = explorer.clone();
     let create_file_explorer = explorer.clone();
     let create_directory_explorer = explorer.clone();
+    let cut_explorer = explorer.clone();
+    let copy_explorer = explorer.clone();
+    let paste_explorer = explorer.clone();
     let set_root_explorer = explorer.clone();
     let rename_explorer = explorer.clone();
     let delete_explorer = explorer.clone();
     let open_path = path.clone();
     let create_file_parent = parent.clone();
-    let create_directory_parent = parent;
+    let create_directory_parent = parent.clone();
+    let cut_path = path.clone();
+    let copy_path = path.clone();
+    let paste_parent = parent;
     let set_root_path = path.clone();
     let rename_path = path.clone();
     let delete_path = path;
-    let theme = explorer.read(cx).theme.menu_style();
+    let explorer_state = explorer.read(cx);
+    let operation_running = explorer_state.file_operation_running;
+    let paste_disabled = !explorer_state.has_file_clipboard() || operation_running;
+    let theme = explorer_state.theme.menu_style();
 
     menu.local_style(theme)
         .min_w(px(200.0))
@@ -634,6 +733,36 @@ pub(super) fn build_file_context_menu(
                 .on_click(move |_, window, cx| {
                     create_directory_explorer.update(cx, |this, cx| {
                         this.prompt_create_directory(create_directory_parent.clone(), window, cx);
+                    });
+                }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.file_action.cut").to_string())
+                .disabled(operation_running)
+                .on_click(move |_, window, cx| {
+                    cut_explorer.update(cx, |this, cx| {
+                        this.cut_path(cut_path.clone(), window, cx);
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.file_action.copy").to_string())
+                .icon(IconName::Copy)
+                .disabled(operation_running)
+                .on_click(move |_, window, cx| {
+                    copy_explorer.update(cx, |this, cx| {
+                        this.copy_path(copy_path.clone(), window, cx);
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new(t!("WorkspaceExplorer.file_action.paste").to_string())
+                .icon(IconName::Paste)
+                .disabled(paste_disabled)
+                .on_click(move |_, window, cx| {
+                    paste_explorer.update(cx, |this, cx| {
+                        this.paste_into(paste_parent.clone(), window, cx);
                     });
                 }),
         )

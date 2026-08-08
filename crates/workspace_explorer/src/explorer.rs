@@ -1,4 +1,5 @@
 mod branches;
+mod clipboard;
 mod file_actions;
 mod frame;
 mod header;
@@ -12,8 +13,8 @@ use crate::git::{GitChange, GitRepository, load_changes};
 use crate::model::ExplorerEntry;
 use crate::theme::WorkspaceTheme;
 use gpui::{
-    AppContext as _, AsyncApp, Context, Entity, PathPromptOptions, ScrollHandle, Subscription,
-    WeakEntity, Window,
+    AppContext as _, AsyncApp, Context, Entity, FocusHandle, PathPromptOptions, ScrollHandle,
+    Subscription, WeakEntity, Window,
 };
 use ignore::gitignore::Gitignore;
 use rust_i18n::t;
@@ -23,8 +24,10 @@ use std::sync::Arc;
 
 use self::load::{WorkspaceSnapshot, load_workspace};
 use branches::BranchManager;
+use clipboard::FileClipboard;
 use file_actions::{ExplorerConfirmation, FileActionEditor};
 
+pub(crate) use clipboard::keybindings;
 pub use frame::{ExplorerFramePlacement, WorkspaceExplorerEvent};
 
 pub struct WorkspaceExplorer {
@@ -34,6 +37,7 @@ pub struct WorkspaceExplorer {
     loading_directories: HashSet<PathBuf>,
     selected_path: Option<PathBuf>,
     selected_change_path: Option<PathBuf>,
+    file_clipboard: Option<FileClipboard>,
     repository: Option<GitRepository>,
     branch_manager: Option<Entity<BranchManager>>,
     changes: Vec<GitChange>,
@@ -48,6 +52,7 @@ pub struct WorkspaceExplorer {
     editor: Entity<WorkspaceEditor>,
     theme: WorkspaceTheme,
     scroll_handle: ScrollHandle,
+    focus_handle: FocusHandle,
     show_hidden: bool,
     show_ignored: bool,
     follow_terminal_cwd: bool,
@@ -89,6 +94,7 @@ impl WorkspaceExplorer {
             loading_directories: HashSet::new(),
             selected_path: None,
             selected_change_path: None,
+            file_clipboard: None,
             repository: None,
             branch_manager: None,
             changes: Vec::new(),
@@ -103,6 +109,7 @@ impl WorkspaceExplorer {
             editor,
             theme,
             scroll_handle: ScrollHandle::new(),
+            focus_handle: cx.focus_handle(),
             show_hidden: false,
             show_ignored: false,
             follow_terminal_cwd: true,
@@ -194,6 +201,7 @@ impl WorkspaceExplorer {
         self.loading_directories.clear();
         self.selected_path = None;
         self.selected_change_path = None;
+        self.file_clipboard = None;
         self.repository = None;
         self.branch_manager = None;
         self.changes.clear();

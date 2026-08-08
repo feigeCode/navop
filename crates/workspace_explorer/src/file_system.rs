@@ -8,6 +8,10 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod clipboard;
+
+pub(crate) use clipboard::{copy_entry, move_entry};
+
 pub(crate) struct LoadedFile {
     pub(crate) text: String,
     pub(crate) policy: FilePolicy,
@@ -201,69 +205,4 @@ pub(crate) fn canonical_workspace_root(path: PathBuf) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        create_directory, create_file, delete_entry, read_directory, rename_entry,
-        root_ignore_matcher,
-    };
-    use std::fs;
-
-    fn entry_names(entries: Vec<crate::model::ExplorerEntry>) -> Vec<String> {
-        entries.into_iter().map(|entry| entry.name).collect()
-    }
-
-    #[test]
-    fn hidden_and_ignored_visibility_are_independent() {
-        let temp = std::env::temp_dir().join(format!(
-            "navop-workspace-explorer-filter-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&temp);
-        fs::create_dir_all(&temp).unwrap();
-        fs::write(temp.join(".gitignore"), "target\n").unwrap();
-        fs::write(temp.join(".env.local"), "SECRET=test").unwrap();
-        fs::create_dir(temp.join("target")).unwrap();
-        fs::write(temp.join("Cargo.toml"), "[package]").unwrap();
-
-        let matcher = root_ignore_matcher(&temp).unwrap();
-        let default_names =
-            entry_names(read_directory(&temp, Some(matcher.as_ref()), false, false).unwrap());
-        assert_eq!(vec!["Cargo.toml"], default_names);
-
-        let hidden_names =
-            entry_names(read_directory(&temp, Some(matcher.as_ref()), true, false).unwrap());
-        assert!(hidden_names.contains(&".env.local".to_string()));
-        assert!(!hidden_names.contains(&"target".to_string()));
-
-        let ignored_names =
-            entry_names(read_directory(&temp, Some(matcher.as_ref()), false, true).unwrap());
-        assert!(ignored_names.contains(&"target".to_string()));
-        assert!(!ignored_names.contains(&".env.local".to_string()));
-
-        fs::remove_dir_all(temp).unwrap();
-    }
-
-    #[test]
-    fn basic_file_operations_create_rename_and_delete_entries() {
-        let temp = std::env::temp_dir().join(format!(
-            "navop-workspace-file-operations-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&temp);
-        fs::create_dir_all(&temp).unwrap();
-
-        let file = create_file(&temp, "new.txt").unwrap();
-        let directory = create_directory(&temp, "folder").unwrap();
-        let renamed = rename_entry(&file, "renamed.txt").unwrap();
-
-        assert!(renamed.is_file());
-        assert!(directory.is_dir());
-        assert!(create_file(&temp, "../outside").is_err());
-
-        delete_entry(&renamed).unwrap();
-        delete_entry(&directory).unwrap();
-        assert!(!renamed.exists());
-        assert!(!directory.exists());
-        fs::remove_dir_all(temp).unwrap();
-    }
-}
+mod tests;
