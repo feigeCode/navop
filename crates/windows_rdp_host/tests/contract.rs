@@ -21,9 +21,11 @@ fn workspace_root() -> PathBuf {
 
 fn read(relative_path: &str) -> String {
     let path = workspace_root().join(relative_path);
-    fs::read_to_string(&path).unwrap_or_else(|error| {
+    let contents = fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!("failed to read {}: {error}", path.display());
-    })
+    });
+
+    contents.replace("\r\n", "\n")
 }
 
 fn assert_contains_all(path: &str, required: &[&str]) {
