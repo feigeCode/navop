@@ -27,7 +27,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants, DropdownButton, IconButton, IconButtonRole},
+    button::{Button, ButtonVariants, IconButton, IconButtonRole},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},

@@ -57,6 +57,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
+use gpui_component::menu::LocalMenuStyle;
 
 actions!(terminal_file_manager, [PasteUpload]);
 
@@ -1237,6 +1238,17 @@ impl FileManagerPanel {
         }
     }
 
+    pub fn menu_style(&self) -> LocalMenuStyle {
+        LocalMenuStyle {
+            background: self.colors.background,
+            foreground: self.colors.foreground,
+            muted_foreground: self.colors.muted_foreground,
+            border: self.colors.border,
+            accent: self.colors.muted,
+            accent_foreground: self.colors.foreground,
+            radius: px(8.0),
+        }
+    }
     pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
         self.colors = colors;
         cx.notify();
@@ -1570,13 +1582,10 @@ impl FileManagerPanel {
             return Vec::new();
         };
 
-        match repo.list_paths(connection_key) {
-            Ok(paths) => paths,
-            Err(error) => {
-                tracing::error!("Failed to load SFTP favorite paths: {}", error);
-                Vec::new()
-            }
-        }
+        repo.list_paths(connection_key).unwrap_or_else(|error| {
+            tracing::error!("Failed to load SFTP favorite paths: {}", error);
+            Vec::new()
+        })
     }
 
     fn favorite_path_repository(cx: &mut Context<Self>) -> Option<Arc<SftpFavoritePathRepository>> {
@@ -3807,7 +3816,7 @@ impl FileManagerPanel {
         let foreground = self.colors.foreground;
         let muted_foreground = self.colors.muted_foreground;
         let accent = self.colors.accent;
-
+        let menu_color = self.menu_style();
         v_flex()
             .border_b_1()
             .border_color(border)
@@ -3896,14 +3905,6 @@ impl FileManagerPanel {
                         DropdownButton::new("fm-upload")
                             .ghost()
                             .small()
-                            .button(
-                                Button::new("fm-upload-file")
-                                    .icon(IconName::Upload)
-                                    .tooltip(t!("FileManager.upload_file"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.select_and_upload_files(window, cx);
-                                    })),
-                            )
                             .dropdown_menu_with_anchor(
                                 Anchor::TopRight,
                                 move |menu, window, _cx| {
@@ -3913,8 +3914,8 @@ impl FileManagerPanel {
                                     let new_folder_panel = upload_panel.clone();
                                     let download_panel = upload_panel.clone();
                                     let delete_panel = upload_panel.clone();
-
-                                    menu.item(
+                                    menu.local_style(menu_color)
+                                        .item(
                                         PopupMenuItem::new(t!("FileManager.upload_file"))
                                             .icon(IconName::Upload)
                                             .on_click(window.listener_for(
@@ -3926,7 +3927,7 @@ impl FileManagerPanel {
                                     )
                                     .item(
                                         PopupMenuItem::new(t!("FileManager.upload_folder"))
-                                            .icon(IconName::NewFolder)
+                                            .icon(IconName::Upload)
                                             .on_click(window.listener_for(
                                                 &upload_folder_panel,
                                                 move |this, _, window, cx| {
@@ -5233,7 +5234,7 @@ impl FileManagerPanel {
                                         let current_path = state.current_path.clone();
                                         let has_parent = !state.is_at_root();
                                         let view = cx.entity();
-
+                                        let menu_style = state.menu_style();
                                         range
                                             .map(|list_ix| {
                                                 // 上级目录行
@@ -5270,7 +5271,6 @@ impl FileManagerPanel {
                                                 let ctx_full_path = full_path.clone();
                                                 let ctx_is_dir = is_dir;
                                                 let ctx_view = view.clone();
-
                                                 div()
                                                     .id(list_ix)
                                                     .cursor_pointer()
@@ -5322,7 +5322,7 @@ impl FileManagerPanel {
                                                                 &ctx_view,
                                                                 window,
                                                                 cx,
-                                                            )
+                                                            ).local_style(menu_style)
                                                         },
                                                     )
                                                     .child(state.render_file_row(
