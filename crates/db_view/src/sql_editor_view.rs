@@ -1574,7 +1574,7 @@ impl SqlEditorTab {
     ) {
         self.save_to_file(cx);
         tab_container.update(cx, |container, cx| {
-            container.force_close_tab_by_id(&tab_id, cx);
+            container.force_close_tab_by_id(&tab_id, _window, cx);
         });
         cx.emit(SqlEditorEvent::QuerySaved {
             connection_id: self.connection_id.clone(),

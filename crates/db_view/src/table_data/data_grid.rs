@@ -2046,14 +2046,13 @@ impl DataGrid {
             state.commit_cell_edit(window, cx);
         });
         let changes = self.get_changes(cx);
+        let window_handle = window.window_handle();
         if changes.is_empty() {
-            if let Some(window_id) = cx.active_window() {
-                let _ = cx.update_window(window_id, |_, _window, cx| {
-                    tab_container.update(cx, |container, cx| {
-                        container.force_close_tab_by_id(&tab_id, cx);
-                    });
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                tab_container.update(cx, |container, cx| {
+                    container.force_close_tab_by_id(&tab_id, window, cx);
                 });
-            }
+            });
             return;
         }
 
@@ -2166,13 +2165,11 @@ impl DataGrid {
                             t!("TableDataGrid.save_changes_success", count = change_count)
                                 .to_string(),
                         );
-                        if let Some(window_id) = cx.active_window() {
-                            let _ = cx.update_window(window_id, |_, _window, cx| {
-                                tab_container.update(cx, |container, cx| {
-                                    container.force_close_tab_by_id(&tab_id, cx);
-                                });
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            tab_container.update(cx, |container, cx| {
+                                container.force_close_tab_by_id(&tab_id, window, cx);
                             });
-                        }
+                        });
                     }
                 }
                 Err(e) => {

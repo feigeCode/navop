@@ -791,8 +791,14 @@ impl TableDesigner {
             .any(|keyword| normalized_sql.contains(keyword))
     }
 
-    fn execute_request(&mut self, request: TableDesignerExecutionRequest, cx: &mut Context<Self>) {
+    fn execute_request(
+        &mut self,
+        request: TableDesignerExecutionRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let global_state = cx.global::<GlobalDbState>().clone();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = global_state
@@ -807,88 +813,81 @@ impl TableDesigner {
                 .await;
 
             let _ = cx.update(|cx: &mut App| {
-                if let Some(window_id) = cx.active_window() {
-                    let _ = cx.update_window(window_id, |_, window, cx| match &result {
-                        Ok(results) => {
-                            let has_error = results.iter().any(|r| r.is_error());
-                            if has_error {
-                                let error_msg = results
-                                    .iter()
-                                    .filter_map(|r| {
-                                        if let db::executor::SqlResult::Error(err) = r {
-                                            Some(err.message.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("; ");
-                                window.push_notification(
-                                    format!(
-                                        "{}: {}",
-                                        &t!("Table.execute_failed").to_string(),
-                                        error_msg
-                                    ),
-                                    cx,
-                                );
+                let _ = cx.update_window(window_handle, |_, window, cx| match &result {
+                    Ok(results) => {
+                        let has_error = results.iter().any(|r| r.is_error());
+                        if has_error {
+                            let error_msg = results
+                                .iter()
+                                .filter_map(|r| {
+                                    if let db::executor::SqlResult::Error(err) = r {
+                                        Some(err.message.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("; ");
+                            window.push_notification(
+                                format!("{}: {}", t!("Table.execute_failed"), error_msg),
+                                cx,
+                            );
+                        } else {
+                            let msg = if request.is_new_table {
+                                t!("Table.create_success").to_string()
                             } else {
-                                let msg = if request.is_new_table {
-                                    t!("Table.create_success").to_string()
-                                } else {
-                                    t!("Table.modify_success").to_string()
-                                };
-                                window.push_notification(msg, cx);
-                                let _ = this.update(cx, |designer, cx| {
-                                    match &request.success_behavior {
-                                        ExecuteSuccessBehavior::StayOpen { tab_id } => {
-                                            cx.emit(TableDesignerEvent::Saved {
-                                                connection_id: request.connection_id.clone(),
-                                                database_name: request.database_name.clone(),
-                                                schema_name: request.schema_name.clone(),
-                                                table_name: request.table_name.clone(),
-                                                is_new_table: request.is_new_table,
-                                                tab_id: tab_id.clone(),
-                                            });
-                                            if request.is_new_table {
-                                                designer.config.table_name =
-                                                    Some(request.table_name.clone());
-                                            }
-                                            designer.load_table_structure("after_save", cx);
+                                t!("Table.modify_success").to_string()
+                            };
+                            window.push_notification(msg, cx);
+                            let _ =
+                                this.update(cx, |designer, cx| match &request.success_behavior {
+                                    ExecuteSuccessBehavior::StayOpen { tab_id } => {
+                                        cx.emit(TableDesignerEvent::Saved {
+                                            connection_id: request.connection_id.clone(),
+                                            database_name: request.database_name.clone(),
+                                            schema_name: request.schema_name.clone(),
+                                            table_name: request.table_name.clone(),
+                                            is_new_table: request.is_new_table,
+                                            tab_id: tab_id.clone(),
+                                        });
+                                        if request.is_new_table {
+                                            designer.config.table_name =
+                                                Some(request.table_name.clone());
                                         }
-                                        ExecuteSuccessBehavior::CloseTab {
-                                            tab_container,
-                                            tab_id,
-                                            emitted_tab_id,
-                                        } => {
-                                            cx.emit(TableDesignerEvent::Saved {
-                                                connection_id: request.connection_id.clone(),
-                                                database_name: request.database_name.clone(),
-                                                schema_name: request.schema_name.clone(),
-                                                table_name: request.table_name.clone(),
-                                                is_new_table: request.is_new_table,
-                                                tab_id: emitted_tab_id.clone(),
-                                            });
-                                            tab_container.update(
-                                                cx,
-                                                |container: &mut TabContainer, cx| {
-                                                    container.force_close_tab_by_id(tab_id, cx);
-                                                },
-                                            );
-                                        }
+                                        designer.load_table_structure("after_save", cx);
+                                    }
+                                    ExecuteSuccessBehavior::CloseTab {
+                                        tab_container,
+                                        tab_id,
+                                        emitted_tab_id,
+                                    } => {
+                                        cx.emit(TableDesignerEvent::Saved {
+                                            connection_id: request.connection_id.clone(),
+                                            database_name: request.database_name.clone(),
+                                            schema_name: request.schema_name.clone(),
+                                            table_name: request.table_name.clone(),
+                                            is_new_table: request.is_new_table,
+                                            tab_id: emitted_tab_id.clone(),
+                                        });
+                                        tab_container.update(
+                                            cx,
+                                            |container: &mut TabContainer, cx| {
+                                                container.force_close_tab_by_id(tab_id, window, cx);
+                                            },
+                                        );
                                     }
                                 });
-                            }
                         }
-                        Err(e) => {
-                            let msg = if request.is_new_table {
-                                t!("Table.create_failed").to_string()
-                            } else {
-                                t!("Table.modify_failed").to_string()
-                            };
-                            window.push_notification(format!("{}: {}", msg, e), cx);
-                        }
-                    });
-                }
+                    }
+                    Err(e) => {
+                        let msg = if request.is_new_table {
+                            t!("Table.create_failed").to_string()
+                        } else {
+                            t!("Table.modify_failed").to_string()
+                        };
+                        window.push_notification(format!("{}: {}", msg, e), cx);
+                    }
+                });
             });
         })
         .detach();
@@ -901,7 +900,7 @@ impl TableDesigner {
         cx: &mut Context<Self>,
     ) {
         if !Self::contains_destructive_sql(&request.sql) {
-            self.execute_request(request, cx);
+            self.execute_request(request, window, cx);
             return;
         }
 
@@ -929,10 +928,10 @@ impl TableDesigner {
                         .child(t!("Table.destructive_sql_confirm_desc").to_string())
                         .child(t!("Common.irreversible").to_string()),
                 )
-                .on_ok(move |_, _, cx| {
+                .on_ok(move |_, window, cx| {
                     let request = request_for_ok.clone();
                     designer_entity.update(cx, |designer, cx| {
-                        designer.execute_request(request, cx);
+                        designer.execute_request(request, window, cx);
                     });
                     true
                 })
@@ -944,6 +943,7 @@ impl TableDesigner {
         design: TableDesign,
         column_renames: Vec<(String, String)>,
         success_behavior: ExecuteSuccessBehavior,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let global_state = cx.global::<GlobalDbState>().clone();
@@ -953,6 +953,7 @@ impl TableDesigner {
         let original = self.original_design.clone();
         let is_new_table = original.is_none();
         let table_name = design.table_name.clone();
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let sql_result = global_state
@@ -968,10 +969,7 @@ impl TableDesigner {
                 .await;
 
             let _ = cx.update(|cx: &mut App| {
-                let Some(window_id) = cx.active_window() else {
-                    return;
-                };
-                let _ = cx.update_window(window_id, |_, window, cx| {
+                let _ = cx.update_window(window_handle, |_, window, cx| {
                     let _ = this.update(cx, |designer, cx| match sql_result {
                         Ok(sql) if !Self::sql_has_changes(&sql) => match &success_behavior {
                             ExecuteSuccessBehavior::StayOpen { .. } => {
@@ -983,7 +981,7 @@ impl TableDesigner {
                                 ..
                             } => {
                                 tab_container.update(cx, |container: &mut TabContainer, cx| {
-                                    container.force_close_tab_by_id(tab_id, cx);
+                                    container.force_close_tab_by_id(tab_id, window, cx);
                                 });
                             }
                         },
@@ -1046,7 +1044,7 @@ impl TableDesigner {
             tab_id,
             emitted_tab_id: self.config.tab_id.clone(),
         };
-        self.build_and_maybe_execute(design, column_renames, success_behavior, cx);
+        self.build_and_maybe_execute(design, column_renames, success_behavior, window, cx);
     }
 
     pub fn load_table_structure(&mut self, reason: &'static str, cx: &mut Context<Self>) {
@@ -1208,7 +1206,7 @@ impl TableDesigner {
         let success_behavior = ExecuteSuccessBehavior::StayOpen {
             tab_id: self.config.tab_id.clone(),
         };
-        self.build_and_maybe_execute(design, column_renames, success_behavior, cx);
+        self.build_and_maybe_execute(design, column_renames, success_behavior, window, cx);
     }
 
     fn render_toolbar(&self, cx: &Context<Self>) -> AnyElement {
