@@ -215,7 +215,7 @@ impl From<WindowsRdpRawEvent> for WindowsRdpEvent {
             EVENT_DISCONNECTED => {
                 decode_optional_i32(&event.payload).map(|extended_code| Self::Disconnected {
                     generation,
-                    reason: crate::error::WindowsRdpDisconnectReason::unknown(
+                    reason: crate::error::WindowsRdpDisconnectReason::from_native_codes(
                         event.code,
                         extended_code,
                     ),
@@ -537,14 +537,22 @@ mod tests {
                 raw(EVENT_DISCONNECTED, 2308, []),
                 WindowsRdpEvent::Disconnected {
                     generation: 42,
-                    reason: crate::error::WindowsRdpDisconnectReason::unknown(2308, None),
+                    reason: crate::error::WindowsRdpDisconnectReason::new(
+                        crate::error::WindowsRdpDiagnosticCategory::Network,
+                        2308,
+                        None,
+                    ),
                 },
             ),
             (
                 raw(EVENT_DISCONNECTED, 2308, (-55_i32).to_le_bytes()),
                 WindowsRdpEvent::Disconnected {
                     generation: 42,
-                    reason: crate::error::WindowsRdpDisconnectReason::unknown(2308, Some(-55)),
+                    reason: crate::error::WindowsRdpDisconnectReason::new(
+                        crate::error::WindowsRdpDiagnosticCategory::Network,
+                        2308,
+                        Some(-55),
+                    ),
                 },
             ),
             (
@@ -625,6 +633,62 @@ mod tests {
                 generation: 42,
                 reason: crate::error::WindowsRdpDisconnectReason::unknown(i32::MIN, Some(i32::MAX),),
             }
+        );
+    }
+
+    #[test]
+    fn disconnected_prefers_a_known_extended_reason_without_losing_raw_codes() {
+        let event = raw(EVENT_DISCONNECTED, 2308, 768_i32.to_le_bytes());
+
+        assert_eq!(
+            WindowsRdpEvent::from(event),
+            WindowsRdpEvent::Disconnected {
+                generation: 42,
+                reason: crate::error::WindowsRdpDisconnectReason::new(
+                    crate::error::WindowsRdpDiagnosticCategory::Authentication,
+                    2308,
+                    Some(768),
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn callback_queue_filters_generation_then_decodes_disconnect_diagnostics() {
+        let bridge = EventBridge::new(42);
+        let extended_code = 768_i32.to_le_bytes();
+        let stale = NavopRdpEvent::current(7, EVENT_DISCONNECTED, 2308, extended_code.len() as u32);
+        let current =
+            NavopRdpEvent::current(42, EVENT_DISCONNECTED, 2308, extended_code.len() as u32);
+
+        unsafe {
+            native_event_callback(
+                (&bridge as *const EventBridge).cast_mut().cast(),
+                &stale,
+                extended_code.as_ptr(),
+            );
+            native_event_callback(
+                (&bridge as *const EventBridge).cast_mut().cast(),
+                &current,
+                extended_code.as_ptr(),
+            );
+        }
+
+        let decoded = bridge
+            .drain()
+            .into_iter()
+            .map(WindowsRdpEvent::from)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            decoded,
+            vec![WindowsRdpEvent::Disconnected {
+                generation: 42,
+                reason: crate::error::WindowsRdpDisconnectReason::new(
+                    crate::error::WindowsRdpDiagnosticCategory::Authentication,
+                    2308,
+                    Some(768),
+                ),
+            }]
         );
     }
 

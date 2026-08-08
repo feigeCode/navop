@@ -47,6 +47,25 @@ impl WindowsRdpDisconnectReason {
         )
     }
 
+    pub(crate) const fn from_native_codes(
+        disconnect_code: i32,
+        extended_code: Option<i32>,
+    ) -> Self {
+        let extended_category = match extended_code {
+            Some(code) => classify_extended_disconnect_code(code),
+            None => None,
+        };
+        let category = match extended_category {
+            Some(category) => category,
+            None => match classify_disconnect_code(disconnect_code) {
+                Some(category) => category,
+                None => WindowsRdpDiagnosticCategory::Unknown,
+            },
+        };
+
+        Self::new(category, disconnect_code, extended_code)
+    }
+
     pub const fn category(self) -> WindowsRdpDiagnosticCategory {
         self.category
     }
@@ -57,6 +76,42 @@ impl WindowsRdpDisconnectReason {
 
     pub const fn extended_code(self) -> Option<i32> {
         self.extended_code
+    }
+}
+
+// `IMsTscAxEvents::OnDisconnected` and `ExtendedDisconnectReasonCode` use
+// independent numeric spaces. Keep these tables explicit and conservative:
+// known extended reasons take precedence, while unknown extended values fall
+// back to the primary disconnect reason. Raw values are always retained.
+const fn classify_disconnect_code(code: i32) -> Option<WindowsRdpDiagnosticCategory> {
+    match code {
+        1 | 2 => Some(WindowsRdpDiagnosticCategory::UserInitiated),
+        2055 | 2567 | 2823 | 3079 | 3335 | 3591 | 3847 | 4615 | 7175 | 8711 => {
+            Some(WindowsRdpDiagnosticCategory::Authentication)
+        }
+        1030 | 1286 | 1542 | 1798 | 2822 | 3078 | 6919 => {
+            Some(WindowsRdpDiagnosticCategory::CertificateOrSecurity)
+        }
+        5639 | 5895 | 8455 => Some(WindowsRdpDiagnosticCategory::ServerPolicy),
+        260 | 264 | 516 | 520 | 772 | 776 | 1028 | 1288 | 1540 | 1796 | 2052 | 2308 => {
+            Some(WindowsRdpDiagnosticCategory::Network)
+        }
+        _ => None,
+    }
+}
+
+const fn classify_extended_disconnect_code(code: i32) -> Option<WindowsRdpDiagnosticCategory> {
+    match code {
+        1 | 2 | 11 | 12 => Some(WindowsRdpDiagnosticCategory::UserInitiated),
+        10 | 768 => Some(WindowsRdpDiagnosticCategory::Authentication),
+        8 | 264 => Some(WindowsRdpDiagnosticCategory::CertificateOrSecurity),
+        3 | 4 | 5 | 7 | 9 | 257 | 258 | 265 | 266 => {
+            Some(WindowsRdpDiagnosticCategory::ServerPolicy)
+        }
+        262 => Some(WindowsRdpDiagnosticCategory::Network),
+        // Other documented licensing/internal/protocol values do not map
+        // cleanly to the stable public categories and remain raw Unknown.
+        _ => None,
     }
 }
 
@@ -177,5 +232,98 @@ mod tests {
         assert_eq!(reason.category(), WindowsRdpDiagnosticCategory::Unknown);
         assert_eq!(reason.disconnect_code(), i32::MIN);
         assert_eq!(reason.extended_code(), Some(i32::MAX));
+    }
+
+    #[test]
+    fn primary_disconnect_codes_map_only_high_confidence_categories() {
+        let cases = [
+            (1, WindowsRdpDiagnosticCategory::UserInitiated),
+            (2055, WindowsRdpDiagnosticCategory::Authentication),
+            (1030, WindowsRdpDiagnosticCategory::CertificateOrSecurity),
+            (5639, WindowsRdpDiagnosticCategory::ServerPolicy),
+            (2308, WindowsRdpDiagnosticCategory::Network),
+        ];
+
+        for (code, expected) in cases {
+            let reason = WindowsRdpDisconnectReason::from_native_codes(code, None);
+            assert_eq!(reason.category(), expected, "disconnect code {code}");
+            assert_eq!(reason.disconnect_code(), code);
+            assert_eq!(reason.extended_code(), None);
+        }
+
+        for code in [0, 3, 2056, 2310, i32::MIN, i32::MAX] {
+            assert_eq!(
+                WindowsRdpDisconnectReason::from_native_codes(code, None).category(),
+                WindowsRdpDiagnosticCategory::Unknown,
+                "disconnect code {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_server_and_licensing_codes_are_not_forced_into_public_categories() {
+        assert_eq!(
+            WindowsRdpDisconnectReason::from_native_codes(3, None).category(),
+            WindowsRdpDiagnosticCategory::Unknown
+        );
+
+        for extended_code in [256, 259, 260, 261, 263, 267] {
+            let reason =
+                WindowsRdpDisconnectReason::from_native_codes(i32::MIN, Some(extended_code));
+            assert_eq!(
+                reason.category(),
+                WindowsRdpDiagnosticCategory::Unknown,
+                "extended disconnect code {extended_code}"
+            );
+            assert_eq!(reason.disconnect_code(), i32::MIN);
+            assert_eq!(reason.extended_code(), Some(extended_code));
+        }
+    }
+
+    #[test]
+    fn extended_disconnect_codes_are_classified_in_their_own_code_space() {
+        let cases = [
+            (11, WindowsRdpDiagnosticCategory::UserInitiated),
+            (768, WindowsRdpDiagnosticCategory::Authentication),
+            (264, WindowsRdpDiagnosticCategory::CertificateOrSecurity),
+            (266, WindowsRdpDiagnosticCategory::ServerPolicy),
+            (262, WindowsRdpDiagnosticCategory::Network),
+        ];
+
+        for (extended_code, expected) in cases {
+            let reason =
+                WindowsRdpDisconnectReason::from_native_codes(i32::MIN, Some(extended_code));
+            assert_eq!(
+                reason.category(),
+                expected,
+                "extended disconnect code {extended_code}"
+            );
+            assert_eq!(reason.disconnect_code(), i32::MIN);
+            assert_eq!(reason.extended_code(), Some(extended_code));
+        }
+    }
+
+    #[test]
+    fn known_extended_reason_overrides_primary_and_unknown_extended_reason_falls_back() {
+        let extended_override = WindowsRdpDisconnectReason::from_native_codes(2308, Some(768));
+        assert_eq!(
+            extended_override.category(),
+            WindowsRdpDiagnosticCategory::Authentication
+        );
+        assert_eq!(extended_override.disconnect_code(), 2308);
+        assert_eq!(extended_override.extended_code(), Some(768));
+
+        let primary_fallback = WindowsRdpDisconnectReason::from_native_codes(2308, Some(-55));
+        assert_eq!(
+            primary_fallback.category(),
+            WindowsRdpDiagnosticCategory::Network
+        );
+        assert_eq!(primary_fallback.disconnect_code(), 2308);
+        assert_eq!(primary_fallback.extended_code(), Some(-55));
+
+        let unknown = WindowsRdpDisconnectReason::from_native_codes(i32::MIN, Some(i32::MAX));
+        assert_eq!(unknown.category(), WindowsRdpDiagnosticCategory::Unknown);
+        assert_eq!(unknown.disconnect_code(), i32::MIN);
+        assert_eq!(unknown.extended_code(), Some(i32::MAX));
     }
 }
