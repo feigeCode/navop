@@ -3902,9 +3902,12 @@ impl FileManagerPanel {
                             ),
                     )
                     .child(
-                        DropdownButton::new("fm-upload")
+                        Button::new("fm-upload")
                             .ghost()
                             .small()
+                            .compact()
+                            .icon(IconName::Ellipsis)
+                            .tooltip(t!("File.actions"))
                             .dropdown_menu_with_anchor(
                                 Anchor::TopRight,
                                 move |menu, window, _cx| {
