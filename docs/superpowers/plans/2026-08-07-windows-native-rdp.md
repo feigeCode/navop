@@ -1503,13 +1503,13 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - focus released；
 - confirm close。
 
-- [ ] **Red:** fake event sink 顺序、未知 DISPID、未知 error code、callback after generation change。
-- [ ] **Red:** secret redaction tests 覆盖 password、Gateway password、username 可配置脱敏和完整 endpoint。
+- [x] **Red:** fake event sink 顺序、未知 DISPID、未知 error code、callback after generation change。
+- [x] **Red:** secret redaction tests 覆盖 password、Gateway password、username 可配置脱敏和完整 endpoint。
 - [x] **Green:** 建立 connection point/event sink 并保存 advise cookie。
 - [ ] **Green:** 映射 HRESULT、disconnect reason、extended reason、logon code，未知值保留 raw code。
 - [ ] **Green:** Rust callback 投递 UI queue，按 generation 过滤。
 - [x] **Green:** destroy 前 `Unadvise`。
-- [ ] **Refactor:** 映射表从 UI 文案分离，错误本地化在上层完成。
+- [x] **Refactor:** 映射表从 UI 文案分离，错误本地化在上层完成。
 - [x] **Review:** 检查 callback reentrancy 和 COM ref cycle。
 - [ ] **Verify:** 人工制造错误密码、拒绝连接、网络中断、服务器重启并核对状态。
 
@@ -1540,13 +1540,26 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   disconnect code、confirm-close by-ref 输出、legacy/modern reconnect、network
   quality，以及 malformed VARIANT 安全忽略。静态 contract 同时冻结
   detach → `Unadvise` → release 和 ActiveX cleanup 顺序。
+- **Diagnostic mapping slice:** Rust facade 现已把 Microsoft primary disconnect reason
+  与 `ExtendedDisconnectReasonCode` 作为独立 code space 处理；已知 extended category
+  优先，未知 extended value 回退 primary reason，所有 signed raw code 均原样保留。
+  当前只映射高置信的 user-initiated、authentication、certificate/security、
+  server-policy 和 network 类别；无法无歧义落入稳定 public category 的
+  server/licensing/internal/protocol 值继续保持 `Unknown`。映射表只产生稳定 category
+  与 raw code，不包含 native/UI 文案。Rust callback 集成测试同时覆盖 stale generation
+  过滤、queue drain 和 disconnected semantic decode。
 - **Automated verification boundary:** macOS host 已运行 crate tests、Clippy、
   cfg-native Rust test type-check、format check 和 diff check；这些检查不编译 MSVC/
-  ATL/type-library C++。本切片必须在提交并推送后通过 `CI` workflow 的
-  `windows-rdp-probe` x86_64/i686 matrix，结果将在 runner 完成后补记。
-- **Still pending:** disconnect/HRESULT/extended/logon 分类、错误文案分层、UI queue 与
-  generation filtering、secret redaction 补充，以及真实 RDP runtime/manual
-  acceptance 均未完成，因此 Task 5 整体仍保持未完成。
+  ATL/type-library C++。`CI` run `31236996673` 的两个 probe job 均成功：
+  x86_64 `Windows RDP probe (x86_64-pc-windows-msvc)` / `93051269919`，i686
+  `Windows RDP probe (i686-pc-windows-msvc)` / `93051269914`。两个 job 分别执行
+  locked `windows-rdp-probe` compile/link 和 `windows_rdp_host` Windows native host
+  tests；probe executable 本身未运行，这些 tests 也不建立 ActiveX RDP session。
+- **Still pending:** production native sink 尚未读取 `ExtendedDisconnectReason`，HRESULT/
+  logon code 的稳定分类仍未补齐；Rust event queue 尚未投递到 GPUI UI queue。真实 RDP
+  runtime/manual acceptance（错误密码、拒绝连接、网络中断、服务器重启）也未完成。
+  因此 Task 5 整体仍保持未完成；上述 GitHub-hosted runner 结果不得表述为真实 RDP
+  runtime、ActiveX connect/disconnect 或交互桌面验证。
 
 ---
 
