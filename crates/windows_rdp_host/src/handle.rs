@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::capabilities::WindowsRdpHostCapabilities;
 use crate::credential::WindowsRdpCredentialBundle;
 use crate::error::{WindowsRdpHostError, check_native_result};
-use crate::event::{EventBridge, native_event_callback};
+use crate::event::{EventBridge, WindowsRdpRawEvent, native_event_callback};
 use crate::ffi::{
     CONNECTION_STATE_CONNECTED, CONNECTION_STATE_CONNECTING, CONNECTION_STATE_DISCONNECTED,
     NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpBounds, NavopRdpCreateOptions,
@@ -77,6 +77,16 @@ impl WindowsRdpHost {
 
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Drains owned native events in FIFO order.
+    ///
+    /// The queue is destructive. Events received for another generation, or
+    /// after closing begins, are never returned.
+    pub fn drain_events(&self) -> Vec<WindowsRdpRawEvent> {
+        self.event_bridge
+            .as_ref()
+            .map_or_else(Vec::new, |event_bridge| event_bridge.drain())
     }
 
     /// Returns the Rust facade's current ownership and callback-admission state.
@@ -578,13 +588,6 @@ mod tests {
             "native callback context must be retained"
         );
         emit_callback(callback, context, event);
-    }
-
-    fn drain_events(host: &WindowsRdpHost) -> Vec<crate::event::OwnedNativeEvent> {
-        host.event_bridge
-            .as_ref()
-            .expect("event bridge should remain owned by the host")
-            .drain()
     }
 
     fn destroy_calls() -> usize {
@@ -1709,7 +1712,7 @@ mod tests {
         assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
         assert!(!host.is_closed());
         emit_last_callback(fake_event(42, 9, 90, &[9]));
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
 
         host.close()
             .expect("unregister failure should be retryable");
@@ -1741,7 +1744,7 @@ mod tests {
         assert!(active_callback_is_retained());
         assert_eq!(destroy_calls(), 0);
         emit_active_callback(fake_event(42, 9, 90, &[9]));
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
 
         assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
         assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
@@ -1814,8 +1817,8 @@ mod tests {
                 .expect("fake create should succeed");
 
         assert_eq!(
-            drain_events(&host),
-            vec![crate::event::OwnedNativeEvent {
+            host.drain_events(),
+            vec![crate::event::WindowsRdpRawEvent {
                 generation: 42,
                 kind: 7,
                 code: -9,
@@ -1833,7 +1836,7 @@ mod tests {
 
         emit_last_callback(fake_event(41, 7, 0, &[1]));
 
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
     }
 
     #[test]
@@ -1846,10 +1849,60 @@ mod tests {
         emit_last_callback(fake_event(42, 1, 10, &[1]));
         emit_last_callback(fake_event(42, 2, 20, &[2]));
 
-        let events = drain_events(&host);
+        let events = host.drain_events();
         assert_eq!(events.len(), 2);
         assert_eq!((events[0].kind, events[0].code), (1, 10));
         assert_eq!((events[1].kind, events[1].code), (2, 20));
+        assert!(host.drain_events().is_empty());
+    }
+
+    #[test]
+    fn unknown_kind_raw_code_and_payload_are_retained_unchanged() {
+        reset_fake_state();
+        let host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        emit_last_callback(fake_event(42, u32::MAX, i32::MIN, &[0xaa, 0x00, 0xff]));
+
+        assert_eq!(
+            host.drain_events(),
+            vec![crate::event::WindowsRdpRawEvent {
+                generation: 42,
+                kind: u32::MAX,
+                code: i32::MIN,
+                payload: vec![0xaa, 0x00, 0xff],
+            }]
+        );
+    }
+
+    #[test]
+    fn stale_generation_does_not_block_a_current_event() {
+        reset_fake_state();
+        let host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        emit_last_callback(fake_event(41, 1, 10, &[1]));
+        emit_last_callback(fake_event(42, 2, 20, &[2]));
+
+        let events = host.drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!((events[0].kind, events[0].code), (2, 20));
+    }
+
+    #[test]
+    fn close_clears_queued_events_before_rejecting_late_callbacks() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+        emit_last_callback(fake_event(42, 1, 10, &[1]));
+
+        host.close().expect("close should succeed");
+        emit_last_callback(fake_event(42, 2, 20, &[2]));
+
+        assert!(host.drain_events().is_empty());
     }
 
     #[test]
@@ -1864,7 +1917,7 @@ mod tests {
 
         host.close().expect("close should succeed");
 
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
     }
 
     #[test]
@@ -1877,7 +1930,7 @@ mod tests {
 
         emit_last_callback(fake_event(42, 4, 40, &[4]));
 
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
     }
 
     #[test]
@@ -1899,7 +1952,7 @@ mod tests {
             callback(context, &event, ptr::null());
         }
 
-        assert!(drain_events(&host).is_empty());
+        assert!(host.drain_events().is_empty());
     }
 
     #[test]

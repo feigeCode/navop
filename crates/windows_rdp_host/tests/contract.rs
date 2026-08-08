@@ -322,6 +322,8 @@ fn event_callback_abi_is_versioned_owned_and_architecture_independent() {
         &format!("{HOST_CRATE}/src/event.rs"),
         &[
             "struct OwnedNativeEvent",
+            "pub struct WindowsRdpRawEvent",
+            "pub enum WindowsRdpEvent",
             "struct EventBridge",
             "VecDeque<OwnedNativeEvent>",
             "AtomicU8",
@@ -332,6 +334,7 @@ fn event_callback_abi_is_versioned_owned_and_architecture_independent() {
             "event_generation != self.generation",
             "CallbackLifecycle::Closing",
             "CallbackLifecycle::Closed",
+            "impl From<WindowsRdpRawEvent> for WindowsRdpEvent",
         ],
     );
 }
@@ -1178,6 +1181,13 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
         &[
             "pub use capabilities::WindowsRdpHostCapabilities;",
             "pub use error::WindowsRdpHostError;",
+            "WindowsRdpDiagnosticCategory",
+            "WindowsRdpDisconnectReason",
+            "WindowsRdpDiagnosticContext",
+            "WindowsRdpDiagnosticSnapshot",
+            "WindowsRdpUsernameRedaction",
+            "WindowsRdpEvent",
+            "WindowsRdpRawEvent",
             "WindowsRdpConnectionState",
             "WindowsRdpHost",
             "WindowsRdpRequestCloseStatus",
@@ -1187,6 +1197,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "WindowsRdpConnectionOptions",
             "WindowsRdpHostOptions",
             "WindowsRdpParentWindow",
+            "mod diagnostic;",
             "mod event;",
             "mod lifecycle;",
         ],
@@ -1206,6 +1217,7 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn connection_state(",
             "pub fn request_close(",
             "pub fn disconnect(",
+            "pub fn drain_events(&self) -> Vec<WindowsRdpRawEvent>",
             "pub fn close(&mut self)",
             "pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle",
             "impl Drop for WindowsRdpHost",

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::ffi::c_void;
+use std::fmt;
 use std::mem::size_of;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
@@ -7,6 +8,31 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::ffi::{ABI_VERSION, NavopRdpEvent};
+
+/// An owned event copied from the native callback boundary.
+///
+/// `kind`, `code`, and `payload` are intentionally opaque. Keeping unknown
+/// values intact lets a newer native event producer interoperate with an older
+/// Rust facade without losing diagnostics.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WindowsRdpRawEvent {
+    pub generation: u64,
+    pub kind: u32,
+    pub code: i32,
+    pub payload: Vec<u8>,
+}
+
+impl fmt::Debug for WindowsRdpRawEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowsRdpRawEvent")
+            .field("generation", &self.generation)
+            .field("kind", &self.kind)
+            .field("code", &self.code)
+            .field("payload_len", &self.payload.len())
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OwnedNativeEvent {
@@ -30,6 +56,94 @@ pub(crate) struct EventBridge {
     queue: Mutex<VecDeque<OwnedNativeEvent>>,
 }
 
+impl From<OwnedNativeEvent> for WindowsRdpRawEvent {
+    fn from(event: OwnedNativeEvent) -> Self {
+        Self {
+            generation: event.generation,
+            kind: event.kind,
+            code: event.code,
+            payload: event.payload,
+        }
+    }
+}
+
+/// Stable semantic event shape for the future ActiveX event sink.
+///
+/// Native DISPID and payload decoding are deliberately not inferred here. A
+/// native event that is not yet understood remains available as `Unknown`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowsRdpEvent {
+    HostReady {
+        generation: u64,
+        capabilities: crate::capabilities::WindowsRdpHostCapabilities,
+    },
+    Connecting {
+        generation: u64,
+    },
+    Connected {
+        generation: u64,
+    },
+    LoginComplete {
+        generation: u64,
+    },
+    Reconnecting {
+        generation: u64,
+        attempt: u32,
+        max_attempts: Option<u32>,
+    },
+    Reconnected {
+        generation: u64,
+    },
+    NetworkStatusChanged {
+        generation: u64,
+        quality: Option<u32>,
+    },
+    RemoteDesktopSizeChanged {
+        generation: u64,
+        width: u32,
+        height: u32,
+    },
+    FullscreenChanged {
+        generation: u64,
+        fullscreen: bool,
+    },
+    AuthenticationWarning {
+        generation: u64,
+        visible: bool,
+    },
+    Warning {
+        generation: u64,
+        code: i32,
+    },
+    FatalError {
+        generation: u64,
+        code: i32,
+    },
+    LogonError {
+        generation: u64,
+        code: i32,
+    },
+    Disconnected {
+        generation: u64,
+        reason: crate::error::WindowsRdpDisconnectReason,
+    },
+    CloseConfirmed {
+        generation: u64,
+    },
+    FocusReleased {
+        generation: u64,
+    },
+    Unknown {
+        event: WindowsRdpRawEvent,
+    },
+}
+
+impl From<WindowsRdpRawEvent> for WindowsRdpEvent {
+    fn from(event: WindowsRdpRawEvent) -> Self {
+        Self::Unknown { event }
+    }
+}
+
 impl EventBridge {
     pub(crate) fn new(generation: u64) -> Self {
         Self {
@@ -40,20 +154,26 @@ impl EventBridge {
     }
 
     pub(crate) fn begin_closing(&self) {
+        let mut queue = self.lock_queue();
         self.lifecycle
             .store(CallbackLifecycle::Closing as u8, Ordering::Release);
-        self.lock_queue().clear();
+        queue.clear();
     }
 
     pub(crate) fn mark_closed(&self) {
+        let mut queue = self.lock_queue();
         self.lifecycle
             .store(CallbackLifecycle::Closed as u8, Ordering::Release);
-        self.lock_queue().clear();
+        queue.clear();
     }
 
-    #[cfg(test)]
-    pub(crate) fn drain(&self) -> Vec<OwnedNativeEvent> {
-        self.lock_queue().drain(..).collect()
+    pub(crate) fn drain(&self) -> Vec<WindowsRdpRawEvent> {
+        let mut queue = self.lock_queue();
+        if self.lifecycle.load(Ordering::Acquire) != CallbackLifecycle::Open as u8 {
+            queue.clear();
+            return Vec::new();
+        }
+        queue.drain(..).map(WindowsRdpRawEvent::from).collect()
     }
 
     fn enqueue(&self, event_generation: u64, kind: u32, code: i32, payload: &[u8]) {
@@ -137,4 +257,43 @@ pub(crate) unsafe extern "C" fn native_event_callback(
         let bridge = unsafe { &*context.cast::<EventBridge>() };
         bridge.enqueue(event_generation, kind, code, payload);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_event_debug_redacts_opaque_payload_contents() {
+        let event = WindowsRdpRawEvent {
+            generation: 42,
+            kind: 7,
+            code: -9,
+            payload: b"opaque-payload-sentinel".to_vec(),
+        };
+
+        let debug = format!("{event:?}");
+
+        assert!(debug.contains("generation: 42"));
+        assert!(debug.contains("kind: 7"));
+        assert!(debug.contains("code: -9"));
+        assert!(debug.contains("payload_len: 23"));
+        assert!(!debug.contains("opaque-payload-sentinel"));
+        assert_eq!(event.payload, b"opaque-payload-sentinel");
+    }
+
+    #[test]
+    fn drain_rejects_events_once_closing_is_observable() {
+        let bridge = EventBridge::new(42);
+        bridge.enqueue(42, 7, -9, &[1, 2, 3]);
+
+        // Model the close/drain race window directly: Closing is observable,
+        // while the thread performing close has not yet cleared the queue.
+        bridge
+            .lifecycle
+            .store(CallbackLifecycle::Closing as u8, Ordering::Release);
+
+        assert!(bridge.drain().is_empty());
+        assert!(bridge.lock_queue().is_empty());
+    }
 }

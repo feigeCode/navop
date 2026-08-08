@@ -7,6 +7,7 @@
 
 mod capabilities;
 mod credential;
+mod diagnostic;
 mod error;
 mod event;
 mod ffi;
@@ -18,7 +19,13 @@ mod options;
 
 pub use capabilities::WindowsRdpHostCapabilities;
 pub use credential::WindowsRdpCredentialBundle;
+pub use diagnostic::{
+    WindowsRdpDiagnosticContext, WindowsRdpDiagnosticSnapshot, WindowsRdpRedactedValue,
+    WindowsRdpUsernameRedaction,
+};
 pub use error::WindowsRdpHostError;
+pub use error::{WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason};
+pub use event::{WindowsRdpEvent, WindowsRdpRawEvent};
 pub use handle::{WindowsRdpConnectionState, WindowsRdpHost, WindowsRdpRequestCloseStatus};
 pub use lifecycle::WindowsRdpHostLifecycle;
 pub use options::{

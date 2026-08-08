@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::error::WindowsRdpHostError;
 use crate::ffi::{NavopRdpBorrowedUtf16, NavopRdpConnectionOptions};
 
@@ -44,13 +46,33 @@ impl WindowsRdpColorDepth {
 
 /// Minimal connection configuration kept separate from credentials and future
 /// security/redirection policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct WindowsRdpConnectionOptions {
     host: String,
     port: u16,
     desktop_width: u32,
     desktop_height: u32,
     color_depth: WindowsRdpColorDepth,
+}
+
+impl fmt::Debug for WindowsRdpConnectionOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WindowsRdpConnectionOptions")
+            .field("host", &redacted_host(&self.host))
+            .field("port", &self.port)
+            .field("desktop_width", &self.desktop_width)
+            .field("desktop_height", &self.desktop_height)
+            .field("color_depth", &self.color_depth)
+            .finish()
+    }
+}
+
+fn redacted_host(host: &str) -> String {
+    format!(
+        "<redacted, {} UTF-16 code units>",
+        host.encode_utf16().count()
+    )
 }
 
 impl WindowsRdpConnectionOptions {
@@ -241,5 +263,25 @@ mod tests {
         assert_eq!(options.desktop_width(), 1600);
         assert_eq!(options.desktop_height(), 900);
         assert_eq!(options.color_depth(), WindowsRdpColorDepth::Bpp24);
+    }
+
+    #[test]
+    fn connection_options_debug_redacts_the_complete_endpoint() {
+        let options = WindowsRdpConnectionOptions::new(
+            "alice@example.com:endpoint-sentinel@[2001:db8::1]",
+            3390,
+            1600,
+            900,
+            WindowsRdpColorDepth::Bpp24,
+        )
+        .expect("valid connection options");
+        let debug = format!("{options:?}");
+
+        assert!(debug.contains("WindowsRdpConnectionOptions"));
+        assert!(debug.contains("port: 3390"));
+        assert!(debug.contains("<redacted"));
+        assert!(!debug.contains("alice@example.com"));
+        assert!(!debug.contains("endpoint-sentinel"));
+        assert!(!debug.contains("2001:db8"));
     }
 }
