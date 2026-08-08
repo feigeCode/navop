@@ -180,9 +180,4 @@ impl HomePage {
         self.filtered_workspace_ids.clear();
         cx.notify();
     }
-
-    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
-        cx.notify();
-    }
 }

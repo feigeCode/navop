@@ -12,8 +12,8 @@ use gpui::{
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, IconSize, InteractiveElementExt,
-    ObjectIcon, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, InteractiveElementExt, ObjectIcon,
+    Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _, DropdownButton, IconButton, IconButtonRole},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
@@ -60,9 +60,7 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::connection_visuals::{
-    ConnectionVisualSize, connection_type_navigation_icon, connection_type_rail_icon,
-};
+use crate::connection_visuals::ConnectionVisualSize;
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -76,7 +74,6 @@ use crate::local_terminal_profiles::{
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
-use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
@@ -90,8 +87,6 @@ actions!(
     ]
 );
 
-const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
-const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
 const MODERN_HOME_CARD_MIN_WIDTH: gpui::Pixels = px(220.0);
 const MODERN_HOME_CARD_MAX_WIDTH: gpui::Pixels = px(260.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
@@ -174,7 +169,6 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
-    sidebar_collapsed: bool,
     team_permissions: TeamPermissionSnapshot,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
@@ -226,7 +220,6 @@ mod local_terminal;
 mod modern_home;
 mod modern_home_shortcuts;
 mod render;
-mod sidebar;
 mod sync_route;
 mod team_permissions;
 mod toolbar;

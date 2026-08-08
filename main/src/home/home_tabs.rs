@@ -265,7 +265,7 @@ mod tests {
     fn ai_workbench_sidebar_entry_opens_a_closeable_regular_tab() {
         let tabs_source = include_str!("home_tabs.rs").replace("\r\n", "\n");
         let rail_source = include_str!("../persistent_connection_sidebar/rail.rs");
-        let legacy_sidebar_source = include_str!("../home_tab/sidebar.rs");
+        let legacy_sidebar_source = include_str!("../persistent_connection_sidebar/legacy.rs");
 
         assert!(rail_source.contains("persistent-open-ai-workbench"));
         assert!(rail_source.contains("StartupDefaultPage::Home"));

@@ -87,7 +87,6 @@ impl HomePage {
             auth_error: None,
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
-            sidebar_collapsed: false,
             team_permissions: TeamPermissionSnapshot::from_persisted_user_id(persisted_user_id),
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),

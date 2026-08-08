@@ -94,9 +94,6 @@ impl Render for HomePage {
                     .size_full()
                     .min_w_0()
                     .overflow_hidden()
-                    .when(self.home_page_style == HomePageStyle::Legacy, |layout| {
-                        layout.child(self.render_sidebar(window, cx))
-                    })
                     .child(content),
             )
     }

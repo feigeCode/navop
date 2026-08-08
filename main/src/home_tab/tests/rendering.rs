@@ -239,12 +239,24 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
     let render = include_str!("../render.rs");
     let content = include_str!("../content.rs");
     let card = include_str!("../connection_card.rs");
-    let sidebar = include_str!("../sidebar.rs");
+    let sidebar = include_str!("../../persistent_connection_sidebar/legacy.rs");
 
     assert!(render.contains("self.home_page_style == HomePageStyle::Legacy"));
     assert!(content.contains("slot.w(px(320.0)).flex_shrink_0()"));
     assert!(content.contains("slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)"));
     assert!(card.contains("if legacy { px(90.0) } else { px(76.0) }"));
+    assert!(sidebar.contains("\"legacy-open-home\""));
+    assert!(sidebar.contains("HomePage::show_home(&home_page, window, cx)"));
+    assert!(
+        sidebar.find("\"legacy-open-home\"").unwrap()
+            < sidebar.find("for filter in ConnectionType::all()").unwrap()
+    );
+    let filter_entries = sidebar
+        .split("for filter in ConnectionType::all()")
+        .nth(1)
+        .expect("legacy connection filters");
+    assert!(filter_entries.contains("home.set_selected_filter(filter, cx);"));
+    assert!(filter_entries.contains("HomePage::show_home(&home_page, window, cx);"));
     assert!(sidebar.contains("legacy-home-sidebar-toggle"));
     assert!(sidebar.contains("FunctionalIcon::new(IconName::User)"));
     assert!(!sidebar.contains("ObjectIcon::new(IconName::User)"));
@@ -252,7 +264,7 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
 
 #[test]
 fn legacy_ai_workbench_uses_an_object_glyph_icon() {
-    let sidebar = include_str!("../sidebar.rs");
+    let sidebar = include_str!("../../persistent_connection_sidebar/legacy.rs");
     let ai_entry = sidebar
         .split(".when(show_ai_workbench")
         .nth(1)

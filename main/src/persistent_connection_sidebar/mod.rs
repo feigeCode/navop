@@ -9,6 +9,7 @@ use gpui_component::{
     ActiveTheme as _, h_flex,
     input::{InputEvent, InputState},
 };
+use one_core::settings::HomePageStyle;
 use terminal_view::TerminalColors;
 
 use crate::home_tab::HomePage;
@@ -20,6 +21,7 @@ mod connection_copy_menu;
 mod connection_share;
 mod context_menu;
 mod drag;
+mod legacy;
 mod rail;
 mod resize;
 #[cfg(test)]
@@ -99,6 +101,8 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
 
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
+    home_page_style: HomePageStyle,
+    legacy_collapsed: bool,
     pub(super) tree_expanded: bool,
     pub(super) collapsed_workspaces: HashSet<i64>,
     pub(super) unassigned_collapsed: bool,
@@ -117,6 +121,7 @@ impl EventEmitter<PersistentConnectionSidebarEvent> for PersistentConnectionSide
 impl PersistentConnectionSidebar {
     pub(crate) fn new(
         home_page: Entity<HomePage>,
+        home_page_style: HomePageStyle,
         tree_expanded: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -135,6 +140,8 @@ impl PersistentConnectionSidebar {
         .detach();
         Self {
             home_page,
+            home_page_style,
+            legacy_collapsed: false,
             tree_expanded,
             collapsed_workspaces: HashSet::new(),
             unassigned_collapsed: false,
@@ -150,6 +157,18 @@ impl PersistentConnectionSidebar {
             self.tree_expanded = expanded;
             cx.notify();
         }
+    }
+
+    pub(crate) fn set_home_page_style(&mut self, style: HomePageStyle, cx: &mut Context<Self>) {
+        if self.home_page_style != style {
+            self.home_page_style = style;
+            cx.notify();
+        }
+    }
+
+    fn toggle_legacy_collapsed(&mut self, cx: &mut Context<Self>) {
+        self.legacy_collapsed = !self.legacy_collapsed;
+        cx.notify();
     }
 
     pub(crate) fn is_expanded(&self) -> bool {
@@ -175,6 +194,10 @@ impl PersistentConnectionSidebar {
 
 impl Render for PersistentConnectionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.home_page_style == HomePageStyle::Legacy {
+            return self.render_legacy_sidebar(window, cx);
+        }
+
         let palette = self.palette(cx);
         h_flex()
             .h_full()
@@ -188,5 +211,6 @@ impl Render for PersistentConnectionSidebar {
             .when(self.tree_expanded, |this| {
                 this.child(self.render_connection_tree(palette, window, cx))
             })
+            .into_any_element()
     }
 }
