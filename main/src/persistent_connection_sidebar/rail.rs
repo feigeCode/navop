@@ -19,7 +19,6 @@ use crate::license::is_feature_enabled;
 pub(super) fn render_navigation_rail(
     home_page: &Entity<HomePage>,
     sidebar: Entity<PersistentConnectionSidebar>,
-    tree_expanded: bool,
     palette: SidebarPalette,
     cx: &gpui::App,
 ) -> AnyElement {
@@ -29,10 +28,6 @@ pub(super) fn render_navigation_rail(
     let home = home_page.read(cx);
     let home_active = home.is_home_active();
     let selected_filter = home.selected_filter;
-    let has_tabs = {
-        let tabs = home.tab_container.read(cx);
-        tabs.has_pinned_tab() || !tabs.tabs().is_empty()
-    };
     let show_team =
         should_show_team_management_entry(is_feature_enabled(Feature::TeamManagement, cx));
     let show_ai_workbench_entry =
@@ -87,14 +82,6 @@ pub(super) fn render_navigation_rail(
                         .p_1()
                         .border_b_1()
                         .border_color(palette.border)
-                        .when(home_active && !has_tabs, |this| {
-                            this.child(connection_tree_toggle_button(
-                                sidebar.clone(),
-                                tree_expanded,
-                                palette,
-                                rail_item_size,
-                            ))
-                        })
                         .child(selectable_rail_button(
                             "persistent-open-home",
                             IconName::Home,
@@ -187,37 +174,6 @@ pub(super) fn render_navigation_rail(
                 ),
         )
         .into_any_element()
-}
-
-fn connection_tree_toggle_button(
-    sidebar: Entity<PersistentConnectionSidebar>,
-    expanded: bool,
-    palette: SidebarPalette,
-    rail_item_size: Size,
-) -> impl IntoElement {
-    IconButton::new(
-        "persistent-toggle-connections",
-        if expanded {
-            IconName::PanelLeftClose
-        } else {
-            IconName::PanelLeftOpen
-        },
-    )
-    .hit_size(rail_item_size)
-    .glyph_size(IconSize::Medium)
-    .text_color(palette.muted_foreground)
-    .tooltip(if expanded {
-        t!("Sidebar.hide_navigation").to_string()
-    } else {
-        t!("Sidebar.show_navigation").to_string()
-    })
-    .on_click(move |_, _, cx| {
-        sidebar.update(cx, |sidebar, cx| {
-            let expanded = !sidebar.is_expanded();
-            sidebar.set_tree_expanded(expanded, cx);
-            cx.emit(PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded });
-        });
-    })
 }
 
 fn render_filter_buttons(
@@ -336,31 +292,6 @@ fn selectable_rail_button(
 #[cfg(test)]
 mod tests {
     use super::next_tree_expanded_after_filter_click;
-
-    #[test]
-    fn home_rail_keeps_connection_tree_toggle_when_tab_bar_is_hidden() {
-        let source = include_str!("rail.rs");
-        let renderer_start = source
-            .find("pub(super) fn render_navigation_rail")
-            .expect("navigation rail renderer");
-        let renderer_end = source[renderer_start..]
-            .find("fn render_filter_buttons")
-            .map(|offset| renderer_start + offset)
-            .expect("filter button renderer");
-        let renderer = &source[renderer_start..renderer_end];
-
-        assert!(renderer.contains("tree_expanded: bool"));
-        assert!(!renderer.contains("sidebar.read(cx)"));
-        assert!(renderer.contains(".when(home_active && !has_tabs"));
-        assert!(renderer.contains("connection_tree_toggle_button("));
-        assert!(renderer.contains("\"persistent-toggle-connections\""));
-        assert!(renderer.contains("IconName::PanelLeftClose"));
-        assert!(renderer.contains("IconName::PanelLeftOpen"));
-        assert!(
-            renderer
-                .contains("PersistentConnectionSidebarEvent::TreeVisibilityChanged { expanded }")
-        );
-    }
 
     #[test]
     fn selected_filter_button_toggles_the_connection_tree() {

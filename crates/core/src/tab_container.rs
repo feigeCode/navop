@@ -835,6 +835,7 @@ pub struct TabContainer {
     renaming_tab_id: Option<SharedString>,
     rename_input: Option<Entity<InputState>>,
     rename_input_subscription: Option<Subscription>,
+    show_tab_bar_when_empty: bool,
     show_window_controls: bool,
     #[cfg(test)]
     force_windows_titlebar_for_test: bool,
@@ -882,6 +883,7 @@ impl TabContainer {
             renaming_tab_id: None,
             rename_input: None,
             rename_input_subscription: None,
+            show_tab_bar_when_empty: false,
             show_window_controls: false,
             #[cfg(test)]
             force_windows_titlebar_for_test: false,
@@ -944,6 +946,11 @@ impl TabContainer {
 
     pub fn with_navigation_sidebar_toggle(mut self, expanded: bool) -> Self {
         self.navigation_sidebar_expanded = Some(expanded);
+        self
+    }
+
+    pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self {
+        self.show_tab_bar_when_empty = show;
         self
     }
 
@@ -3930,6 +3937,7 @@ impl Render for TabContainer {
         let focus_handle = self.focus_handle(cx);
         let tab_bar_height = cx.theme().geometry.layout.tab_bar;
         let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();
+        let show_tab_bar = has_tabs || self.show_tab_bar_when_empty;
 
         div()
             .id("tab-container")
@@ -3968,11 +3976,17 @@ impl Render for TabContainer {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .when(has_tabs, |this| this.child(self.render_tab_bar(window, cx)))
+            .when(show_tab_bar, |this| {
+                this.child(self.render_tab_bar(window, cx))
+            })
             .child(
                 v_flex()
                     .absolute()
-                    .top(if has_tabs { tab_bar_height } else { px(0.0) })
+                    .top(if show_tab_bar {
+                        tab_bar_height
+                    } else {
+                        px(0.0)
+                    })
                     .right_0()
                     .bottom_0()
                     .left_0()

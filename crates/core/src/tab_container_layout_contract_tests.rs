@@ -77,7 +77,7 @@ fn active_tab_intrinsic_size_cannot_shrink_the_window_chrome() {
 }
 
 #[test]
-fn tab_bar_is_hidden_until_a_tab_exists() {
+fn tab_bar_visibility_can_be_kept_when_empty() {
     let source = include_str!("tab_container.rs").replace("\r\n", "\n");
     let render_start = source
         .find("impl Render for TabContainer")
@@ -87,8 +87,11 @@ fn tab_bar_is_hidden_until_a_tab_exists() {
     assert!(
         render.contains("let has_tabs = !self.pinned_tabs.is_empty() || !self.tabs.is_empty();")
     );
-    assert!(render.contains(".when(has_tabs, |this| this.child(self.render_tab_bar(window, cx)))"));
-    assert!(render.contains(".top(if has_tabs { tab_bar_height } else { px(0.0) })"));
+    assert!(source.contains("show_tab_bar_when_empty: false"));
+    assert!(source.contains("pub fn with_tab_bar_when_empty(mut self, show: bool) -> Self"));
+    assert!(render.contains("let show_tab_bar = has_tabs || self.show_tab_bar_when_empty;"));
+    assert!(render.contains(".when(show_tab_bar, |this|"));
+    assert!(render.contains(".top(if show_tab_bar {"));
 }
 
 #[test]

@@ -1113,16 +1113,14 @@ enum MainContent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MainContentPresentation {
-    HomeOnly,
-    HomeWithTabs,
+    HomeWithTabBar,
     Tabs,
 }
 
-fn main_content_presentation(main_content: MainContent, has_tabs: bool) -> MainContentPresentation {
-    match (main_content, has_tabs) {
-        (MainContent::Home, false) => MainContentPresentation::HomeOnly,
-        (MainContent::Home, true) => MainContentPresentation::HomeWithTabs,
-        (MainContent::Tabs, _) => MainContentPresentation::Tabs,
+fn main_content_presentation(main_content: MainContent) -> MainContentPresentation {
+    match main_content {
+        MainContent::Home => MainContentPresentation::HomeWithTabBar,
+        MainContent::Tabs => MainContentPresentation::Tabs,
     }
 }
 
@@ -1169,7 +1167,7 @@ impl OnetCliApp {
         let home_page_style = settings.home_page_style;
         let show_persistent_sidebar = home_page_style.uses_persistent_sidebar();
         let tab_container = cx.new(|cx| {
-            let mut container = TabContainer::new(window, cx);
+            let mut container = TabContainer::new(window, cx).with_tab_bar_when_empty(true);
 
             if show_persistent_sidebar {
                 container = container.with_navigation_sidebar_toggle(connection_sidebar_expanded);
@@ -1344,14 +1342,8 @@ impl OnetCliApp {
     }
 
     fn render_main_content(&self, cx: &App) -> AnyElement {
-        let has_tabs = {
-            let tabs = self.tab_container.read(cx);
-            tabs.has_pinned_tab() || !tabs.tabs().is_empty()
-        };
-
-        match main_content_presentation(self.main_content, has_tabs) {
-            MainContentPresentation::HomeOnly => self.home_page.clone().into_any_element(),
-            MainContentPresentation::HomeWithTabs => div()
+        match main_content_presentation(self.main_content) {
+            MainContentPresentation::HomeWithTabBar => div()
                 .flex()
                 .flex_col()
                 .size_full()
@@ -1606,13 +1598,11 @@ mod tests {
         let app_source = include_str!("onetcli_app.rs");
         let home_render_source = include_str!("home_tab/render.rs");
 
-        assert!(app_source.contains(
-            "MainContentPresentation::HomeOnly => self.home_page.clone().into_any_element()"
-        ));
-        assert!(app_source.contains("MainContentPresentation::HomeWithTabs => div()"));
+        assert!(app_source.contains("MainContentPresentation::HomeWithTabBar => div()"));
         assert!(app_source.contains(".id(\"home-tab-bar-slot\")"));
         assert!(app_source.contains(".h(cx.theme().geometry.layout.tab_bar)"));
         assert!(app_source.contains(".id(\"home-page-content\")"));
+        assert!(app_source.contains("with_tab_bar_when_empty(true)"));
         assert!(!app_source.contains(".id(\"home-content-overlay\")"));
         assert!(app_source.contains(
             "MainContentPresentation::Tabs => self.tab_container.clone().into_any_element()"
@@ -1622,18 +1612,14 @@ mod tests {
     }
 
     #[test]
-    fn home_keeps_the_tab_bar_visible_when_tabs_exist() {
+    fn home_always_keeps_the_tab_bar_visible() {
         assert_eq!(
-            MainContentPresentation::HomeOnly,
-            main_content_presentation(MainContent::Home, false)
-        );
-        assert_eq!(
-            MainContentPresentation::HomeWithTabs,
-            main_content_presentation(MainContent::Home, true)
+            MainContentPresentation::HomeWithTabBar,
+            main_content_presentation(MainContent::Home)
         );
         assert_eq!(
             MainContentPresentation::Tabs,
-            main_content_presentation(MainContent::Tabs, true)
+            main_content_presentation(MainContent::Tabs)
         );
     }
 
