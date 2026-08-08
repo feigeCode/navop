@@ -31,7 +31,7 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::PopupMenuItem,
+    menu::{DropdownMenu, PopupMenuItem},
     notification::Notification,
     popover::{Popover, PopoverState},
     progress::Progress,
@@ -845,7 +845,7 @@ fn is_valid_entry_name(name: &str) -> bool {
 fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
     BreadcrumbItem::new(label)
         .flex_shrink(1.0)
-        .min_w(px(0.))
+        .min_w(px(35.))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
         .overflow_hidden()
         .text_ellipsis()
@@ -5596,7 +5596,7 @@ impl SftpView {
             self.local_favorite_paths()
         };
         let left_endpoint_title = self.left_endpoint_title();
-        let upload_view = cx.entity();
+        let local_actions_view = cx.entity();
 
         v_flex()
             .flex_1()
@@ -5742,95 +5742,91 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                DropdownButton::new("local_upload")
-                                    .button(
-                                        Button::new("local_upload_selected")
-                                            .icon(IconName::Upload)
-                                            .tooltip(t!("Common.upload"))
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                let has_selection =
-                                                    this.get_local_selected_count(cx) > 0;
-                                                let left_ready = this
-                                                    .left_remote
-                                                    .as_ref()
-                                                    .is_none_or(|endpoint| {
-                                                        endpoint.state
-                                                            == LeftRemoteConnectionState::Connected
-                                                    });
-
-                                                if has_selection && left_ready {
-                                                    this.transfer_left_selection_to_right(
-                                                        window, cx,
-                                                    );
-                                                } else {
-                                                    this.select_and_upload_files(window, cx);
-                                                }
-                                            })),
-                                    )
+                                Button::new("local_file_actions")
                                     .ghost()
                                     .small()
                                     .compact()
-                                    .tooltip(t!("Common.upload"))
-                                    .disabled(!is_connected)
+                                    .icon(IconName::Ellipsis)
+                                    .tooltip(t!("File.actions"))
+                                    .disabled(is_left_remote)
                                     .dropdown_menu_with_anchor(
                                         Anchor::TopRight,
                                         move |menu, window, _cx| {
-                                            let upload_files_view = upload_view.clone();
-                                            let upload_folder_view = upload_view.clone();
-
+                                            let new_file_view = local_actions_view.clone();
+                                            let new_folder_view = local_actions_view.clone();
+                                            let delete_view = local_actions_view.clone();
+                                            let upload_files_view = local_actions_view.clone();
+                                            let upload_folder_view = local_actions_view.clone();
                                             menu.item(
                                                 PopupMenuItem::new(
                                                     t!("File.upload_file").to_string(),
                                                 )
-                                                .icon(IconName::Upload)
+                                                    .disabled(!is_connected)
+                                                    .icon(IconName::Upload)
+                                                    .on_click(window.listener_for(
+                                                        &upload_files_view,
+                                                        move |this, _, window, cx| {
+                                                            this.select_and_upload_files(window, cx);
+                                                        },
+                                                    )),
+                                            )
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("File.upload_folder").to_string(),
+                                                    )
+                                                        .disabled(!is_connected)
+                                                        .icon(IconName::Upload)
+                                                        .on_click(window.listener_for(
+                                                            &upload_folder_view,
+                                                            move |this, _, window, cx| {
+                                                                this.select_and_upload_folder(window, cx);
+                                                            },
+                                                        )),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new(t!("File.new_file").to_string())
+                                                    .icon(IconName::File)
+                                                    .on_click(window.listener_for(
+                                                        &new_file_view,
+                                                        move |this, _, window, cx| {
+                                                            this.create_new_file(
+                                                                PanelSide::Local,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new(
+                                                    t!("File.new_folder").to_string(),
+                                                )
+                                                    .disabled(!is_connected)
+                                                .icon(IconName::NewFolder)
                                                 .on_click(window.listener_for(
-                                                    &upload_files_view,
+                                                    &new_folder_view,
                                                     move |this, _, window, cx| {
-                                                        this.select_and_upload_files(window, cx);
+                                                        this.show_new_folder_dialog(
+                                                            PanelSide::Local,
+                                                            window,
+                                                            cx,
+                                                        );
                                                     },
                                                 )),
                                             )
                                             .item(
-                                                PopupMenuItem::new(
-                                                    t!("File.upload_folder").to_string(),
-                                                )
-                                                .icon(IconName::NewFolder)
-                                                .on_click(window.listener_for(
-                                                    &upload_folder_view,
-                                                    move |this, _, window, cx| {
-                                                        this.select_and_upload_folder(window, cx);
-                                                    },
-                                                )),
+                                                PopupMenuItem::new(t!("Common.delete").to_string())
+                                                    .icon(IconName::Remove)
+                                                    .disabled(!has_selection)
+                                                    .on_click(window.listener_for(
+                                                        &delete_view,
+                                                        move |this, _, window, cx| {
+                                                            this.delete_local_selected(window, cx);
+                                                        },
+                                                    )),
                                             )
                                         },
                                     ),
-                            )
-                            .child(
-                                IconButton::new("local_new_file", IconName::File)
-                                    .role(IconButtonRole::Toolbar)
-                                    .disabled(is_left_remote)
-                                    .tooltip(t!("File.new_file"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.create_new_file(PanelSide::Local, window, cx);
-                                    })),
-                            )
-                            .child(
-                                IconButton::new("local_new_folder", IconName::NewFolder)
-                                    .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("File.new_folder"))
-                                    .disabled(is_left_remote)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.show_new_folder_dialog(PanelSide::Local, window, cx);
-                                    })),
-                            )
-                            .child(
-                                IconButton::new("local_delete", IconName::Remove)
-                                    .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("Common.delete"))
-                                    .disabled(is_left_remote || !has_selection)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.delete_local_selected(window, cx);
-                                    })),
                             ),
                     ),
             )
@@ -5928,6 +5924,7 @@ impl SftpView {
         let can_go_forward = self.can_go_forward_remote();
         let is_favorite = self.is_current_remote_path_favorite();
         let favorite_paths = self.remote_favorite_paths();
+        let remote_actions_view = cx.entity();
 
         v_flex()
             .flex_1()
@@ -6050,31 +6047,65 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                IconButton::new("remote_new_file", IconName::File)
-                                    .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("File.new_file"))
+                                Button::new("remote_file_actions")
+                                    .ghost()
+                                    .small()
+                                    .compact()
+                                    .icon(IconName::Ellipsis)
+                                    .tooltip(t!("File.actions"))
                                     .disabled(!is_connected)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.create_new_file(PanelSide::Remote, window, cx);
-                                    })),
-                            )
-                            .child(
-                                IconButton::new("remote_new_folder", IconName::NewFolder)
-                                    .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("File.new_folder"))
-                                    .disabled(!is_connected)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.show_new_folder_dialog(PanelSide::Remote, window, cx);
-                                    })),
-                            )
-                            .child(
-                                IconButton::new("remote_delete", IconName::Remove)
-                                    .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("Common.delete"))
-                                    .disabled(!has_selection || !is_connected)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.delete_remote_selected(window, cx);
-                                    })),
+                                    .dropdown_menu_with_anchor(
+                                        Anchor::TopRight,
+                                        move |menu, window, _cx| {
+                                            let new_file_view = remote_actions_view.clone();
+                                            let new_folder_view = remote_actions_view.clone();
+                                            let delete_view = remote_actions_view.clone();
+
+                                            menu.item(
+                                                PopupMenuItem::new(t!("File.new_file").to_string())
+                                                    .icon(IconName::File)
+                                                    .disabled(!is_connected)
+                                                    .on_click(window.listener_for(
+                                                        &new_file_view,
+                                                        move |this, _, window, cx| {
+                                                            this.create_new_file(
+                                                                PanelSide::Remote,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new(
+                                                    t!("File.new_folder").to_string(),
+                                                )
+                                                .icon(IconName::NewFolder)
+                                                .disabled(!is_connected)
+                                                .on_click(window.listener_for(
+                                                    &new_folder_view,
+                                                    move |this, _, window, cx| {
+                                                        this.show_new_folder_dialog(
+                                                            PanelSide::Remote,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
+                                            .item(
+                                                PopupMenuItem::new(t!("Common.delete").to_string())
+                                                    .icon(IconName::Remove)
+                                                    .disabled(!has_selection || !is_connected)
+                                                    .on_click(window.listener_for(
+                                                        &delete_view,
+                                                        move |this, _, window, cx| {
+                                                            this.delete_remote_selected(window, cx);
+                                                        },
+                                                    )),
+                                            )
+                                        },
+                                    ),
                             ),
                     ),
             )

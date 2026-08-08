@@ -205,6 +205,74 @@ File:
     en: Drop files here
     zh-CN: 将文件拖放到这里
     zh-HK: 將檔案拖放到這裡
+  copy:
+    en: Copy
+    zh-CN: 复制
+    zh-HK: 複製
+  cut:
+    en: Cut
+    zh-CN: 剪切
+    zh-HK: 剪下
+  paste:
+    en: Paste
+    zh-CN: 粘贴
+    zh-HK: 貼上
+  properties:
+    en: Properties
+    zh-CN: 属性
+    zh-HK: 屬性
+  actions:
+    en: File actions
+    zh-CN: 文件操作
+    zh-HK: 文件操作
+  calculate:
+    en: Calculate
+    zh-CN: 计算
+    zh-HK: 計算
+  calculating:
+    en: Calculating…
+    zh-CN: 计算中…
+    zh-HK: 計算中…
+  property_name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  property_path:
+    en: Path
+    zh-CN: 路径
+    zh-HK: 路徑
+  property_type:
+    en: Type
+    zh-CN: 类型
+    zh-HK: 類型
+  property_file:
+    en: File
+    zh-CN: 文件
+    zh-HK: 文件
+  property_folder:
+    en: Folder
+    zh-CN: 文件夹
+    zh-HK: 文件夾
+  property_size:
+    en: Size
+    zh-CN: 大小
+    zh-HK: 大小
+  property_modified:
+    en: Modified
+    zh-CN: 修改时间
+    zh-HK: 修改時間
+  property_permissions:
+    en: Permissions
+    zh-CN: 权限
+    zh-HK: 權限
+  copy_ready:
+    en: Files copied. Choose a destination and paste.
+    zh-CN: 已复制文件，请选择目标位置后粘贴
+    zh-HK: 已複製文件，請選擇目標位置後貼上
+  cut_ready:
+    en: Files cut. Choose a destination and paste.
+    zh-CN: 已剪切文件，请选择目标位置后粘贴
+    zh-HK: 已剪下文件，請選擇目標位置後貼上
   new_file:
     en: New File
     zh-CN: 新建文件

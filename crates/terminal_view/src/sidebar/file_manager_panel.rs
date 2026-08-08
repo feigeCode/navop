@@ -3909,6 +3909,10 @@ impl FileManagerPanel {
                                 move |menu, window, _cx| {
                                     let upload_files_panel = upload_panel.clone();
                                     let upload_folder_panel = upload_panel.clone();
+                                    let new_file_panel = upload_panel.clone();
+                                    let new_folder_panel = upload_panel.clone();
+                                    let download_panel = upload_panel.clone();
+                                    let delete_panel = upload_panel.clone();
 
                                     menu.item(
                                         PopupMenuItem::new(t!("FileManager.upload_file"))
@@ -3930,51 +3934,51 @@ impl FileManagerPanel {
                                                 },
                                             )),
                                     )
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new(t!("FileManager.new_file"))
+                                            .icon(IconName::File)
+                                            .on_click(window.listener_for(
+                                                &new_file_panel,
+                                                move |this, _, window, cx| {
+                                                    this.show_new_file_dialog(window, cx);
+                                                },
+                                            )),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(t!("FileManager.new_folder"))
+                                            .icon(IconName::NewFolder)
+                                            .on_click(window.listener_for(
+                                                &new_folder_panel,
+                                                move |this, _, window, cx| {
+                                                    this.show_new_folder_dialog(window, cx);
+                                                },
+                                            )),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(t!("FileManager.download"))
+                                            .icon(IconName::ArrowDown)
+                                            .disabled(!has_selection)
+                                            .on_click(window.listener_for(
+                                                &download_panel,
+                                                move |this, _, window, cx| {
+                                                    this.download_selected(window, cx);
+                                                },
+                                            )),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(t!("FileManager.delete"))
+                                            .icon(IconName::Remove)
+                                            .disabled(!has_selection)
+                                            .on_click(window.listener_for(
+                                                &delete_panel,
+                                                move |this, _, window, cx| {
+                                                    this.delete_selected(window, cx);
+                                                },
+                                            )),
+                                    )
                                 },
                             ),
-                    )
-                    .child(
-                        Button::new("fm-new-file")
-                            .ghost()
-                            .small()
-                            .icon(IconName::File)
-                            .tooltip(t!("FileManager.new_file"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_new_file_dialog(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fm-new-folder")
-                            .ghost()
-                            .small()
-                            .icon(IconName::NewFolder)
-                            .tooltip(t!("FileManager.new_folder"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_new_folder_dialog(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fm-download")
-                            .ghost()
-                            .small()
-                            .icon(IconName::ArrowDown)
-                            .tooltip(t!("FileManager.download"))
-                            .disabled(!has_selection)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.download_selected(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fm-delete")
-                            .ghost()
-                            .small()
-                            .danger()
-                            .icon(IconName::Remove)
-                            .tooltip(t!("FileManager.delete"))
-                            .disabled(!has_selection)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.delete_selected(window, cx);
-                            })),
                     )
                     .child(div().flex_1())
                     // 同步终端工作目录按钮
