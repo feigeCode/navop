@@ -1548,18 +1548,28 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   server/licensing/internal/protocol 值继续保持 `Unknown`。映射表只产生稳定 category
   与 raw code，不包含 native/UI 文案。Rust callback 集成测试同时覆盖 stale generation
   过滤、queue drain 和 disconnected semantic decode。
+- **Production extended reason capture:** production `OnDisconnected` 保持只读取 COM
+  event 的一个 primary `VT_I4` 参数，并在同一 owner thread 上同步调用
+  `IMsRdpClient::get_ExtendedDisconnectReason`。property getter 成功时，extended raw
+  signed code 以 4-byte little-endian payload 投递；getter 失败或 ActiveX resources
+  不可用时仍投递 primary disconnect event，不因补充诊断失败而丢失断连通知。sink
+  仍只保存 non-owning `NativeRdpHost*`，没有新增 owning client/control/host reference，
+  因而不改变既有 COM ownership graph 或 teardown 顺序。
 - **Automated verification boundary:** macOS host 已运行 crate tests、Clippy、
   cfg-native Rust test type-check、format check 和 diff check；这些检查不编译 MSVC/
-  ATL/type-library C++。`CI` run `31236996673` 的两个 probe job 均成功：
-  x86_64 `Windows RDP probe (x86_64-pc-windows-msvc)` / `93051269919`，i686
-  `Windows RDP probe (i686-pc-windows-msvc)` / `93051269914`。两个 job 分别执行
-  locked `windows-rdp-probe` compile/link 和 `windows_rdp_host` Windows native host
-  tests；probe executable 本身未运行，这些 tests 也不建立 ActiveX RDP session。
-- **Still pending:** production native sink 尚未读取 `ExtendedDisconnectReason`，HRESULT/
-  logon code 的稳定分类仍未补齐；Rust event queue 尚未投递到 GPUI UI queue。真实 RDP
-  runtime/manual acceptance（错误密码、拒绝连接、网络中断、服务器重启）也未完成。
-  因此 Task 5 整体仍保持未完成；上述 GitHub-hosted runner 结果不得表述为真实 RDP
-  runtime、ActiveX connect/disconnect 或交互桌面验证。
+  ATL/type-library C++。head `210c6bb723def7612479eb8fa50b1492fc021c77`
+  的 `CI` run `31238248979` 中两个 probe job 均成功：x86_64
+  `Windows RDP probe (x86_64-pc-windows-msvc)` / `93054686139`，i686
+  `Windows RDP probe (i686-pc-windows-msvc)` / `93054686127`。两个 job 分别执行
+  locked `windows-rdp-probe` ATL/MSVC/type-library compile/link 和
+  `windows_rdp_host` Windows native host tests，覆盖 production extended-reason
+  getter 的双架构编译/链接与 optional payload test；probe executable 本身未运行，
+  这些 tests 也不建立 ActiveX RDP session。
+- **Still pending:** HRESULT/logon code 的稳定分类仍未补齐；Rust event queue 尚未投递到
+  GPUI UI queue。真实 RDP runtime/manual acceptance（错误密码、拒绝连接、网络中断、
+  服务器重启）也未完成。因此 Task 5 整体仍保持未完成；上述 GitHub-hosted runner
+  结果只证明 ATL/MSVC/type-library compile/link 和 Windows native tests，不得表述为
+  真实 RDP runtime、ActiveX connect/disconnect 或交互桌面验证。
 
 ---
 
