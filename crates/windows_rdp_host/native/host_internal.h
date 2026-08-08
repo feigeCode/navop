@@ -28,6 +28,21 @@ NavopRdpResult set_active_x_visible(
 NavopRdpResult focus_active_x(
     NativeRdpActiveXResources* resources) noexcept;
 
+NavopRdpResult connect_active_x(
+    NativeRdpActiveXResources* resources,
+    const NavopRdpConnectionOptions& options) noexcept;
+
+NavopRdpResult get_active_x_connection_state(
+    NativeRdpActiveXResources* resources,
+    uint32_t* out_state) noexcept;
+
+NavopRdpResult request_close_active_x(
+    NativeRdpActiveXResources* resources,
+    uint32_t* out_status) noexcept;
+
+NavopRdpResult disconnect_active_x(
+    NativeRdpActiveXResources* resources) noexcept;
+
 struct NativeRdpHost {
     ~NativeRdpHost() noexcept;
 

@@ -19,6 +19,9 @@ mod options;
 pub use capabilities::WindowsRdpHostCapabilities;
 pub use credential::WindowsRdpCredentialBundle;
 pub use error::WindowsRdpHostError;
-pub use handle::WindowsRdpHost;
+pub use handle::{WindowsRdpConnectionState, WindowsRdpHost, WindowsRdpRequestCloseStatus};
 pub use lifecycle::WindowsRdpHostLifecycle;
-pub use options::{WindowsRdpHostOptions, WindowsRdpParentWindow};
+pub use options::{
+    WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS, WindowsRdpColorDepth, WindowsRdpConnectionOptions,
+    WindowsRdpHostOptions, WindowsRdpParentWindow,
+};

@@ -103,9 +103,21 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "NAVOP_RDP_RESULT_ALLOCATION_FAILED",
             "NAVOP_RDP_RESULT_INTERNAL_ERROR",
             "NAVOP_RDP_RESULT_UNAVAILABLE",
+            "NAVOP_RDP_RESULT_WRONG_THREAD",
+            "NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT",
+            "NAVOP_RDP_RESULT_INVALID_STATE",
+            "NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS UINT32_C(255)",
             "typedef struct NavopRdpProbeOptions",
             "typedef struct NavopRdpProbeResult",
             "typedef struct NavopRdpCreateOptions",
+            "typedef struct NavopRdpBorrowedUtf16",
+            "typedef struct NavopRdpConnectionOptions",
+            "NavopRdpBorrowedUtf16 host;",
+            "uint32_t port;",
+            "int32_t desktop_width;",
+            "int32_t desktop_height;",
+            "int32_t color_depth;",
+            "uint32_t flags;",
             "NAVOP_RDP_CREATE_WITH_PARENT_ABI_VERSION UINT32_C(1)",
             "typedef struct NavopRdpCreateWithParentOptions",
             "uintptr_t parent_hwnd;",
@@ -135,6 +147,13 @@ fn c_abi_is_versioned_fixed_width_and_opaque() {
             "navop_rdp_set_bounds(",
             "navop_rdp_set_visible(",
             "navop_rdp_focus(",
+            "navop_rdp_connect(",
+            "navop_rdp_get_connection_state(",
+            "navop_rdp_request_close(",
+            "navop_rdp_disconnect(",
+            "host is borrowed UTF-16 data",
+            "len is authoritative",
+            "does not retain data after the call returns",
             "visible must be exactly 0 or 1",
             "NativeRdpHost** out_host",
             "navop_rdp_destroy(",
@@ -183,6 +202,28 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "static_assert(offsetof(NavopRdpCreateOptions, abi_version) == 4)",
             "static_assert(offsetof(NavopRdpCreateOptions, generation_low) == 8)",
             "static_assert(offsetof(NavopRdpCreateOptions, generation_high) == 12)",
+            "static_assert(offsetof(NavopRdpBorrowedUtf16, data) == 0)",
+            "static_assert(sizeof(NavopRdpBorrowedUtf16) == 16)",
+            "static_assert(alignof(NavopRdpBorrowedUtf16) == 8)",
+            "static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 8)",
+            "static_assert(sizeof(NavopRdpBorrowedUtf16) == 8)",
+            "static_assert(alignof(NavopRdpBorrowedUtf16) == 4)",
+            "static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 4)",
+            "static_assert(sizeof(NavopRdpConnectionOptions) == 48)",
+            "static_assert(alignof(NavopRdpConnectionOptions) == 8)",
+            "static_assert(sizeof(NavopRdpConnectionOptions) == 36)",
+            "static_assert(alignof(NavopRdpConnectionOptions) == 4)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, host) == 8)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, port) == 24)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 28)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 32)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 36)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, flags) == 40)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, port) == 16)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 20)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 24)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 28)",
+            "static_assert(offsetof(NavopRdpConnectionOptions, flags) == 32)",
             "static_assert(sizeof(NavopRdpCreateWithParentOptions) >= 20)",
             "static_assert(alignof(NavopRdpCreateWithParentOptions) == alignof(uintptr_t))",
             "static_assert(offsetof(NavopRdpCreateWithParentOptions, struct_size) == 0)",
@@ -231,6 +272,22 @@ fn cpp_and_rust_freeze_the_same_struct_layout() {
             "offset_of!(NavopRdpBounds, y) == 4",
             "offset_of!(NavopRdpBounds, width) == 8",
             "offset_of!(NavopRdpBounds, height) == 12",
+            "struct NavopRdpBorrowedUtf16",
+            "struct NavopRdpConnectionOptions",
+            "size_of::<NavopRdpBorrowedUtf16>() == 16",
+            "align_of::<NavopRdpBorrowedUtf16>() == 8",
+            "offset_of!(NavopRdpBorrowedUtf16, len) == 8",
+            "size_of::<NavopRdpConnectionOptions>() == 48",
+            "align_of::<NavopRdpConnectionOptions>() == 8",
+            "offset_of!(NavopRdpConnectionOptions, port) == 24",
+            "offset_of!(NavopRdpConnectionOptions, flags) == 40",
+            "size_of::<NavopRdpBorrowedUtf16>() == 8",
+            "align_of::<NavopRdpBorrowedUtf16>() == 4",
+            "offset_of!(NavopRdpBorrowedUtf16, len) == 4",
+            "size_of::<NavopRdpConnectionOptions>() == 36",
+            "align_of::<NavopRdpConnectionOptions>() == 4",
+            "offset_of!(NavopRdpConnectionOptions, port) == 16",
+            "offset_of!(NavopRdpConnectionOptions, flags) == 32",
         ],
     );
 }
@@ -663,7 +720,13 @@ fn native_credentials_validate_copy_and_wipe_on_every_exit_path() {
 fn credentials_do_not_expand_options_events_errors_or_dump_collection() {
     assert_excludes_all(
         &format!("{HOST_CRATE}/src/options.rs"),
-        &["password", "credential", "secret"],
+        &[
+            "password",
+            "secret",
+            "server_password",
+            "gateway_password",
+            "NavopRdpCredentialBundle",
+        ],
     );
     assert_excludes_all(
         &format!("{HOST_CRATE}/src/event.rs"),
@@ -936,15 +999,194 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
 }
 
 #[test]
+fn connection_options_and_rust_facade_keep_the_minimal_slice_separate() {
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/options.rs"),
+        &[
+            "WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS",
+            "pub enum WindowsRdpColorDepth",
+            "pub struct WindowsRdpConnectionOptions",
+            "host_utf16_len",
+            "encode_utf16",
+            "host.contains('\\0')",
+            "pub(crate) fn as_native",
+            "_host_utf16: Vec<u16>",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/error.rs"),
+        &[
+            "InvalidState",
+            "ffi::RESULT_INVALID_STATE",
+            "operation is invalid in the current state",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/src/handle.rs"),
+        &[
+            "pub enum WindowsRdpConnectionState",
+            "pub enum WindowsRdpRequestCloseStatus",
+            "pub fn connect(",
+            "pub fn connection_state(",
+            "pub fn request_close(",
+            "pub fn disconnect(",
+            "CONNECTION_STATE_DISCONNECTED",
+            "REQUEST_CLOSE_CAN_PROCEED",
+            "InvalidNativeResponse",
+            "native_options owns the UTF-16 storage",
+            "retains neither the struct nor its host pointer",
+        ],
+    );
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/src/options.rs"),
+        &[
+            "server_password",
+            "gateway_password",
+            "NavopRdpCredentialBundle",
+            "password",
+            "secret",
+        ],
+    );
+}
+
+#[test]
+fn native_connection_entrypoints_validate_gate_outputs_and_exceptions() {
+    for path in ["native/configuration.cpp", "native/lifecycle.cpp"] {
+        assert_contains_all(
+            &format!("{HOST_CRATE}/{path}"),
+            &[
+                "try {",
+                "ensure_owner_thread(host)",
+                "callback_state != CallbackState::Open",
+                "catch (...)",
+                "NAVOP_RDP_RESULT_INTERNAL_ERROR",
+            ],
+        );
+    }
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/configuration.cpp"),
+        &[
+            "validate_struct_size",
+            "validate_abi_version",
+            "options->flags != 0",
+            "NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS",
+            "options->host.data == nullptr",
+            "options->port > UINT32_C(65535)",
+            "options->desktop_width <= 0",
+            "options->desktop_height <= 0",
+            "valid_color_depth",
+            "options->host.data[index] == 0",
+            "connect_active_x(host->active_x_resources, *options)",
+        ],
+    );
+    assert_tokens_in_scope(
+        &format!("{HOST_CRATE}/native/lifecycle.cpp"),
+        "extern \"C\" NavopRdpResult navop_rdp_get_connection_state(",
+        "extern \"C\" NavopRdpResult navop_rdp_request_close(",
+        &[
+            "out_state == nullptr",
+            "*out_state = UINT32_C(0)",
+            "host == nullptr",
+            "ensure_owner_thread(host)",
+            "callback_state != CallbackState::Open",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/lifecycle.cpp"),
+        &[
+            "out_status == nullptr",
+            "*out_status = UINT32_C(0)",
+            "return request_close_active_x(host->active_x_resources, out_status);",
+            "return disconnect_active_x(host->active_x_resources);",
+        ],
+    );
+}
+
+#[test]
+fn active_x_connect_order_and_borrowed_endpoint_contract_are_frozen() {
+    let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+    assert_tokens_in_scope(
+        active_x,
+        "NavopRdpResult connect_active_x(",
+        "NavopRdpResult get_active_x_connection_state(",
+        &[
+            "get_Connected",
+            "put_Server",
+            "QueryInterface",
+            "put_RDPPort",
+            "put_DesktopWidth",
+            "put_DesktopHeight",
+            "put_ColorDepth",
+            "Connect",
+        ],
+    );
+    assert_contains_all(
+        active_x,
+        &[
+            "if (FAILED(result))",
+            "CComBSTR server(",
+            "static_cast<int>(options.host.len)",
+            "reinterpret_cast<LPCOLESTR>(options.host.data)",
+            "IMsRdpClientAdvancedSettings",
+            "RequestClose",
+            "Disconnect",
+            "controlCloseCanProceed",
+            "controlCloseWaitForEvents",
+        ],
+    );
+    assert_excludes_all(active_x, &["wcslen", "lstrlenW", "printf", "std::cout"]);
+    assert_excludes_all(
+        &format!("{HOST_CRATE}/native/configuration.cpp"),
+        &[
+            "wcslen",
+            "lstrlenW",
+            "printf",
+            "std::cout",
+            "std::cerr",
+            "OutputDebugString",
+        ],
+    );
+    assert_contains_all(
+        &format!("{HOST_CRATE}/native/windows_rdp_host.h"),
+        &[
+            "not",
+            "NUL-terminated",
+            "len is authoritative",
+            "copies the endpoint into a temporary COM string",
+            "does not retain data after the call returns",
+        ],
+    );
+}
+
+#[test]
+fn native_connection_sources_are_registered_in_the_windows_build() {
+    assert_contains_all(
+        &format!("{HOST_CRATE}/build.rs"),
+        &[
+            "cargo:rerun-if-changed=native/configuration.cpp",
+            "cargo:rerun-if-changed=native/lifecycle.cpp",
+            ".file(\"native/configuration.cpp\")",
+            ".file(\"native/lifecycle.cpp\")",
+        ],
+    );
+}
+
+#[test]
 fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
     assert_contains_all(
         &format!("{HOST_CRATE}/src/lib.rs"),
         &[
             "pub use capabilities::WindowsRdpHostCapabilities;",
             "pub use error::WindowsRdpHostError;",
-            "pub use handle::WindowsRdpHost;",
+            "WindowsRdpConnectionState",
+            "WindowsRdpHost",
+            "WindowsRdpRequestCloseStatus",
             "pub use lifecycle::WindowsRdpHostLifecycle;",
-            "pub use options::{WindowsRdpHostOptions, WindowsRdpParentWindow};",
+            "WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS",
+            "WindowsRdpColorDepth",
+            "WindowsRdpConnectionOptions",
+            "WindowsRdpHostOptions",
+            "WindowsRdpParentWindow",
             "mod event;",
             "mod lifecycle;",
         ],
@@ -960,6 +1202,10 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "pub fn set_bounds(",
             "pub fn set_visible(",
             "pub fn focus(",
+            "pub fn connect(",
+            "pub fn connection_state(",
+            "pub fn request_close(",
+            "pub fn disconnect(",
             "pub fn close(&mut self)",
             "pub const fn lifecycle(&self) -> WindowsRdpHostLifecycle",
             "impl Drop for WindowsRdpHost",
@@ -989,9 +1235,17 @@ fn rust_facade_owns_only_the_opaque_handle_and_uses_idempotent_destroy() {
             "type SetBoundsFn",
             "type SetVisibleFn",
             "type FocusFn",
+            "type ConnectFn",
+            "type GetConnectionStateFn",
+            "type RequestCloseFn",
+            "type DisconnectFn",
             "set_bounds: SetBoundsFn",
             "set_visible: SetVisibleFn",
             "focus: FocusFn",
+            "connect: ConnectFn",
+            "get_connection_state: GetConnectionStateFn",
+            "request_close: RequestCloseFn",
+            "disconnect: DisconnectFn",
             "navop_rdp_set_bounds(",
             "navop_rdp_set_visible(",
             "navop_rdp_focus(",

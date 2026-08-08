@@ -82,6 +82,9 @@ NavopRdpResult validate_resources(
         !IsWindow(resources->state.child_window)) {
         return NAVOP_RDP_RESULT_UNAVAILABLE;
     }
+    if (resources->state.control == nullptr || resources->state.client == nullptr) {
+        return NAVOP_RDP_RESULT_UNAVAILABLE;
+    }
     return NAVOP_RDP_RESULT_OK;
 }
 
@@ -237,4 +240,151 @@ NavopRdpResult focus_active_x(
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
     return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult connect_active_x(
+    NativeRdpActiveXResources* resources,
+    const NavopRdpConnectionOptions& options) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+
+    short connected = 0;
+    HRESULT result = resources->state.client->get_Connected(&connected);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (connected != 0) {
+        return NAVOP_RDP_RESULT_INVALID_STATE;
+    }
+
+    CComBSTR server(
+        static_cast<int>(options.host.len),
+        reinterpret_cast<LPCOLESTR>(options.host.data));
+    if (server.m_str == nullptr) {
+        return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+    }
+
+    result = resources->state.client->put_Server(server);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    CComPtr<IMsRdpClientAdvancedSettings> advanced_settings;
+    result = resources->state.control->QueryInterface(
+        IID_PPV_ARGS(&advanced_settings));
+    if (FAILED(result) || advanced_settings == nullptr) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    result = advanced_settings->put_RDPPort(
+        static_cast<LONG>(options.port));
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    result = resources->state.client->put_DesktopWidth(
+        options.desktop_width);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    result = resources->state.client->put_DesktopHeight(
+        options.desktop_height);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    result = resources->state.client->put_ColorDepth(options.color_depth);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    result = resources->state.client->Connect();
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult get_active_x_connection_state(
+    NativeRdpActiveXResources* resources,
+    uint32_t* out_state) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+    if (out_state == nullptr) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+
+    short connected = 0;
+    const HRESULT result = resources->state.client->get_Connected(&connected);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (connected < 0 || connected > 2) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    *out_state = static_cast<uint32_t>(connected);
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult request_close_active_x(
+    NativeRdpActiveXResources* resources,
+    uint32_t* out_status) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+    if (out_status == nullptr) {
+        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+    }
+
+    short connected = 0;
+    HRESULT result = resources->state.client->get_Connected(&connected);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (connected == 0) {
+        *out_status = 0;
+        return NAVOP_RDP_RESULT_OK;
+    }
+    if (connected != 1 && connected != 2) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    ControlCloseStatus status = controlCloseCanProceed;
+    result = resources->state.client->RequestClose(&status);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (status != controlCloseCanProceed &&
+        status != controlCloseWaitForEvents) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    *out_status = static_cast<uint32_t>(status);
+    return NAVOP_RDP_RESULT_OK;
+}
+
+NavopRdpResult disconnect_active_x(
+    NativeRdpActiveXResources* resources) noexcept {
+    const NavopRdpResult resource_result = validate_resources(resources);
+    if (resource_result != NAVOP_RDP_RESULT_OK) {
+        return resource_result;
+    }
+
+    short connected = 0;
+    HRESULT result = resources->state.client->get_Connected(&connected);
+    if (FAILED(result)) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+    if (connected == 0) {
+        return NAVOP_RDP_RESULT_OK;
+    }
+    if (connected != 1 && connected != 2) {
+        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    result = resources->state.client->Disconnect();
+    return FAILED(result)
+        ? NAVOP_RDP_RESULT_INTERNAL_ERROR
+        : NAVOP_RDP_RESULT_OK;
 }

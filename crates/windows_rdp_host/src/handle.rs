@@ -8,12 +8,28 @@ use crate::credential::WindowsRdpCredentialBundle;
 use crate::error::{WindowsRdpHostError, check_native_result};
 use crate::event::{EventBridge, native_event_callback};
 use crate::ffi::{
+    CONNECTION_STATE_CONNECTED, CONNECTION_STATE_CONNECTING, CONNECTION_STATE_DISCONNECTED,
     NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpBounds, NavopRdpCreateOptions,
     NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions, NavopRdpProbeOptions,
-    NavopRdpProbeResult,
+    NavopRdpProbeResult, REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
-use crate::options::{WindowsRdpHostOptions, WindowsRdpParentWindow};
+use crate::options::{WindowsRdpConnectionOptions, WindowsRdpHostOptions, WindowsRdpParentWindow};
+
+/// Connection state reported synchronously by the native RDP control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpConnectionState {
+    Disconnected,
+    Connected,
+    Connecting,
+}
+
+/// Result of asking the native RDP control to begin graceful shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpRequestCloseStatus {
+    CanProceed,
+    WaitForEvents,
+}
 
 /// Owns one opaque native RDP host handle.
 ///
@@ -93,6 +109,81 @@ impl WindowsRdpHost {
         // - the native contract does not retain either borrowed pointer after
         //   returning from the synchronous ABI entrypoint.
         let result = unsafe { (self.bindings.apply_credentials)(self.raw, &native_credentials) };
+        check_native_result(result)
+    }
+
+    /// Applies the minimal endpoint/display configuration and starts an RDP
+    /// connection.
+    ///
+    /// The UTF-16 server name is borrowed only for the synchronous native call
+    /// and is not retained by the native host.
+    pub fn connect(
+        &mut self,
+        options: &WindowsRdpConnectionOptions,
+    ) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let native_options = options.as_native()?;
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - native_options owns the UTF-16 storage borrowed by its ABI struct
+        //   for the full synchronous call.
+        // - the native contract retains neither the struct nor its host pointer.
+        let result = unsafe { (self.bindings.connect)(self.raw, &native_options.native) };
+        check_native_result(result)
+    }
+
+    /// Returns the current native RDP connection state.
+    pub fn connection_state(&mut self) -> Result<WindowsRdpConnectionState, WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let mut state = CONNECTION_STATE_DISCONNECTED;
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - state is a live writable out-parameter for the synchronous call.
+        let result = unsafe { (self.bindings.get_connection_state)(self.raw, &mut state) };
+        check_native_result(result)?;
+        match state {
+            CONNECTION_STATE_DISCONNECTED => Ok(WindowsRdpConnectionState::Disconnected),
+            CONNECTION_STATE_CONNECTED => Ok(WindowsRdpConnectionState::Connected),
+            CONNECTION_STATE_CONNECTING => Ok(WindowsRdpConnectionState::Connecting),
+            _ => Err(WindowsRdpHostError::InvalidNativeResponse),
+        }
+    }
+
+    /// Requests graceful native control shutdown without forcing a disconnect.
+    pub fn request_close(&mut self) -> Result<WindowsRdpRequestCloseStatus, WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        let mut status = REQUEST_CLOSE_CAN_PROCEED;
+        // SAFETY:
+        // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        // - status is a live writable out-parameter for the synchronous call.
+        let result = unsafe { (self.bindings.request_close)(self.raw, &mut status) };
+        check_native_result(result)?;
+        match status {
+            REQUEST_CLOSE_CAN_PROCEED => Ok(WindowsRdpRequestCloseStatus::CanProceed),
+            REQUEST_CLOSE_WAIT_FOR_EVENTS => Ok(WindowsRdpRequestCloseStatus::WaitForEvents),
+            _ => Err(WindowsRdpHostError::InvalidNativeResponse),
+        }
+    }
+
+    /// Forces the native RDP control to disconnect.
+    ///
+    /// The native boundary treats an already-disconnected control as success.
+    pub fn disconnect(&mut self) -> Result<(), WindowsRdpHostError> {
+        if !matches!(self.lifecycle, WindowsRdpHostLifecycle::Open) || self.raw.is_null() {
+            return Err(WindowsRdpHostError::InvalidArgument);
+        }
+
+        // SAFETY: WindowsRdpHost is !Send + !Sync and owner-thread serialized.
+        let result = unsafe { (self.bindings.disconnect)(self.raw) };
         check_native_result(result)
     }
 
@@ -327,9 +418,11 @@ mod tests {
 
     use super::*;
     use crate::ffi::{
-        NativeEventCallback, NativeResult, NavopRdpCredentialBundle, NavopRdpEvent, ProbeFn,
-        RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT, RESULT_OK,
+        NativeEventCallback, NativeResult, NavopRdpConnectionOptions, NavopRdpCredentialBundle,
+        NavopRdpEvent, ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR,
+        RESULT_INVALID_ARGUMENT, RESULT_INVALID_STATE, RESULT_OK,
     };
+    use crate::options::WindowsRdpColorDepth;
 
     #[derive(Clone)]
     struct FakeEvent {
@@ -354,6 +447,17 @@ mod tests {
         credential_calls: usize,
         credential_results: std::collections::VecDeque<NativeResult>,
         captured_credentials: Vec<(Vec<u16>, Vec<u16>)>,
+        connect_calls: usize,
+        connect_results: std::collections::VecDeque<NativeResult>,
+        captured_connection_options: Vec<(Vec<u16>, u32, i32, i32, i32)>,
+        connection_state_calls: usize,
+        connection_state_results: std::collections::VecDeque<NativeResult>,
+        connection_states: std::collections::VecDeque<u32>,
+        request_close_calls: usize,
+        request_close_results: std::collections::VecDeque<NativeResult>,
+        request_close_statuses: std::collections::VecDeque<u32>,
+        disconnect_calls: usize,
+        disconnect_results: std::collections::VecDeque<NativeResult>,
         bounds_calls: usize,
         captured_bounds: Vec<(i32, i32, i32, i32)>,
         bounds_results: std::collections::VecDeque<NativeResult>,
@@ -384,6 +488,17 @@ mod tests {
                 credential_calls: 0,
                 credential_results: std::collections::VecDeque::new(),
                 captured_credentials: Vec::new(),
+                connect_calls: 0,
+                connect_results: std::collections::VecDeque::new(),
+                captured_connection_options: Vec::new(),
+                connection_state_calls: 0,
+                connection_state_results: std::collections::VecDeque::new(),
+                connection_states: std::collections::VecDeque::new(),
+                request_close_calls: 0,
+                request_close_results: std::collections::VecDeque::new(),
+                request_close_statuses: std::collections::VecDeque::new(),
+                disconnect_calls: 0,
+                disconnect_results: std::collections::VecDeque::new(),
                 bounds_calls: 0,
                 captured_bounds: Vec::new(),
                 bounds_results: std::collections::VecDeque::new(),
@@ -494,6 +609,26 @@ mod tests {
 
     fn captured_credentials() -> Vec<(Vec<u16>, Vec<u16>)> {
         FAKE_NATIVE_STATE.with(|state| state.borrow().captured_credentials.clone())
+    }
+
+    fn connect_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().connect_calls)
+    }
+
+    fn captured_connection_options() -> Vec<(Vec<u16>, u32, i32, i32, i32)> {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().captured_connection_options.clone())
+    }
+
+    fn connection_state_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().connection_state_calls)
+    }
+
+    fn request_close_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().request_close_calls)
+    }
+
+    fn disconnect_calls() -> usize {
+        FAKE_NATIVE_STATE.with(|state| state.borrow().disconnect_calls)
     }
 
     fn bounds_calls() -> usize {
@@ -812,6 +947,105 @@ mod tests {
         RESULT_OK
     }
 
+    unsafe fn fake_connect(
+        host: *mut NativeRdpHost,
+        options: *const NavopRdpConnectionOptions,
+    ) -> NativeResult {
+        if host.is_null() || options.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+
+        let result = FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.connect_calls += 1;
+            state.connect_results.pop_front().unwrap_or(RESULT_OK)
+        });
+        if result != RESULT_OK {
+            return result;
+        }
+
+        // SAFETY: the facade passes a current-layout options value whose
+        // borrowed UTF-16 host storage remains live for this synchronous call.
+        let options = unsafe { &*options };
+        let host_name = if options.host.len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: the non-empty host slice is backed by NativeConnectionOptions.
+            unsafe {
+                std::slice::from_raw_parts(options.host.data, options.host.len as usize).to_vec()
+            }
+        };
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().captured_connection_options.push((
+                host_name,
+                options.port,
+                options.desktop_width,
+                options.desktop_height,
+                options.color_depth,
+            ));
+        });
+        RESULT_OK
+    }
+
+    unsafe fn fake_get_connection_state(
+        host: *mut NativeRdpHost,
+        out_state: *mut u32,
+    ) -> NativeResult {
+        if host.is_null() || out_state.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        let (result, state) = FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.connection_state_calls += 1;
+            (
+                state
+                    .connection_state_results
+                    .pop_front()
+                    .unwrap_or(RESULT_OK),
+                state
+                    .connection_states
+                    .pop_front()
+                    .unwrap_or(CONNECTION_STATE_DISCONNECTED),
+            )
+        });
+        unsafe {
+            *out_state = state;
+        }
+        result
+    }
+
+    unsafe fn fake_request_close(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult {
+        if host.is_null() || out_status.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        let (result, status) = FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.request_close_calls += 1;
+            (
+                state.request_close_results.pop_front().unwrap_or(RESULT_OK),
+                state
+                    .request_close_statuses
+                    .pop_front()
+                    .unwrap_or(REQUEST_CLOSE_CAN_PROCEED),
+            )
+        });
+        unsafe {
+            *out_status = status;
+        }
+        result
+    }
+
+    unsafe fn fake_disconnect(host: *mut NativeRdpHost) -> NativeResult {
+        if host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.disconnect_calls += 1;
+            state.disconnect_results.pop_front().unwrap_or(RESULT_OK)
+        })
+    }
+
     unsafe fn fake_set_bounds(
         host: *mut NativeRdpHost,
         bounds: *const crate::ffi::NavopRdpBounds,
@@ -866,6 +1100,10 @@ mod tests {
             register_event_callback: fake_register_event_callback,
             unregister_event_callback: fake_unregister_event_callback,
             apply_credentials: fake_apply_credentials,
+            connect: fake_connect,
+            get_connection_state: fake_get_connection_state,
+            request_close: fake_request_close,
+            disconnect: fake_disconnect,
         }
     }
 
@@ -878,6 +1116,17 @@ mod tests {
             create_with_parent,
             ..bindings(fake_create)
         }
+    }
+
+    fn connection_options() -> WindowsRdpConnectionOptions {
+        WindowsRdpConnectionOptions::new(
+            "rdp.example",
+            3390,
+            1600,
+            900,
+            WindowsRdpColorDepth::Bpp24,
+        )
+        .expect("test connection options should be valid")
     }
 
     #[test]
@@ -1161,6 +1410,187 @@ mod tests {
             Err(WindowsRdpHostError::InvalidArgument)
         );
         assert_eq!(credential_calls(), 0);
+    }
+
+    #[test]
+    fn connection_options_are_copied_during_the_synchronous_native_call() {
+        reset_fake_state();
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let options = connection_options();
+
+        host.connect(&options)
+            .expect("connection options should be forwarded");
+        drop(options);
+
+        assert_eq!(connect_calls(), 1);
+        assert_eq!(
+            captured_connection_options(),
+            vec![("rdp.example".encode_utf16().collect(), 3390, 1600, 900, 24,)]
+        );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn connection_failures_map_without_changing_host_lifecycle() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .connect_results
+                .extend([RESULT_INVALID_STATE, RESULT_INTERNAL_ERROR]);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let options = connection_options();
+
+        assert_eq!(
+            host.connect(&options),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+        assert_eq!(host.connect(&options), Err(WindowsRdpHostError::Internal));
+        assert_eq!(connect_calls(), 2);
+        assert!(captured_connection_options().is_empty());
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn connection_state_and_request_close_map_only_known_native_values() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            state.connection_states.extend([
+                CONNECTION_STATE_DISCONNECTED,
+                CONNECTION_STATE_CONNECTED,
+                CONNECTION_STATE_CONNECTING,
+                99,
+            ]);
+            state.request_close_statuses.extend([
+                REQUEST_CLOSE_CAN_PROCEED,
+                REQUEST_CLOSE_WAIT_FOR_EVENTS,
+                99,
+            ]);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.connection_state(),
+            Ok(WindowsRdpConnectionState::Disconnected)
+        );
+        assert_eq!(
+            host.connection_state(),
+            Ok(WindowsRdpConnectionState::Connected)
+        );
+        assert_eq!(
+            host.connection_state(),
+            Ok(WindowsRdpConnectionState::Connecting)
+        );
+        assert_eq!(
+            host.connection_state(),
+            Err(WindowsRdpHostError::InvalidNativeResponse)
+        );
+        assert_eq!(
+            host.request_close(),
+            Ok(WindowsRdpRequestCloseStatus::CanProceed)
+        );
+        assert_eq!(
+            host.request_close(),
+            Ok(WindowsRdpRequestCloseStatus::WaitForEvents)
+        );
+        assert_eq!(
+            host.request_close(),
+            Err(WindowsRdpHostError::InvalidNativeResponse)
+        );
+        assert_eq!(connection_state_calls(), 4);
+        assert_eq!(request_close_calls(), 3);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn disconnect_is_forwarded_repeatedly_with_deterministic_results() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().disconnect_results.extend([
+                RESULT_OK,
+                RESULT_OK,
+                RESULT_INTERNAL_ERROR,
+            ]);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(host.disconnect(), Ok(()));
+        assert_eq!(host.disconnect(), Ok(()));
+        assert_eq!(host.disconnect(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(disconnect_calls(), 3);
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn connection_operations_are_rejected_before_native_when_closing_or_closed() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().unregister_failures_remaining = 1;
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+        let options = connection_options();
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::Internal));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert_eq!(
+            host.connect(&options),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.connection_state(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.request_close(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(host.disconnect(), Err(WindowsRdpHostError::InvalidArgument));
+        assert_eq!(
+            (
+                connect_calls(),
+                connection_state_calls(),
+                request_close_calls(),
+                disconnect_calls(),
+            ),
+            (0, 0, 0, 0)
+        );
+
+        host.close().expect("closing host should remain retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
+        assert_eq!(
+            host.connect(&options),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.connection_state(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(
+            host.request_close(),
+            Err(WindowsRdpHostError::InvalidArgument)
+        );
+        assert_eq!(host.disconnect(), Err(WindowsRdpHostError::InvalidArgument));
+        assert_eq!(
+            (
+                connect_calls(),
+                connection_state_calls(),
+                request_close_calls(),
+                disconnect_calls(),
+            ),
+            (0, 0, 0, 0)
+        );
     }
 
     #[test]

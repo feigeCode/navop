@@ -18,6 +18,8 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_RESULT_UNAVAILABLE INT32_C(5)
 #define NAVOP_RDP_RESULT_WRONG_THREAD INT32_C(6)
 #define NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT INT32_C(7)
+#define NAVOP_RDP_RESULT_INVALID_STATE INT32_C(8)
+#define NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS UINT32_C(255)
 
 /*
  * Versioned structs accept struct_size values greater than or equal to the
@@ -43,6 +45,28 @@ typedef struct NavopRdpCreateOptions {
     uint32_t generation_low;
     uint32_t generation_high;
 } NavopRdpCreateOptions;
+
+/*
+ * host is borrowed UTF-16 data for navop_rdp_connect only. It is not
+ * NUL-terminated, so len is authoritative. The native implementation scans
+ * exactly len code units, copies the endpoint into a temporary COM string, and
+ * does not retain data after the call returns.
+ */
+typedef struct NavopRdpBorrowedUtf16 {
+    const uint16_t* data;
+    uint32_t len;
+} NavopRdpBorrowedUtf16;
+
+typedef struct NavopRdpConnectionOptions {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    NavopRdpBorrowedUtf16 host;
+    uint32_t port;
+    int32_t desktop_width;
+    int32_t desktop_height;
+    int32_t color_depth;
+    uint32_t flags;
+} NavopRdpConnectionOptions;
 
 /*
  * parent_hwnd is a caller-owned, non-null, non-owning native window handle
@@ -161,6 +185,35 @@ static_assert(offsetof(NavopRdpCreateOptions, struct_size) == 0);
 static_assert(offsetof(NavopRdpCreateOptions, abi_version) == 4);
 static_assert(offsetof(NavopRdpCreateOptions, generation_low) == 8);
 static_assert(offsetof(NavopRdpCreateOptions, generation_high) == 12);
+static_assert(offsetof(NavopRdpBorrowedUtf16, data) == 0);
+static_assert(offsetof(NavopRdpConnectionOptions, struct_size) == 0);
+static_assert(offsetof(NavopRdpConnectionOptions, abi_version) == 4);
+static_assert(offsetof(NavopRdpConnectionOptions, host) == 8);
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(NavopRdpBorrowedUtf16) == 16);
+static_assert(alignof(NavopRdpBorrowedUtf16) == 8);
+static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 8);
+static_assert(sizeof(NavopRdpConnectionOptions) == 48);
+static_assert(alignof(NavopRdpConnectionOptions) == 8);
+static_assert(offsetof(NavopRdpConnectionOptions, port) == 24);
+static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 28);
+static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 32);
+static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 36);
+static_assert(offsetof(NavopRdpConnectionOptions, flags) == 40);
+#elif INTPTR_MAX == INT32_MAX
+static_assert(sizeof(NavopRdpBorrowedUtf16) == 8);
+static_assert(alignof(NavopRdpBorrowedUtf16) == 4);
+static_assert(offsetof(NavopRdpBorrowedUtf16, len) == 4);
+static_assert(sizeof(NavopRdpConnectionOptions) == 36);
+static_assert(alignof(NavopRdpConnectionOptions) == 4);
+static_assert(offsetof(NavopRdpConnectionOptions, port) == 16);
+static_assert(offsetof(NavopRdpConnectionOptions, desktop_width) == 20);
+static_assert(offsetof(NavopRdpConnectionOptions, desktop_height) == 24);
+static_assert(offsetof(NavopRdpConnectionOptions, color_depth) == 28);
+static_assert(offsetof(NavopRdpConnectionOptions, flags) == 32);
+#else
+#error Unsupported pointer width for the Windows RDP connection ABI
+#endif
 static_assert(sizeof(NavopRdpCreateWithParentOptions) >= 20);
 static_assert(alignof(NavopRdpCreateWithParentOptions) == alignof(uintptr_t));
 static_assert(offsetof(NavopRdpCreateWithParentOptions, struct_size) == 0);
@@ -270,6 +323,21 @@ NavopRdpResult navop_rdp_unregister_event_callback(
 NavopRdpResult navop_rdp_apply_credentials(
     NativeRdpHost* host,
     const NavopRdpCredentialBundle* credentials) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_connect(
+    NativeRdpHost* host,
+    const NavopRdpConnectionOptions* options) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_get_connection_state(
+    NativeRdpHost* host,
+    uint32_t* out_state) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_request_close(
+    NativeRdpHost* host,
+    uint32_t* out_status) NAVOP_RDP_NOEXCEPT;
+
+NavopRdpResult navop_rdp_disconnect(
+    NativeRdpHost* host) NAVOP_RDP_NOEXCEPT;
 
 /*
  * For a non-null owned host, destroy may release the native object only after

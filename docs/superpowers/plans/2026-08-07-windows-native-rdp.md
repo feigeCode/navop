@@ -1435,6 +1435,41 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Rollback:** connection API 不接入默认 UI；关闭 feature。
 
+#### Execution Notes (2026-08-08) — host/port 最小连接垂直切片
+
+- **Red evidence:** Rust options tests 覆盖 empty host、embedded NUL、port 0、
+  UTF-16 code-unit 上限、supplementary Unicode 与无效 desktop dimensions；
+  facade fake bindings 覆盖重复/非法 connection state、closing/closed gate、未知 native
+  state/status，以及 native result 不得改变 Rust ownership lifecycle。Windows-only native
+  tests 还覆盖 connection ABI header/version/flags、host pointer/length、port、dimensions、
+  color depth、owner thread、callback gate 和 output initialization。
+- **Green implementation:** 新增独立的 `WindowsRdpConnectionOptions` 与 color-depth enum；
+  Rust 只在同步 FFI 调用期间持有并借出 UTF-16 endpoint。固定宽度 C ABI 新增
+  `NavopRdpBorrowedUtf16`、`NavopRdpConnectionOptions`、connect、connection-state、
+  request-close 与 disconnect entrypoints，并冻结 x86/x64 size/alignment/offset。
+  native 路径在调用 `Connect` 前按顺序设置 `Server`、RDP port、desktop
+  width/height 与 color depth；重复 connect 返回 invalid-state，already-disconnected
+  disconnect 返回成功。
+- **Refactor/review:** connection options 与 credential/security/redirection policy 保持
+  分离；borrowed host 以 length 为权威，不要求 NUL terminator，不使用 `wcslen` /
+  `lstrlenW`，不保留 caller pointer，也没有 endpoint logging。Rust host lifecycle
+  继续只表达 ownership/callback admission，不冒充 native RDP connection state。
+- **Automated verification:** 在 macOS host 运行 `cargo fmt --all -- --check`、
+  `cargo test --locked -p windows_rdp_host`、`cargo clippy --locked
+  -p windows_rdp_host --all-targets -- -D warnings`、以及
+  `RUSTFLAGS='--cfg windows_rdp_host_native' cargo check --locked
+  -p windows_rdp_host --tests`；这些验证 Rust facade、FFI declarations、unit/contract
+  tests 与 non-native behavior，但不会编译或链接 Windows C++。
+- **Manual verification / known limitations:** 当前环境没有 Windows MSVC/ATL、
+  注册的 MSTSC type library、真实 ActiveX runtime 或 RDP test server，因此尚未完成
+  Windows C++ compile/link、真实 `Connect`、登录界面/桌面、`RequestClose` event、
+  disconnect cleanup 或资源 smoke。特别是 `CComBSTR` length constructor、
+  advanced-settings interface 获取方式、`ControlCloseStatus` generated 名称和
+  `IMsRdpClient10::RequestClose` 签名，仍须 Windows CI/VM 核验；本记录不勾选或
+  声称完成上述 runtime acceptance。
+- **Decision changes:** Task 4 先交付可审查、可测试的 ABI/facade 最小切片；默认 UI
+  接入与真实 session acceptance 保持关闭，等待 Windows build/runtime evidence。
+
 ---
 
 ### Task 5: event sink、状态映射与错误诊断

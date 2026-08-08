@@ -8,6 +8,8 @@ fn main() {
     println!("cargo:rerun-if-changed=native/event_dispatch.cpp");
     println!("cargo:rerun-if-changed=native/host.cpp");
     println!("cargo:rerun-if-changed=native/active_x_host.cpp");
+    println!("cargo:rerun-if-changed=native/configuration.cpp");
+    println!("cargo:rerun-if-changed=native/lifecycle.cpp");
     println!("cargo:rerun-if-changed=native/host_internal.h");
     println!("cargo:rerun-if-changed=native/windows_rdp_host.h");
     println!("cargo:rerun-if-env-changed=VCToolsInstallDir");
@@ -60,6 +62,8 @@ fn build_native_host() {
         .file("native/event_dispatch.cpp")
         .file("native/host.cpp")
         .file("native/active_x_host.cpp")
+        .file("native/configuration.cpp")
+        .file("native/lifecycle.cpp")
         .include("native")
         .include(&out_dir)
         .out_dir(&out_dir)

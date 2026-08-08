@@ -15,6 +15,13 @@ pub(crate) const RESULT_INTERNAL_ERROR: NativeResult = 4;
 pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
 pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
+pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
+
+pub(crate) const CONNECTION_STATE_DISCONNECTED: u32 = 0;
+pub(crate) const CONNECTION_STATE_CONNECTED: u32 = 1;
+pub(crate) const CONNECTION_STATE_CONNECTING: u32 = 2;
+pub(crate) const REQUEST_CLOSE_CAN_PROCEED: u32 = 0;
+pub(crate) const REQUEST_CLOSE_WAIT_FOR_EVENTS: u32 = 1;
 
 #[repr(C)]
 pub(crate) struct NativeRdpHost {
@@ -174,6 +181,46 @@ pub(crate) struct NavopRdpCredentialBundle {
     pub(crate) flags: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct NavopRdpBorrowedUtf16 {
+    pub(crate) data: *const u16,
+    pub(crate) len: u32,
+}
+
+#[repr(C)]
+pub(crate) struct NavopRdpConnectionOptions {
+    pub(crate) struct_size: u32,
+    pub(crate) abi_version: u32,
+    pub(crate) host: NavopRdpBorrowedUtf16,
+    pub(crate) port: u32,
+    pub(crate) desktop_width: i32,
+    pub(crate) desktop_height: i32,
+    pub(crate) color_depth: i32,
+    pub(crate) flags: u32,
+}
+
+impl NavopRdpConnectionOptions {
+    pub(crate) fn current(
+        host: NavopRdpBorrowedUtf16,
+        port: u32,
+        desktop_width: i32,
+        desktop_height: i32,
+        color_depth: i32,
+    ) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: ABI_VERSION,
+            host,
+            port,
+            desktop_width,
+            desktop_height,
+            color_depth,
+            flags: 0,
+        }
+    }
+}
+
 const _: () = {
     assert!(size_of::<NativeResult>() == 4);
 
@@ -231,6 +278,10 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, struct_size) == 0);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, abi_version) == 4);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, server_password) == 8);
+    assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, data) == 0);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, struct_size) == 0);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, abi_version) == 4);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, host) == 8);
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -244,6 +295,16 @@ const _: () = {
     assert!(align_of::<NavopRdpCredentialBundle>() == 8);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 24);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 40);
+    assert!(size_of::<NavopRdpBorrowedUtf16>() == 16);
+    assert!(align_of::<NavopRdpBorrowedUtf16>() == 8);
+    assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 8);
+    assert!(size_of::<NavopRdpConnectionOptions>() == 48);
+    assert!(align_of::<NavopRdpConnectionOptions>() == 8);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, port) == 24);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width) == 28);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height) == 32);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, color_depth) == 36);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, flags) == 40);
 };
 
 #[cfg(target_pointer_width = "32")]
@@ -257,6 +318,16 @@ const _: () = {
     assert!(align_of::<NavopRdpCredentialBundle>() == 4);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, gateway_password) == 16);
     assert!(std::mem::offset_of!(NavopRdpCredentialBundle, flags) == 24);
+    assert!(size_of::<NavopRdpBorrowedUtf16>() == 8);
+    assert!(align_of::<NavopRdpBorrowedUtf16>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len) == 4);
+    assert!(size_of::<NavopRdpConnectionOptions>() == 36);
+    assert!(align_of::<NavopRdpConnectionOptions>() == 4);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, port) == 16);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width) == 20);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height) == 24);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, color_depth) == 28);
+    assert!(std::mem::offset_of!(NavopRdpConnectionOptions, flags) == 32);
 };
 
 impl NavopRdpEventCallbackOptions {
@@ -301,6 +372,13 @@ pub(crate) type ApplyCredentialsFn = unsafe fn(
     host: *mut NativeRdpHost,
     credentials: *const NavopRdpCredentialBundle,
 ) -> NativeResult;
+pub(crate) type ConnectFn =
+    unsafe fn(host: *mut NativeRdpHost, options: *const NavopRdpConnectionOptions) -> NativeResult;
+pub(crate) type GetConnectionStateFn =
+    unsafe fn(host: *mut NativeRdpHost, out_state: *mut u32) -> NativeResult;
+pub(crate) type RequestCloseFn =
+    unsafe fn(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult;
+pub(crate) type DisconnectFn = unsafe fn(host: *mut NativeRdpHost) -> NativeResult;
 
 #[derive(Clone, Copy)]
 pub(crate) struct NativeBindings {
@@ -314,6 +392,10 @@ pub(crate) struct NativeBindings {
     pub(crate) register_event_callback: RegisterEventCallbackFn,
     pub(crate) unregister_event_callback: UnregisterEventCallbackFn,
     pub(crate) apply_credentials: ApplyCredentialsFn,
+    pub(crate) connect: ConnectFn,
+    pub(crate) get_connection_state: GetConnectionStateFn,
+    pub(crate) request_close: RequestCloseFn,
+    pub(crate) disconnect: DisconnectFn,
 }
 
 pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
@@ -327,6 +409,10 @@ pub(crate) const NATIVE_BINDINGS: NativeBindings = NativeBindings {
     register_event_callback,
     unregister_event_callback,
     apply_credentials,
+    connect,
+    get_connection_state,
+    request_close,
+    disconnect,
 };
 
 #[cfg(windows_rdp_host_native)]
@@ -360,6 +446,16 @@ unsafe extern "C" {
         host: *mut NativeRdpHost,
         credentials: *const NavopRdpCredentialBundle,
     ) -> NativeResult;
+    fn navop_rdp_connect(
+        host: *mut NativeRdpHost,
+        options: *const NavopRdpConnectionOptions,
+    ) -> NativeResult;
+    fn navop_rdp_get_connection_state(
+        host: *mut NativeRdpHost,
+        out_state: *mut u32,
+    ) -> NativeResult;
+    fn navop_rdp_request_close(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult;
+    fn navop_rdp_disconnect(host: *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_destroy(host: *mut *mut NativeRdpHost) -> NativeResult;
 }
 
@@ -423,6 +519,29 @@ unsafe fn apply_credentials(
     credentials: *const NavopRdpCredentialBundle,
 ) -> NativeResult {
     unsafe { navop_rdp_apply_credentials(host, credentials) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn connect(
+    host: *mut NativeRdpHost,
+    options: *const NavopRdpConnectionOptions,
+) -> NativeResult {
+    unsafe { navop_rdp_connect(host, options) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn get_connection_state(host: *mut NativeRdpHost, out_state: *mut u32) -> NativeResult {
+    unsafe { navop_rdp_get_connection_state(host, out_state) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn request_close(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult {
+    unsafe { navop_rdp_request_close(host, out_status) }
+}
+
+#[cfg(windows_rdp_host_native)]
+unsafe fn disconnect(host: *mut NativeRdpHost) -> NativeResult {
+    unsafe { navop_rdp_disconnect(host) }
 }
 
 #[cfg(windows_rdp_host_native)]
@@ -622,6 +741,91 @@ unsafe fn apply_credentials(
 }
 
 #[cfg(not(windows_rdp_host_native))]
+unsafe fn connect(
+    host: *mut NativeRdpHost,
+    options: *const NavopRdpConnectionOptions,
+) -> NativeResult {
+    if host.is_null() || options.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let struct_size = unsafe { std::ptr::addr_of!((*options).struct_size).read() };
+    if struct_size < size_of::<NavopRdpConnectionOptions>() as u32 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let abi_version = unsafe { std::ptr::addr_of!((*options).abi_version).read() };
+    if abi_version != ABI_VERSION {
+        return RESULT_ABI_MISMATCH;
+    }
+    let flags = unsafe { std::ptr::addr_of!((*options).flags).read() };
+    if flags != 0 {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let host_name = unsafe { std::ptr::addr_of!((*options).host).read() };
+    if host_name.len == 0
+        || host_name.len as usize > crate::options::WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS
+        || host_name.data.is_null()
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    let host_slice = unsafe { std::slice::from_raw_parts(host_name.data, host_name.len as usize) };
+    if host_slice.contains(&0) {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    let port = unsafe { std::ptr::addr_of!((*options).port).read() };
+    let desktop_width = unsafe { std::ptr::addr_of!((*options).desktop_width).read() };
+    let desktop_height = unsafe { std::ptr::addr_of!((*options).desktop_height).read() };
+    let color_depth = unsafe { std::ptr::addr_of!((*options).color_depth).read() };
+    if !(1..=u32::from(u16::MAX)).contains(&port)
+        || desktop_width <= 0
+        || desktop_height <= 0
+        || !matches!(color_depth, 8 | 15 | 16 | 24 | 32)
+    {
+        return RESULT_INVALID_ARGUMENT;
+    }
+
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn get_connection_state(host: *mut NativeRdpHost, out_state: *mut u32) -> NativeResult {
+    if out_state.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    unsafe {
+        *out_state = CONNECTION_STATE_DISCONNECTED;
+    }
+    if host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn request_close(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult {
+    if out_status.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    unsafe {
+        *out_status = REQUEST_CLOSE_CAN_PROCEED;
+    }
+    if host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
+unsafe fn disconnect(host: *mut NativeRdpHost) -> NativeResult {
+    if host.is_null() {
+        return RESULT_INVALID_ARGUMENT;
+    }
+    RESULT_UNAVAILABLE
+}
+
+#[cfg(not(windows_rdp_host_native))]
 unsafe fn destroy(host: *mut *mut NativeRdpHost) -> NativeResult {
     if host.is_null() {
         return RESULT_INVALID_ARGUMENT;
@@ -649,6 +853,7 @@ mod tests {
         assert_eq!(RESULT_UNAVAILABLE, 5);
         assert_eq!(RESULT_WRONG_THREAD, 6);
         assert_eq!(RESULT_CALLBACK_IN_FLIGHT, 7);
+        assert_eq!(RESULT_INVALID_STATE, 8);
         assert_eq!(size_of::<NativeResult>(), 4);
     }
 
@@ -742,6 +947,66 @@ mod tests {
     }
 
     #[test]
+    fn connection_layout_matches_the_current_pointer_width() {
+        assert_eq!(std::mem::offset_of!(NavopRdpBorrowedUtf16, data), 0);
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpConnectionOptions, struct_size),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(NavopRdpConnectionOptions, abi_version),
+            4
+        );
+        assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, host), 8);
+
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(size_of::<NavopRdpBorrowedUtf16>(), 16);
+            assert_eq!(align_of::<NavopRdpBorrowedUtf16>(), 8);
+            assert_eq!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len), 8);
+            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 48);
+            assert_eq!(align_of::<NavopRdpConnectionOptions>(), 8);
+            assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, port), 24);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width),
+                28
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height),
+                32
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, color_depth),
+                36
+            );
+            assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, flags), 40);
+        }
+
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert_eq!(size_of::<NavopRdpBorrowedUtf16>(), 8);
+            assert_eq!(align_of::<NavopRdpBorrowedUtf16>(), 4);
+            assert_eq!(std::mem::offset_of!(NavopRdpBorrowedUtf16, len), 4);
+            assert_eq!(size_of::<NavopRdpConnectionOptions>(), 36);
+            assert_eq!(align_of::<NavopRdpConnectionOptions>(), 4);
+            assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, port), 16);
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, desktop_width),
+                20
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, desktop_height),
+                24
+            );
+            assert_eq!(
+                std::mem::offset_of!(NavopRdpConnectionOptions, color_depth),
+                28
+            );
+            assert_eq!(std::mem::offset_of!(NavopRdpConnectionOptions, flags), 32);
+        }
+    }
+
+    #[test]
     fn create_options_split_the_generation_without_abi_alignment_risk() {
         let options = NavopRdpCreateOptions::current(0x1122_3344_aabb_ccdd);
 
@@ -818,5 +1083,54 @@ mod tests {
             unsafe { apply_credentials(host, &credentials) },
             RESULT_UNAVAILABLE
         );
+    }
+
+    #[cfg(not(windows_rdp_host_native))]
+    #[test]
+    fn non_windows_connection_validates_layout_values_and_outputs_before_unavailable() {
+        let host = std::ptr::NonNull::<NativeRdpHost>::dangling().as_ptr();
+        let host_name: Vec<u16> = "rdp.example".encode_utf16().collect();
+        let mut options = NavopRdpConnectionOptions::current(
+            NavopRdpBorrowedUtf16 {
+                data: host_name.as_ptr(),
+                len: host_name.len() as u32,
+            },
+            3389,
+            1920,
+            1080,
+            32,
+        );
+
+        options.struct_size = 4;
+        options.abi_version += 1;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.struct_size = size_of::<NavopRdpConnectionOptions>() as u32;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_ABI_MISMATCH);
+
+        options.abi_version = ABI_VERSION;
+        options.host.data = std::ptr::null();
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.host.data = host_name.as_ptr();
+        options.port = 0;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_INVALID_ARGUMENT);
+
+        options.port = 3389;
+        assert_eq!(unsafe { connect(host, &options) }, RESULT_UNAVAILABLE);
+
+        let mut state = u32::MAX;
+        assert_eq!(
+            unsafe { get_connection_state(std::ptr::null_mut(), &mut state) },
+            RESULT_INVALID_ARGUMENT
+        );
+        assert_eq!(state, CONNECTION_STATE_DISCONNECTED);
+
+        let mut status = u32::MAX;
+        assert_eq!(
+            unsafe { request_close(std::ptr::null_mut(), &mut status) },
+            RESULT_INVALID_ARGUMENT
+        );
+        assert_eq!(status, REQUEST_CLOSE_CAN_PROCEED);
     }
 }

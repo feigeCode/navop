@@ -4,10 +4,10 @@ use std::ptr;
 
 use crate::ffi::{
     ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, NativeEventCallback, NativeRdpHost, NativeResult,
-    NavopRdpBorrowedSecret, NavopRdpBounds, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
-    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH,
-    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE,
-    RESULT_WRONG_THREAD,
+    NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds, NavopRdpConnectionOptions,
+    NavopRdpCreateOptions, NavopRdpCreateWithParentOptions, NavopRdpCredentialBundle,
+    NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT,
+    RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
 };
 
 unsafe extern "C" {
@@ -36,6 +36,16 @@ unsafe extern "C" {
         host: *mut NativeRdpHost,
         credentials: *const NavopRdpCredentialBundle,
     ) -> NativeResult;
+    fn navop_rdp_connect(
+        host: *mut NativeRdpHost,
+        options: *const NavopRdpConnectionOptions,
+    ) -> NativeResult;
+    fn navop_rdp_get_connection_state(
+        host: *mut NativeRdpHost,
+        out_state: *mut u32,
+    ) -> NativeResult;
+    fn navop_rdp_request_close(host: *mut NativeRdpHost, out_status: *mut u32) -> NativeResult;
+    fn navop_rdp_disconnect(host: *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_destroy(host: *mut *mut NativeRdpHost) -> NativeResult;
     fn navop_rdp_test_dispatch_event(
         host: *mut NativeRdpHost,
@@ -176,6 +186,19 @@ fn credential_bundle(server: Option<&[u16]>, gateway: Option<&[u16]>) -> NavopRd
         gateway_password: borrowed_secret(gateway),
         flags: 0,
     }
+}
+
+fn connection_options(host: &[u16]) -> NavopRdpConnectionOptions {
+    NavopRdpConnectionOptions::current(
+        NavopRdpBorrowedUtf16 {
+            data: host.as_ptr(),
+            len: host.len() as u32,
+        },
+        3389,
+        1280,
+        720,
+        32,
+    )
 }
 
 fn create_hidden_test_parent() -> *mut c_void {
@@ -730,6 +753,206 @@ fn native_credentials_preserve_owner_thread_and_open_gate_rules() {
     );
     assert_eq!(
         unsafe { navop_rdp_apply_credentials(host, &credentials) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_connection_entrypoints_validate_inputs_thread_and_open_gate() {
+    let endpoint = [
+        b'r' as u16,
+        b'd' as u16,
+        b'p' as u16,
+        b'.' as u16,
+        b't' as u16,
+        b'e' as u16,
+        b's' as u16,
+        b't' as u16,
+    ];
+    let mut host = unsafe { create_host(42) };
+    let valid = connection_options(&endpoint);
+
+    assert_eq!(
+        unsafe { navop_rdp_connect(ptr::null_mut(), &valid) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_get_connection_state(ptr::null_mut(), ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_request_close(ptr::null_mut(), ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { navop_rdp_disconnect(ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut short = connection_options(&endpoint);
+    short.struct_size -= 1;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &short) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut wrong_abi = connection_options(&endpoint);
+    wrong_abi.abi_version += 1;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &wrong_abi) },
+        RESULT_ABI_MISMATCH
+    );
+
+    let mut flags = connection_options(&endpoint);
+    flags.flags = 1;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &flags) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut empty_host = connection_options(&endpoint);
+    empty_host.host.len = 0;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &empty_host) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut oversized_host = connection_options(&endpoint);
+    oversized_host.host.len = 256;
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &oversized_host) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut null_host = connection_options(&endpoint);
+    null_host.host.data = ptr::null();
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &null_host) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let embedded_nul_endpoint = [b'r' as u16, 0, b'p' as u16];
+    let embedded_nul = connection_options(&embedded_nul_endpoint);
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &embedded_nul) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    for port in [0, 65_536] {
+        let mut invalid = connection_options(&endpoint);
+        invalid.port = port;
+        assert_eq!(
+            unsafe { navop_rdp_connect(host, &invalid) },
+            RESULT_INVALID_ARGUMENT
+        );
+    }
+
+    for (width, height) in [(0, 720), (-1, 720), (1280, 0), (1280, -1)] {
+        let mut invalid = connection_options(&endpoint);
+        invalid.desktop_width = width;
+        invalid.desktop_height = height;
+        assert_eq!(
+            unsafe { navop_rdp_connect(host, &invalid) },
+            RESULT_INVALID_ARGUMENT
+        );
+    }
+
+    for color_depth in [0, 14, 25, 64] {
+        let mut invalid = connection_options(&endpoint);
+        invalid.color_depth = color_depth;
+        assert_eq!(
+            unsafe { navop_rdp_connect(host, &invalid) },
+            RESULT_INVALID_ARGUMENT
+        );
+    }
+
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &valid) },
+        RESULT_UNAVAILABLE
+    );
+
+    let mut state = u32::MAX;
+    assert_eq!(
+        unsafe { navop_rdp_get_connection_state(host, &mut state) },
+        RESULT_UNAVAILABLE
+    );
+    assert_eq!(state, 0);
+    assert_eq!(
+        unsafe { navop_rdp_get_connection_state(host, ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+
+    let mut status = u32::MAX;
+    assert_eq!(
+        unsafe { navop_rdp_request_close(host, &mut status) },
+        RESULT_UNAVAILABLE
+    );
+    assert_eq!(status, 0);
+    assert_eq!(
+        unsafe { navop_rdp_request_close(host, ptr::null_mut()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(unsafe { navop_rdp_disconnect(host) }, RESULT_UNAVAILABLE);
+
+    let host_address = host as usize;
+    let endpoint_for_thread = endpoint;
+    let wrong_thread_results = std::thread::spawn(move || {
+        let host = host_address as *mut NativeRdpHost;
+        let options = connection_options(&endpoint_for_thread);
+        let mut state = u32::MAX;
+        let mut status = u32::MAX;
+        (
+            unsafe { navop_rdp_connect(host, &options) },
+            unsafe { navop_rdp_get_connection_state(host, &mut state) },
+            state,
+            unsafe { navop_rdp_request_close(host, &mut status) },
+            status,
+            unsafe { navop_rdp_disconnect(host) },
+        )
+    })
+    .join()
+    .expect("wrong-thread connection test worker should not panic");
+    assert_eq!(
+        wrong_thread_results,
+        (
+            RESULT_WRONG_THREAD,
+            RESULT_WRONG_THREAD,
+            0,
+            RESULT_WRONG_THREAD,
+            0,
+            RESULT_WRONG_THREAD,
+        )
+    );
+
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(
+        unsafe { navop_rdp_connect(host, &valid) },
+        RESULT_INVALID_ARGUMENT
+    );
+    state = u32::MAX;
+    assert_eq!(
+        unsafe { navop_rdp_get_connection_state(host, &mut state) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(state, 0);
+    status = u32::MAX;
+    assert_eq!(
+        unsafe { navop_rdp_request_close(host, &mut status) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(status, 0);
+    assert_eq!(
+        unsafe { navop_rdp_disconnect(host) },
         RESULT_INVALID_ARGUMENT
     );
 

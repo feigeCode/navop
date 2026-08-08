@@ -12,6 +12,7 @@ pub enum WindowsRdpHostError {
     Unavailable,
     WrongThread,
     CallbackInFlight,
+    InvalidState,
     NativeReturnedNullHandle,
     NativeDidNotClearHandle,
     InvalidNativeResponse,
@@ -30,6 +31,9 @@ impl fmt::Display for WindowsRdpHostError {
                 formatter.write_str("Windows RDP host called from the wrong thread")
             }
             Self::CallbackInFlight => formatter.write_str("Windows RDP host callback is in flight"),
+            Self::InvalidState => {
+                formatter.write_str("Windows RDP host operation is invalid in the current state")
+            }
             Self::NativeReturnedNullHandle => {
                 formatter.write_str("Windows RDP host returned a null handle")
             }
@@ -58,6 +62,7 @@ pub(crate) fn check_native_result(result: ffi::NativeResult) -> Result<(), Windo
         ffi::RESULT_UNAVAILABLE => Err(WindowsRdpHostError::Unavailable),
         ffi::RESULT_WRONG_THREAD => Err(WindowsRdpHostError::WrongThread),
         ffi::RESULT_CALLBACK_IN_FLIGHT => Err(WindowsRdpHostError::CallbackInFlight),
+        ffi::RESULT_INVALID_STATE => Err(WindowsRdpHostError::InvalidState),
         other => Err(WindowsRdpHostError::UnexpectedNativeResult(other)),
     }
 }
@@ -96,6 +101,10 @@ mod tests {
         assert_eq!(
             check_native_result(ffi::RESULT_CALLBACK_IN_FLIGHT),
             Err(WindowsRdpHostError::CallbackInFlight)
+        );
+        assert_eq!(
+            check_native_result(ffi::RESULT_INVALID_STATE),
+            Err(WindowsRdpHostError::InvalidState)
         );
         assert_eq!(
             check_native_result(99),
