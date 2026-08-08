@@ -10629,6 +10629,7 @@ dependencies = [
  "image",
  "one-core",
  "one-ui",
+ "raw-window-handle",
  "remote_desktop",
  "rust-i18n",
  "smallvec",

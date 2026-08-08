@@ -173,6 +173,26 @@ impl TabContent for RemoteDesktopView {
         true
     }
 
+    fn on_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.activate_windows_native(false) {
+            return;
+        }
+
+        // TabContainer focuses the GPUI FocusHandle after on_activate returns.
+        // Defer the native focus handoff by one UI turn so the ActiveX child is
+        // the final focus owner. A rapid deactivate makes focus() a no-op.
+        cx.defer_in(window, |this, _, _| {
+            this.focus_windows_native();
+        });
+    }
+
+    fn on_deactivate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus_handle = self.focus_handle.clone();
+        self.deactivate_windows_native(|| {
+            window.focus(&focus_handle, cx);
+        });
+    }
+
     fn try_close(
         &mut self,
         _tab_id: &str,
@@ -240,6 +260,7 @@ impl Render for RemoteDesktopView {
             frame: rendered_frame,
             cursor: self.cursor.paint_state(self.remote_size),
         };
+        let uses_windows_native = self.uses_windows_native_presentation();
         let view = cx.entity();
 
         let content = div()
@@ -253,78 +274,80 @@ impl Render for RemoteDesktopView {
             .justify_center()
             .overflow_hidden()
             .track_focus(&self.focus_handle)
-            .key_context(REMOTE_DESKTOP_CONTEXT)
-            .on_action(cx.listener(Self::send_tab))
-            .on_action(cx.listener(Self::send_shift_tab))
-            .on_action(cx.listener(Self::remote_copy))
-            .on_action(cx.listener(Self::remote_paste))
-            .capture_key_down(cx.listener(Self::handle_key_down))
-            .capture_key_up(cx.listener(Self::handle_key_up))
-            .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
-            .on_hover(cx.listener(|this, hovered, _, _| {
-                this.cursor.set_pointer_hovered(*hovered);
-            }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                this.send_pointer_move(event.position, window, cx);
-                cx.stop_propagation();
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, true);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, true);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Middle,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle, cx);
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, true);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, false);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, false);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Middle,
-                cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    this.send_pointer_move(event.position, window, cx);
-                    this.send_mouse_button(event.button, false);
-                    cx.stop_propagation();
-                }),
-            )
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                this.send_scroll(event);
-                cx.stop_propagation();
-            }))
-            .child(remote_desktop_frame_canvas(canvas_paint))
-            .when(show_empty_status, |this| {
+            .when(!uses_windows_native, |this| {
+                this.key_context(REMOTE_DESKTOP_CONTEXT)
+                    .on_action(cx.listener(Self::send_tab))
+                    .on_action(cx.listener(Self::send_shift_tab))
+                    .on_action(cx.listener(Self::remote_copy))
+                    .on_action(cx.listener(Self::remote_paste))
+                    .capture_key_down(cx.listener(Self::handle_key_down))
+                    .capture_key_up(cx.listener(Self::handle_key_up))
+                    .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
+                    .on_hover(cx.listener(|this, hovered, _, _| {
+                        this.cursor.set_pointer_hovered(*hovered);
+                    }))
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.send_pointer_move(event.position, window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus_handle, cx);
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, true);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus_handle, cx);
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, true);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus_handle, cx);
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, true);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, false);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, false);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Middle,
+                        cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                            this.send_pointer_move(event.position, window, cx);
+                            this.send_mouse_button(event.button, false);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                        this.send_scroll(event);
+                        cx.stop_propagation();
+                    }))
+                    .child(remote_desktop_frame_canvas(canvas_paint))
+            })
+            .when(show_empty_status && !uses_windows_native, |this| {
                 this.child(
                     div()
                         .min_w_0()

@@ -13,6 +13,7 @@ one-core = { workspace = true }
 one-ui = { workspace = true }
 remote_desktop = { workspace = true }
 windows_rdp_host = { workspace = true, optional = true }
+raw-window-handle = { workspace = true, optional = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 image = { workspace = true }
@@ -27,7 +28,7 @@ tempfile = "3"
 
 [features]
 default = []
-windows-native-rdp = ["dep:windows_rdp_host"]
+windows-native-rdp = ["dep:raw-window-handle", "dep:windows_rdp_host"]
 
 [lints]
 workspace = true

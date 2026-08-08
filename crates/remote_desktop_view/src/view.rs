@@ -41,6 +41,10 @@ mod presentation;
 mod render;
 mod resize;
 mod surface;
+// Task 6 freezes the GPUI/native-child presentation adapter before Task 8
+// enables the production presentation factory.
+#[allow(dead_code)]
+mod windows_native;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -129,6 +133,8 @@ pub struct RemoteDesktopView {
     _output_ready_task: Option<Task<()>>,
     _presentation_task: Option<Task<()>>,
     _presentation_pacing_task: Option<Task<()>>,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    windows_native: Option<windows_native::WindowsNativeAdapter>,
 }
 
 impl RemoteDesktopView {
@@ -212,6 +218,8 @@ impl RemoteDesktopView {
             _output_ready_task: None,
             _presentation_task: None,
             _presentation_pacing_task: None,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            windows_native: None,
         }
     }
 
@@ -223,6 +231,82 @@ impl RemoteDesktopView {
     fn reset_presentation_pacing(&mut self) {
         self.presentation_pacer.reset();
         self._presentation_pacing_task.take();
+    }
+
+    pub(super) fn uses_windows_native_presentation(&self) -> bool {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        {
+            self.windows_native.is_some()
+        }
+        #[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
+        {
+            false
+        }
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    pub(crate) fn attach_windows_native_presentation(
+        &mut self,
+        presentation: windows_native::WindowsNativeAdapter,
+    ) {
+        self.windows_native = Some(presentation);
+    }
+
+    pub(super) fn update_windows_native_bounds(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        display_scale_factor: f32,
+    ) -> bool {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        if let Some(presentation) = self.windows_native.as_mut() {
+            if let Err(error) =
+                presentation.update_bounds(bounds, point(px(0.0), px(0.0)), display_scale_factor)
+            {
+                tracing::warn!(?error, "failed to update Windows native RDP bounds");
+            }
+            return true;
+        }
+
+        let _ = (bounds, display_scale_factor);
+        false
+    }
+
+    pub(super) fn activate_windows_native(&mut self, focus_child: bool) -> bool {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        if let Some(presentation) = self.windows_native.as_mut() {
+            if let Err(error) = presentation.activate(focus_child) {
+                tracing::warn!(?error, "failed to activate Windows native RDP presentation");
+            }
+            return true;
+        }
+
+        let _ = focus_child;
+        false
+    }
+
+    pub(super) fn focus_windows_native(&mut self) {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        if let Some(presentation) = self.windows_native.as_mut()
+            && let Err(error) = presentation.focus()
+        {
+            tracing::warn!(?error, "failed to focus Windows native RDP presentation");
+        }
+    }
+
+    pub(super) fn deactivate_windows_native(&mut self, mut focus_parent: impl FnMut()) -> bool {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        if let Some(presentation) = self.windows_native.as_mut() {
+            if let Err(error) = presentation.deactivate(&mut focus_parent) {
+                tracing::warn!(
+                    ?error,
+                    "failed to deactivate Windows native RDP presentation"
+                );
+            }
+            return true;
+        }
+
+        let _ = &mut focus_parent;
+        false
     }
 }
 
