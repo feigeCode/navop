@@ -178,6 +178,7 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent(
         }
 
         result = create_active_x_resources(
+            host,
             options->parent_hwnd,
             &host->active_x_resources);
         if (result != NAVOP_RDP_RESULT_OK) {

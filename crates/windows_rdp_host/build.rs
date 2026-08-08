@@ -6,6 +6,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(windows_rdp_host_native)");
     println!("cargo:rerun-if-changed=native/credential.cpp");
     println!("cargo:rerun-if-changed=native/event_dispatch.cpp");
+    println!("cargo:rerun-if-changed=native/event_sink.cpp");
     println!("cargo:rerun-if-changed=native/host.cpp");
     println!("cargo:rerun-if-changed=native/active_x_host.cpp");
     println!("cargo:rerun-if-changed=native/configuration.cpp");
@@ -60,6 +61,7 @@ fn build_native_host() {
         .cpp(true)
         .file("native/credential.cpp")
         .file("native/event_dispatch.cpp")
+        .file("native/event_sink.cpp")
         .file("native/host.cpp")
         .file("native/active_x_host.cpp")
         .file("native/configuration.cpp")

@@ -2,15 +2,20 @@
 
 #include "windows_rdp_host.h"
 
+struct IUnknown;
+
 enum class CallbackState : uint32_t {
     Open,
     Closing,
     Closed,
 };
 
+struct NativeRdpHost;
 struct NativeRdpActiveXResources;
+struct NativeRdpEventSubscription;
 
 NavopRdpResult create_active_x_resources(
+    NativeRdpHost* owner,
     uintptr_t parent_hwnd,
     NativeRdpActiveXResources** out_resources) noexcept;
 
@@ -42,6 +47,14 @@ NavopRdpResult request_close_active_x(
 
 NavopRdpResult disconnect_active_x(
     NativeRdpActiveXResources* resources) noexcept;
+
+NavopRdpResult create_event_subscription(
+    NativeRdpHost* host,
+    IUnknown* control,
+    NativeRdpEventSubscription** out_subscription) noexcept;
+
+void destroy_event_subscription(
+    NativeRdpEventSubscription* subscription) noexcept;
 
 struct NativeRdpHost {
     ~NativeRdpHost() noexcept;

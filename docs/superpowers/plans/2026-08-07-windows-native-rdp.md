@@ -1505,12 +1505,12 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 - [ ] **Red:** fake event sink 顺序、未知 DISPID、未知 error code、callback after generation change。
 - [ ] **Red:** secret redaction tests 覆盖 password、Gateway password、username 可配置脱敏和完整 endpoint。
-- [ ] **Green:** 建立 connection point/event sink 并保存 advise cookie。
+- [x] **Green:** 建立 connection point/event sink 并保存 advise cookie。
 - [ ] **Green:** 映射 HRESULT、disconnect reason、extended reason、logon code，未知值保留 raw code。
 - [ ] **Green:** Rust callback 投递 UI queue，按 generation 过滤。
-- [ ] **Green:** destroy 前 `Unadvise`。
+- [x] **Green:** destroy 前 `Unadvise`。
 - [ ] **Refactor:** 映射表从 UI 文案分离，错误本地化在上层完成。
-- [ ] **Review:** 检查 callback reentrancy 和 COM ref cycle。
+- [x] **Review:** 检查 callback reentrancy 和 COM ref cycle。
 - [ ] **Verify:** 人工制造错误密码、拒绝连接、网络中断、服务器重启并核对状态。
 
 **Acceptance:**
@@ -1521,6 +1521,32 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - event sink 无悬挂 callback。
 
 **Rollback:** 暂不显示高级诊断，但不得绕过 `Unadvise`。
+
+#### Execution Notes (2026-08-08) — ActiveX event sink 与 connection point 切片
+
+- **Green implementation:** 新增 `IDispatch` event sink，通过
+  `IConnectionPointContainer::FindConnectionPoint(__uuidof(IMsTscAxEvents))` 建立
+  subscription，保存 `Advise` cookie，并把 17 个最小事件映射到既有固定宽度 Rust
+  event kind/schema。`DISPPARAMS::rgvarg` 按 COM 逆序读取，payload 显式 little-endian；
+  未知 DISPID 或已知事件的 malformed 参数安全忽略并返回 `S_OK`。
+- **Lifetime/reentrancy review:** sink 只持有 non-owning `NativeRdpHost*`，不持有
+  control、connection point 或 owning host 引用；资源关系为 host → subscription，
+  connection point → sink。destroy 先关闭 callback gate，ActiveX cleanup 再
+  `detach()` sink、`Unadvise(cookie)`、释放 connection point/sink，之后才销毁 child
+  window 和释放 control。即使 `Unadvise` 失败，sink 已 detach，不再访问 host；
+  callback 内重入 unregister/destroy 仍由既有 in-flight gate 拒绝。
+- **Native test seam:** Windows-only native tests 通过未写入 public header 的私有入口
+  直接调用 `IDispatch::Invoke`，覆盖 known/unknown DISPID、逆序参数、signed raw
+  disconnect code、confirm-close by-ref 输出、legacy/modern reconnect、network
+  quality，以及 malformed VARIANT 安全忽略。静态 contract 同时冻结
+  detach → `Unadvise` → release 和 ActiveX cleanup 顺序。
+- **Automated verification boundary:** macOS host 已运行 crate tests、Clippy、
+  cfg-native Rust test type-check、format check 和 diff check；这些检查不编译 MSVC/
+  ATL/type-library C++。本切片必须在提交并推送后通过 `CI` workflow 的
+  `windows-rdp-probe` x86_64/i686 matrix，结果将在 runner 完成后补记。
+- **Still pending:** disconnect/HRESULT/extended/logon 分类、错误文案分层、UI queue 与
+  generation filtering、secret redaction 补充，以及真实 RDP runtime/manual
+  acceptance 均未完成，因此 Task 5 整体仍保持未完成。
 
 ---
 

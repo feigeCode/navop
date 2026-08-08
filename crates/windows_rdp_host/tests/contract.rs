@@ -978,6 +978,7 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "CComPtr<IUnknown> container;",
             "CComPtr<IUnknown> control;",
             "CComPtr<IMsRdpClient10> client;",
+            "NativeRdpEventSubscription* event_subscription = nullptr;",
             "CComPtr<IMsRdpClientNonScriptable2> non_scriptable;",
             "OleInitialize(nullptr)",
             "AtlAxWinInit()",
@@ -1025,6 +1026,9 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "if (FAILED(non_scriptable_result) || non_scriptable == nullptr)",
             "const HRESULT ui_parent_result =\n        non_scriptable->put_UIParentWindowHandle(parent);",
             "if (FAILED(ui_parent_result))",
+            "const NavopRdpResult subscription_result = create_event_subscription(",
+            "owner,",
+            "&resources->state.event_subscription",
             "*out_resources = resources.release();",
         ],
     );
@@ -1033,6 +1037,8 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
         "~ActiveXCleanup() noexcept",
         "\n    }\n};",
         &[
+            "destroy_event_subscription(event_subscription);",
+            "event_subscription = nullptr;",
             "DestroyWindow(child_window);",
             "client.Release();",
             "control.Release();",
@@ -1054,6 +1060,109 @@ fn active_x_host_creates_a_hidden_zero_sized_child_and_releases_owned_resources(
             "put_UIParentWindowHandle(reinterpret_cast<LONG_PTR>",
             "put_UIParentWindowHandle((LONG)",
             "put_UIParentWindowHandle((long)",
+        ],
+    );
+}
+
+#[test]
+fn active_x_event_sink_maps_known_dispids_and_unadvises_before_releasing_the_control() {
+    let sink = &format!("{HOST_CRATE}/native/event_sink.cpp");
+    let active_x = &format!("{HOST_CRATE}/native/active_x_host.cpp");
+    let internal = &format!("{HOST_CRATE}/native/host_internal.h");
+    let public_header = &format!("{HOST_CRATE}/native/windows_rdp_host.h");
+
+    assert_contains_all(
+        sink,
+        &[
+            "class RdpEventSink final : public IDispatch",
+            "IID_IUnknown",
+            "IID_IDispatch",
+            "__uuidof(IMsTscAxEvents)",
+            "InterlockedIncrement(&ref_count_)",
+            "InterlockedDecrement(&ref_count_)",
+            "NativeRdpHost* host_;",
+            "void detach() noexcept",
+            "class RdpEventSink",
+            "IConnectionPointContainer",
+            "FindConnectionPoint(",
+            "connection_point->Advise(",
+            "DWORD advise_cookie = 0;",
+            "subscription->advise_cookie = advise_cookie;",
+            "NAVOP_RDP_EVENT_CONNECTING",
+            "NAVOP_RDP_EVENT_CONNECTED",
+            "NAVOP_RDP_EVENT_LOGIN_COMPLETE",
+            "NAVOP_RDP_EVENT_RECONNECTING",
+            "NAVOP_RDP_EVENT_RECONNECTED",
+            "NAVOP_RDP_EVENT_NETWORK_STATUS_CHANGED",
+            "NAVOP_RDP_EVENT_REMOTE_DESKTOP_SIZE_CHANGED",
+            "NAVOP_RDP_EVENT_ENTER_FULLSCREEN",
+            "NAVOP_RDP_EVENT_LEAVE_FULLSCREEN",
+            "NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISPLAYED",
+            "NAVOP_RDP_EVENT_AUTHENTICATION_WARNING_DISMISSED",
+            "NAVOP_RDP_EVENT_WARNING",
+            "NAVOP_RDP_EVENT_FATAL_ERROR",
+            "NAVOP_RDP_EVENT_LOGON_ERROR",
+            "NAVOP_RDP_EVENT_DISCONNECTED",
+            "NAVOP_RDP_EVENT_CLOSE_CONFIRMED",
+            "NAVOP_RDP_EVENT_FOCUS_RELEASED",
+            "parameters->rgvarg[1]",
+            "parameters->rgvarg[0]",
+            "encode_u32_le(",
+            "default:",
+            "return S_OK;",
+            "extern \"C\" NavopRdpResult navop_rdp_test_invoke_active_x_event(",
+        ],
+    );
+    assert_tokens_in_scope(
+        sink,
+        "void destroy_event_subscription(",
+        "\n}\n\nextern \"C\" NavopRdpResult navop_rdp_test_invoke_active_x_event(",
+        &[
+            "sink->detach();",
+            "subscription->connection_point->Unadvise(",
+            "subscription->advise_cookie = 0;",
+            "subscription->connection_point.Release();",
+            "sink->Release();",
+            "delete subscription;",
+        ],
+    );
+    assert_tokens_in_scope(
+        active_x,
+        "~ActiveXCleanup() noexcept",
+        "\n    }\n};",
+        &[
+            "destroy_event_subscription(event_subscription);",
+            "DestroyWindow(child_window);",
+            "client.Release();",
+            "control.Release();",
+            "container.Release();",
+            "AtlAxWinTerm();",
+            "OleUninitialize();",
+        ],
+    );
+    assert_contains_all(
+        internal,
+        &[
+            "struct NativeRdpEventSubscription;",
+            "NavopRdpResult create_event_subscription(",
+            "void destroy_event_subscription(",
+        ],
+    );
+    assert_excludes_all(
+        public_header,
+        &[
+            "NativeRdpEventSubscription",
+            "navop_rdp_test_invoke_active_x_event",
+            "IConnectionPoint",
+            "IMsTscAxEvents",
+        ],
+    );
+    assert_excludes_all(
+        sink,
+        &[
+            "CComPtr<NativeRdpHost>",
+            "CComPtr<IMsRdpClient",
+            "std::shared_ptr<NativeRdpHost>",
         ],
     );
 }
@@ -1378,6 +1487,7 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "OUT_DIR",
             "host.cpp",
             "active_x_host.cpp",
+            "event_sink.cpp",
             "cpp(true)",
             "/std:c++17",
             "/EHsc",

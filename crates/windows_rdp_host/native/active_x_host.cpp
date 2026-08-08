@@ -22,8 +22,11 @@ struct ActiveXCleanup {
     CComPtr<IUnknown> container;
     CComPtr<IUnknown> control;
     CComPtr<IMsRdpClient10> client;
+    NativeRdpEventSubscription* event_subscription = nullptr;
 
     ~ActiveXCleanup() noexcept {
+        destroy_event_subscription(event_subscription);
+        event_subscription = nullptr;
         if (child_window != nullptr) {
             DestroyWindow(child_window);
         }
@@ -91,9 +94,10 @@ NavopRdpResult validate_resources(
 }  // namespace
 
 NavopRdpResult create_active_x_resources(
+    NativeRdpHost* owner,
     uintptr_t parent_hwnd,
     NativeRdpActiveXResources** out_resources) noexcept {
-    if (out_resources == nullptr) {
+    if (owner == nullptr || out_resources == nullptr) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
     *out_resources = nullptr;
@@ -161,6 +165,14 @@ NavopRdpResult create_active_x_resources(
         non_scriptable->put_UIParentWindowHandle(parent);
     if (FAILED(ui_parent_result)) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+    }
+
+    const NavopRdpResult subscription_result = create_event_subscription(
+        owner,
+        resources->state.control,
+        &resources->state.event_subscription);
+    if (subscription_result != NAVOP_RDP_RESULT_OK) {
+        return subscription_result;
     }
 
     *out_resources = resources.release();

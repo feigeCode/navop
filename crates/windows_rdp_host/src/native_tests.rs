@@ -3,7 +3,8 @@ use std::mem::size_of;
 use std::ptr;
 
 use crate::ffi::{
-    ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, EVENT_CONNECTED,
+    ABI_VERSION, CREATE_WITH_PARENT_ABI_VERSION, EVENT_CLOSE_CONFIRMED, EVENT_CONNECTED,
+    EVENT_DISCONNECTED, EVENT_NETWORK_STATUS_CHANGED, EVENT_RECONNECTING,
     EVENT_REMOTE_DESKTOP_SIZE_CHANGED, MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost,
     NativeResult, NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds,
     NavopRdpConnectionOptions, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
@@ -11,6 +12,11 @@ use crate::ffi::{
     RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE,
     RESULT_WRONG_THREAD,
 };
+
+const VT_I4: u16 = 3;
+const VT_BOOL: u16 = 11;
+const VT_UI4: u16 = 19;
+const VT_BYREF: u16 = 0x4000;
 
 unsafe extern "C" {
     fn navop_rdp_create(
@@ -53,6 +59,13 @@ unsafe extern "C" {
         host: *mut NativeRdpHost,
         event: *const NavopRdpEvent,
         payload: *const u8,
+    ) -> NativeResult;
+    fn navop_rdp_test_invoke_active_x_event(
+        host: *mut NativeRdpHost,
+        dispatch_id: i32,
+        arguments: *mut i32,
+        variant_types: *const u16,
+        argument_count: u32,
     ) -> NativeResult;
 }
 
@@ -497,6 +510,191 @@ fn native_dispatch_invokes_the_registered_callback_once() {
     assert_eq!(context.kind, EVENT_REMOTE_DESKTOP_SIZE_CHANGED);
     assert_eq!(context.code, 0);
     assert_eq!(context.payload, payload);
+
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn active_x_event_sink_maps_known_events_and_ignores_unknown_or_malformed_invocations() {
+    let generation = 0x1122_3344_aabb_ccdd;
+    let mut context = RecordingContext::default();
+    let mut host = unsafe { create_host(generation) };
+    unsafe {
+        register_callback(
+            host,
+            generation,
+            record_callback,
+            (&mut context as *mut RecordingContext).cast(),
+        );
+    }
+
+    assert_eq!(
+        unsafe { navop_rdp_test_invoke_active_x_event(host, 2, ptr::null_mut(), ptr::null(), 0,) },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 1);
+    assert_eq!(context.kind, EVENT_CONNECTED);
+    assert_eq!(context.code, 0);
+
+    let mut size_arguments = [1080, 1920];
+    let size_types = [VT_I4, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                12,
+                size_arguments.as_mut_ptr(),
+                size_types.as_ptr(),
+                size_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 2);
+    assert_eq!(context.kind, EVENT_REMOTE_DESKTOP_SIZE_CHANGED);
+    assert_eq!(
+        context.payload,
+        [1920_u32.to_le_bytes(), 1080_u32.to_le_bytes()].concat()
+    );
+
+    let mut reconnect_arguments = [8, 3, -1, 1234];
+    let reconnect_types = [VT_I4, VT_I4, VT_BOOL, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                34,
+                reconnect_arguments.as_mut_ptr(),
+                reconnect_types.as_ptr(),
+                reconnect_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 3);
+    assert_eq!(context.kind, EVENT_RECONNECTING);
+    assert_eq!(
+        context.payload,
+        [3_u32.to_le_bytes(), 8_u32.to_le_bytes()].concat()
+    );
+
+    let mut legacy_reconnect_arguments = [2, 4, 5678];
+    let legacy_reconnect_types = [VT_I4 | VT_BYREF, VT_I4, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                17,
+                legacy_reconnect_arguments.as_mut_ptr(),
+                legacy_reconnect_types.as_ptr(),
+                legacy_reconnect_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(legacy_reconnect_arguments[0], 0);
+    assert_eq!(context.calls, 4);
+    assert_eq!(context.kind, EVENT_RECONNECTING);
+    assert_eq!(context.payload, 4_u32.to_le_bytes());
+
+    let mut network_arguments = [45, 10_000, 3];
+    let network_types = [VT_I4, VT_I4, VT_UI4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                32,
+                network_arguments.as_mut_ptr(),
+                network_types.as_ptr(),
+                network_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 5);
+    assert_eq!(context.kind, EVENT_NETWORK_STATUS_CHANGED);
+    assert_eq!(context.payload, 3_u32.to_le_bytes());
+
+    let mut disconnect_arguments = [-1234];
+    let disconnect_types = [VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                4,
+                disconnect_arguments.as_mut_ptr(),
+                disconnect_types.as_ptr(),
+                disconnect_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 6);
+    assert_eq!(context.kind, EVENT_DISCONNECTED);
+    assert_eq!(context.code, -1234);
+
+    let mut allow_close = [0];
+    let allow_close_types = [VT_BOOL | VT_BYREF];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                15,
+                allow_close.as_mut_ptr(),
+                allow_close_types.as_ptr(),
+                allow_close.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(allow_close, [-1]);
+    assert_eq!(context.calls, 7);
+    assert_eq!(context.kind, EVENT_CLOSE_CONFIRMED);
+
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(host, 10_000, ptr::null_mut(), ptr::null(), 0)
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 7);
+
+    let mut malformed_size_arguments = [1080, 1920];
+    let malformed_size_types = [VT_UI4, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                12,
+                malformed_size_arguments.as_mut_ptr(),
+                malformed_size_types.as_ptr(),
+                malformed_size_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 7);
+
+    let mut malformed_reconnect_arguments = [8, 3, 1, 1234];
+    let malformed_reconnect_types = [VT_I4, VT_I4, VT_I4, VT_I4];
+    assert_eq!(
+        unsafe {
+            navop_rdp_test_invoke_active_x_event(
+                host,
+                34,
+                malformed_reconnect_arguments.as_mut_ptr(),
+                malformed_reconnect_types.as_ptr(),
+                malformed_reconnect_arguments.len() as u32,
+            )
+        },
+        RESULT_OK
+    );
+    assert_eq!(context.calls, 7);
 
     assert_eq!(
         unsafe { navop_rdp_unregister_event_callback(host) },
