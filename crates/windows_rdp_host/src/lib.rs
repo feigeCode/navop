@@ -24,6 +24,7 @@ pub use diagnostic::{
     WindowsRdpUsernameRedaction,
 };
 pub use error::WindowsRdpHostError;
+pub use error::WindowsRdpHresult;
 pub use error::{
     WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason, WindowsRdpFatalError,
     WindowsRdpFatalErrorKind, WindowsRdpLogonError, WindowsRdpLogonErrorKind, WindowsRdpWarning,

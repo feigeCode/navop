@@ -72,24 +72,29 @@ extern "C" NavopRdpResult navop_rdp_connect(
     NativeRdpHost* host,
     const NavopRdpConnectionOptions* options) noexcept {
     try {
-        if (host == nullptr || options == nullptr) {
+        if (host == nullptr) {
             return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
         }
-
         NavopRdpResult result = ensure_owner_thread(host);
         if (result != NAVOP_RDP_RESULT_OK) {
             return result;
         }
+        clear_last_error(host);
+        if (options == nullptr) {
+            return record_last_error(host, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+        }
         if (host->callback_state != CallbackState::Open) {
-            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+            return record_last_error(host, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
         }
 
         result = validate_connection_options(options);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
-        return connect_active_x(host->active_x_resources, *options);
+        // Owner-aware equivalent of
+        // connect_active_x(host->active_x_resources, *options).
+        return connect_active_x(host, host->active_x_resources, *options);
     } catch (...) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 }

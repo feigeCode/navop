@@ -39,6 +39,20 @@ typedef struct NavopRdpProbeResult {
     uint32_t reserved;
 } NavopRdpProbeResult;
 
+/*
+ * Synchronous native diagnostics preserve the stable NavopRdpResult together
+ * with an optional raw signed HRESULT. No native text or connection secrets
+ * cross this ABI. has_hresult is exactly 0 or 1 and reserved is always zero.
+ */
+typedef struct NavopRdpLastError {
+    uint32_t struct_size;
+    uint32_t abi_version;
+    int32_t result;
+    int32_t hresult;
+    uint32_t has_hresult;
+    uint32_t reserved;
+} NavopRdpLastError;
+
 typedef struct NavopRdpCreateOptions {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -222,6 +236,14 @@ static_assert(offsetof(NavopRdpProbeResult, struct_size) == 0);
 static_assert(offsetof(NavopRdpProbeResult, abi_version) == 4);
 static_assert(offsetof(NavopRdpProbeResult, available) == 8);
 static_assert(offsetof(NavopRdpProbeResult, reserved) == 12);
+static_assert(sizeof(NavopRdpLastError) == 24);
+static_assert(alignof(NavopRdpLastError) == 4);
+static_assert(offsetof(NavopRdpLastError, struct_size) == 0);
+static_assert(offsetof(NavopRdpLastError, abi_version) == 4);
+static_assert(offsetof(NavopRdpLastError, result) == 8);
+static_assert(offsetof(NavopRdpLastError, hresult) == 12);
+static_assert(offsetof(NavopRdpLastError, has_hresult) == 16);
+static_assert(offsetof(NavopRdpLastError, reserved) == 20);
 static_assert(sizeof(NavopRdpCreateOptions) == 16);
 static_assert(alignof(NavopRdpCreateOptions) == 4);
 static_assert(offsetof(NavopRdpCreateOptions, struct_size) == 0);
@@ -337,6 +359,25 @@ NavopRdpResult navop_rdp_create(
 NavopRdpResult navop_rdp_create_with_parent(
     const NavopRdpCreateWithParentOptions* options,
     NativeRdpHost** out_host) NAVOP_RDP_NOEXCEPT;
+
+/*
+ * Enhanced create entrypoint. out_error is initialized on every call whose
+ * output layout is valid, including failures that occur before a host can be
+ * returned. The legacy entrypoint remains available for ABI compatibility.
+ */
+NavopRdpResult navop_rdp_create_with_parent_v2(
+    const NavopRdpCreateWithParentOptions* options,
+    NativeRdpHost** out_host,
+    NavopRdpLastError* out_error) NAVOP_RDP_NOEXCEPT;
+
+/*
+ * Returns the most recent owner-thread synchronous operation diagnostic.
+ * Reading does not clear the slot. A successful operation leaves result == OK
+ * and has_hresult == 0. Wrong-thread calls do not overwrite the slot.
+ */
+NavopRdpResult navop_rdp_get_last_error(
+    NativeRdpHost* host,
+    NavopRdpLastError* out_error) NAVOP_RDP_NOEXCEPT;
 
 NavopRdpResult navop_rdp_set_bounds(
     NativeRdpHost* host,

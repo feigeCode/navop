@@ -139,7 +139,7 @@ impl WindowsRdpLogonError {
             // STATUS_ACCOUNT_RESTRICTION.
             -1_073_741_714 => WindowsRdpLogonErrorKind::AccountRestriction,
             // Documented ARBITRATION_CODE_* values.
-            -2 | -3 | -4 | -5 | -6 | -7 => WindowsRdpLogonErrorKind::SessionArbitration,
+            -7..=-2 => WindowsRdpLogonErrorKind::SessionArbitration,
             _ => WindowsRdpLogonErrorKind::Unknown,
         };
 
@@ -252,6 +252,25 @@ const fn classify_extended_disconnect_code(code: i32) -> Option<WindowsRdpDiagno
     }
 }
 
+/// Raw signed HRESULT returned by a synchronous native RDP operation.
+///
+/// The value is preserved exactly as reported by the Windows API. The facade
+/// intentionally does not expose native error text, endpoint data, or sensitive values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsRdpHresult {
+    code: i32,
+}
+
+impl WindowsRdpHresult {
+    pub const fn from_code(code: i32) -> Self {
+        Self { code }
+    }
+
+    pub const fn code(self) -> i32 {
+        self.code
+    }
+}
+
 /// Deterministic failures returned by the versioned native host boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowsRdpHostError {
@@ -267,6 +286,28 @@ pub enum WindowsRdpHostError {
     NativeDidNotClearHandle,
     InvalidNativeResponse,
     UnexpectedNativeResult(i32),
+    NativeHresult {
+        result: i32,
+        hresult: WindowsRdpHresult,
+    },
+}
+
+impl WindowsRdpHostError {
+    /// Returns the stable native result code when this error carries an HRESULT.
+    pub const fn native_result(self) -> Option<i32> {
+        match self {
+            Self::NativeHresult { result, .. } => Some(result),
+            _ => None,
+        }
+    }
+
+    /// Returns the raw signed HRESULT when one was supplied by the native host.
+    pub const fn hresult(self) -> Option<WindowsRdpHresult> {
+        match self {
+            Self::NativeHresult { hresult, .. } => Some(hresult),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for WindowsRdpHostError {
@@ -296,6 +337,11 @@ impl fmt::Display for WindowsRdpHostError {
             Self::UnexpectedNativeResult(result) => {
                 write!(formatter, "unexpected Windows RDP host result {result}")
             }
+            Self::NativeHresult { result, hresult } => write!(
+                formatter,
+                "Windows RDP host result {result} with HRESULT {:#010X}",
+                hresult.code() as u32
+            ),
         }
     }
 }
@@ -359,6 +405,21 @@ mod tests {
         assert_eq!(
             check_native_result(99),
             Err(WindowsRdpHostError::UnexpectedNativeResult(99))
+        );
+    }
+
+    #[test]
+    fn hresult_error_preserves_raw_signed_code() {
+        let error = WindowsRdpHostError::NativeHresult {
+            result: ffi::RESULT_INTERNAL_ERROR,
+            hresult: WindowsRdpHresult::from_code(i32::MIN),
+        };
+
+        assert_eq!(error.native_result(), Some(ffi::RESULT_INTERNAL_ERROR));
+        assert_eq!(error.hresult().map(WindowsRdpHresult::code), Some(i32::MIN));
+        assert_eq!(
+            error.to_string(),
+            "Windows RDP host result 4 with HRESULT 0x80000000"
         );
     }
 

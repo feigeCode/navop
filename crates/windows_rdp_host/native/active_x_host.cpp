@@ -113,18 +113,21 @@ NavopRdpResult create_active_x_resources(
     auto resources = std::unique_ptr<NativeRdpActiveXResources>(
         new (std::nothrow) NativeRdpActiveXResources());
     if (!resources) {
-        return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+        return record_last_error(owner, NAVOP_RDP_RESULT_ALLOCATION_FAILED);
     }
     resources->state.parent_window = parent;
 
     const HRESULT ole_result = OleInitialize(nullptr);
     if (FAILED(ole_result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(ole_result));
     }
     resources->state.ole_initialized = true;
 
     if (!AtlAxWinInit()) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
     resources->state.atl_initialized = true;
 
@@ -142,18 +145,30 @@ NavopRdpResult create_active_x_resources(
         GetModuleHandleW(nullptr),
         nullptr);
     if (resources->state.child_window == nullptr) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     const HRESULT control_result = create_rdp_control(resources->state);
     if (FAILED(control_result) || resources->state.control == nullptr) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        if (FAILED(control_result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(control_result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     const HRESULT query_result = resources->state.control->QueryInterface(
         IID_PPV_ARGS(&resources->state.client));
     if (FAILED(query_result) || resources->state.client == nullptr) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        if (FAILED(query_result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(query_result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
@@ -161,14 +176,23 @@ NavopRdpResult create_active_x_resources(
         resources->state.control->QueryInterface(
             IID_PPV_ARGS(&non_scriptable));
     if (FAILED(non_scriptable_result) || non_scriptable == nullptr) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        if (FAILED(non_scriptable_result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(non_scriptable_result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     const HRESULT ui_parent_result =
         non_scriptable->put_UIParentWindowHandle(
             reinterpret_cast<wireHWND>(parent));
     if (FAILED(ui_parent_result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(ui_parent_result));
     }
 
     const NavopRdpResult subscription_result = create_event_subscription(
@@ -259,85 +283,117 @@ NavopRdpResult focus_active_x(
 }
 
 NavopRdpResult connect_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     const NavopRdpConnectionOptions& options) noexcept {
     const NavopRdpResult resource_result = validate_resources(resources);
     if (resource_result != NAVOP_RDP_RESULT_OK) {
-        return resource_result;
+        return record_last_error(owner, resource_result);
     }
 
     short connected = 0;
     HRESULT result = resources->state.client->get_Connected(&connected);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     if (connected != 0) {
-        return NAVOP_RDP_RESULT_INVALID_STATE;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_STATE);
     }
 
     CComBSTR server(
         static_cast<int>(options.host.len),
         reinterpret_cast<LPCOLESTR>(options.host.data));
     if (server.m_str == nullptr) {
-        return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+        return record_last_error(owner, NAVOP_RDP_RESULT_ALLOCATION_FAILED);
     }
 
     result = resources->state.client->put_Server(server);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
 
     CComPtr<IMsRdpClientAdvancedSettings> advanced_settings;
     result = resources->state.control->QueryInterface(
         IID_PPV_ARGS(&advanced_settings));
     if (FAILED(result) || advanced_settings == nullptr) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        if (FAILED(result)) {
+            return record_last_hresult(
+                owner,
+                NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                static_cast<int32_t>(result));
+        }
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     result = advanced_settings->put_RDPPort(
         static_cast<LONG>(options.port));
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     result = resources->state.client->put_DesktopWidth(
         options.desktop_width);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     result = resources->state.client->put_DesktopHeight(
         options.desktop_height);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     result = resources->state.client->put_ColorDepth(options.color_depth);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     result = resources->state.client->Connect();
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     return NAVOP_RDP_RESULT_OK;
 }
 
 NavopRdpResult get_active_x_connection_state(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     uint32_t* out_state) noexcept {
     const NavopRdpResult resource_result = validate_resources(resources);
     if (resource_result != NAVOP_RDP_RESULT_OK) {
-        return resource_result;
+        return record_last_error(owner, resource_result);
     }
     if (out_state == nullptr) {
-        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
     }
 
     short connected = 0;
     const HRESULT result = resources->state.client->get_Connected(&connected);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     if (connected < 0 || connected > 2) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
     *out_state = static_cast<uint32_t>(connected);
     return NAVOP_RDP_RESULT_OK;
@@ -366,63 +422,77 @@ NavopRdpResult get_active_x_extended_disconnect_reason(
 }
 
 NavopRdpResult request_close_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     uint32_t* out_status) noexcept {
     const NavopRdpResult resource_result = validate_resources(resources);
     if (resource_result != NAVOP_RDP_RESULT_OK) {
-        return resource_result;
+        return record_last_error(owner, resource_result);
     }
     if (out_status == nullptr) {
-        return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
     }
 
     short connected = 0;
     HRESULT result = resources->state.client->get_Connected(&connected);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     if (connected == 0) {
         *out_status = 0;
         return NAVOP_RDP_RESULT_OK;
     }
     if (connected != 1 && connected != 2) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     ControlCloseStatus status = controlCloseCanProceed;
     result = resources->state.client->RequestClose(&status);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     if (status != controlCloseCanProceed &&
         status != controlCloseWaitForEvents) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
     *out_status = static_cast<uint32_t>(status);
     return NAVOP_RDP_RESULT_OK;
 }
 
 NavopRdpResult disconnect_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources) noexcept {
     const NavopRdpResult resource_result = validate_resources(resources);
     if (resource_result != NAVOP_RDP_RESULT_OK) {
-        return resource_result;
+        return record_last_error(owner, resource_result);
     }
 
     short connected = 0;
     HRESULT result = resources->state.client->get_Connected(&connected);
     if (FAILED(result)) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result));
     }
     if (connected == 0) {
         return NAVOP_RDP_RESULT_OK;
     }
     if (connected != 1 && connected != 2) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 
     result = resources->state.client->Disconnect();
     return FAILED(result)
-        ? NAVOP_RDP_RESULT_INTERNAL_ERROR
+        ? record_last_hresult(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            static_cast<int32_t>(result))
         : NAVOP_RDP_RESULT_OK;
 }

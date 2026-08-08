@@ -8,9 +8,9 @@ use crate::ffi::{
     EVENT_REMOTE_DESKTOP_SIZE_CHANGED, MAX_EVENT_PAYLOAD_BYTES, NativeEventCallback, NativeRdpHost,
     NativeResult, NavopRdpBorrowedSecret, NavopRdpBorrowedUtf16, NavopRdpBounds,
     NavopRdpConnectionOptions, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
-    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, RESULT_ABI_MISMATCH,
-    RESULT_CALLBACK_IN_FLIGHT, RESULT_INVALID_ARGUMENT, RESULT_OK, RESULT_UNAVAILABLE,
-    RESULT_WRONG_THREAD,
+    NavopRdpCredentialBundle, NavopRdpEvent, NavopRdpEventCallbackOptions, NavopRdpLastError,
+    RESULT_ABI_MISMATCH, RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT,
+    RESULT_OK, RESULT_UNAVAILABLE, RESULT_WRONG_THREAD,
 };
 
 const VT_I4: u16 = 3;
@@ -26,6 +26,15 @@ unsafe extern "C" {
     fn navop_rdp_create_with_parent(
         options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
+    ) -> NativeResult;
+    fn navop_rdp_create_with_parent_v2(
+        options: *const NavopRdpCreateWithParentOptions,
+        out_host: *mut *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
+    ) -> NativeResult;
+    fn navop_rdp_get_last_error(
+        host: *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
     ) -> NativeResult;
     fn navop_rdp_set_bounds(
         host: *mut NativeRdpHost,
@@ -73,6 +82,12 @@ unsafe extern "C" {
         has_extended_code: u32,
         extended_code: i32,
     ) -> NativeResult;
+    fn navop_rdp_test_set_last_error(
+        host: *mut NativeRdpHost,
+        result: NativeResult,
+        has_hresult: u32,
+        hresult: i32,
+    ) -> NativeResult;
 }
 
 unsafe extern "system" {
@@ -113,6 +128,15 @@ unsafe fn create_host(generation: u64) -> *mut NativeRdpHost {
     assert_eq!(unsafe { navop_rdp_create(&options, &mut host) }, RESULT_OK);
     assert!(!host.is_null());
     host
+}
+
+unsafe fn read_last_error(host: *mut NativeRdpHost) -> NavopRdpLastError {
+    let mut error = NavopRdpLastError::current();
+    assert_eq!(
+        unsafe { navop_rdp_get_last_error(host, &mut error) },
+        RESULT_OK
+    );
+    error
 }
 
 unsafe fn register_callback(
@@ -306,6 +330,83 @@ fn native_create_with_parent_rejects_invalid_abi_and_never_returns_a_handle() {
     assert!(host.is_null());
 }
 
+#[repr(C)]
+struct ExtendedLastError {
+    base: NavopRdpLastError,
+    trailing: [u8; 16],
+}
+
+#[test]
+fn native_create_with_parent_v2_populates_and_validates_failure_diagnostics() {
+    let generation = 0x1122_3344_aabb_ccdd;
+    let mut host = 1_usize as *mut NativeRdpHost;
+    let mut extended = ExtendedLastError {
+        base: NavopRdpLastError {
+            struct_size: size_of::<ExtendedLastError>() as u32,
+            ..NavopRdpLastError::current()
+        },
+        trailing: [0xa5; 16],
+    };
+
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent_v2(ptr::null(), &mut host, &mut extended.base,) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert!(host.is_null());
+    assert_eq!(
+        extended.base.struct_size,
+        size_of::<ExtendedLastError>() as u32
+    );
+    assert_eq!(extended.base.abi_version, ABI_VERSION);
+    assert_eq!(extended.base.result, RESULT_INVALID_ARGUMENT);
+    assert_eq!(extended.base.hresult, 0);
+    assert_eq!(extended.base.has_hresult, 0);
+    assert_eq!(extended.base.reserved, 0);
+    assert_eq!(extended.trailing, [0xa5; 16]);
+
+    let mut diagnostic = NavopRdpLastError::current();
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent_v2(ptr::null(), ptr::null_mut(), &mut diagnostic,) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(diagnostic.result, RESULT_INVALID_ARGUMENT);
+
+    host = 1_usize as *mut NativeRdpHost;
+    let mut options = NavopRdpCreateWithParentOptions::current(generation, 1);
+    options.abi_version = CREATE_WITH_PARENT_ABI_VERSION + 1;
+    diagnostic = NavopRdpLastError::current();
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent_v2(&options, &mut host, &mut diagnostic) },
+        RESULT_ABI_MISMATCH
+    );
+    assert!(host.is_null());
+    assert_eq!(diagnostic.result, RESULT_ABI_MISMATCH);
+    assert_eq!(diagnostic.has_hresult, 0);
+
+    host = 1_usize as *mut NativeRdpHost;
+    let mut invalid_layout = NavopRdpLastError {
+        struct_size: size_of::<NavopRdpLastError>() as u32 - 1,
+        result: RESULT_INTERNAL_ERROR,
+        hresult: i32::MIN,
+        has_hresult: 1,
+        reserved: 7,
+        ..NavopRdpLastError::current()
+    };
+    let original_invalid_layout = invalid_layout;
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent_v2(ptr::null(), &mut host, &mut invalid_layout,) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(host, 1_usize as *mut NativeRdpHost);
+    assert_eq!(invalid_layout, original_invalid_layout);
+
+    assert_eq!(
+        unsafe { navop_rdp_create_with_parent_v2(ptr::null(), &mut host, ptr::null_mut(),) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(host, 1_usize as *mut NativeRdpHost);
+}
+
 #[test]
 fn native_create_with_parent_rejects_a_parent_owned_by_another_thread() {
     let parent = create_hidden_test_parent();
@@ -450,6 +551,177 @@ unsafe extern "C" fn record_callback(
         context.payload =
             unsafe { std::slice::from_raw_parts(payload, event.payload_len as usize).to_vec() };
     }
+}
+
+#[test]
+fn native_last_error_preserves_signed_hresult_and_repeated_reads() {
+    let mut host = unsafe { create_host(42) };
+
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INTERNAL_ERROR, 1, i32::MIN) },
+        RESULT_INTERNAL_ERROR
+    );
+    let first = unsafe { read_last_error(host) };
+    assert_eq!(first.result, RESULT_INTERNAL_ERROR);
+    assert_eq!(first.hresult, i32::MIN);
+    assert_eq!(first.has_hresult, 1);
+    assert_eq!(first.reserved, 0);
+    assert_eq!(unsafe { read_last_error(host) }, first);
+
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INVALID_ARGUMENT, 2, 7) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(unsafe { read_last_error(host) }, first);
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_owner_operations_replace_or_clear_stale_hresult() {
+    let generation = 42;
+    let mut context = RecordingContext::default();
+    let mut host = unsafe { create_host(generation) };
+
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INTERNAL_ERROR, 1, i32::MIN) },
+        RESULT_INTERNAL_ERROR
+    );
+    assert_eq!(
+        unsafe { navop_rdp_set_bounds(host, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    let replaced = unsafe { read_last_error(host) };
+    assert_eq!(replaced.result, RESULT_INVALID_ARGUMENT);
+    assert_eq!(replaced.hresult, 0);
+    assert_eq!(replaced.has_hresult, 0);
+
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INTERNAL_ERROR, 1, i32::MIN) },
+        RESULT_INTERNAL_ERROR
+    );
+    unsafe {
+        register_callback(
+            host,
+            generation,
+            record_callback,
+            (&mut context as *mut RecordingContext).cast(),
+        );
+    }
+    assert_eq!(
+        unsafe { read_last_error(host) },
+        NavopRdpLastError::current()
+    );
+
+    assert_eq!(
+        unsafe { navop_rdp_unregister_event_callback(host) },
+        RESULT_OK
+    );
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_wrong_thread_diagnostic_access_preserves_owner_slot() {
+    let mut host = unsafe { create_host(42) };
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INTERNAL_ERROR, 1, i32::MIN) },
+        RESULT_INTERNAL_ERROR
+    );
+    let expected = unsafe { read_last_error(host) };
+    let host_address = host as usize;
+
+    let (set_result, read_result, output, sentinel) = std::thread::spawn(move || {
+        let host = host_address as *mut NativeRdpHost;
+        let sentinel = NavopRdpLastError {
+            result: RESULT_INVALID_ARGUMENT,
+            hresult: 17,
+            has_hresult: 1,
+            reserved: 23,
+            ..NavopRdpLastError::current()
+        };
+        let mut output = sentinel;
+        let set_result =
+            unsafe { navop_rdp_test_set_last_error(host, RESULT_INVALID_ARGUMENT, 0, 0) };
+        let read_result = unsafe { navop_rdp_get_last_error(host, &mut output) };
+        (set_result, read_result, output, sentinel)
+    })
+    .join()
+    .expect("wrong-thread diagnostic worker should finish");
+
+    assert_eq!(set_result, RESULT_WRONG_THREAD);
+    assert_eq!(read_result, RESULT_WRONG_THREAD);
+    assert_eq!(output, sentinel);
+    assert_eq!(unsafe { read_last_error(host) }, expected);
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
+}
+
+#[test]
+fn native_last_error_preserves_extended_output_and_rejects_invalid_layout() {
+    let mut host = unsafe { create_host(42) };
+    assert_eq!(
+        unsafe { navop_rdp_test_set_last_error(host, RESULT_INTERNAL_ERROR, 1, i32::MIN) },
+        RESULT_INTERNAL_ERROR
+    );
+
+    let mut extended = ExtendedLastError {
+        base: NavopRdpLastError {
+            struct_size: size_of::<ExtendedLastError>() as u32,
+            ..NavopRdpLastError::current()
+        },
+        trailing: [0x5a; 16],
+    };
+    assert_eq!(
+        unsafe { navop_rdp_get_last_error(host, &mut extended.base) },
+        RESULT_OK
+    );
+    assert_eq!(
+        extended.base.struct_size,
+        size_of::<ExtendedLastError>() as u32
+    );
+    assert_eq!(extended.base.abi_version, ABI_VERSION);
+    assert_eq!(extended.base.result, RESULT_INTERNAL_ERROR);
+    assert_eq!(extended.base.hresult, i32::MIN);
+    assert_eq!(extended.base.has_hresult, 1);
+    assert_eq!(extended.base.reserved, 0);
+    assert_eq!(extended.trailing, [0x5a; 16]);
+
+    let mut short = NavopRdpLastError {
+        struct_size: size_of::<NavopRdpLastError>() as u32 - 1,
+        result: RESULT_INVALID_ARGUMENT,
+        hresult: 31,
+        has_hresult: 1,
+        reserved: 37,
+        ..NavopRdpLastError::current()
+    };
+    let original_short = short;
+    assert_eq!(
+        unsafe { navop_rdp_get_last_error(host, &mut short) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(short, original_short);
+
+    let mut wrong_abi = NavopRdpLastError {
+        abi_version: ABI_VERSION + 1,
+        result: RESULT_INVALID_ARGUMENT,
+        hresult: 41,
+        has_hresult: 1,
+        reserved: 43,
+        ..NavopRdpLastError::current()
+    };
+    let original_wrong_abi = wrong_abi;
+    assert_eq!(
+        unsafe { navop_rdp_get_last_error(host, &mut wrong_abi) },
+        RESULT_ABI_MISMATCH
+    );
+    assert_eq!(wrong_abi, original_wrong_abi);
+    assert_eq!(unsafe { read_last_error(host) }, extended.base);
+
+    assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
+    assert!(host.is_null());
 }
 
 #[test]

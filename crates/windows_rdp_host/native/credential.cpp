@@ -103,7 +103,7 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
     NativeRdpHost* host,
     const NavopRdpCredentialBundle* credentials) noexcept {
     try {
-        if (host == nullptr || credentials == nullptr) {
+        if (host == nullptr) {
             return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
         }
 
@@ -111,43 +111,47 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
         if (result != NAVOP_RDP_RESULT_OK) {
             return result;
         }
+        clear_last_error(host);
+        if (credentials == nullptr) {
+            return record_last_error(host, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
+        }
 
         result = validate_struct_size(
             credentials->struct_size,
             static_cast<uint32_t>(sizeof(NavopRdpCredentialBundle)));
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
 
         result = validate_abi_version(credentials->abi_version);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
         if (credentials->flags != UINT32_C(0)) {
-            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+            return record_last_error(host, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
         }
         if (host->callback_state != CallbackState::Open) {
-            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+            return record_last_error(host, NAVOP_RDP_RESULT_INVALID_ARGUMENT);
         }
 
         result = validate_borrowed_secret(credentials->server_password);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
         result = validate_borrowed_secret(credentials->gateway_password);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
 
         SensitiveUtf16Buffer server_password;
         SensitiveUtf16Buffer gateway_password;
         result = server_password.copy_from(credentials->server_password);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
         result = gateway_password.copy_from(credentials->gateway_password);
         if (result != NAVOP_RDP_RESULT_OK) {
-            return result;
+            return record_last_error(host, result);
         }
 
         // Transport-only slice: no ActiveX property setter is called yet.
@@ -155,6 +159,6 @@ extern "C" NavopRdpResult navop_rdp_apply_credentials(
         // exception before this synchronous ABI call returns.
         return NAVOP_RDP_RESULT_OK;
     } catch (...) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 }

@@ -5,13 +5,14 @@ use std::rc::Rc;
 
 use crate::capabilities::WindowsRdpHostCapabilities;
 use crate::credential::WindowsRdpCredentialBundle;
-use crate::error::{WindowsRdpHostError, check_native_result};
+use crate::error::{WindowsRdpHostError, WindowsRdpHresult, check_native_result};
 use crate::event::{EventBridge, WindowsRdpRawEvent, native_event_callback};
 use crate::ffi::{
     CONNECTION_STATE_CONNECTED, CONNECTION_STATE_CONNECTING, CONNECTION_STATE_DISCONNECTED,
-    NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NavopRdpBounds, NavopRdpCreateOptions,
-    NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions, NavopRdpProbeOptions,
-    NavopRdpProbeResult, REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS,
+    NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NativeResult, NavopRdpBounds,
+    NavopRdpCreateOptions, NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions,
+    NavopRdpLastError, NavopRdpProbeOptions, NavopRdpProbeResult, REQUEST_CLOSE_CAN_PROCEED,
+    REQUEST_CLOSE_WAIT_FOR_EVENTS, RESULT_OK,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
 use crate::options::{WindowsRdpConnectionOptions, WindowsRdpHostOptions, WindowsRdpParentWindow};
@@ -119,7 +120,7 @@ impl WindowsRdpHost {
         // - the native contract does not retain either borrowed pointer after
         //   returning from the synchronous ABI entrypoint.
         let result = unsafe { (self.bindings.apply_credentials)(self.raw, &native_credentials) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Applies the minimal endpoint/display configuration and starts an RDP
@@ -142,7 +143,7 @@ impl WindowsRdpHost {
         //   for the full synchronous call.
         // - the native contract retains neither the struct nor its host pointer.
         let result = unsafe { (self.bindings.connect)(self.raw, &native_options.native) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Returns the current native RDP connection state.
@@ -156,7 +157,7 @@ impl WindowsRdpHost {
         // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
         // - state is a live writable out-parameter for the synchronous call.
         let result = unsafe { (self.bindings.get_connection_state)(self.raw, &mut state) };
-        check_native_result(result)?;
+        check_host_result(self.bindings, self.raw, result)?;
         match state {
             CONNECTION_STATE_DISCONNECTED => Ok(WindowsRdpConnectionState::Disconnected),
             CONNECTION_STATE_CONNECTED => Ok(WindowsRdpConnectionState::Connected),
@@ -176,7 +177,7 @@ impl WindowsRdpHost {
         // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
         // - status is a live writable out-parameter for the synchronous call.
         let result = unsafe { (self.bindings.request_close)(self.raw, &mut status) };
-        check_native_result(result)?;
+        check_host_result(self.bindings, self.raw, result)?;
         match status {
             REQUEST_CLOSE_CAN_PROCEED => Ok(WindowsRdpRequestCloseStatus::CanProceed),
             REQUEST_CLOSE_WAIT_FOR_EVENTS => Ok(WindowsRdpRequestCloseStatus::WaitForEvents),
@@ -194,7 +195,7 @@ impl WindowsRdpHost {
 
         // SAFETY: WindowsRdpHost is !Send + !Sync and owner-thread serialized.
         let result = unsafe { (self.bindings.disconnect)(self.raw) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Sets the ActiveX child bounds in physical pixels relative to the
@@ -223,7 +224,7 @@ impl WindowsRdpHost {
         // - bounds is a current-layout stack value live for the synchronous call.
         // - the native boundary does not retain the borrowed bounds pointer.
         let result = unsafe { (self.bindings.set_bounds)(self.raw, &bounds) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Shows or hides the ActiveX child without activating it.
@@ -240,7 +241,7 @@ impl WindowsRdpHost {
         // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
         // - the C ABI uses an explicit 0/1 integer rather than C++ bool.
         let result = unsafe { (self.bindings.set_visible)(self.raw, u32::from(visible)) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Gives keyboard focus to the visible ActiveX child.
@@ -255,7 +256,7 @@ impl WindowsRdpHost {
         // SAFETY:
         // - WindowsRdpHost is !Send + !Sync and owner-thread serialized.
         let result = unsafe { (self.bindings.focus)(self.raw) };
-        check_native_result(result)
+        check_host_result(self.bindings, self.raw, result)
     }
 
     /// Stops callbacks and destroys the native handle. Repeated calls are safe.
@@ -278,7 +279,7 @@ impl WindowsRdpHost {
             // which keeps EventBridge alive for the full callback lifetime and
             // makes it safe to release after this call.
             let result = unsafe { (self.bindings.unregister_event_callback)(self.raw) };
-            check_native_result(result)?;
+            check_host_result(self.bindings, self.raw, result)?;
             self.callback_registered = false;
         }
 
@@ -291,7 +292,7 @@ impl WindowsRdpHost {
         // registered. The opaque handle is still owned by this facade and the
         // native destroy contract accepts its address and clears it on success.
         let result = unsafe { (self.bindings.destroy)(&mut self.raw) };
-        check_native_result(result)?;
+        check_host_result(self.bindings, self.raw, result)?;
         if !self.raw.is_null() {
             return Err(WindowsRdpHostError::NativeDidNotClearHandle);
         }
@@ -350,11 +351,14 @@ impl WindowsRdpHost {
         let native_options =
             NavopRdpCreateWithParentOptions::current(options.generation(), parent.as_raw());
         let mut raw = ptr::null_mut();
+        let mut diagnostic = NavopRdpLastError::current();
         // SAFETY: native_options and raw's out-pointer remain valid for the
-        // synchronous call. The caller's safety contract keeps the borrowed
-        // parent window alive for the returned host's full lifetime.
-        let result = unsafe { (bindings.create_with_parent)(&native_options, &mut raw) };
-        check_native_result(result)?;
+        // synchronous call. diagnostic is a current-layout writable out value.
+        // The caller's safety contract keeps the borrowed parent window alive
+        // for the returned host's full lifetime.
+        let result =
+            unsafe { (bindings.create_with_parent_v2)(&native_options, &mut raw, &mut diagnostic) };
+        check_native_diagnostic(result, &diagnostic)?;
         Self::finish_create(options, bindings, raw)
     }
 
@@ -384,7 +388,7 @@ impl WindowsRdpHost {
                 callback_context,
             )
         };
-        if let Err(error) = check_native_result(registration_result) {
+        if let Err(error) = check_host_result(bindings, raw, registration_result) {
             event_bridge.begin_closing();
             // SAFETY: failed registration atomically retains neither callback
             // nor context, so EventBridge can be dropped after this best-effort
@@ -410,6 +414,47 @@ impl WindowsRdpHost {
     }
 }
 
+fn check_native_diagnostic(
+    result: NativeResult,
+    diagnostic: &NavopRdpLastError,
+) -> Result<(), WindowsRdpHostError> {
+    if result == RESULT_OK {
+        return Ok(());
+    }
+    if !diagnostic.has_current_layout() || diagnostic.result != result {
+        return check_native_result(result);
+    }
+    if diagnostic.has_hresult == 1 {
+        return Err(WindowsRdpHostError::NativeHresult {
+            result,
+            hresult: WindowsRdpHresult::from_code(diagnostic.hresult),
+        });
+    }
+    check_native_result(result)
+}
+
+fn check_host_result(
+    bindings: NativeBindings,
+    raw: *mut NativeRdpHost,
+    result: NativeResult,
+) -> Result<(), WindowsRdpHostError> {
+    if result == RESULT_OK {
+        return Ok(());
+    }
+    if raw.is_null() {
+        return check_native_result(result);
+    }
+
+    let mut diagnostic = NavopRdpLastError::current();
+    // SAFETY: raw is the caller-owned live native handle on failure paths that
+    // retain ownership. diagnostic is a current-layout writable out value.
+    let read_result = unsafe { (bindings.get_last_error)(raw, &mut diagnostic) };
+    if read_result != RESULT_OK {
+        return check_native_result(result);
+    }
+    check_native_diagnostic(result, &diagnostic)
+}
+
 impl Drop for WindowsRdpHost {
     fn drop(&mut self) {
         if self.close().is_err() && self.callback_registered {
@@ -428,9 +473,9 @@ mod tests {
 
     use super::*;
     use crate::ffi::{
-        NativeEventCallback, NativeResult, NavopRdpConnectionOptions, NavopRdpCredentialBundle,
-        NavopRdpEvent, ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR,
-        RESULT_INVALID_ARGUMENT, RESULT_INVALID_STATE, RESULT_OK,
+        NativeEventCallback, NavopRdpConnectionOptions, NavopRdpCredentialBundle, NavopRdpEvent,
+        ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT,
+        RESULT_INVALID_STATE,
     };
     use crate::options::WindowsRdpColorDepth;
 
@@ -452,6 +497,8 @@ mod tests {
         unregister_failures_remaining: usize,
         destroy_failures_remaining: usize,
         nonclearing_destroy_calls_remaining: usize,
+        last_diagnostic: Option<NavopRdpLastError>,
+        last_error_read_result: NativeResult,
         unregister_calls: usize,
         destroy_calls: usize,
         credential_calls: usize,
@@ -493,6 +540,8 @@ mod tests {
                 unregister_failures_remaining: 0,
                 destroy_failures_remaining: 0,
                 nonclearing_destroy_calls_remaining: 0,
+                last_diagnostic: None,
+                last_error_read_result: crate::ffi::RESULT_UNAVAILABLE,
                 unregister_calls: 0,
                 destroy_calls: 0,
                 credential_calls: 0,
@@ -532,6 +581,18 @@ mod tests {
     fn reset_fake_state() {
         FAKE_NATIVE_STATE.with(|state| {
             *state.borrow_mut() = FakeNativeState::default();
+        });
+    }
+
+    fn set_fake_diagnostic(diagnostic: NavopRdpLastError) {
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().last_diagnostic = Some(diagnostic);
+        });
+    }
+
+    fn set_fake_last_error_read_result(result: NativeResult) {
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().last_error_read_result = result;
         });
     }
 
@@ -702,9 +763,13 @@ mod tests {
     unsafe fn fake_create_with_parent(
         options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
     ) -> NativeResult {
-        if options.is_null() || out_host.is_null() {
+        if options.is_null() || out_host.is_null() || out_error.is_null() {
             return RESULT_INVALID_ARGUMENT;
+        }
+        unsafe {
+            *out_error = NavopRdpLastError::current();
         }
         let options = unsafe { &*options };
         let generation =
@@ -723,12 +788,14 @@ mod tests {
     unsafe fn fake_null_create_with_parent(
         _options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
     ) -> NativeResult {
-        if out_host.is_null() {
+        if out_host.is_null() || out_error.is_null() {
             return RESULT_INVALID_ARGUMENT;
         }
         unsafe {
             *out_host = ptr::null_mut();
+            *out_error = NavopRdpLastError::current();
         }
         RESULT_OK
     }
@@ -736,13 +803,66 @@ mod tests {
     unsafe fn fake_failed_create_with_parent(
         _options: *const NavopRdpCreateWithParentOptions,
         out_host: *mut *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
     ) -> NativeResult {
         if !out_host.is_null() {
             unsafe {
                 *out_host = ptr::null_mut();
             }
         }
+        if !out_error.is_null() {
+            unsafe {
+                *out_error = NavopRdpLastError {
+                    result: RESULT_ALLOCATION_FAILED,
+                    ..NavopRdpLastError::current()
+                };
+            }
+        }
         RESULT_ALLOCATION_FAILED
+    }
+
+    unsafe fn fake_hresult_failed_create_with_parent(
+        _options: *const NavopRdpCreateWithParentOptions,
+        out_host: *mut *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
+    ) -> NativeResult {
+        if !out_host.is_null() {
+            unsafe {
+                *out_host = ptr::null_mut();
+            }
+        }
+        if !out_error.is_null() {
+            unsafe {
+                *out_error = NavopRdpLastError {
+                    result: RESULT_ALLOCATION_FAILED,
+                    hresult: i32::MIN,
+                    has_hresult: 1,
+                    ..NavopRdpLastError::current()
+                };
+            }
+        }
+        RESULT_ALLOCATION_FAILED
+    }
+
+    unsafe fn fake_get_last_error(
+        host: *mut NativeRdpHost,
+        out_error: *mut NavopRdpLastError,
+    ) -> NativeResult {
+        if host.is_null() || out_error.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        FAKE_NATIVE_STATE.with(|state| {
+            let state = state.borrow();
+            if state.last_error_read_result != RESULT_OK {
+                return state.last_error_read_result;
+            }
+            if let Some(diagnostic) = state.last_diagnostic {
+                unsafe {
+                    *out_error = diagnostic;
+                }
+            }
+            RESULT_OK
+        })
     }
 
     unsafe fn fake_wrong_abi_probe(
@@ -1095,7 +1215,8 @@ mod tests {
         NativeBindings {
             probe,
             create,
-            create_with_parent: fake_create_with_parent,
+            create_with_parent_v2: fake_create_with_parent,
+            get_last_error: fake_get_last_error,
             set_bounds: fake_set_bounds,
             set_visible: fake_set_visible,
             focus: fake_focus,
@@ -1114,9 +1235,11 @@ mod tests {
         bindings_with_probe(fake_probe, create)
     }
 
-    fn bindings_with_parent(create_with_parent: crate::ffi::CreateWithParentFn) -> NativeBindings {
+    fn bindings_with_parent(
+        create_with_parent_v2: crate::ffi::CreateWithParentV2Fn,
+    ) -> NativeBindings {
         NativeBindings {
-            create_with_parent,
+            create_with_parent_v2,
             ..bindings(fake_create)
         }
     }
@@ -1214,6 +1337,129 @@ mod tests {
         );
 
         assert!(matches!(result, Err(WindowsRdpHostError::AllocationFailed)));
+        assert_eq!(parent_create_calls(), 0);
+        assert_eq!(unregister_calls(), 0);
+        assert_eq!(destroy_calls(), 0);
+    }
+
+    #[test]
+    fn host_operation_hresult_is_preserved_without_changing_lifecycle() {
+        reset_fake_state();
+        set_fake_last_error_read_result(RESULT_OK);
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INVALID_STATE,
+            hresult: i32::MIN,
+            has_hresult: 1,
+            ..NavopRdpLastError::current()
+        });
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .connect_results
+                .push_back(RESULT_INVALID_STATE);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::NativeHresult {
+                result: RESULT_INVALID_STATE,
+                hresult: WindowsRdpHresult::from_code(i32::MIN),
+            })
+        );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
+    fn invalid_or_mismatched_diagnostics_fall_back_to_stable_result() {
+        reset_fake_state();
+        set_fake_last_error_read_result(RESULT_OK);
+        FAKE_NATIVE_STATE.with(|state| {
+            state.borrow_mut().connect_results.extend([
+                RESULT_INVALID_STATE,
+                RESULT_INVALID_STATE,
+                RESULT_INVALID_STATE,
+            ]);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        set_fake_diagnostic(NavopRdpLastError {
+            struct_size: 23,
+            result: RESULT_INVALID_STATE,
+            hresult: 7,
+            has_hresult: 1,
+            ..NavopRdpLastError::current()
+        });
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INTERNAL_ERROR,
+            hresult: 8,
+            has_hresult: 1,
+            ..NavopRdpLastError::current()
+        });
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INVALID_STATE,
+            hresult: 9,
+            has_hresult: 0,
+            ..NavopRdpLastError::current()
+        });
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn diagnostic_read_failure_falls_back_without_hiding_the_native_result() {
+        reset_fake_state();
+        set_fake_last_error_read_result(RESULT_INTERNAL_ERROR);
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .connect_results
+                .push_back(RESULT_INVALID_STATE);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn create_with_parent_hresult_is_checked_before_callback_registration() {
+        reset_fake_state();
+        let parent = unsafe { WindowsRdpParentWindow::from_raw(0x1234) };
+
+        let result = WindowsRdpHost::create_with_parent_with(
+            parent,
+            WindowsRdpHostOptions::default(),
+            bindings_with_parent(fake_hresult_failed_create_with_parent),
+        );
+
+        assert!(matches!(
+            result,
+            Err(WindowsRdpHostError::NativeHresult {
+                result: RESULT_ALLOCATION_FAILED,
+                hresult,
+            }) if hresult.code() == i32::MIN
+        ));
         assert_eq!(parent_create_calls(), 0);
         assert_eq!(unregister_calls(), 0);
         assert_eq!(destroy_calls(), 0);

@@ -506,7 +506,11 @@ NavopRdpResult create_event_subscription(
         if (host == nullptr ||
             control == nullptr ||
             out_subscription == nullptr) {
-            return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
+            return host == nullptr
+                ? NAVOP_RDP_RESULT_INVALID_ARGUMENT
+                : record_last_error(
+                      host,
+                      NAVOP_RDP_RESULT_INVALID_ARGUMENT);
         }
         *out_subscription = nullptr;
 
@@ -514,7 +518,13 @@ NavopRdpResult create_event_subscription(
         HRESULT result = control->QueryInterface(
             IID_PPV_ARGS(&connection_point_container));
         if (FAILED(result) || connection_point_container == nullptr) {
-            return NAVOP_RDP_RESULT_UNAVAILABLE;
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    host,
+                    NAVOP_RDP_RESULT_UNAVAILABLE,
+                    static_cast<int32_t>(result));
+            }
+            return record_last_error(host, NAVOP_RDP_RESULT_UNAVAILABLE);
         }
 
         CComPtr<IConnectionPoint> connection_point;
@@ -522,17 +532,27 @@ NavopRdpResult create_event_subscription(
             __uuidof(IMsTscAxEvents),
             &connection_point);
         if (FAILED(result) || connection_point == nullptr) {
-            return NAVOP_RDP_RESULT_UNAVAILABLE;
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    host,
+                    NAVOP_RDP_RESULT_UNAVAILABLE,
+                    static_cast<int32_t>(result));
+            }
+            return record_last_error(host, NAVOP_RDP_RESULT_UNAVAILABLE);
         }
 
         auto subscription = std::unique_ptr<NativeRdpEventSubscription>(
             new (std::nothrow) NativeRdpEventSubscription());
         if (!subscription) {
-            return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_ALLOCATION_FAILED);
         }
         RdpEventSink* sink = new (std::nothrow) RdpEventSink(host);
         if (sink == nullptr) {
-            return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
+            return record_last_error(
+                host,
+                NAVOP_RDP_RESULT_ALLOCATION_FAILED);
         }
 
         DWORD advise_cookie = 0;
@@ -541,7 +561,13 @@ NavopRdpResult create_event_subscription(
             &advise_cookie);
         if (FAILED(result) || advise_cookie == 0) {
             sink->Release();
-            return NAVOP_RDP_RESULT_UNAVAILABLE;
+            if (FAILED(result)) {
+                return record_last_hresult(
+                    host,
+                    NAVOP_RDP_RESULT_UNAVAILABLE,
+                    static_cast<int32_t>(result));
+            }
+            return record_last_error(host, NAVOP_RDP_RESULT_UNAVAILABLE);
         }
 
         subscription->connection_point = connection_point;
@@ -550,7 +576,7 @@ NavopRdpResult create_event_subscription(
         *out_subscription = subscription.release();
         return NAVOP_RDP_RESULT_OK;
     } catch (...) {
-        return NAVOP_RDP_RESULT_INTERNAL_ERROR;
+        return record_last_error(host, NAVOP_RDP_RESULT_INTERNAL_ERROR);
     }
 }
 

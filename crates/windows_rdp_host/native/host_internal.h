@@ -34,10 +34,12 @@ NavopRdpResult focus_active_x(
     NativeRdpActiveXResources* resources) noexcept;
 
 NavopRdpResult connect_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     const NavopRdpConnectionOptions& options) noexcept;
 
 NavopRdpResult get_active_x_connection_state(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     uint32_t* out_state) noexcept;
 
@@ -46,10 +48,12 @@ NavopRdpResult get_active_x_extended_disconnect_reason(
     int32_t* out_extended_code) noexcept;
 
 NavopRdpResult request_close_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources,
     uint32_t* out_status) noexcept;
 
 NavopRdpResult disconnect_active_x(
+    NativeRdpHost* owner,
     NativeRdpActiveXResources* resources) noexcept;
 
 NavopRdpResult create_event_subscription(
@@ -70,7 +74,21 @@ struct NativeRdpHost {
     void* callback_context;
     CallbackState callback_state;
     NativeRdpActiveXResources* active_x_resources;
+    NavopRdpResult last_result;
+    int32_t last_hresult;
+    uint32_t has_last_hresult;
 };
+
+void clear_last_error(NativeRdpHost* host) noexcept;
+
+NavopRdpResult record_last_error(
+    NativeRdpHost* host,
+    NavopRdpResult result) noexcept;
+
+NavopRdpResult record_last_hresult(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    int32_t hresult) noexcept;
 
 NavopRdpResult ensure_owner_thread(
     const NativeRdpHost* host) noexcept;
