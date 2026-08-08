@@ -24,7 +24,11 @@ pub use diagnostic::{
     WindowsRdpUsernameRedaction,
 };
 pub use error::WindowsRdpHostError;
-pub use error::{WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason};
+pub use error::{
+    WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason, WindowsRdpFatalError,
+    WindowsRdpFatalErrorKind, WindowsRdpLogonError, WindowsRdpLogonErrorKind, WindowsRdpWarning,
+    WindowsRdpWarningKind,
+};
 pub use event::{WindowsRdpEvent, WindowsRdpRawEvent};
 pub use handle::{WindowsRdpConnectionState, WindowsRdpHost, WindowsRdpRequestCloseStatus};
 pub use lifecycle::WindowsRdpHostLifecycle;

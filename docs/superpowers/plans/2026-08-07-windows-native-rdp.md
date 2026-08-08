@@ -449,9 +449,9 @@ pub enum WindowsRdpEvent {
     RemoteDesktopSizeChanged { generation: u64, width: u32, height: u32 },
     FullscreenChanged { generation: u64, fullscreen: bool },
     AuthenticationWarning { generation: u64, visible: bool },
-    Warning { generation: u64, code: i32 },
-    FatalError { generation: u64, code: i32 },
-    LogonError { generation: u64, code: i32 },
+    Warning { generation: u64, warning: WindowsRdpWarning },
+    FatalError { generation: u64, error: WindowsRdpFatalError },
+    LogonError { generation: u64, error: WindowsRdpLogonError },
     Disconnected { generation: u64, reason: WindowsRdpDisconnectReason },
     CloseConfirmed { generation: u64 },
     FocusReleased { generation: u64 },
@@ -1565,11 +1565,12 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `windows_rdp_host` Windows native host tests，覆盖 production extended-reason
   getter 的双架构编译/链接与 optional payload test；probe executable 本身未运行，
   这些 tests 也不建立 ActiveX RDP session。
-- **Still pending:** HRESULT/logon code 的稳定分类仍未补齐；Rust event queue 尚未投递到
-  GPUI UI queue。真实 RDP runtime/manual acceptance（错误密码、拒绝连接、网络中断、
-  服务器重启）也未完成。因此 Task 5 整体仍保持未完成；上述 GitHub-hosted runner
-  结果只证明 ATL/MSVC/type-library compile/link 和 Windows native tests，不得表述为
-  真实 RDP runtime、ActiveX connect/disconnect 或交互桌面验证。
+- **Still pending at this slice:** HRESULT/logon code 的稳定分类当时尚未补齐；后续
+  diagnostic code-space mapping 切片已完成 logon 分类，但 HRESULT 仍待完成。Rust event
+  queue 尚未投递到 GPUI UI queue。真实 RDP runtime/manual acceptance（错误密码、拒绝
+  连接、网络中断、服务器重启）也未完成。因此 Task 5 整体仍保持未完成；上述
+  GitHub-hosted runner 结果只证明 ATL/MSVC/type-library compile/link 和 Windows native
+  tests，不得表述为真实 RDP runtime、ActiveX connect/disconnect 或交互桌面验证。
 
 #### Execution Notes (2026-08-08) — owner-thread event reducer contract 切片
 
@@ -1593,9 +1594,34 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `WindowsRdpHost`，也没有在 render/entity lifecycle 中创建、drain、show/hide、focus
   或销毁真实 child `HWND`；这些属于 Task 6，因此当前不能把“Rust callback 投递 UI
   queue，按 generation 过滤”整体勾选为完成。
-- **Still pending:** HRESULT/logon code 的稳定分类、真实 GPUI entity/event lifecycle、
-  有交互桌面的 ActiveX/RDP session，以及错误密码、服务端拒绝、网络中断和服务器重启
-  manual acceptance 均未完成；Task 5 整体继续保持未完成。
+- **Still pending at this slice:** HRESULT/logon code 的稳定分类当时尚未完成；后续
+  diagnostic code-space mapping 切片已完成 logon 分类，但 HRESULT、真实 GPUI
+  entity/event lifecycle、有交互桌面的 ActiveX/RDP session，以及错误密码、服务端拒绝、
+  网络中断和服务器重启 manual acceptance 仍未完成；Task 5 整体继续保持未完成。
+
+#### Execution Notes (2026-08-08) — native event diagnostic code-space mapping 切片
+
+- **Green implementation:** `OnWarning`、`OnFatalError` 和 `OnLogonError` 不再只暴露
+  裸 `i32`，而是分别解码为 `WindowsRdpWarning`、`WindowsRdpFatalError` 和
+  `WindowsRdpLogonError`。每个 value object 都同时保存稳定的 `kind()` 和原始
+  signed `code()`，不携带 native/UI 文案；未知值不会被强行归类。
+- **Documented mappings:** warning code `1` 保留为 `BitmapCacheCorrupt`；fatal codes
+  `0/1..7/100` 分别保留 documented unknown、internal、out-of-memory、
+  window-creation、invalid-state、unrecoverable-connection 和 Winsock
+  initialization 分类；logon code 覆盖 bad credentials、password change required、
+  other、warning、access denied、account restriction 和六个 session-arbitration
+  code。signed NTSTATUS 值按其原始 `i32` 形式匹配。
+- **Non-exhaustive boundary:** Microsoft 的 `OnLogonError` code list 明确不是 exhaustive，
+  因此未列出的 signed code 保持 `Unknown` 并原样保留。fatal code `0` 也和未识别值
+  区分为 documented `UnknownError`。
+- **Reducer/event verification:** `WindowsRdpEvent` 的 warning/fatal/logon 分支携带
+  完整 diagnostic object；owner-thread reducer 同时保存 kind 和 raw code。单元测试
+  覆盖 documented、signed NTSTATUS、arbitration、未知极值、typed decode 和
+  malformed payload 保留 raw event。
+- **Still pending:** native synchronous COM operation 的 HRESULT 尚未通过 ABI 传到
+  Rust；当前切片不能宣称 HRESULT mapping 已完成。GPUI entity/UI queue 接线、真实
+  ActiveX/RDP session 和人工错误密码、拒绝连接、网络中断、服务器重启验证也仍未完成，
+  因此 Task 5 checklist 保持未完成。
 
 ---
 

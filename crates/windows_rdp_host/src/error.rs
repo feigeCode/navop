@@ -18,6 +18,143 @@ pub enum WindowsRdpDiagnosticCategory {
     Unknown,
 }
 
+/// Stable classification for `IMsTscAxEvents::OnWarning`.
+///
+/// Microsoft's documented warning-code list is intentionally treated as
+/// non-exhaustive. Unknown values retain their raw signed code in
+/// [`WindowsRdpWarning`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpWarningKind {
+    BitmapCacheCorrupt,
+    Unknown,
+}
+
+/// A raw-code-preserving warning diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsRdpWarning {
+    kind: WindowsRdpWarningKind,
+    code: i32,
+}
+
+impl WindowsRdpWarning {
+    pub const fn from_native_code(code: i32) -> Self {
+        let kind = match code {
+            1 => WindowsRdpWarningKind::BitmapCacheCorrupt,
+            _ => WindowsRdpWarningKind::Unknown,
+        };
+
+        Self { kind, code }
+    }
+
+    pub const fn kind(self) -> WindowsRdpWarningKind {
+        self.kind
+    }
+
+    pub const fn code(self) -> i32 {
+        self.code
+    }
+}
+
+/// Stable classification for `IMsTscAxEvents::OnFatalError`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpFatalErrorKind {
+    /// The documented native value `0`, distinct from an unrecognized code.
+    UnknownError,
+    Internal,
+    OutOfMemory,
+    WindowCreation,
+    InvalidState,
+    ConnectionUnrecoverable,
+    WinsockInitialization,
+    Unknown,
+}
+
+/// A raw-code-preserving fatal ActiveX diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsRdpFatalError {
+    kind: WindowsRdpFatalErrorKind,
+    code: i32,
+}
+
+impl WindowsRdpFatalError {
+    pub const fn from_native_code(code: i32) -> Self {
+        let kind = match code {
+            0 => WindowsRdpFatalErrorKind::UnknownError,
+            1 | 4 | 6 => WindowsRdpFatalErrorKind::Internal,
+            2 => WindowsRdpFatalErrorKind::OutOfMemory,
+            3 => WindowsRdpFatalErrorKind::WindowCreation,
+            5 => WindowsRdpFatalErrorKind::InvalidState,
+            7 => WindowsRdpFatalErrorKind::ConnectionUnrecoverable,
+            100 => WindowsRdpFatalErrorKind::WinsockInitialization,
+            _ => WindowsRdpFatalErrorKind::Unknown,
+        };
+
+        Self { kind, code }
+    }
+
+    pub const fn kind(self) -> WindowsRdpFatalErrorKind {
+        self.kind
+    }
+
+    pub const fn code(self) -> i32 {
+        self.code
+    }
+}
+
+/// Stable classification for `IMsTscAxEvents::OnLogonError`.
+///
+/// The native code list is not exhaustive and includes multiple independent
+/// spaces, including signed NTSTATUS values and session-arbitration results.
+/// Classification therefore remains conservative and always preserves the
+/// original signed code in [`WindowsRdpLogonError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpLogonErrorKind {
+    BadCredentials,
+    PasswordChangeRequired,
+    Other,
+    Warning,
+    AccessDenied,
+    AccountRestriction,
+    SessionArbitration,
+    Unknown,
+}
+
+/// A raw-code-preserving logon diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsRdpLogonError {
+    kind: WindowsRdpLogonErrorKind,
+    code: i32,
+}
+
+impl WindowsRdpLogonError {
+    pub const fn from_native_code(code: i32) -> Self {
+        let kind = match code {
+            // LOGON_FAILED_BAD_PASSWORD / STATUS_LOGON_FAILURE.
+            0 | -1_073_741_715 => WindowsRdpLogonErrorKind::BadCredentials,
+            // LOGON_FAILED_UPDATE_PASSWORD / STATUS_PASSWORD_MUST_CHANGE.
+            1 | -1_073_741_276 => WindowsRdpLogonErrorKind::PasswordChangeRequired,
+            2 => WindowsRdpLogonErrorKind::Other,
+            3 => WindowsRdpLogonErrorKind::Warning,
+            -1 => WindowsRdpLogonErrorKind::AccessDenied,
+            // STATUS_ACCOUNT_RESTRICTION.
+            -1_073_741_714 => WindowsRdpLogonErrorKind::AccountRestriction,
+            // Documented ARBITRATION_CODE_* values.
+            -2 | -3 | -4 | -5 | -6 | -7 => WindowsRdpLogonErrorKind::SessionArbitration,
+            _ => WindowsRdpLogonErrorKind::Unknown,
+        };
+
+        Self { kind, code }
+    }
+
+    pub const fn kind(self) -> WindowsRdpLogonErrorKind {
+        self.kind
+    }
+
+    pub const fn code(self) -> i32 {
+        self.code
+    }
+}
+
 /// A raw-code-preserving disconnect diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsRdpDisconnectReason {
@@ -325,5 +462,80 @@ mod tests {
         assert_eq!(unknown.category(), WindowsRdpDiagnosticCategory::Unknown);
         assert_eq!(unknown.disconnect_code(), i32::MIN);
         assert_eq!(unknown.extended_code(), Some(i32::MAX));
+    }
+
+    #[test]
+    fn warning_codes_preserve_raw_values_and_only_classify_documented_values() {
+        let documented = WindowsRdpWarning::from_native_code(1);
+        assert_eq!(documented.kind(), WindowsRdpWarningKind::BitmapCacheCorrupt);
+        assert_eq!(documented.code(), 1);
+
+        for code in [0, -1, i32::MIN, i32::MAX] {
+            let warning = WindowsRdpWarning::from_native_code(code);
+            assert_eq!(warning.kind(), WindowsRdpWarningKind::Unknown);
+            assert_eq!(warning.code(), code);
+        }
+    }
+
+    #[test]
+    fn fatal_error_codes_distinguish_documented_unknown_from_unrecognized_values() {
+        let cases = [
+            (0, WindowsRdpFatalErrorKind::UnknownError),
+            (1, WindowsRdpFatalErrorKind::Internal),
+            (2, WindowsRdpFatalErrorKind::OutOfMemory),
+            (3, WindowsRdpFatalErrorKind::WindowCreation),
+            (4, WindowsRdpFatalErrorKind::Internal),
+            (5, WindowsRdpFatalErrorKind::InvalidState),
+            (6, WindowsRdpFatalErrorKind::Internal),
+            (7, WindowsRdpFatalErrorKind::ConnectionUnrecoverable),
+            (100, WindowsRdpFatalErrorKind::WinsockInitialization),
+        ];
+
+        for (code, expected) in cases {
+            let error = WindowsRdpFatalError::from_native_code(code);
+            assert_eq!(error.kind(), expected, "fatal error code {code}");
+            assert_eq!(error.code(), code);
+        }
+
+        for code in [-1, 8, 99, 101, i32::MIN, i32::MAX] {
+            let error = WindowsRdpFatalError::from_native_code(code);
+            assert_eq!(error.kind(), WindowsRdpFatalErrorKind::Unknown);
+            assert_eq!(error.code(), code);
+        }
+    }
+
+    #[test]
+    fn logon_error_codes_classify_documented_signed_spaces_and_preserve_raw_values() {
+        let cases = [
+            (0, WindowsRdpLogonErrorKind::BadCredentials),
+            (-1_073_741_715, WindowsRdpLogonErrorKind::BadCredentials),
+            (1, WindowsRdpLogonErrorKind::PasswordChangeRequired),
+            (
+                -1_073_741_276,
+                WindowsRdpLogonErrorKind::PasswordChangeRequired,
+            ),
+            (2, WindowsRdpLogonErrorKind::Other),
+            (3, WindowsRdpLogonErrorKind::Warning),
+            (-1, WindowsRdpLogonErrorKind::AccessDenied),
+            (-1_073_741_714, WindowsRdpLogonErrorKind::AccountRestriction),
+            (-2, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-3, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-4, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-5, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-6, WindowsRdpLogonErrorKind::SessionArbitration),
+            (-7, WindowsRdpLogonErrorKind::SessionArbitration),
+        ];
+
+        for (code, expected) in cases {
+            let error = WindowsRdpLogonError::from_native_code(code);
+            assert_eq!(error.kind(), expected, "logon error code {code}");
+            assert_eq!(error.code(), code);
+        }
+
+        for code in [-8, 4, i32::MIN, i32::MAX] {
+            let error = WindowsRdpLogonError::from_native_code(code);
+            assert_eq!(error.kind(), WindowsRdpLogonErrorKind::Unknown);
+            assert_eq!(error.code(), code);
+        }
     }
 }

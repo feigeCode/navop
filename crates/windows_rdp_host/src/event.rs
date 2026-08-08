@@ -121,15 +121,15 @@ pub enum WindowsRdpEvent {
     },
     Warning {
         generation: u64,
-        code: i32,
+        warning: crate::error::WindowsRdpWarning,
     },
     FatalError {
         generation: u64,
-        code: i32,
+        error: crate::error::WindowsRdpFatalError,
     },
     LogonError {
         generation: u64,
-        code: i32,
+        error: crate::error::WindowsRdpLogonError,
     },
     Disconnected {
         generation: u64,
@@ -227,15 +227,15 @@ impl From<WindowsRdpRawEvent> for WindowsRdpEvent {
             }
             EVENT_WARNING if event.payload.is_empty() => Some(Self::Warning {
                 generation,
-                code: event.code,
+                warning: crate::error::WindowsRdpWarning::from_native_code(event.code),
             }),
             EVENT_FATAL_ERROR if event.payload.is_empty() => Some(Self::FatalError {
                 generation,
-                code: event.code,
+                error: crate::error::WindowsRdpFatalError::from_native_code(event.code),
             }),
             EVENT_LOGON_ERROR if event.payload.is_empty() => Some(Self::LogonError {
                 generation,
-                code: event.code,
+                error: crate::error::WindowsRdpLogonError::from_native_code(event.code),
             }),
             EVENT_DISCONNECTED => {
                 decode_optional_i32(&event.payload).map(|extended_code| Self::Disconnected {
@@ -541,21 +541,21 @@ mod tests {
                 raw(EVENT_WARNING, -7, []),
                 WindowsRdpEvent::Warning {
                     generation: 42,
-                    code: -7,
+                    warning: crate::error::WindowsRdpWarning::from_native_code(-7),
                 },
             ),
             (
                 raw(EVENT_FATAL_ERROR, i32::MIN, []),
                 WindowsRdpEvent::FatalError {
                     generation: 42,
-                    code: i32::MIN,
+                    error: crate::error::WindowsRdpFatalError::from_native_code(i32::MIN),
                 },
             ),
             (
                 raw(EVENT_LOGON_ERROR, i32::MAX, []),
                 WindowsRdpEvent::LogonError {
                     generation: 42,
-                    code: i32::MAX,
+                    error: crate::error::WindowsRdpLogonError::from_native_code(i32::MAX),
                 },
             ),
             (
@@ -674,6 +674,41 @@ mod tests {
                 reason: crate::error::WindowsRdpDisconnectReason::unknown(i32::MIN, Some(i32::MAX),),
             }
         );
+    }
+
+    #[test]
+    fn event_diagnostics_decode_stable_kinds_without_losing_signed_raw_codes() {
+        assert_eq!(
+            WindowsRdpEvent::from(raw(EVENT_WARNING, 1, [])),
+            WindowsRdpEvent::Warning {
+                generation: 42,
+                warning: crate::error::WindowsRdpWarning::from_native_code(1),
+            }
+        );
+        assert_eq!(
+            WindowsRdpEvent::from(raw(EVENT_FATAL_ERROR, 100, [])),
+            WindowsRdpEvent::FatalError {
+                generation: 42,
+                error: crate::error::WindowsRdpFatalError::from_native_code(100),
+            }
+        );
+        assert_eq!(
+            WindowsRdpEvent::from(raw(EVENT_LOGON_ERROR, -1_073_741_715, [])),
+            WindowsRdpEvent::LogonError {
+                generation: 42,
+                error: crate::error::WindowsRdpLogonError::from_native_code(-1_073_741_715),
+            }
+        );
+
+        let unknown = WindowsRdpEvent::from(raw(EVENT_LOGON_ERROR, i32::MIN, []));
+        let WindowsRdpEvent::LogonError { error, .. } = unknown else {
+            panic!("expected logon error");
+        };
+        assert_eq!(
+            error.kind(),
+            crate::error::WindowsRdpLogonErrorKind::Unknown
+        );
+        assert_eq!(error.code(), i32::MIN);
     }
 
     #[test]

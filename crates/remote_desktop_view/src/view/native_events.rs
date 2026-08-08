@@ -1,5 +1,6 @@
 use windows_rdp_host::{
-    WindowsRdpDisconnectReason, WindowsRdpEvent, WindowsRdpHost, WindowsRdpRawEvent,
+    WindowsRdpDisconnectReason, WindowsRdpEvent, WindowsRdpFatalError, WindowsRdpHost,
+    WindowsRdpLogonError, WindowsRdpRawEvent, WindowsRdpWarning,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,9 +27,9 @@ pub(super) struct NativeRdpEventState {
     reconnect_attempt: Option<(u32, Option<u32>)>,
     authentication_warning_visible: bool,
     last_disconnect: Option<WindowsRdpDisconnectReason>,
-    last_warning_code: Option<i32>,
-    last_fatal_error_code: Option<i32>,
-    last_logon_error_code: Option<i32>,
+    last_warning: Option<WindowsRdpWarning>,
+    last_fatal_error: Option<WindowsRdpFatalError>,
+    last_logon_error: Option<WindowsRdpLogonError>,
     network_quality: Option<u32>,
     fullscreen: bool,
 }
@@ -43,9 +44,9 @@ impl NativeRdpEventState {
             reconnect_attempt: None,
             authentication_warning_visible: false,
             last_disconnect: None,
-            last_warning_code: None,
-            last_fatal_error_code: None,
-            last_logon_error_code: None,
+            last_warning: None,
+            last_fatal_error: None,
+            last_logon_error: None,
             network_quality: None,
             fullscreen: false,
         }
@@ -97,14 +98,14 @@ impl NativeRdpEventState {
             WindowsRdpEvent::AuthenticationWarning { visible, .. } => {
                 self.authentication_warning_visible = visible;
             }
-            WindowsRdpEvent::Warning { code, .. } => {
-                self.last_warning_code = Some(code);
+            WindowsRdpEvent::Warning { warning, .. } => {
+                self.last_warning = Some(warning);
             }
-            WindowsRdpEvent::FatalError { code, .. } => {
-                self.last_fatal_error_code = Some(code);
+            WindowsRdpEvent::FatalError { error, .. } => {
+                self.last_fatal_error = Some(error);
             }
-            WindowsRdpEvent::LogonError { code, .. } => {
-                self.last_logon_error_code = Some(code);
+            WindowsRdpEvent::LogonError { error, .. } => {
+                self.last_logon_error = Some(error);
             }
             WindowsRdpEvent::Disconnected { reason, .. } => {
                 self.phase = NativeRdpConnectionPhase::Disconnected;
@@ -155,7 +156,10 @@ pub(super) fn drain_native_events(
 mod tests {
     use std::cell::RefCell;
 
-    use windows_rdp_host::{WindowsRdpDiagnosticCategory, WindowsRdpRawEvent};
+    use windows_rdp_host::{
+        WindowsRdpDiagnosticCategory, WindowsRdpFatalErrorKind, WindowsRdpLogonErrorKind,
+        WindowsRdpRawEvent, WindowsRdpWarningKind,
+    };
 
     use super::*;
 
@@ -278,27 +282,45 @@ mod tests {
             &mut state,
             WindowsRdpEvent::Warning {
                 generation: 8,
-                code: -7,
+                warning: WindowsRdpWarning::from_native_code(1),
             },
         );
         apply(
             &mut state,
             WindowsRdpEvent::FatalError {
                 generation: 8,
-                code: i32::MIN,
+                error: WindowsRdpFatalError::from_native_code(100),
             },
         );
         apply(
             &mut state,
             WindowsRdpEvent::LogonError {
                 generation: 8,
-                code: i32::MAX,
+                error: WindowsRdpLogonError::from_native_code(-1_073_741_715),
             },
         );
 
-        assert_eq!(Some(-7), state.last_warning_code);
-        assert_eq!(Some(i32::MIN), state.last_fatal_error_code);
-        assert_eq!(Some(i32::MAX), state.last_logon_error_code);
+        assert_eq!(
+            Some(WindowsRdpWarningKind::BitmapCacheCorrupt),
+            state.last_warning.map(WindowsRdpWarning::kind)
+        );
+        assert_eq!(Some(1), state.last_warning.map(WindowsRdpWarning::code));
+        assert_eq!(
+            Some(WindowsRdpFatalErrorKind::WinsockInitialization),
+            state.last_fatal_error.map(WindowsRdpFatalError::kind)
+        );
+        assert_eq!(
+            Some(100),
+            state.last_fatal_error.map(WindowsRdpFatalError::code)
+        );
+        assert_eq!(
+            Some(WindowsRdpLogonErrorKind::BadCredentials),
+            state.last_logon_error.map(WindowsRdpLogonError::kind)
+        );
+        assert_eq!(
+            Some(-1_073_741_715),
+            state.last_logon_error.map(WindowsRdpLogonError::code)
+        );
     }
 
     #[test]
