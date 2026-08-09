@@ -257,7 +257,7 @@ fn legacy_and_modern_home_layouts_are_both_kept() {
 }
 
 #[test]
-fn legacy_ai_workbench_uses_an_object_glyph_icon() {
+fn legacy_ai_workbench_uses_the_original_color_icon() {
     let sidebar = include_str!("../sidebar.rs");
     let ai_entry = sidebar
         .split(".when(show_ai_workbench")
@@ -266,8 +266,8 @@ fn legacy_ai_workbench_uses_an_object_glyph_icon() {
         .expect("legacy AI workbench sidebar entry");
 
     assert!(ai_entry.contains("\"legacy-open-ai-workbench\""));
-    assert!(ai_entry.contains("IconName::AILine"));
-    assert!(!ai_entry.contains("IconName::AI,"));
+    assert!(ai_entry.contains("IconName::AI,"));
+    assert!(!ai_entry.contains("IconName::AILine"));
 }
 
 #[test]

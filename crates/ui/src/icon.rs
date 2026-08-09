@@ -9,12 +9,12 @@ use std::path::PathBuf;
 
 mod metadata;
 mod size;
-mod typed;
+mod wrappers;
 
 pub use metadata::{IconKind, IconMetadata};
 pub use size::IconSize;
 use size::{resolve_icon_size, should_apply_resolved_size};
-pub use typed::{BrandIcon, FunctionalIcon, IconKindMismatch, ObjectIcon};
+pub use wrappers::{BrandIcon, FunctionalIcon, ObjectIcon};
 
 /// Types implementing this trait can automatically be converted to [`Icon`].
 ///

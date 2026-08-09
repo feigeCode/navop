@@ -1,22 +1,8 @@
 use std::path::Path;
 
 use db::ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path};
-use gpui_component::{BrandIcon, Icon, IconName, IconSize, ObjectIcon, Sizable};
+use gpui_component::{Icon, IconName, IconSize, Sizable};
 use one_core::storage::{ConnectionType, DatabaseType, DbConnectionConfig, StoredConnection};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConnectionIdentityIcon {
-    Brand(IconName),
-    ColorObject(IconName),
-    Object(IconName),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ConnectionVisual {
-    navigation_icon: IconName,
-    identity_icon: ConnectionIdentityIcon,
-    accessible_label: &'static str,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExternalDriverIconSource<'a> {
@@ -50,93 +36,38 @@ impl ConnectionVisualSize {
     }
 }
 
-const fn connection_visual(kind: ConnectionType) -> ConnectionVisual {
-    use ConnectionIdentityIcon::{Brand, ColorObject, Object};
-
+const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
     match kind {
-        ConnectionType::All => ConnectionVisual {
-            navigation_icon: IconName::ServerLine,
-            identity_icon: Object(IconName::Server),
-            accessible_label: "All",
-        },
-        ConnectionType::Database => ConnectionVisual {
-            navigation_icon: IconName::DatabaseLine,
-            identity_icon: Object(IconName::Database),
-            accessible_label: "Database",
-        },
-        ConnectionType::SshSftp => ConnectionVisual {
-            navigation_icon: IconName::TerminalLine,
-            identity_icon: ColorObject(IconName::TerminalColor),
-            accessible_label: "SSH/SFTP",
-        },
-        ConnectionType::Redis => ConnectionVisual {
-            navigation_icon: IconName::RedisLine,
-            identity_icon: Brand(IconName::Redis),
-            accessible_label: "Redis",
-        },
-        ConnectionType::MongoDB => ConnectionVisual {
-            navigation_icon: IconName::MongoDBLine,
-            identity_icon: Brand(IconName::MongoDB),
-            accessible_label: "MongoDB",
-        },
-        ConnectionType::Serial => ConnectionVisual {
-            navigation_icon: IconName::SerialLine,
-            identity_icon: ColorObject(IconName::SerialPort),
-            accessible_label: "Serial",
-        },
-        ConnectionType::PortForwarding => ConnectionVisual {
-            navigation_icon: IconName::PortForwardingLine,
-            identity_icon: ColorObject(IconName::PortForwardingColor),
-            accessible_label: "Port Forwarding",
-        },
-        ConnectionType::Rdp => ConnectionVisual {
-            navigation_icon: IconName::RdpLine,
-            identity_icon: ColorObject(IconName::Rdp),
-            accessible_label: "RDP",
-        },
-        ConnectionType::Vnc => ConnectionVisual {
-            navigation_icon: IconName::VncLine,
-            identity_icon: ColorObject(IconName::Vnc),
-            accessible_label: "VNC",
-        },
+        ConnectionType::All => IconName::Server,
+        ConnectionType::Database => IconName::Database,
+        ConnectionType::SshSftp => IconName::TerminalColor,
+        ConnectionType::Redis => IconName::Redis,
+        ConnectionType::MongoDB => IconName::MongoDB,
+        ConnectionType::Serial => IconName::SerialPort,
+        ConnectionType::PortForwarding => IconName::PortForwardingColor,
+        ConnectionType::Rdp => IconName::Rdp,
+        ConnectionType::Vnc => IconName::Vnc,
     }
 }
 
-/// Monochrome line icons used by navigation and filtering surfaces.
-///
-/// Protocol identity colors belong to content surfaces, not navigation state.
-pub(crate) const fn connection_type_line_icon(kind: ConnectionType) -> IconName {
-    connection_visual(kind).navigation_icon
-}
-
-/// Monochrome icon for navigation, filtering, and other structural surfaces.
+/// Original-color icon used by navigation and filtering surfaces.
 pub(crate) fn connection_type_navigation_icon(
     kind: ConnectionType,
     size: ConnectionVisualSize,
 ) -> Icon {
-    ObjectIcon::new(connection_type_line_icon(kind))
-        .with_size(size.icon_size())
-        .into_icon()
+    connection_type_icon(kind, size)
 }
 
-/// Navigation-rail icon with the shared rail glyph size and monochrome policy.
+/// Navigation-rail icon with the shared rail glyph size.
 pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
     connection_type_navigation_icon(kind, ConnectionVisualSize::Rail)
 }
 
-/// Rich protocol identity icon used by cards, lists, and connection pickers.
+/// Original-color protocol identity icon used by cards, lists, and connection pickers.
 pub(crate) fn connection_type_icon(kind: ConnectionType, size: ConnectionVisualSize) -> Icon {
-    match connection_visual(kind).identity_icon {
-        ConnectionIdentityIcon::Brand(name) => {
-            BrandIcon::new(name).with_size(size.icon_size()).into_icon()
-        }
-        ConnectionIdentityIcon::ColorObject(name) => {
-            Icon::new(name).color().with_size(size.icon_size())
-        }
-        ConnectionIdentityIcon::Object(name) => ObjectIcon::new(name)
-            .with_size(size.icon_size())
-            .into_icon(),
-    }
+    connection_type_icon_name(kind)
+        .color()
+        .with_size(size.icon_size())
 }
 
 pub(crate) fn database_type_icon(kind: &DatabaseType, size: ConnectionVisualSize) -> Icon {
@@ -150,7 +81,7 @@ pub(crate) fn database_type_icon(kind: &DatabaseType, size: ConnectionVisualSize
         DatabaseType::ClickHouse => IconName::ClickHouseColor,
         DatabaseType::External { .. } => return generic_database_icon(size),
     };
-    BrandIcon::new(name).with_size(size.icon_size()).into_icon()
+    name.color().with_size(size.icon_size())
 }
 
 pub(crate) fn database_config_icon(
@@ -174,8 +105,8 @@ pub(crate) fn stored_connection_icon(
             .unwrap_or_else(|_| generic_database_icon(size)),
         ConnectionType::SshSftp => connection
             .to_ssh_params()
-            .map(|params| brand_icon(params.os_icon(), size))
-            .unwrap_or_else(|_| brand_icon(IconName::LinuxPenguinColor, size)),
+            .map(|params| color_icon(params.os_icon(), size))
+            .unwrap_or_else(|_| color_icon(IconName::LinuxPenguinColor, size)),
         kind => connection_type_icon(kind, size),
     }
 }
@@ -213,13 +144,11 @@ pub(crate) fn external_driver_icon_from_sources(
 }
 
 fn generic_database_icon(size: ConnectionVisualSize) -> Icon {
-    Icon::new(IconName::Database)
-        .with_size(size.icon_size())
-        .color()
+    IconName::Database.color().with_size(size.icon_size())
 }
 
-fn brand_icon(name: IconName, size: ConnectionVisualSize) -> Icon {
-    BrandIcon::new(name).with_size(size.icon_size()).into_icon()
+fn color_icon(name: IconName, size: ConnectionVisualSize) -> Icon {
+    name.color().with_size(size.icon_size())
 }
 
 fn external_driver_icon_source<'a>(
@@ -234,7 +163,6 @@ fn external_driver_icon_source<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_component::IconKind;
 
     #[test]
     fn semantic_connection_sizes_map_to_the_shared_icon_scale() {
@@ -247,79 +175,25 @@ mod tests {
     }
 
     #[test]
-    fn every_connection_type_has_a_complete_visual_definition() {
-        for connection_type in ConnectionType::all() {
-            let visual = connection_visual(connection_type);
-            assert_eq!(visual.accessible_label, connection_type.label());
-            assert_eq!(visual.navigation_icon.kind(), IconKind::ObjectGlyph);
+    fn connection_types_map_directly_to_original_color_assets() {
+        let expected = [
+            (ConnectionType::All, IconName::Server),
+            (ConnectionType::Database, IconName::Database),
+            (ConnectionType::SshSftp, IconName::TerminalColor),
+            (ConnectionType::Redis, IconName::Redis),
+            (ConnectionType::MongoDB, IconName::MongoDB),
+            (ConnectionType::Serial, IconName::SerialPort),
+            (
+                ConnectionType::PortForwarding,
+                IconName::PortForwardingColor,
+            ),
+            (ConnectionType::Rdp, IconName::Rdp),
+            (ConnectionType::Vnc, IconName::Vnc),
+        ];
+
+        for (connection_type, icon_name) in expected {
+            assert_eq!(connection_type_icon_name(connection_type), icon_name);
         }
-    }
-
-    #[test]
-    fn navigation_icons_never_use_brand_color() {
-        for connection_type in ConnectionType::all() {
-            assert_ne!(
-                connection_type_line_icon(connection_type).kind(),
-                IconKind::BrandColor
-            );
-        }
-    }
-
-    #[test]
-    fn remote_desktop_navigation_and_identity_icons_have_distinct_roles() {
-        let rdp = connection_visual(ConnectionType::Rdp);
-        assert_eq!(rdp.navigation_icon, IconName::RdpLine);
-        assert!(matches!(
-            rdp.identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::Rdp)
-        ));
-
-        let vnc = connection_visual(ConnectionType::Vnc);
-        assert_eq!(vnc.navigation_icon, IconName::VncLine);
-        assert!(matches!(
-            vnc.identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::Vnc)
-        ));
-    }
-
-    #[test]
-    fn identity_icons_preserve_color_for_brands_and_protocol_color_assets() {
-        assert!(matches!(
-            connection_visual(ConnectionType::Redis).identity_icon,
-            ConnectionIdentityIcon::Brand(IconName::Redis)
-        ));
-        assert!(matches!(
-            connection_visual(ConnectionType::MongoDB).identity_icon,
-            ConnectionIdentityIcon::Brand(IconName::MongoDB)
-        ));
-
-        for connection_type in [ConnectionType::All, ConnectionType::Database] {
-            assert!(matches!(
-                connection_visual(connection_type).identity_icon,
-                ConnectionIdentityIcon::Object(_)
-            ));
-        }
-
-        assert!(matches!(
-            connection_visual(ConnectionType::SshSftp).identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::TerminalColor)
-        ));
-        assert!(matches!(
-            connection_visual(ConnectionType::Serial).identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::SerialPort)
-        ));
-        assert!(matches!(
-            connection_visual(ConnectionType::PortForwarding).identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::PortForwardingColor)
-        ));
-        assert!(matches!(
-            connection_visual(ConnectionType::Rdp).identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::Rdp)
-        ));
-        assert!(matches!(
-            connection_visual(ConnectionType::Vnc).identity_icon,
-            ConnectionIdentityIcon::ColorObject(IconName::Vnc)
-        ));
     }
 
     #[test]

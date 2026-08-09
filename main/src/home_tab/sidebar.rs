@@ -95,7 +95,7 @@ impl HomePage {
                     .when(show_ai_workbench, |footer| {
                         footer.child(self.render_legacy_sidebar_button(
                             "legacy-open-ai-workbench",
-                            IconName::AILine,
+                            IconName::AI,
                             t!("Settings.General.Startup.default_page_ai_workbench").to_string(),
                             collapsed,
                             |home, window, cx| home.add_ai_workbench_tab(window, cx),

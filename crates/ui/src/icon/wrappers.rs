@@ -1,55 +1,8 @@
-use std::{error::Error, fmt};
-
 use gpui::{App, Hsla, IntoElement, RenderOnce, StyleRefinement, Styled, Transformation, Window};
 
 use crate::{Sizable, Size};
 
-use super::{Icon, IconKind, IconName};
-
-/// Error returned when an icon is used with the wrong semantic wrapper.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IconKindMismatch {
-    expected: &'static str,
-    actual: IconKind,
-    icon: IconName,
-}
-
-impl IconKindMismatch {
-    fn new(expected: &'static str, actual: IconKind, icon: IconName) -> Self {
-        Self {
-            expected,
-            actual,
-            icon,
-        }
-    }
-
-    /// The semantic family expected by the wrapper.
-    pub const fn expected(&self) -> &'static str {
-        self.expected
-    }
-
-    /// The icon's actual semantic family.
-    pub const fn actual(&self) -> IconKind {
-        self.actual
-    }
-
-    /// The icon that failed validation.
-    pub const fn icon(&self) -> IconName {
-        self.icon
-    }
-}
-
-impl fmt::Display for IconKindMismatch {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "icon {:?} has kind {:?}, expected {}",
-            self.icon, self.actual, self.expected
-        )
-    }
-}
-
-impl Error for IconKindMismatch {}
+use super::{Icon, IconName};
 
 /// A monochrome action or control icon.
 #[derive(IntoElement, Clone)]
@@ -58,21 +11,11 @@ pub struct FunctionalIcon {
 }
 
 impl FunctionalIcon {
-    /// Creates a functional icon and panics when the supplied icon is not functional.
+    /// Creates a functional icon without validating its metadata family.
     pub fn new(name: IconName) -> Self {
-        Self::try_new(name).unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    /// Creates a functional icon after validating its metadata.
-    pub fn try_new(name: IconName) -> Result<Self, IconKindMismatch> {
-        let actual = name.kind();
-        if !actual.is_functional() {
-            return Err(IconKindMismatch::new("a functional icon", actual, name));
-        }
-
-        Ok(Self {
+        Self {
             icon: Icon::new(name).mono(),
-        })
+        }
     }
 
     /// Applies an explicit monochrome tint.
@@ -93,7 +36,7 @@ impl FunctionalIcon {
         self
     }
 
-    /// Converts the semantic wrapper back into the base icon type.
+    /// Converts the wrapper back into the base icon type.
     pub fn into_icon(self) -> Icon {
         self.icon
     }
@@ -128,31 +71,21 @@ impl RenderOnce for FunctionalIcon {
     }
 }
 
-/// An original-color icon that identifies a product, platform, or database brand.
+/// An original-color icon used for product, platform, or database identity.
 #[derive(IntoElement, Clone)]
 pub struct BrandIcon {
     icon: Icon,
 }
 
 impl BrandIcon {
-    /// Creates a brand icon and panics when the supplied icon is not a brand.
+    /// Creates a color icon without validating its metadata family.
     pub fn new(name: IconName) -> Self {
-        Self::try_new(name).unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    /// Creates a brand icon after validating its metadata.
-    pub fn try_new(name: IconName) -> Result<Self, IconKindMismatch> {
-        let actual = name.kind();
-        if actual != IconKind::BrandColor {
-            return Err(IconKindMismatch::new("a brand icon", actual, name));
-        }
-
-        Ok(Self {
+        Self {
             icon: Icon::new(name).color(),
-        })
+        }
     }
 
-    /// Converts the semantic wrapper back into the base icon type.
+    /// Converts the wrapper back into the base icon type.
     pub fn into_icon(self) -> Icon {
         self.icon
     }
@@ -184,21 +117,11 @@ pub struct ObjectIcon {
 }
 
 impl ObjectIcon {
-    /// Creates an object icon and panics when the supplied icon is not an object glyph.
+    /// Creates an object icon without validating its metadata family.
     pub fn new(name: IconName) -> Self {
-        Self::try_new(name).unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    /// Creates an object icon after validating its metadata.
-    pub fn try_new(name: IconName) -> Result<Self, IconKindMismatch> {
-        let actual = name.kind();
-        if actual != IconKind::ObjectGlyph {
-            return Err(IconKindMismatch::new("an object icon", actual, name));
-        }
-
-        Ok(Self {
+        Self {
             icon: Icon::new(name).mono(),
-        })
+        }
     }
 
     /// Applies an explicit monochrome tint.
@@ -207,7 +130,7 @@ impl ObjectIcon {
         self
     }
 
-    /// Converts the semantic wrapper back into the base icon type.
+    /// Converts the wrapper back into the base icon type.
     pub fn into_icon(self) -> Icon {
         self.icon
     }
@@ -246,32 +169,20 @@ impl RenderOnce for ObjectIcon {
 mod tests {
     use gpui::px;
 
-    use super::{BrandIcon, FunctionalIcon, IconKindMismatch, ObjectIcon};
+    use super::{BrandIcon, FunctionalIcon, ObjectIcon};
     use crate::{
         Icon, IconColorMode, IconName, IconSize, Sizable, Size, button::ButtonIconVariant,
     };
 
     #[test]
-    fn wrappers_apply_the_required_color_mode() {
+    fn wrappers_apply_the_required_color_mode_without_kind_validation() {
         let functional = FunctionalIcon::new(IconName::Plus).into_icon();
-        let brand = BrandIcon::new(IconName::PostgreSQLColor).into_icon();
-        let object = ObjectIcon::new(IconName::Table).into_icon();
+        let brand = BrandIcon::new(IconName::ServerLine).into_icon();
+        let object = ObjectIcon::new(IconName::User).into_icon();
 
         assert_eq!(functional.color_mode, IconColorMode::Mono);
         assert_eq!(brand.color_mode, IconColorMode::Color);
         assert_eq!(object.color_mode, IconColorMode::Mono);
-    }
-
-    #[test]
-    fn wrappers_reject_the_wrong_semantic_kind() {
-        let error = match BrandIcon::try_new(IconName::Plus) {
-            Ok(_) => panic!("functional icon unexpectedly passed brand validation"),
-            Err(error) => error,
-        };
-
-        assert_eq!(error.icon(), IconName::Plus);
-        assert_eq!(error.expected(), "a brand icon");
-        assert!(matches!(error, IconKindMismatch { .. }));
     }
 
     #[test]
