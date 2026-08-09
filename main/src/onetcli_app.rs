@@ -1293,42 +1293,39 @@ impl OnetCliApp {
             }
         });
 
-        cx.subscribe(
-            &tab_container,
-            |this, _, event: &TabContainerEvent, cx| {
-                let app = cx.entity();
-                match event {
-                    TabContainerEvent::NavigationSidebarToggled { expanded } => {
-                        if !this.home_page_style.uses_persistent_sidebar() {
-                            return;
-                        }
-                        let expanded = *expanded;
-                        cx.defer(move |cx| {
-                            app.update(cx, |app, cx| {
-                                app.set_connection_sidebar_expanded(expanded, cx);
-                            });
-                        });
+        cx.subscribe(&tab_container, |this, _, event: &TabContainerEvent, cx| {
+            let app = cx.entity();
+            match event {
+                TabContainerEvent::NavigationSidebarToggled { expanded } => {
+                    if !this.home_page_style.uses_persistent_sidebar() {
+                        return;
                     }
-                    TabContainerEvent::TabActivated { .. } => {
-                        cx.defer(move |cx| {
-                            app.update(cx, |app, cx| {
-                                app.set_main_content(MainContent::Tabs, cx);
-                                app.sync_connection_sidebar_theme(cx);
-                            });
+                    let expanded = *expanded;
+                    cx.defer(move |cx| {
+                        app.update(cx, |app, cx| {
+                            app.set_connection_sidebar_expanded(expanded, cx);
                         });
-                    }
-                    TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
-                        cx.defer(move |cx| {
-                            app.update(cx, |app, cx| {
-                                app.show_home_if_tab_container_is_empty(cx);
-                                app.sync_connection_sidebar_theme(cx);
-                                cx.notify();
-                            });
-                        });
-                    }
+                    });
                 }
-            },
-        )
+                TabContainerEvent::TabActivated { .. } => {
+                    cx.defer(move |cx| {
+                        app.update(cx, |app, cx| {
+                            app.set_main_content(MainContent::Tabs, cx);
+                            app.sync_connection_sidebar_theme(cx);
+                        });
+                    });
+                }
+                TabContainerEvent::LayoutChanged | TabContainerEvent::TabClosed { .. } => {
+                    cx.defer(move |cx| {
+                        app.update(cx, |app, cx| {
+                            app.show_home_if_tab_container_is_empty(cx);
+                            app.sync_connection_sidebar_theme(cx);
+                            cx.notify();
+                        });
+                    });
+                }
+            }
+        })
         .detach();
         if let Some(active_pinned_index) = layout.active_pinned_index {
             let tabs = tab_container.clone();
@@ -1495,8 +1492,7 @@ impl OnetCliApp {
                 let home_tab_id = "home";
                 self.tab_container.update(cx, |tabs, cx| {
                     if !tabs.has_pinned_tab_by_id(home_tab_id) {
-                        let home_tab =
-                            TabItem::new(home_tab_id, "app", self.home_page.clone());
+                        let home_tab = TabItem::new(home_tab_id, "app", self.home_page.clone());
                         tabs.insert_pinned_tab_at(0, home_tab, cx);
                     }
                     tabs.activate_pinned_tab_by_id(home_tab_id, window, cx);

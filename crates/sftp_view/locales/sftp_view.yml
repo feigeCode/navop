@@ -726,9 +726,9 @@ Transfer:
     zh-CN: 选择服务器间复制方式
     zh-HK: 選擇伺服器間複製方式
   direct_copy_intro:
-    en: "A direct server transfer is available. Before copying, choose who should authenticate to the target server and carry the data."
-    zh-CN: "检测到可用的服务器直传方式。复制前，请选择由谁向目标服务器进行认证并传输数据。"
-    zh-HK: "偵測到可用的伺服器直傳方式。複製前，請選擇由誰向目標伺服器進行認證並傳輸資料。"
+    en: "A direct server transfer is available. Confirm whether Navop may provide the configured target authentication to the source server so it can connect to the target directly."
+    zh-CN: "检测到可用的服务器直传方式。请确认是否允许 Navop 将已配置的目标服务器认证材料安全提供给源服务器，由源服务器直接连接目标服务器。"
+    zh-HK: "偵測到可用的伺服器直傳方式。請確認是否允許 Navop 將已設定的目標伺服器認證資料安全提供給來源伺服器，由來源伺服器直接連線目標伺服器。"
   direct_copy_route:
     en: "Transfer route:"
     zh-CN: "传输路径："
@@ -746,17 +746,45 @@ Transfer:
     zh-CN: "Navop → 目标服务器/本机中转连接认证：%{auth}"
     zh-HK: "Navop → 目標伺服器/本機中轉連線認證：%{auth}"
   direct_copy_server_auth_heading:
-    en: "Server authentication direct transfer (%{strategy})"
-    zh-CN: "服务器认证直传（%{strategy}）"
-    zh-HK: "伺服器認證直傳（%{strategy}）"
+    en: "Source server direct transfer (%{strategy})"
+    zh-CN: "源服务器直接传输（%{strategy}）"
+    zh-HK: "來源伺服器直接傳輸（%{strategy}）"
   direct_copy_auth_boundary:
-    en: "Navop will run %{strategy} on the source server, and the source server will authenticate to the target using only its own OpenSSH configuration, default private keys, or SSH agent. Navop-saved passwords, private keys, key paths, and passphrases are never sent to the source server."
-    zh-CN: "Navop 将在源服务器上执行 %{strategy}，由源服务器仅使用其自身的 OpenSSH 配置、默认私钥或 SSH Agent 向目标服务器认证。Navop 保存的密码、私钥、私钥路径和口令绝不会发送到源服务器。"
-    zh-HK: "Navop 將在來源伺服器上執行 %{strategy}，由來源伺服器僅使用其自身的 OpenSSH 設定、預設私鑰或 SSH Agent 向目標伺服器認證。Navop 儲存的密碼、私鑰、私鑰路徑和口令絕不會傳送到來源伺服器。"
+    en: "Navop will run %{strategy} on the source server. The source server will authenticate directly to the target using: %{auth}. File data travels directly from source to target and does not pass through this computer."
+    zh-CN: "Navop 将在源服务器上执行 %{strategy}。源服务器将使用以下方式直接认证目标服务器：%{auth}。文件数据从源服务器直达目标服务器，不经过本机。"
+    zh-HK: "Navop 將在來源伺服器上執行 %{strategy}。來源伺服器將使用以下方式直接驗證目標伺服器：%{auth}。檔案資料從來源伺服器直達目標伺服器，不經過本機。"
+  direct_copy_target_password_detail:
+    en: "Navop will send the configured target password through the existing encrypted SSH connection to a permission-restricted temporary askpass credential on the source server."
+    zh-CN: "Navop 会通过当前已加密的 SSH 连接，将已配置的目标服务器密码发送到源服务器上权限受限的临时 askpass 凭据文件。"
+    zh-HK: "Navop 會透過目前已加密的 SSH 連線，將已設定的目標伺服器密碼傳送到來源伺服器上權限受限的臨時 askpass 憑證檔案。"
+  direct_copy_target_private_key_file_detail:
+    en: "Navop will read the configured private-key file locally, send its bytes through the encrypted SSH connection, and create a temporary mode-0600 identity file on the source server."
+    zh-CN: "Navop 会在本机读取已配置的私钥文件，通过加密 SSH 连接发送私钥字节，并在源服务器创建权限为 0600 的临时身份文件。"
+    zh-HK: "Navop 會在本機讀取已設定的私鑰檔案，透過加密 SSH 連線傳送私鑰位元組，並在來源伺服器建立權限為 0600 的臨時身分檔案。"
+  direct_copy_target_private_key_content_detail:
+    en: "Navop will send the stored private-key content through the encrypted SSH connection and create a temporary mode-0600 identity file on the source server."
+    zh-CN: "Navop 会通过加密 SSH 连接发送已保存的私钥内容，并在源服务器创建权限为 0600 的临时身份文件。"
+    zh-HK: "Navop 會透過加密 SSH 連線傳送已儲存的私鑰內容，並在來源伺服器建立權限為 0600 的臨時身分檔案。"
+  direct_copy_target_passphrase_detail:
+    en: "The configured private-key passphrase will be supplied through the same protected temporary askpass mechanism."
+    zh-CN: "已配置的私钥口令将通过同一套受保护的临时 askpass 机制提供。"
+    zh-HK: "已設定的私鑰口令將透過同一套受保護的臨時 askpass 機制提供。"
+  direct_copy_target_certificate_detail:
+    en: "The configured SSH certificate will also be sent and stored temporarily with mode 0600."
+    zh-CN: "已配置的 SSH 证书也会被发送，并以 0600 权限临时保存。"
+    zh-HK: "已設定的 SSH 憑證也會被傳送，並以 0600 權限臨時儲存。"
+  direct_copy_target_agent_detail:
+    en: "Navop will not forward its local SSH agent. The source server will use only an identity or SSH agent already available on that server."
+    zh-CN: "Navop 不会转发本机 SSH Agent；源服务器只会使用其自身已有的身份文件或 SSH Agent。"
+    zh-HK: "Navop 不會轉發本機 SSH Agent；來源伺服器只會使用其自身已有的身分檔案或 SSH Agent。"
+  direct_copy_target_auto_key_detail:
+    en: "The source server will use only its own OpenSSH default identities or SSH agent; no Navop credential is sent for this authentication mode."
+    zh-CN: "源服务器只会使用其自身 OpenSSH 默认身份或 SSH Agent；此认证方式不会发送 Navop 凭据。"
+    zh-HK: "來源伺服器只會使用其自身 OpenSSH 預設身分或 SSH Agent；此驗證方式不會傳送 Navop 憑證。"
   direct_copy_security:
-    en: "Navop has already verified non-interactive BatchMode login. Direct transfer will not ask you to enter a password or private-key passphrase. Strict host-key checking is enabled; jump hosts/proxies, agent forwarding, and PTYs are disabled; credentials are never embedded in commands."
-    zh-CN: "Navop 已完成 BatchMode 非交互登录预检。直传过程中不会要求你输入密码或私钥口令；同时会严格校验主机密钥，禁用跳板机/代理、Agent 转发和 PTY，且绝不会把凭据拼入命令。"
-    zh-HK: "Navop 已完成 BatchMode 非互動登入預檢。直傳過程中不會要求你輸入密碼或私鑰口令；同時會嚴格驗證主機金鑰，停用跳板機/代理、Agent 轉發和 PTY，且絕不會把憑證拼入命令。"
+    en: "Target authentication material is sent to the source server only after confirmation, never placed in command arguments or environment variables, and is removed with the source-side temporary directory when authentication or transfer ends. The source server's known_hosts is checked strictly. Jump hosts/proxies, agent forwarding, and PTYs are disabled. If direct authentication or transfer fails, Navop will report the error and will not silently retry through this computer."
+    zh-CN: "目标服务器认证材料只会在确认后发送给源服务器，不会写入命令参数或环境变量，并会在认证或传输结束时随源服务器临时目录一并删除。目标主机密钥将严格使用源服务器的 known_hosts 校验；同时禁用跳板机/代理、Agent 转发和 PTY。直传认证或传输失败时，Navop 会直接报错，不会静默改走本机中转。"
+    zh-HK: "目標伺服器驗證資料只會在確認後傳送給來源伺服器，不會寫入命令參數或環境變數，並會在驗證或傳輸結束時隨來源伺服器臨時目錄一併刪除。目標主機金鑰將嚴格使用來源伺服器的 known_hosts 驗證；同時停用跳板機/代理、Agent 轉發和 PTY。直傳驗證或傳輸失敗時，Navop 會直接回報錯誤，不會靜默改走本機中轉。"
   direct_copy_navop_relay_heading:
     en: Transfer through Navop
     zh-CN: 通过 Navop 本机中转
@@ -766,9 +794,9 @@ Transfer:
     zh-CN: "Navop 将自行连接两台服务器，在本机使用已配置的密码、私钥、口令或 SSH Agent，并通过本机中转文件数据；这些凭据不会暴露给另一台远程服务器。"
     zh-HK: "Navop 將自行連線兩台伺服器，在本機使用已設定的密碼、私鑰、口令或 SSH Agent，並透過本機中轉檔案資料；這些憑證不會暴露給另一台遠端伺服器。"
   direct_copy_prompt:
-    en: "Choose server authentication direct transfer, transfer through Navop, or cancel this copy."
-    zh-CN: "请选择服务器认证直传、通过 Navop 本机中转，或取消本次复制。"
-    zh-HK: "請選擇伺服器認證直傳、透過 Navop 本機中轉，或取消本次複製。"
+    en: "Choose source-server direct transfer only if you permit the authentication behavior described above. Otherwise choose transfer through Navop or cancel."
+    zh-CN: "只有在你允许上述认证行为时才选择源服务器直传；否则请选择通过 Navop 本机中转，或取消本次复制。"
+    zh-HK: "只有在你允許上述驗證行為時才選擇來源伺服器直傳；否則請選擇透過 Navop 本機中轉，或取消本次複製。"
   direct_copy_use_direct:
     en: "Run %{strategy} on source server"
     zh-CN: "在源服务器执行 %{strategy} 直传"

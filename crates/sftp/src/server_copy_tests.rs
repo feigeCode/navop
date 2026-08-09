@@ -87,6 +87,8 @@ fn preview() -> DirectCopyPreview {
         target_port: 2222,
         target_username: "target".to_string(),
         navop_target_auth: ServerCopyAuthKind::PrivateKeyFile,
+        target_auth_has_passphrase: true,
+        target_auth_has_certificate: true,
         item_count: 2,
     }
 }

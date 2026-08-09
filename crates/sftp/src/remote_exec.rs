@@ -16,11 +16,27 @@ pub(crate) async fn exec_remote_command(
     command: &str,
     cancelled: Arc<AtomicBool>,
 ) -> Result<RemoteCommandOutput> {
+    exec_remote_command_with_input(manager, command, &[], cancelled).await
+}
+
+pub(crate) async fn exec_remote_command_with_input(
+    manager: &SshSessionManager,
+    command: &str,
+    input: &[u8],
+    cancelled: Arc<AtomicBool>,
+) -> Result<RemoteCommandOutput> {
     ensure_not_cancelled(&cancelled)?;
     let mut channel = manager.open_channel().await?;
     ensure_not_cancelled_with_channel(&cancelled, &mut channel).await?;
     channel.exec(command).await?;
     ensure_not_cancelled_with_channel(&cancelled, &mut channel).await?;
+    if !input.is_empty() {
+        if channel.send_data(input).await.is_err() {
+            let _ = channel.close().await;
+            bail!("failed to send protected input to remote command");
+        }
+        ensure_not_cancelled_with_channel(&cancelled, &mut channel).await?;
+    }
     channel.eof().await?;
     ensure_not_cancelled_with_channel(&cancelled, &mut channel).await?;
 

@@ -1,3 +1,4 @@
+use crate::server_copy_command::DirectCopyAuthMode;
 use crate::server_copy_direct::{execute_direct_copy, prepare_direct_copy};
 use crate::{
     DirectoryConflictPolicy, FileEntry, ProgressCallback, RusshSftpClient, SftpClient,
@@ -72,6 +73,8 @@ pub struct DirectCopyPreview {
     pub target_port: u16,
     pub target_username: String,
     pub navop_target_auth: ServerCopyAuthKind,
+    pub target_auth_has_passphrase: bool,
+    pub target_auth_has_certificate: bool,
     pub item_count: usize,
 }
 
@@ -82,6 +85,8 @@ impl DirectCopyPreview {
         target: &SshConnectConfig,
         item_count: usize,
     ) -> Self {
+        let (target_auth_has_passphrase, target_auth_has_certificate) =
+            DirectCopyAuthMode::from_auth(&target.auth).private_key_material_flags();
         Self {
             strategy,
             source_host: source.host.clone(),
@@ -92,6 +97,8 @@ impl DirectCopyPreview {
             target_port: target.port,
             target_username: target.username.clone(),
             navop_target_auth: ServerCopyAuthKind::from(&target.auth),
+            target_auth_has_passphrase,
+            target_auth_has_certificate,
             item_count,
         }
     }
@@ -133,11 +140,7 @@ pub fn join_copy_path(base: &str, name: &str) -> String {
 pub fn build_copy_plan(items: &[ServerCopyItem], entries: &[Vec<FileEntry>]) -> Vec<CopyPlanEntry> {
     let mut plan = Vec::new();
     for (item, descendants) in items.iter().zip(entries) {
-        plan.extend(build_item_copy_plan(
-            item,
-            descendants,
-            &item.target_path,
-        ));
+        plan.extend(build_item_copy_plan(item, descendants, &item.target_path));
     }
     plan
 }
@@ -207,13 +210,12 @@ pub async fn relay_copy(
 
     for (item, item_descendants) in items.iter().zip(&descendants) {
         ensure_not_cancelled(&cancelled)?;
-        let mut replacement = if item.is_dir
-            && item.directory_conflict_policy == DirectoryConflictPolicy::Replace
-        {
-            Some(target.begin_directory_replace(&item.target_path).await?)
-        } else {
-            None
-        };
+        let mut replacement =
+            if item.is_dir && item.directory_conflict_policy == DirectoryConflictPolicy::Replace {
+                Some(target.begin_directory_replace(&item.target_path).await?)
+            } else {
+                None
+            };
         let target_root = replacement
             .as_ref()
             .map(|replacement| replacement.path().to_owned())
@@ -326,6 +328,7 @@ pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
                 return execute_direct_copy(
                     &source_session,
                     &mut target,
+                    &target_config,
                     plan,
                     &items,
                     cancelled,

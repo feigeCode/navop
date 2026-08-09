@@ -11389,6 +11389,7 @@ dependencies = [
  "tokio-socks",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

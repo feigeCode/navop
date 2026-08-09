@@ -1142,7 +1142,9 @@ impl TabContainer {
             } else if !self.pinned_tabs.is_empty() {
                 let next_index = index.min(self.pinned_tabs.len() - 1);
                 self.active_pinned_index = Some(next_index);
-                self.pinned_tabs[next_index].content().on_activate(window, cx);
+                self.pinned_tabs[next_index]
+                    .content()
+                    .on_activate(window, cx);
                 self.pinned_tabs[next_index]
                     .content()
                     .focus_handle(cx)
@@ -1150,9 +1152,7 @@ impl TabContainer {
             }
         }
 
-        cx.emit(TabContainerEvent::TabClosed {
-            id: id.to_string(),
-        });
+        cx.emit(TabContainerEvent::TabClosed { id: id.to_string() });
         cx.emit(TabContainerEvent::LayoutChanged);
         cx.notify();
         true

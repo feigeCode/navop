@@ -15,6 +15,7 @@ russh-sftp = { workspace = true }
 ssh = { workspace = true }
 tokio-socks = { workspace = true }
 uuid = { workspace = true }
+zeroize = { workspace = true }
 
 [lints]
 workspace = true

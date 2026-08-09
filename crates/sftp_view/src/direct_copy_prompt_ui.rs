@@ -298,10 +298,12 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                     .child(
                         t!(
                             "Transfer.direct_copy_auth_boundary",
-                            strategy = strategy_label(preview.strategy)
+                            strategy = strategy_label(preview.strategy),
+                            auth = auth_label(preview.navop_target_auth)
                         )
                         .to_string(),
                     )
+                    .child(target_auth_transfer_detail(preview))
                     .child(t!("Transfer.direct_copy_security").to_string()),
             ),
         )
@@ -356,6 +358,36 @@ fn auth_label(auth: ServerCopyAuthKind) -> String {
         ServerCopyAuthKind::Agent => t!("Transfer.auth_agent").to_string(),
         ServerCopyAuthKind::AutoPublicKey => t!("Transfer.auth_auto_public_key").to_string(),
     }
+}
+
+fn target_auth_transfer_detail(preview: &DirectCopyPreview) -> String {
+    let mut details = vec![match preview.navop_target_auth {
+        ServerCopyAuthKind::Password => {
+            t!("Transfer.direct_copy_target_password_detail").to_string()
+        }
+        ServerCopyAuthKind::PrivateKeyFile => {
+            t!("Transfer.direct_copy_target_private_key_file_detail").to_string()
+        }
+        ServerCopyAuthKind::PrivateKeyContent => {
+            t!("Transfer.direct_copy_target_private_key_content_detail").to_string()
+        }
+        ServerCopyAuthKind::Agent => t!("Transfer.direct_copy_target_agent_detail").to_string(),
+        ServerCopyAuthKind::AutoPublicKey => {
+            t!("Transfer.direct_copy_target_auto_key_detail").to_string()
+        }
+    }];
+    if matches!(
+        preview.navop_target_auth,
+        ServerCopyAuthKind::PrivateKeyFile | ServerCopyAuthKind::PrivateKeyContent
+    ) {
+        if preview.target_auth_has_passphrase {
+            details.push(t!("Transfer.direct_copy_target_passphrase_detail").to_string());
+        }
+        if preview.target_auth_has_certificate {
+            details.push(t!("Transfer.direct_copy_target_certificate_detail").to_string());
+        }
+    }
+    details.join(" ")
 }
 
 fn format_endpoint(username: &str, host: &str, port: u16) -> String {
