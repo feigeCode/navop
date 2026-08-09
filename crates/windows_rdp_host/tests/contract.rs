@@ -1598,7 +1598,30 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
         &[
             "\"run_on\":\"windows-2022\"",
             "run: ./script/test-windows.ps1",
+            "choco install nasm --no-progress --yes",
+            "nasm -v",
         ],
+    );
+    assert_tokens_in_scope(
+        ".github/workflows/ci.yml",
+        "  windows-rdp-probe:",
+        "  test:",
+        &[
+            "- uses: actions/checkout@v7",
+            "- name: Install NASM",
+            "choco install nasm --no-progress --yes",
+            "nasm -v",
+            "- name: Setup Rust toolchain",
+            "- name: Build ATL/MSVC probe",
+        ],
+    );
+    assert_contains_all(
+        ".github/workflows/release.yml",
+        &["choco install nasm --no-progress --yes", "nasm -v"],
+    );
+    assert_contains_all(
+        ".github/workflows/build-windows-msi.yml",
+        &["choco install nasm --no-progress --yes", "nasm -v"],
     );
     assert_contains_all(
         "script/test-windows.ps1",

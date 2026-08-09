@@ -223,6 +223,8 @@ jobs:
         shell: pwsh
         run: |
           cmake --version
+          choco install nasm --no-progress --yes
+          nasm -v
 
       - name: Install Zig toolchain (portable Linux)
         if: matrix.portable_linux

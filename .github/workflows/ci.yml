@@ -89,6 +89,11 @@ jobs:
           - i686-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
+      - name: Install NASM
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          nasm -v
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -110,6 +115,12 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v7
+      - name: Install NASM
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          nasm -v
       - name: Test release packaging
         if: ${{ matrix.run_on == 'ubuntu-latest' }}
         run: node --test script/test-release-packaging.mjs

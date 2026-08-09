@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -5,9 +6,12 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term};
+#[cfg(unix)]
 use alacritty_terminal::tty::{Options as PtyOptions, Shell};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
-use terminal::pty_backend::{GpuiEventProxy, LocalPtyBackend, TerminalEvent};
+#[cfg(unix)]
+use terminal::pty_backend::LocalPtyBackend;
+use terminal::pty_backend::{GpuiEventProxy, TerminalEvent};
 use terminal::{TerminalActivity, TerminalPerformanceMetrics};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -211,6 +215,7 @@ fn local_pty_close_during_high_output_baseline() {
     );
 }
 
+#[cfg(unix)]
 fn wait_for_ingress(
     metrics: &TerminalPerformanceMetrics,
     events: &mut UnboundedReceiver<TerminalEvent>,
@@ -227,6 +232,7 @@ fn wait_for_ingress(
     false
 }
 
+#[cfg(unix)]
 fn wait_for_output_quiet(
     metrics: &TerminalPerformanceMetrics,
     events: &mut UnboundedReceiver<TerminalEvent>,

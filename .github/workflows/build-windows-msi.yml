@@ -54,6 +54,12 @@ jobs:
           target: ${{ env.WINDOWS_TARGET }}
           cache: false
 
+      - name: Install NASM
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress --yes
+          nasm -v
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.10
 
