@@ -1,7 +1,6 @@
 use crate::{FileEntry, ProgressCallback, RusshSftpClient, SftpClient, TransferCancelled};
 use anyhow::Result;
 use ssh::SshConnectConfig;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -11,12 +10,6 @@ pub struct ServerCopyItem {
     pub target_path: String,
     pub is_dir: bool,
     pub size: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopyStrategy {
-    Direct,
-    Relay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,14 +36,6 @@ pub(crate) struct CopyFileRequest<'a> {
     pub file_size: u64,
     pub total: u64,
     pub progress: &'a (dyn Fn(crate::TransferProgress) + Send + Sync),
-}
-
-pub fn choose_copy_strategy(direct_available: bool) -> CopyStrategy {
-    if direct_available {
-        CopyStrategy::Direct
-    } else {
-        CopyStrategy::Relay
-    }
 }
 
 pub fn join_copy_path(base: &str, name: &str) -> String {
@@ -178,56 +163,18 @@ pub async fn relay_copy(
     Ok(())
 }
 
-pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<CopyStrategy> {
-    let direct_progress = request.progress.clone();
-    let direct_source = request.source_config.clone();
-    let direct_target = request.target_config.clone();
-    let direct_items = request.items.clone();
-    let direct_cancelled = request.cancelled.clone();
-    run_with_fallback(
-        move || async move {
-            crate::direct_copy::try_direct_copy(
-                direct_source,
-                direct_target,
-                &direct_items,
-                direct_cancelled,
-                move |progress| direct_progress(progress),
-            )
-            .await
-        },
-        move || async move {
-            let mut source = RusshSftpClient::connect(request.source_config).await?;
-            let mut target = RusshSftpClient::connect(request.target_config).await?;
-            let relay_progress = request.progress;
-            relay_copy(
-                &mut source,
-                &mut target,
-                &request.items,
-                request.cancelled,
-                Box::new(move |progress| relay_progress(progress)),
-            )
-            .await
-        },
+pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
+    let mut source = RusshSftpClient::connect(request.source_config).await?;
+    let mut target = RusshSftpClient::connect(request.target_config).await?;
+    let relay_progress = request.progress;
+    relay_copy(
+        &mut source,
+        &mut target,
+        &request.items,
+        request.cancelled,
+        Box::new(move |progress| relay_progress(progress)),
     )
     .await
-}
-
-async fn run_with_fallback<D, DF, R, RF>(direct: D, relay: R) -> Result<CopyStrategy>
-where
-    D: FnOnce() -> DF,
-    DF: Future<Output = Result<()>>,
-    R: FnOnce() -> RF,
-    RF: Future<Output = Result<()>>,
-{
-    match direct().await {
-        Ok(()) => Ok(CopyStrategy::Direct),
-        Err(error) if error.downcast_ref::<TransferCancelled>().is_some() => Err(error),
-        Err(error) => {
-            tracing::warn!(%error, "direct server copy failed; using SFTP relay");
-            relay().await?;
-            Ok(CopyStrategy::Relay)
-        }
-    }
 }
 
 #[cfg(test)]

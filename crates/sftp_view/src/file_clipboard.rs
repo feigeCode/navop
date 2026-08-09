@@ -1,5 +1,6 @@
 use crate::{
-    DirectorySizeState, FileItem, FileListPanel, SftpView, generate_unique_name, join_remote_path,
+    DirectorySizeState, FileItem, FileListPanel, SftpView, exec_remote_command,
+    generate_unique_name, join_remote_path,
 };
 use anyhow::{Context as _, Result};
 use gpui::{AppContext, Context, Entity, ParentElement, Styled, Window, div, px};
@@ -7,9 +8,10 @@ use gpui_component::{WindowExt, h_flex, notification::Notification, v_flex};
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use sftp::{
-    ServerCopyItem, ServerCopyRequest, SftpClient, calculate_directory_size, copy_between_servers,
-    remote_path_is_same_or_descendant,
+    RemoteFileOperation, ServerCopyItem, SftpClient, build_remote_file_command,
+    calculate_directory_size, remote_path_is_same_or_descendant,
 };
+use ssh::SshSessionManager;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -310,6 +312,7 @@ impl SftpView {
             ClipboardEndpoint::Local => return,
         };
 
+        let session_manager = Arc::new(SshSessionManager::new(config));
         let endpoint = clipboard.endpoint;
         let kind = clipboard.kind;
         let task = Tokio::spawn(cx, async move {
@@ -339,25 +342,14 @@ impl SftpView {
                 })
                 .collect::<Vec<_>>();
 
-            match clipboard.kind {
-                FileClipboardKind::Cut => {
-                    for item in items {
-                        client_guard
-                            .rename(&item.source_path, &item.target_path)
-                            .await?;
-                    }
-                }
-                FileClipboardKind::Copy => {
-                    drop(client_guard);
-                    copy_between_servers(ServerCopyRequest {
-                        source_config: config.clone(),
-                        target_config: config,
-                        items,
-                        cancelled: Arc::new(AtomicBool::new(false)),
-                        progress: Arc::new(|_| {}),
-                    })
-                    .await?;
-                }
+            drop(client_guard);
+            let operation = match clipboard.kind {
+                FileClipboardKind::Copy => RemoteFileOperation::Copy,
+                FileClipboardKind::Cut => RemoteFileOperation::Move,
+            };
+            for item in &items {
+                let command = build_remote_file_command(operation, std::slice::from_ref(item))?;
+                exec_remote_command(session_manager.clone(), &command).await?;
             }
             Ok::<_, anyhow::Error>(())
         });
