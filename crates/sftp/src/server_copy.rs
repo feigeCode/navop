@@ -37,6 +37,7 @@ pub enum DirectCopyStrategy {
 pub enum DirectCopyDecision {
     UseDirect,
     UseRelay,
+    Cancel,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,7 +322,7 @@ pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
             );
             let decision = request_direct_copy_approval(direct_copy_approval, preview).await;
             ensure_not_cancelled(&cancelled)?;
-            if decision == DirectCopyDecision::UseDirect {
+            if direct_copy_is_selected(decision)? {
                 return execute_direct_copy(
                     &source_session,
                     &mut target,
@@ -347,6 +348,14 @@ pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
         Box::new(move |progress| relay_progress(progress)),
     )
     .await
+}
+
+fn direct_copy_is_selected(decision: DirectCopyDecision) -> Result<bool> {
+    match decision {
+        DirectCopyDecision::UseDirect => Ok(true),
+        DirectCopyDecision::UseRelay => Ok(false),
+        DirectCopyDecision::Cancel => Err(TransferCancelled.into()),
+    }
 }
 
 fn direct_copy_route_is_simple(source: &SshConnectConfig, target: &SshConnectConfig) -> bool {

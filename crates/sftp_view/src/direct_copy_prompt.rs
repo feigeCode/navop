@@ -165,6 +165,21 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn explicit_cancel_is_returned_to_core() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (approval, request) =
+            direct_copy_approval_bridge(11, cancelled, Arc::new(Mutex::new(())));
+        let approval_task = tokio::spawn(async move { approval(preview()).await });
+        let request = request.await.expect("prompt request should be delivered");
+
+        send_prompt_decision(&request.response, DirectCopyDecision::Cancel);
+        assert_eq!(
+            DirectCopyDecision::Cancel,
+            approval_task.await.expect("approval task should complete")
+        );
+    }
+
     fn preview() -> DirectCopyPreview {
         DirectCopyPreview {
             strategy: DirectCopyStrategy::Rsync,

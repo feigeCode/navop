@@ -1,8 +1,9 @@
 use super::{
     DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind, ServerCopyItem,
-    build_copy_plan, build_item_copy_plan, join_copy_path, request_direct_copy_approval,
+    build_copy_plan, build_item_copy_plan, direct_copy_is_selected, join_copy_path,
+    request_direct_copy_approval,
 };
-use crate::{DirectoryConflictPolicy, FileEntry};
+use crate::{DirectoryConflictPolicy, FileEntry, TransferCancelled};
 use ssh::SshAuth;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -100,13 +101,26 @@ async fn missing_direct_approval_defaults_to_relay() {
 
 #[tokio::test]
 async fn direct_approval_result_is_respected() {
-    for decision in [DirectCopyDecision::UseDirect, DirectCopyDecision::UseRelay] {
+    for decision in [
+        DirectCopyDecision::UseDirect,
+        DirectCopyDecision::UseRelay,
+        DirectCopyDecision::Cancel,
+    ] {
         let approval = Arc::new(move |_| Box::pin(async move { decision }) as _);
         assert_eq!(
             decision,
             request_direct_copy_approval(Some(approval), preview()).await
         );
     }
+}
+
+#[test]
+fn direct_copy_decision_routes_cancel_as_transfer_cancellation() {
+    assert!(direct_copy_is_selected(DirectCopyDecision::UseDirect).unwrap());
+    assert!(!direct_copy_is_selected(DirectCopyDecision::UseRelay).unwrap());
+
+    let error = direct_copy_is_selected(DirectCopyDecision::Cancel).unwrap_err();
+    assert!(error.is::<TransferCancelled>());
 }
 
 #[test]

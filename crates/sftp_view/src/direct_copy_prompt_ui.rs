@@ -16,6 +16,27 @@ use sftp::{DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopy
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PromptAction {
+    Cancel,
+    UseRelay,
+    UseDirect,
+}
+
+impl PromptAction {
+    fn decision(self) -> DirectCopyDecision {
+        match self {
+            Self::Cancel => DirectCopyDecision::Cancel,
+            Self::UseRelay => DirectCopyDecision::UseRelay,
+            Self::UseDirect => DirectCopyDecision::UseDirect,
+        }
+    }
+
+    fn is_primary(self) -> bool {
+        self == Self::UseDirect
+    }
+}
+
 impl SftpView {
     pub(crate) fn open_direct_copy_prompt(
         &mut self,
@@ -122,9 +143,11 @@ fn open_prompt_dialog(
         let direct_response = response.clone();
         let relay_response = response.clone();
         let cancel_response = response.clone();
+        let escape_response = response.clone();
         let direct_view = view.clone();
         let relay_view = view.clone();
         let cancel_view = view.clone();
+        let escape_view = view.clone();
 
         dialog
             .title(t!("Transfer.direct_copy_title").to_string())
@@ -132,11 +155,11 @@ fn open_prompt_dialog(
             .child(prompt_content(&preview, cx))
             .on_cancel(move |_, window, cx| {
                 finish_prompt(
-                    &cancel_view,
+                    &escape_view,
                     task_id,
                     dialog_handle,
-                    &cancel_response,
-                    DirectCopyDecision::UseRelay,
+                    &escape_response,
+                    PromptAction::Cancel.decision(),
                     window,
                     cx,
                 );
@@ -145,24 +168,31 @@ fn open_prompt_dialog(
             .footer(move |_, _, window, cx| {
                 vec![
                     prompt_button(
+                        "sftp-direct-copy-cancel",
+                        t!("Transfer.direct_copy_cancel").to_string(),
+                        PromptAction::Cancel,
+                        task_id,
+                        dialog_handle,
+                        cancel_view.clone(),
+                        cancel_response.clone(),
+                    ),
+                    prompt_button(
                         "sftp-direct-copy-relay",
                         t!("Transfer.direct_copy_use_relay").to_string(),
-                        DirectCopyDecision::UseRelay,
+                        PromptAction::UseRelay,
                         task_id,
                         dialog_handle,
                         relay_view.clone(),
                         relay_response.clone(),
-                        false,
                     ),
                     prompt_button(
                         "sftp-direct-copy-confirm",
                         direct_button_label(preview.strategy),
-                        DirectCopyDecision::UseDirect,
+                        PromptAction::UseDirect,
                         task_id,
                         dialog_handle,
                         direct_view.clone(),
                         direct_response.clone(),
-                        true,
                     ),
                 ]
                 .into_iter()
@@ -180,16 +210,16 @@ type PromptButton = Box<dyn Fn(&mut Window, &mut gpui::App) -> AnyElement>;
 fn prompt_button(
     id: &'static str,
     label: String,
-    decision: DirectCopyDecision,
+    action: PromptAction,
     task_id: usize,
     dialog_handle: DialogHandle,
     view: WeakEntity<SftpView>,
     response: PromptDecisionSender,
-    primary: bool,
 ) -> PromptButton {
     Box::new(move |_window, _cx| {
         let view = view.clone();
         let response = response.clone();
+        let decision = action.decision();
         let button = Button::new(id)
             .label(label.clone())
             .on_click(move |_, window, cx| {
@@ -203,7 +233,7 @@ fn prompt_button(
                     cx,
                 );
             });
-        if primary {
+        if action.is_primary() {
             button.primary().into_any_element()
         } else {
             button.ghost().into_any_element()
@@ -240,6 +270,7 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
     );
     v_flex()
         .gap_3()
+        .child(t!("Transfer.direct_copy_intro").to_string())
         .child(
             h_flex()
                 .gap_2()
@@ -259,6 +290,28 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                     .gap_2()
                     .child(
                         t!(
+                            "Transfer.direct_copy_server_auth_heading",
+                            strategy = strategy_label(preview.strategy)
+                        )
+                        .to_string(),
+                    )
+                    .child(
+                        t!(
+                            "Transfer.direct_copy_auth_boundary",
+                            strategy = strategy_label(preview.strategy)
+                        )
+                        .to_string(),
+                    )
+                    .child(t!("Transfer.direct_copy_security").to_string()),
+            ),
+        )
+        .child(
+            div().p_3().rounded_md().bg(cx.theme().secondary).child(
+                v_flex()
+                    .gap_2()
+                    .child(t!("Transfer.direct_copy_navop_relay_heading").to_string())
+                    .child(
+                        t!(
                             "Transfer.direct_copy_navop_source_auth",
                             auth = auth_label(preview.navop_source_auth)
                         )
@@ -270,21 +323,27 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                             auth = auth_label(preview.navop_target_auth)
                         )
                         .to_string(),
-                    ),
+                    )
+                    .child(t!("Transfer.direct_copy_navop_relay_detail").to_string()),
             ),
         )
-        .child(t!("Transfer.direct_copy_auth_boundary").to_string())
-        .child(t!("Transfer.direct_copy_security").to_string())
         .child(t!("Transfer.direct_copy_prompt").to_string())
         .into_any_element()
 }
 
 fn direct_button_label(strategy: DirectCopyStrategy) -> String {
-    let strategy = match strategy {
+    t!(
+        "Transfer.direct_copy_use_direct",
+        strategy = strategy_label(strategy)
+    )
+    .to_string()
+}
+
+fn strategy_label(strategy: DirectCopyStrategy) -> String {
+    match strategy {
         DirectCopyStrategy::Rsync => t!("Transfer.strategy_rsync").to_string(),
         DirectCopyStrategy::Scp => t!("Transfer.strategy_scp").to_string(),
-    };
-    t!("Transfer.direct_copy_use_direct", strategy = strategy).to_string()
+    }
 }
 
 fn auth_label(auth: ServerCopyAuthKind) -> String {
@@ -310,7 +369,8 @@ fn format_endpoint(username: &str, host: &str, port: u16) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_endpoint;
+    use super::{PromptAction, format_endpoint};
+    use sftp::DirectCopyDecision;
 
     #[test]
     fn endpoint_display_brackets_ipv6_hosts() {
@@ -322,5 +382,21 @@ mod tests {
             "root@example.com:2222",
             format_endpoint("root", "example.com", 2222)
         );
+    }
+
+    #[test]
+    fn prompt_actions_map_to_distinct_copy_decisions() {
+        assert_eq!(DirectCopyDecision::Cancel, PromptAction::Cancel.decision());
+        assert_eq!(
+            DirectCopyDecision::UseRelay,
+            PromptAction::UseRelay.decision()
+        );
+        assert_eq!(
+            DirectCopyDecision::UseDirect,
+            PromptAction::UseDirect.decision()
+        );
+        assert!(PromptAction::UseDirect.is_primary());
+        assert!(!PromptAction::UseRelay.is_primary());
+        assert!(!PromptAction::Cancel.is_primary());
     }
 }
