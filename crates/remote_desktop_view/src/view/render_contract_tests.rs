@@ -19,8 +19,9 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
     assert!(canvas.contains("window.paint_image("));
     assert!(
         canvas.matches("window.paint_image(").count() >= 2,
-        "framebuffer and remote cursor must be painted in the same bounded canvas"
+        "framebuffer tiles and remote cursor must be painted in the same bounded canvas"
     );
+    assert!(canvas.contains("for tile in frame.tiles()"));
     assert!(canvas.contains(".absolute()"));
     assert!(canvas.contains(".inset_0()"));
     assert!(canvas.contains(".size_full()"));
@@ -201,7 +202,9 @@ fn reconnect_status_uses_a_transient_notification_outside_tab_content() {
     assert!(notifications.contains("Notification::info(message)"));
     assert!(notifications.contains("localized_reconnect_notification("));
     assert!(!notifications.contains("localized_reconnect_status("));
-    assert!(output.contains("self.reset_session_state(None, SessionResetReason::Reconnecting)"));
+    assert!(
+        output.contains("self.reset_session_state(None, SessionResetReason::Reconnecting, cx)")
+    );
     assert!(output.contains("self.notify_reconnecting(reconnect, window, cx)"));
     assert!(!output.contains("RemoteDesktopOutput::Reconnecting(message)"));
     assert!(notifications.contains(".id1::<RemoteDesktopReconnectNotification>("));

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -8,7 +8,7 @@ use remote_desktop::{
     RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopFailure,
     RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
     RemoteDesktopProviderVersionError, RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey,
-    RemoteMouseButton, RemoteNamedKey, ResizeSupport, RgbaFramebuffer, create_backend,
+    RemoteMouseButton, RemoteNamedKey, ResizeSupport, create_backend,
 };
 use rust_i18n::t;
 
@@ -30,13 +30,15 @@ mod frames;
 mod input;
 mod notifications;
 mod output;
+mod presentation;
 mod render;
 mod resize;
+mod surface;
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
-const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(800);
+const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(150);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 
 #[cfg(target_os = "macos")]
@@ -83,11 +85,14 @@ pub struct RemoteDesktopView {
     title: String,
     input_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteDesktopInput>>,
     output_rx: Option<remote_desktop::output_mailbox::OutputMailboxReceiver>,
+    presentation_tx: Option<tokio::sync::mpsc::UnboundedSender<presentation::PresentationCommand>>,
+    presentation_queue: presentation::PresentationQueue,
+    presentation_in_flight: bool,
+    latest_presentation_frame_ticket: Arc<AtomicU64>,
     focus_handle: FocusHandle,
-    latest_frame: Option<Arc<RenderImage>>,
-    framebuffer: Option<RgbaFramebuffer>,
-    rendered_frames: RenderedFrameLifecycle<Arc<RenderImage>>,
-    pending_frame_drops: Vec<Arc<RenderImage>>,
+    latest_frame: Option<Arc<surface::RemoteDesktopSurface>>,
+    rendered_frames: RenderedFrameLifecycle<Arc<surface::RemoteDesktopSurface>>,
+    pending_frame_drops: Vec<Arc<surface::RemoteDesktopSurface>>,
     cursor: cursor::RemoteCursorState,
     frame_sync: frame_sync::FrameSyncTracker,
     capabilities: Option<RemoteDesktopCapabilities>,
@@ -107,7 +112,13 @@ pub struct RemoteDesktopView {
     status: SharedString,
     connected: bool,
     tab_index: Option<usize>,
+    startup_started_at: Instant,
+    runtime_started_at: Option<Instant>,
+    startup_connected_logged: bool,
+    startup_frame_logged: bool,
+    _initial_layout_task: Option<Task<()>>,
     _output_ready_task: Option<Task<()>>,
+    _presentation_task: Option<Task<()>>,
 }
 
 impl RemoteDesktopView {
@@ -122,12 +133,25 @@ impl RemoteDesktopView {
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
             this.output_rx.take();
+            this.presentation_tx.take();
+            this.presentation_queue.clear();
+            this.presentation_in_flight = false;
+            this._initial_layout_task.take();
             this._output_ready_task.take();
-            let mut images = std::mem::take(&mut this.pending_frame_drops);
-            images.extend(
+            this._presentation_task.take();
+            let mut surfaces = std::mem::take(&mut this.pending_frame_drops);
+            surfaces.extend(
                 this.rendered_frames
                     .take_all_distinct(this.latest_frame.take()),
             );
+            let mut images = Vec::new();
+            for surface in surfaces {
+                for image in surface.images() {
+                    if !images.contains(image) {
+                        images.push(image.clone());
+                    }
+                }
+            }
             images.extend(this.cursor.release_all_images());
             let _ = window_handle.update(cx, move |_, window, _| {
                 for image in images {
@@ -144,9 +168,12 @@ impl RemoteDesktopView {
             title: config.title,
             input_tx: None,
             output_rx: None,
+            presentation_tx: None,
+            presentation_queue: presentation::PresentationQueue::default(),
+            presentation_in_flight: false,
+            latest_presentation_frame_ticket: Arc::new(AtomicU64::new(0)),
             focus_handle,
             latest_frame: None,
-            framebuffer: None,
             rendered_frames: RenderedFrameLifecycle::default(),
             pending_frame_drops: Vec::new(),
             cursor: cursor::RemoteCursorState::new(manage_native_cursor),
@@ -168,7 +195,13 @@ impl RemoteDesktopView {
             status: SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string()),
             connected: false,
             tab_index: config.tab_index,
+            startup_started_at: Instant::now(),
+            runtime_started_at: None,
+            startup_connected_logged: false,
+            startup_frame_logged: false,
+            _initial_layout_task: None,
             _output_ready_task: None,
+            _presentation_task: None,
         }
     }
 }

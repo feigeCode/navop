@@ -4,7 +4,7 @@ use super::*;
 use crate::pointer::scale_filled_remote_cursor_bounds;
 
 struct RemoteDesktopCanvasPaint {
-    frame: Option<Arc<RenderImage>>,
+    frame: Option<Arc<surface::RemoteDesktopSurface>>,
     cursor: Option<cursor::RemoteCursorPaint>,
 }
 
@@ -26,15 +26,62 @@ fn remote_desktop_frame_canvas(frame: RemoteDesktopCanvasPaint) -> impl IntoElem
 
 fn paint_remote_frame(
     bounds: Bounds<Pixels>,
-    frame: Option<Arc<RenderImage>>,
+    frame: Option<Arc<surface::RemoteDesktopSurface>>,
     window: &mut Window,
 ) {
     let Some(frame) = frame else {
         return;
     };
-    if let Err(error) = window.paint_image(bounds, Corners::default(), frame, 0, false) {
-        tracing::warn!(?error, "failed to paint remote desktop frame");
+    let frame_width = f32::from(frame.width());
+    let frame_height = f32::from(frame.height());
+    for tile in frame.tiles() {
+        let tile_bounds = remote_tile_bounds(bounds, frame_width, frame_height, tile);
+        if let Err(error) = window.paint_image(
+            tile_bounds,
+            Corners::default(),
+            tile.image.clone(),
+            0,
+            false,
+        ) {
+            tracing::warn!(?error, "failed to paint remote desktop tile");
+        }
     }
+}
+
+fn remote_tile_bounds(
+    bounds: Bounds<Pixels>,
+    frame_width: f32,
+    frame_height: f32,
+    tile: &surface::RemoteDesktopTile,
+) -> Bounds<Pixels> {
+    let bounds_left: f32 = bounds.left().into();
+    let bounds_top: f32 = bounds.top().into();
+    let bounds_right: f32 = bounds.right().into();
+    let bounds_bottom: f32 = bounds.bottom().into();
+    let bounds_width: f32 = bounds.size.width.into();
+    let bounds_height: f32 = bounds.size.height.into();
+    let left = if tile.x == 0 {
+        bounds_left
+    } else {
+        bounds_left + bounds_width * f32::from(tile.x) / frame_width
+    };
+    let top = if tile.y == 0 {
+        bounds_top
+    } else {
+        bounds_top + bounds_height * f32::from(tile.y) / frame_height
+    };
+    let right = if f32::from(tile.x + tile.width) == frame_width {
+        bounds_right
+    } else {
+        bounds_left + bounds_width * f32::from(tile.x + tile.width) / frame_width
+    };
+    let bottom = if f32::from(tile.y + tile.height) == frame_height {
+        bounds_bottom
+    } else {
+        bounds_top + bounds_height * f32::from(tile.y + tile.height) / frame_height
+    };
+
+    Bounds::from_corners(point(px(left), px(top)), point(px(right), px(bottom)))
 }
 
 fn paint_remote_cursor(
@@ -109,7 +156,12 @@ impl TabContent for RemoteDesktopView {
         self.cursor.reset_session();
         close_runtime_once(&mut self.input_tx);
         self.output_rx.take();
+        self.presentation_tx.take();
+        self.presentation_queue.clear();
+        self.presentation_in_flight = false;
+        self._initial_layout_task.take();
         self._output_ready_task.take();
+        self._presentation_task.take();
         Task::ready(true)
     }
 }
@@ -121,8 +173,10 @@ impl Render for RemoteDesktopView {
         // until the next render keeps the image alive until the scene that
         // referenced it has been replaced.
         for frame in self.pending_frame_drops.drain(..) {
-            if let Err(error) = window.drop_image(frame) {
-                tracing::warn!(?error, "failed to release remote desktop frame");
+            for image in frame.unshared_images() {
+                if let Err(error) = window.drop_image(image) {
+                    tracing::warn!(?error, "failed to release remote desktop tile");
+                }
             }
         }
         for cursor in self.cursor.take_pending_images() {
@@ -134,12 +188,10 @@ impl Render for RemoteDesktopView {
         self.sync_local_clipboard(window, cx);
         self.flush_pending_start(cx);
         self.flush_pending_resize();
-        if let Some(latest_frame) = self.latest_frame.clone() {
+        if let Some(latest_frame) = self.latest_frame.take() {
             let frame_presented = self.rendered_frames.current() != Some(&latest_frame);
-            if let Some(retired) = self.rendered_frames.promote(latest_frame)
-                && let Err(error) = window.drop_image(retired)
-            {
-                tracing::warn!(?error, "failed to retire remote desktop frame");
+            if let Some(retired) = self.rendered_frames.promote(latest_frame) {
+                self.pending_frame_drops.push(retired);
             }
             if frame_presented {
                 let snapshot = self.frame_sync.snapshot();

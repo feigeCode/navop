@@ -1,103 +1,14 @@
-use std::sync::Arc;
-
-use gpui::{RenderImage, SharedString};
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
-
-use crate::pixels::bgra_to_render_image;
 
 use super::{RemoteDesktopView, frame_sync};
 
 impl RemoteDesktopView {
-    pub(super) fn install_rgba_frame(&mut self, width: u16, height: u16, rgba: Vec<u8>) -> bool {
-        self.install_bgra_frame(width, height, crate::pixels::rgba_to_bgra(rgba))
-    }
-
-    pub(super) fn install_bgra_frame(&mut self, width: u16, height: u16, bgra: Vec<u8>) -> bool {
-        let framebuffer = match RgbaFramebuffer::from_bgra(width, height, bgra) {
-            Ok(framebuffer) => framebuffer,
-            Err(error) => {
-                self.status = SharedString::from(error.to_string());
-                return false;
-            }
-        };
-        let image = match bgra_to_render_image(width, height, framebuffer.clone_rgba()) {
-            Ok(image) => image,
-            Err(error) => {
-                self.status = SharedString::from(error.to_string());
-                return false;
-            }
-        };
-        self.framebuffer = Some(framebuffer);
-        self.install_frame(Ok(image))
-    }
-
-    pub(super) fn apply_bgra_rects(
-        &mut self,
-        width: u16,
-        height: u16,
-        rects: &[RemoteDesktopFrameRect],
-        bgra: Vec<u8>,
-    ) {
-        if !self.frame_sync.can_apply_delta((width, height)) {
-            self.record_rejected_delta(width, height, "delta has no matching base frame");
-            return;
-        }
-        let Some(framebuffer) = self.framebuffer.as_ref() else {
-            self.record_rejected_delta(width, height, "missing base framebuffer");
-            return;
-        };
-        let patched = match patched_bgra_framebuffer(framebuffer, width, height, rects, &bgra) {
-            Ok(patched) => patched,
-            Err(error) => {
-                let reason = error.to_string();
-                self.record_rejected_delta(width, height, &reason);
-                return;
-            }
-        };
-        let image = match bgra_to_render_image(width, height, patched.clone_rgba()) {
-            Ok(image) => image,
-            Err(error) => {
-                self.record_rejected_delta(width, height, "failed to build delta frame");
-                self.status = SharedString::from(error.to_string());
-                return;
-            }
-        };
-        match self.frame_sync.accept_delta((width, height)) {
-            frame_sync::DeltaDisposition::Applied => {
-                self.framebuffer = Some(patched);
-                self.latest_frame = Some(Arc::new(image));
-                self.remote_size = Some((width, height));
-            }
-            disposition @ frame_sync::DeltaDisposition::Rejected { .. } => {
-                self.log_rejected_delta(
-                    width,
-                    height,
-                    "delta synchronization changed before commit",
-                    disposition,
-                );
-            }
-        }
-    }
-
-    fn install_frame(&mut self, image: anyhow::Result<RenderImage>) -> bool {
-        match image {
-            Ok(image) => {
-                self.latest_frame = Some(Arc::new(image));
-                true
-            }
-            Err(error) => {
-                self.status = SharedString::from(error.to_string());
-                false
-            }
-        }
-    }
-
-    fn record_rejected_delta(&mut self, width: u16, height: u16, reason: &str) {
+    pub(super) fn record_rejected_delta(&mut self, width: u16, height: u16, reason: &str) {
         let disposition = self.frame_sync.reject_delta();
         self.log_rejected_delta(width, height, reason, disposition);
     }
 
-    fn log_rejected_delta(
+    pub(super) fn log_rejected_delta(
         &self,
         width: u16,
         height: u16,
@@ -148,39 +59,105 @@ impl RemoteDesktopView {
     }
 }
 
-fn patched_bgra_framebuffer(
+pub(super) fn validate_bgra_rects(
     framebuffer: &RgbaFramebuffer,
     width: u16,
     height: u16,
     rects: &[RemoteDesktopFrameRect],
     bgra: &[u8],
-) -> anyhow::Result<RgbaFramebuffer> {
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         framebuffer.width() == width && framebuffer.height() == height,
         "base framebuffer dimensions changed"
     );
 
-    let mut patched = framebuffer.clone();
     let mut offset = 0usize;
     for rect in rects {
         anyhow::ensure!(
             rect.width > 0 && rect.height > 0,
             "dirty rectangle is empty"
         );
+        let expected_len = usize::from(rect.width)
+            .checked_mul(usize::from(rect.height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| anyhow::anyhow!("dirty rectangle size overflow"))?;
+        anyhow::ensure!(
+            rect.byte_len == expected_len,
+            "dirty rectangle declared length is invalid"
+        );
         let end = offset
             .checked_add(rect.byte_len)
             .ok_or_else(|| anyhow::anyhow!("dirty rectangle payload length overflow"))?;
         anyhow::ensure!(end <= bgra.len(), "dirty rectangle payload is truncated");
-        patched
-            .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])
-            .map_err(|_| anyhow::anyhow!("invalid dirty rectangle"))?;
+        anyhow::ensure!(
+            rect.x <= framebuffer.width() && rect.y <= framebuffer.height(),
+            "dirty rectangle origin is outside framebuffer"
+        );
+        anyhow::ensure!(
+            usize::from(rect.x) + usize::from(rect.width) <= usize::from(framebuffer.width()),
+            "dirty rectangle width exceeds framebuffer"
+        );
+        anyhow::ensure!(
+            usize::from(rect.y) + usize::from(rect.height) <= usize::from(framebuffer.height()),
+            "dirty rectangle height exceeds framebuffer"
+        );
         offset = end;
     }
     anyhow::ensure!(
         offset == bgra.len(),
         "dirty rectangle payload has trailing bytes"
     );
-    Ok(patched)
+    Ok(())
+}
+
+pub(super) fn apply_bgra_rects_to_framebuffer(
+    framebuffer: &mut RgbaFramebuffer,
+    width: u16,
+    height: u16,
+    rects: &[RemoteDesktopFrameRect],
+    bgra: &[u8],
+) -> anyhow::Result<()> {
+    validate_bgra_rects(framebuffer, width, height, rects, bgra)?;
+
+    let mut offset = 0usize;
+    for rect in rects {
+        let end = offset + rect.byte_len;
+        framebuffer.patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &bgra[offset..end])?;
+        offset = end;
+    }
+    Ok(())
+}
+
+pub(super) fn copy_bgra_rect_from_framebuffer(
+    framebuffer: &RgbaFramebuffer,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(width > 0 && height > 0, "framebuffer rectangle is empty");
+    anyhow::ensure!(
+        usize::from(x) + usize::from(width) <= usize::from(framebuffer.width()),
+        "framebuffer rectangle width exceeds framebuffer"
+    );
+    anyhow::ensure!(
+        usize::from(y) + usize::from(height) <= usize::from(framebuffer.height()),
+        "framebuffer rectangle height exceeds framebuffer"
+    );
+
+    let row_bytes = usize::from(width)
+        .checked_mul(4)
+        .ok_or_else(|| anyhow::anyhow!("framebuffer rectangle row size overflow"))?;
+    let capacity = row_bytes
+        .checked_mul(usize::from(height))
+        .ok_or_else(|| anyhow::anyhow!("framebuffer rectangle size overflow"))?;
+    let framebuffer_row_bytes = usize::from(framebuffer.width()) * 4;
+    let mut bgra = Vec::with_capacity(capacity);
+    for row in 0..usize::from(height) {
+        let start = (usize::from(y) + row) * framebuffer_row_bytes + usize::from(x) * 4;
+        bgra.extend_from_slice(&framebuffer.as_rgba()[start..start + row_bytes]);
+    }
+    Ok(bgra)
 }
 
 #[cfg(test)]

@@ -7,28 +7,38 @@ const MAX_REMOTE_FRAME_PIXELS: f32 = 3840.0 * 2160.0;
 #[derive(Default)]
 pub(super) struct InitialSize {
     pending: Option<PendingInitialSize>,
+    generation: u64,
 }
 
 struct PendingInitialSize {
     size: (u16, u16),
     scale_factor: u32,
     updated_at: Instant,
+    generation: u64,
 }
 
 impl InitialSize {
-    pub(super) fn observe(&mut self, size: (u16, u16), scale_factor: u32, observed_at: Instant) {
+    pub(super) fn observe(
+        &mut self,
+        size: (u16, u16),
+        scale_factor: u32,
+        observed_at: Instant,
+    ) -> Option<u64> {
         if self
             .pending
             .as_ref()
             .is_some_and(|pending| pending.size == size && pending.scale_factor == scale_factor)
         {
-            return;
+            return None;
         }
+        self.generation = self.generation.wrapping_add(1).max(1);
         self.pending = Some(PendingInitialSize {
             size,
             scale_factor,
             updated_at: observed_at,
+            generation: self.generation,
         });
+        Some(self.generation)
     }
 
     pub(super) fn take_ready(
@@ -42,6 +52,18 @@ impl InitialSize {
         }
         let pending = self.pending.take()?;
         Some((pending.size, pending.scale_factor))
+    }
+
+    pub(super) fn take_generation(
+        &mut self,
+        generation: u64,
+    ) -> Option<((u16, u16), u32, Instant)> {
+        let pending = self.pending.as_ref()?;
+        if pending.generation != generation {
+            return None;
+        }
+        let pending = self.pending.take()?;
+        Some((pending.size, pending.scale_factor, pending.updated_at))
     }
 }
 
@@ -164,12 +186,34 @@ mod tests {
         let debounce = Duration::from_millis(800);
         let mut initial_size = InitialSize::default();
 
-        initial_size.observe((1920, 1080), 200, started_at);
-        initial_size.observe((1920, 1080), 200, started_at + Duration::from_millis(700));
+        assert_eq!(Some(1), initial_size.observe((1920, 1080), 200, started_at));
+        assert_eq!(
+            None,
+            initial_size.observe((1920, 1080), 200, started_at + Duration::from_millis(700))
+        );
 
         assert_eq!(
             Some(((1920, 1080), 200)),
             initial_size.take_ready(started_at + debounce, debounce)
+        );
+    }
+
+    #[test]
+    fn stale_layout_generation_cannot_start() {
+        let started_at = Instant::now();
+        let mut initial_size = InitialSize::default();
+
+        let first = initial_size
+            .observe((1280, 720), 200, started_at)
+            .expect("first layout generation");
+        let second = initial_size
+            .observe((1920, 1080), 200, started_at + Duration::from_millis(20))
+            .expect("second layout generation");
+
+        assert_eq!(None, initial_size.take_generation(first));
+        assert_eq!(
+            Some(((1920, 1080), 200, started_at + Duration::from_millis(20))),
+            initial_size.take_generation(second)
         );
     }
 
