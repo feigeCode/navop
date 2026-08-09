@@ -7,13 +7,13 @@ use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindow
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, ElementId, Entity,
-    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
     ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, InteractiveElementExt, ObjectIcon,
-    Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, FunctionalIcon, Icon, IconName, IconSize, InteractiveElementExt,
+    ObjectIcon, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _, DropdownButton, IconButton, IconButtonRole},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
@@ -48,7 +48,7 @@ use one_core::storage::{
     RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, TeamMembershipState,
     Workspace, WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
 use port_forwarding::PortForwardingRuntime;
 use port_forwarding_view::{
     PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
@@ -60,7 +60,9 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::connection_visuals::ConnectionVisualSize;
+use crate::connection_visuals::{
+    ConnectionVisualSize, connection_type_navigation_icon, connection_type_rail_icon,
+};
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -74,6 +76,7 @@ use crate::local_terminal_profiles::{
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::team_management::{build_team_management_url, resolve_team_management_url};
+use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
@@ -90,6 +93,8 @@ actions!(
 const MODERN_HOME_CARD_MIN_WIDTH: gpui::Pixels = px(220.0);
 const MODERN_HOME_CARD_MAX_WIDTH: gpui::Pixels = px(260.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
+const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
+const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式
@@ -134,6 +139,7 @@ pub struct HomePage {
     pub(crate) selected_filter: ConnectionType,
     connection_layout: ConnectionLayout,
     home_page_style: HomePageStyle,
+    sidebar_collapsed: bool,
     persistent_sidebar_expanded: bool,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
@@ -215,11 +221,13 @@ mod data;
 mod encryption;
 mod forwarding;
 mod keybindings;
+mod legacy_home;
 mod lifecycle;
 mod local_terminal;
 mod modern_home;
 mod modern_home_shortcuts;
 mod render;
+mod sidebar;
 mod sync_route;
 mod team_permissions;
 mod toolbar;

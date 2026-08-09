@@ -594,8 +594,10 @@ impl SettingsPanel {
                                             .try_global::<GlobalOnetCliApp>()
                                             .map(|global| global.app.clone());
                                         if let Some(app) = app {
-                                            app.update(cx, |app, cx| {
-                                                app.set_home_page_style(style, cx)
+                                            cx.defer(move |cx| {
+                                                app.update(cx, |app, cx| {
+                                                    app.set_home_page_style(style, cx);
+                                                });
                                             });
                                         } else {
                                             AppSettings::update_and_save(cx, |settings| {

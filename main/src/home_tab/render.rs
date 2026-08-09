@@ -57,44 +57,15 @@ impl Render for HomePage {
             });
         }
 
-        let legacy = self.home_page_style == HomePageStyle::Legacy;
-        let content = v_flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_hidden()
-            .bg(cx.theme().background)
-            .when(legacy, |content| {
-                content.child(self.render_toolbar(window, cx))
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .w_full()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .bg(if legacy {
-                        cx.theme().muted
-                    } else {
-                        cx.theme().background
-                    })
-                    .child(if legacy {
-                        self.render_content_area(cx)
-                    } else {
-                        self.render_modern_home(window, cx)
-                    }),
-            );
+        let content = match self.home_page_style {
+            HomePageStyle::Legacy => self.render_legacy_home(window, cx),
+            HomePageStyle::Modern => self.render_modern_home(window, cx),
+        };
 
         div()
             .size_full()
             .min_w_0()
             .track_focus(&self.focus_handle)
-            .child(
-                h_flex()
-                    .size_full()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(content),
-            )
+            .child(content)
     }
 }

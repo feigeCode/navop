@@ -1,6 +1,11 @@
 use super::*;
 
 impl HomePage {
+    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
     pub(super) fn render_workspace_filter_popover(
         &mut self,
         open: bool,

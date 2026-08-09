@@ -1049,6 +1049,20 @@ impl TabContainer {
         cx.notify();
     }
 
+    /// Insert a pinned tab at a stable position.
+    pub fn insert_pinned_tab_at(&mut self, index: usize, tab: TabItem, cx: &mut Context<Self>) {
+        let index = index.min(self.pinned_tabs.len());
+        self.pinned_tabs.insert(index, tab);
+        if let Some(active_index) = self.active_pinned_index {
+            if active_index >= index {
+                self.active_pinned_index = Some(active_index + 1);
+            }
+        } else if self.tabs.is_empty() {
+            self.active_pinned_index = Some(index);
+        }
+        cx.notify();
+    }
+
     /// Returns whether any pinned tab is currently active.
     pub fn is_pinned_tab_active(&self) -> bool {
         self.active_pinned_index.is_some()
@@ -1067,6 +1081,81 @@ impl TabContainer {
     /// Returns the number of pinned tabs.
     pub fn pinned_tab_count(&self) -> usize {
         self.pinned_tabs.len()
+    }
+
+    pub fn has_pinned_tab_by_id(&self, id: &str) -> bool {
+        self.pinned_tabs.iter().any(|tab| tab.id() == id)
+    }
+
+    pub fn is_pinned_tab_active_by_id(&self, id: &str) -> bool {
+        self.active_pinned_index
+            .and_then(|index| self.pinned_tabs.get(index))
+            .is_some_and(|tab| tab.id() == id)
+    }
+
+    pub fn activate_pinned_tab_by_id(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.pinned_tabs.iter().position(|tab| tab.id() == id) else {
+            return false;
+        };
+        self.activate_pinned_tab_at(index, window, cx);
+        true
+    }
+
+    /// Remove a pinned tab by ID and preserve the normal active-content lifecycle.
+    pub fn remove_pinned_tab_by_id(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(index) = self.pinned_tabs.iter().position(|tab| tab.id() == id) else {
+            return false;
+        };
+        let was_active = self.active_pinned_index == Some(index);
+        let removed = self.pinned_tabs.remove(index);
+
+        if let Some(active_index) = self.active_pinned_index {
+            if active_index == index {
+                removed.content().on_deactivate(window, cx);
+                self.active_pinned_index = None;
+            } else if active_index > index {
+                self.active_pinned_index = Some(active_index - 1);
+            }
+        }
+
+        if was_active {
+            if !self.tabs.is_empty() {
+                self.active_index = self.active_index.min(self.tabs.len() - 1);
+                self.tabs[self.active_index]
+                    .content()
+                    .on_activate(window, cx);
+                self.tabs[self.active_index]
+                    .content()
+                    .focus_handle(cx)
+                    .focus(window, cx);
+                self.active_pinned_index = None;
+            } else if !self.pinned_tabs.is_empty() {
+                let next_index = index.min(self.pinned_tabs.len() - 1);
+                self.active_pinned_index = Some(next_index);
+                self.pinned_tabs[next_index].content().on_activate(window, cx);
+                self.pinned_tabs[next_index]
+                    .content()
+                    .focus_handle(cx)
+                    .focus(window, cx);
+            }
+        }
+
+        cx.emit(TabContainerEvent::TabClosed {
+            id: id.to_string(),
+        });
+        cx.emit(TabContainerEvent::LayoutChanged);
+        cx.notify();
+        true
     }
 
     /// Activate the first pinned tab (deactivate regular tabs visually).
@@ -1740,7 +1829,9 @@ impl TabContainer {
 
     /// Set the active tab by ID
     pub fn set_active_by_id(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.tabs.iter().position(|t| t.id() == id) {
+        if let Some(index) = self.pinned_tabs.iter().position(|t| t.id() == id) {
+            self.activate_pinned_tab_at(index, window, cx);
+        } else if let Some(index) = self.tabs.iter().position(|t| t.id() == id) {
             self.set_active_index(index, window, cx);
         }
     }
@@ -4418,6 +4509,39 @@ mod tests {
                 assert!(container_ref.tabs().is_empty());
                 assert_eq!(Some(0), container_ref.active_pinned_index());
                 assert!(pinned.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn removing_active_pinned_tab_activates_the_next_pinned_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let home = cx.new(|cx| TestTab::new("home", cx));
+                let workbench = cx.new(|cx| TestTab::new("workbench", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_pinned_tab(TabItem::new("home", "test", home), cx);
+                    container.add_pinned_tab(
+                        TabItem::new("ai-workbench", "test", workbench.clone()),
+                        cx,
+                    );
+
+                    assert!(container.remove_pinned_tab_by_id("home", window, cx));
+                    assert!(!container.has_pinned_tab_by_id("home"));
+                    assert!(container.has_pinned_tab_by_id("ai-workbench"));
+                    assert_eq!(Some(0), container.active_pinned_index());
+                    assert!(workbench.read(cx).focus_handle(cx).is_focused(window));
+
+                    assert!(container.remove_pinned_tab_by_id("ai-workbench", window, cx));
+                    assert!(!container.has_pinned_tab());
+                    assert_eq!(None, container.active_pinned_index());
+                });
+
                 container
             })
             .expect("window opens");

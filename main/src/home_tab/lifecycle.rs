@@ -63,6 +63,7 @@ impl HomePage {
             selected_filter: ConnectionType::All,
             connection_layout: AppSettings::current(cx).home_connection_layout.into(),
             home_page_style: AppSettings::current(cx).home_page_style,
+            sidebar_collapsed: false,
             persistent_sidebar_expanded: AppSettings::current(cx).connection_sidebar_expanded,
             workspaces: Vec::new(),
             connections: Vec::new(),
