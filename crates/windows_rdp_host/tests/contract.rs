@@ -1610,6 +1610,8 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
             "- uses: actions/checkout@v7",
             "- name: Install NASM",
             "choco install nasm --no-progress --yes",
+            "$nasmDir = Join-Path $env:ProgramFiles \"NASM\"",
+            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
             "nasm -v",
             "- name: Setup Rust toolchain",
             "- name: Build ATL/MSVC probe",
@@ -1617,11 +1619,21 @@ fn build_is_windows_hosted_msvc_only_and_ci_runs_host_tests() {
     );
     assert_contains_all(
         ".github/workflows/release.yml",
-        &["choco install nasm --no-progress --yes", "nasm -v"],
+        &[
+            "choco install nasm --no-progress --yes",
+            "$nasmDir = Join-Path $env:ProgramFiles \"NASM\"",
+            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
+            "nasm -v",
+        ],
     );
     assert_contains_all(
         ".github/workflows/build-windows-msi.yml",
-        &["choco install nasm --no-progress --yes", "nasm -v"],
+        &[
+            "choco install nasm --no-progress --yes",
+            "$nasmDir = Join-Path $env:ProgramFiles \"NASM\"",
+            "$nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append",
+            "nasm -v",
+        ],
     );
     assert_contains_all(
         "script/test-windows.ps1",
