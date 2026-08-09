@@ -244,6 +244,9 @@ impl RemoteDesktopView {
         }
     }
 
+    // Task 6 freezes the attach seam before Task 8 wires the production
+    // presentation factory. Keep this allowance scoped to that staged seam.
+    #[allow(dead_code)]
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     pub(crate) fn attach_windows_native_presentation(
         &mut self,
