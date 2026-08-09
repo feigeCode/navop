@@ -8,8 +8,8 @@ use gpui_component::{WindowExt, h_flex, notification::Notification, v_flex};
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use sftp::{
-    RemoteFileOperation, ServerCopyItem, SftpClient, build_remote_file_command,
-    calculate_directory_size, remote_path_is_same_or_descendant,
+    DirectoryConflictPolicy, RemoteFileOperation, ServerCopyItem, SftpClient,
+    build_remote_file_command, calculate_directory_size, remote_path_is_same_or_descendant,
 };
 use ssh::SshSessionManager;
 use std::collections::HashSet;
@@ -112,7 +112,19 @@ fn property_row(label: String, value: String) -> impl gpui::IntoElement {
         .child(div().flex_1().text_sm().child(value))
 }
 
+fn can_paste_file_clipboard(
+    clipboard: Option<&FileClipboard>,
+    endpoint: ClipboardEndpoint,
+) -> bool {
+    clipboard
+        .is_some_and(|clipboard| clipboard.endpoint == endpoint && !clipboard.entries.is_empty())
+}
+
 impl SftpView {
+    pub(crate) fn can_paste_file_clipboard(&self, endpoint: ClipboardEndpoint) -> bool {
+        can_paste_file_clipboard(self.file_clipboard.as_ref(), endpoint)
+    }
+
     pub(crate) fn store_file_clipboard(
         &mut self,
         endpoint: ClipboardEndpoint,
@@ -338,6 +350,7 @@ impl SftpView {
                         target_path: join_remote_path(&target_dir, &target_name),
                         is_dir: entry.is_dir,
                         size: 0,
+                        directory_conflict_policy: DirectoryConflictPolicy::Merge,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -347,10 +360,8 @@ impl SftpView {
                 FileClipboardKind::Copy => RemoteFileOperation::Copy,
                 FileClipboardKind::Cut => RemoteFileOperation::Move,
             };
-            for item in &items {
-                let command = build_remote_file_command(operation, std::slice::from_ref(item))?;
-                exec_remote_command(session_manager.clone(), &command).await?;
-            }
+            let command = build_remote_file_command(operation, &items)?;
+            exec_remote_command(session_manager, &command).await?;
             Ok::<_, anyhow::Error>(())
         });
 
@@ -551,9 +562,48 @@ impl SftpView {
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_local_directory_size, local_path_is_same_or_descendant};
+    use super::{
+        ClipboardEndpoint, ClipboardEntry, FileClipboard, FileClipboardKind,
+        calculate_local_directory_size, can_paste_file_clipboard, local_path_is_same_or_descendant,
+    };
     use std::fs;
     use std::time::SystemTime;
+
+    fn clipboard(endpoint: ClipboardEndpoint) -> FileClipboard {
+        FileClipboard {
+            kind: FileClipboardKind::Copy,
+            endpoint,
+            entries: vec![ClipboardEntry {
+                name: "notes.txt".to_string(),
+                full_path: "/tmp/notes.txt".to_string(),
+                is_dir: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn paste_availability_requires_a_matching_non_empty_endpoint() {
+        let matching = Some(clipboard(ClipboardEndpoint::RemoteRight));
+        assert!(can_paste_file_clipboard(
+            matching.as_ref(),
+            ClipboardEndpoint::RemoteRight
+        ));
+        assert!(!can_paste_file_clipboard(
+            matching.as_ref(),
+            ClipboardEndpoint::RemoteLeft
+        ));
+
+        let empty = FileClipboard {
+            kind: FileClipboardKind::Cut,
+            endpoint: ClipboardEndpoint::Local,
+            entries: Vec::new(),
+        };
+        assert!(!can_paste_file_clipboard(
+            Some(&empty),
+            ClipboardEndpoint::Local
+        ));
+        assert!(!can_paste_file_clipboard(None, ClipboardEndpoint::Local));
+    }
 
     #[test]
     fn local_descendant_check_respects_component_boundaries() {

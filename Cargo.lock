@@ -11380,11 +11380,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
  "russh",
  "russh-sftp",
  "rust-i18n",
- "serde_json",
  "ssh",
  "tempfile",
  "tokio",

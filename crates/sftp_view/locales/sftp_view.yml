@@ -385,6 +385,10 @@ Conflict:
     en: "The following files already exist at destination:"
     zh-CN: "以下文件在目标位置已存在："
     zh-HK: "以下文件在目標位置已存在："
+  server_copy_type_mismatch_safe:
+    en: "For safety, a file and a directory cannot replace each other during server-to-server copy. Choose Keep Both or Skip."
+    zh-CN: "为避免误删目录或文件，服务器间复制不允许文件与目录互相覆盖。请选择“保留两者”或“跳过”。"
+    zh-HK: "為避免誤刪目錄或檔案，伺服器間複製不允許檔案與目錄互相覆蓋。請選擇「保留兩者」或「跳過」。"
   choose_action:
     en: "Choose how to proceed:"
     zh-CN: "请选择处理方式："
@@ -717,3 +721,71 @@ Transfer:
     en: "Server copy (%{count} items)"
     zh-CN: "服务器间复制（%{count} 个项目）"
     zh-HK: "伺服器間複製（%{count} 個項目）"
+  direct_copy_title:
+    en: Confirm direct server-to-server copy
+    zh-CN: 确认服务器直传
+    zh-HK: 確認伺服器直傳
+  direct_copy_route:
+    en: "Transfer route:"
+    zh-CN: "传输路径："
+    zh-HK: "傳輸路徑："
+  direct_copy_item_count:
+    en: "%{count} top-level item(s) will be copied."
+    zh-CN: "将复制 %{count} 个顶层项目。"
+    zh-HK: "將複製 %{count} 個頂層項目。"
+  direct_copy_navop_source_auth:
+    en: "Navop → source connection authentication: %{auth}"
+    zh-CN: "Navop → 源服务器连接认证：%{auth}"
+    zh-HK: "Navop → 來源伺服器連線認證：%{auth}"
+  direct_copy_navop_target_auth:
+    en: "Navop → target/relay connection authentication: %{auth}"
+    zh-CN: "Navop → 目标服务器/本机中转连接认证：%{auth}"
+    zh-HK: "Navop → 目標伺服器/本機中轉連線認證：%{auth}"
+  direct_copy_auth_boundary:
+    en: "The direct source → target connection does not use or transmit the passwords, private keys, key paths, or passphrases saved by Navop. It uses only the source server's own OpenSSH configuration, default keys, or SSH agent."
+    zh-CN: "源服务器 → 目标服务器的直连不会使用或传递 Navop 保存的密码、私钥、私钥路径或口令；它只使用源服务器自身的 OpenSSH 配置、默认私钥或 SSH Agent。"
+    zh-HK: "來源伺服器 → 目標伺服器的直連不會使用或傳遞 Navop 儲存的密碼、私鑰、私鑰路徑或口令；它只使用來源伺服器自身的 OpenSSH 設定、預設私鑰或 SSH Agent。"
+  direct_copy_security:
+    en: "Navop has verified non-interactive BatchMode login before showing this prompt. Strict host-key checking is enabled; password prompts, jump hosts/proxies, agent forwarding, and PTYs are disabled; credentials are never embedded in a command."
+    zh-CN: "显示此提示前，Navop 已通过 BatchMode 非交互登录预检。直传会严格校验主机密钥，并禁用密码提示、跳板机/代理、Agent 转发和 PTY；凭据不会被拼入命令。"
+    zh-HK: "顯示此提示前，Navop 已通過 BatchMode 非互動登入預檢。直傳會嚴格驗證主機金鑰，並停用密碼提示、跳板機/代理、Agent 轉發和 PTY；憑證不會被拼入命令。"
+  direct_copy_prompt:
+    en: "Confirm to use direct transfer. Choose local relay to copy through Navop using the configured target authentication."
+    zh-CN: "确认后将使用服务器直传；如需使用 Navop 配置的目标服务器认证，请选择本机中转。"
+    zh-HK: "確認後將使用伺服器直傳；如需使用 Navop 設定的目標伺服器認證，請選擇本機中轉。"
+  direct_copy_use_direct:
+    en: "Use %{strategy} direct transfer"
+    zh-CN: "使用 %{strategy} 直传"
+    zh-HK: "使用 %{strategy} 直傳"
+  direct_copy_use_relay:
+    en: Use local relay
+    zh-CN: 使用本机中转
+    zh-HK: 使用本機中轉
+  auth_password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  auth_private_key_file:
+    en: Private key file
+    zh-CN: 私钥文件
+    zh-HK: 私鑰檔案
+  auth_private_key_content:
+    en: Stored private key content
+    zh-CN: 已保存的私钥内容
+    zh-HK: 已儲存的私鑰內容
+  auth_agent:
+    en: SSH agent
+    zh-CN: SSH Agent
+    zh-HK: SSH Agent
+  auth_auto_public_key:
+    en: Automatic public-key authentication
+    zh-CN: 自动公钥认证
+    zh-HK: 自動公鑰認證
+  strategy_rsync:
+    en: rsync
+    zh-CN: rsync
+    zh-HK: rsync
+  strategy_scp:
+    en: scp
+    zh-CN: scp
+    zh-HK: scp

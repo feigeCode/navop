@@ -1,5 +1,10 @@
-use super::{ServerCopyItem, build_copy_plan, join_copy_path};
-use crate::FileEntry;
+use super::{
+    DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind, ServerCopyItem,
+    build_copy_plan, build_item_copy_plan, join_copy_path, request_direct_copy_approval,
+};
+use crate::{DirectoryConflictPolicy, FileEntry};
+use ssh::SshAuth;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 fn file(path: &str, size: u64) -> FileEntry {
@@ -26,8 +31,104 @@ fn directory_plan_keeps_relative_layout_and_sizes() {
         target_path: "/dst/app".to_string(),
         is_dir: true,
         size: 0,
+        directory_conflict_policy: DirectoryConflictPolicy::Merge,
     }];
     let plan = build_copy_plan(&items, &[vec![file("/src/app/bin", 42)]]);
     assert_eq!(plan[1].target_path, "/dst/app/bin");
     assert_eq!(plan[1].size, 42);
+}
+
+#[test]
+fn directory_replace_plan_targets_only_the_staging_tree() {
+    let item = ServerCopyItem {
+        source_path: "/src/app".to_string(),
+        target_path: "/dst/app".to_string(),
+        is_dir: true,
+        size: 0,
+        directory_conflict_policy: DirectoryConflictPolicy::Replace,
+    };
+    let descendants = vec![
+        FileEntry {
+            name: "config".to_string(),
+            path: "/src/app/config".to_string(),
+            size: 0,
+            modified: SystemTime::UNIX_EPOCH,
+            is_dir: true,
+            permissions: 0,
+        },
+        file("/src/app/config/app.toml", 42),
+    ];
+    let staging_root = "/dst/.app.navop-part-dir-test";
+
+    let plan = build_item_copy_plan(&item, &descendants, staging_root);
+
+    assert_eq!(plan[0].target_path, staging_root);
+    assert_eq!(plan[1].target_path, format!("{staging_root}/config"));
+    assert_eq!(
+        plan[2].target_path,
+        format!("{staging_root}/config/app.toml")
+    );
+    assert!(
+        plan.iter()
+            .all(|entry| !entry.target_path.starts_with("/dst/app")),
+        "directory replacement must not write into the live target before commit"
+    );
+}
+
+fn preview() -> DirectCopyPreview {
+    DirectCopyPreview {
+        strategy: DirectCopyStrategy::Rsync,
+        source_host: "source.example".to_string(),
+        source_port: 22,
+        source_username: "source".to_string(),
+        navop_source_auth: ServerCopyAuthKind::Password,
+        target_host: "target.example".to_string(),
+        target_port: 2222,
+        target_username: "target".to_string(),
+        navop_target_auth: ServerCopyAuthKind::PrivateKeyFile,
+        item_count: 2,
+    }
+}
+
+#[tokio::test]
+async fn missing_direct_approval_defaults_to_relay() {
+    assert_eq!(
+        DirectCopyDecision::UseRelay,
+        request_direct_copy_approval(None, preview()).await
+    );
+}
+
+#[tokio::test]
+async fn direct_approval_result_is_respected() {
+    for decision in [DirectCopyDecision::UseDirect, DirectCopyDecision::UseRelay] {
+        let approval = Arc::new(move |_| Box::pin(async move { decision }) as _);
+        assert_eq!(
+            decision,
+            request_direct_copy_approval(Some(approval), preview()).await
+        );
+    }
+}
+
+#[test]
+fn auth_kind_mapping_exposes_only_categories() {
+    let password = SshAuth::Password("PASSWORD-SECRET".to_string());
+    let key = SshAuth::PrivateKey {
+        key_path: "/secret/key".to_string(),
+        passphrase: Some("PASSPHRASE-SECRET".to_string()),
+        certificate_path: Some("/secret/cert".to_string()),
+    };
+    let key_content = SshAuth::PrivateKeyContent {
+        private_key: "PRIVATE-KEY-SECRET".to_string(),
+        passphrase: Some("PASSPHRASE-SECRET".to_string()),
+        certificate_path: Some("/secret/cert".to_string()),
+    };
+
+    assert_eq!(ServerCopyAuthKind::Password, (&password).into());
+    assert_eq!(ServerCopyAuthKind::PrivateKeyFile, (&key).into());
+    assert_eq!(ServerCopyAuthKind::PrivateKeyContent, (&key_content).into());
+    assert_eq!(ServerCopyAuthKind::Agent, (&SshAuth::Agent).into());
+    assert_eq!(
+        ServerCopyAuthKind::AutoPublicKey,
+        (&SshAuth::AutoPublicKey).into()
+    );
 }

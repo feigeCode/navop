@@ -8,7 +8,7 @@ use one_core::storage::{
     ProxyType as StorageProxyType, SshAuthMethod, SshParams, StoredConnection,
 };
 use serde_json::{Value, json};
-use sftp::{RusshSftpClient, SftpClient};
+use sftp::{DirectoryConflictPolicy, RusshSftpClient, SftpClient};
 use ssh::{
     HostKeyVerifier, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth,
     SshConnectConfig,
@@ -358,15 +358,23 @@ async fn upload_path(
 ) -> Result<ToolResult, ToolError> {
     let metadata = std::fs::metadata(local_path).map_err(tool_error)?;
     let remote_stat = client.stat(remote_path).await.map_err(tool_error)?;
-    if prepare_remote_target(client, remote_path, policy, remote_stat).await? {
+    if prepare_remote_upload_target(remote_path, policy, remote_stat.as_ref())? {
         return Ok(skipped_result("upload", local_path, remote_path));
     }
 
     let progress = Box::new(|_| {});
     let cancelled = Arc::new(AtomicBool::new(false));
     if metadata.is_dir() {
+        let directory_conflict_policy =
+            remote_upload_directory_policy(policy, remote_stat.as_ref());
         client
-            .upload_dir_with_progress(local_path, remote_path, cancelled, progress)
+            .upload_dir_with_progress(
+                local_path,
+                remote_path,
+                directory_conflict_policy,
+                cancelled,
+                progress,
+            )
             .await
             .map_err(tool_error)?;
     } else {
@@ -384,6 +392,34 @@ async fn upload_path(
         "bytes": metadata.len(),
         "skipped": false
     })))
+}
+
+fn prepare_remote_upload_target(
+    path: &str,
+    policy: OverwritePolicy,
+    stat: Option<&sftp::PathMetadata>,
+) -> Result<bool, ToolError> {
+    if stat.is_none() {
+        return Ok(false);
+    }
+    match policy {
+        OverwritePolicy::Fail => Err(target_exists(path)),
+        OverwritePolicy::Skip => Ok(true),
+        // Upload implementations perform staged file or directory replacement.
+        // Do not delete the existing target before the replacement is ready.
+        OverwritePolicy::Overwrite => Ok(false),
+    }
+}
+
+fn remote_upload_directory_policy(
+    policy: OverwritePolicy,
+    stat: Option<&sftp::PathMetadata>,
+) -> DirectoryConflictPolicy {
+    if policy == OverwritePolicy::Overwrite && stat.is_some_and(|stat| stat.is_dir) {
+        DirectoryConflictPolicy::Replace
+    } else {
+        DirectoryConflictPolicy::Merge
+    }
 }
 
 async fn download_path(

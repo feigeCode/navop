@@ -1,5 +1,5 @@
 use crate::{
-    Placement, Root,
+    DialogHandle, Placement, Root,
     dialog::{AlertDialog, Dialog},
     input::InputState,
     notification::Notification,
@@ -31,6 +31,11 @@ pub trait WindowExt: Sized {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
+    /// Opens a Dialog and returns a handle that can close only that Dialog.
+    fn open_dialog_with_handle<F>(&mut self, cx: &mut App, build: F) -> DialogHandle
+    where
+        F: Fn(DialogHandle, Dialog, &mut Window, &mut App) -> Dialog + 'static;
+
     /// Opens an AlertDialog.
     ///
     /// This is a convenience method for opening an alert dialog with opinionated defaults.
@@ -57,6 +62,9 @@ pub trait WindowExt: Sized {
 
     /// Closes the last active Dialog.
     fn close_dialog(&mut self, cx: &mut App);
+
+    /// Closes the Dialog identified by `handle`, without affecting dialogs above it.
+    fn close_dialog_by_handle(&mut self, handle: DialogHandle, cx: &mut App) -> bool;
 
     /// Closes all active Dialogs.
     fn close_all_dialogs(&mut self, cx: &mut App);
@@ -125,6 +133,16 @@ impl WindowExt for Window {
     }
 
     #[inline]
+    fn open_dialog_with_handle<F>(&mut self, cx: &mut App, build: F) -> DialogHandle
+    where
+        F: Fn(DialogHandle, Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
+        Root::update(self, cx, move |root, window, cx| {
+            root.open_dialog_with_handle(build, window, cx)
+        })
+    }
+
+    #[inline]
     fn open_alert_dialog<F>(&mut self, cx: &mut App, build: F)
     where
         F: Fn(AlertDialog, &mut Window, &mut App) -> AlertDialog + 'static,
@@ -143,6 +161,13 @@ impl WindowExt for Window {
     fn close_dialog(&mut self, cx: &mut App) {
         Root::update(self, cx, |root, window, cx| {
             root.close_dialog(window, cx);
+        })
+    }
+
+    #[inline]
+    fn close_dialog_by_handle(&mut self, handle: DialogHandle, cx: &mut App) -> bool {
+        Root::update(self, cx, |root, window, cx| {
+            root.close_dialog_by_handle(handle, window, cx)
         })
     }
 

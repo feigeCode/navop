@@ -15,7 +15,7 @@ pub fn build_remote_file_command(
         bail!("remote file command requires at least one item");
     }
 
-    items
+    let commands = items
         .iter()
         .map(|item| {
             let source = shell_quote_path(&item.source_path)?;
@@ -29,7 +29,22 @@ pub fn build_remote_file_command(
             })
         })
         .collect::<Result<Vec<_>>>()
-        .map(|commands| commands.join(" && "))
+        .map(|commands| commands.join(" && "))?;
+    let required_command = match operation {
+        RemoteFileOperation::Copy => "cp",
+        RemoteFileOperation::Move => "mv",
+    };
+    Ok(format!(
+        "{} {commands}",
+        required_command_guard(required_command)
+    ))
+}
+
+fn required_command_guard(command: &str) -> String {
+    format!(
+        "command -v {command} >/dev/null 2>&1 || {{ printf '%s\\n' \
+'required remote command not found: {command}' >&2; exit 127; }};"
+    )
 }
 
 fn shell_quote_path(path: &str) -> Result<String> {
@@ -42,7 +57,7 @@ fn shell_quote_path(path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{RemoteFileOperation, build_remote_file_command};
-    use crate::ServerCopyItem;
+    use crate::{DirectoryConflictPolicy, ServerCopyItem};
 
     fn item(source: &str, target: &str, is_dir: bool) -> ServerCopyItem {
         ServerCopyItem {
@@ -50,6 +65,7 @@ mod tests {
             target_path: target.to_string(),
             is_dir,
             size: 0,
+            directory_conflict_policy: DirectoryConflictPolicy::Merge,
         }
     }
 
@@ -66,7 +82,9 @@ mod tests {
 
         assert_eq!(
             command,
-            "cp -- '/src/a.txt' '/dst/a.txt' && cp -R -- '/src/folder' '/dst/folder'"
+            "command -v cp >/dev/null 2>&1 || { printf '%s\\n' \
+'required remote command not found: cp' >&2; exit 127; }; \
+cp -- '/src/a.txt' '/dst/a.txt' && cp -R -- '/src/folder' '/dst/folder'"
         );
     }
 
@@ -78,7 +96,12 @@ mod tests {
         )
         .expect("move command");
 
-        assert_eq!(command, "mv -- '/src/a.txt' '/dst/a.txt'");
+        assert_eq!(
+            command,
+            "command -v mv >/dev/null 2>&1 || { printf '%s\\n' \
+'required remote command not found: mv' >&2; exit 127; }; \
+mv -- '/src/a.txt' '/dst/a.txt'"
+        );
     }
 
     #[test]
@@ -91,8 +114,52 @@ mod tests {
 
         assert_eq!(
             command,
-            "cp -- '/src/it'\"'\"'s ready' '/dst/-still it'\"'\"'s ready'"
+            "command -v cp >/dev/null 2>&1 || { printf '%s\\n' \
+'required remote command not found: cp' >&2; exit 127; }; \
+cp -- '/src/it'\"'\"'s ready' '/dst/-still it'\"'\"'s ready'"
         );
+    }
+
+    #[test]
+    fn copy_command_checks_cp_before_execution() {
+        let command = build_remote_file_command(
+            RemoteFileOperation::Copy,
+            &[item("/src/a.txt", "/dst/a.txt", false)],
+        )
+        .expect("copy command");
+
+        assert!(command.starts_with(
+            "command -v cp >/dev/null 2>&1 || { printf '%s\\n' \
+'required remote command not found: cp' >&2; exit 127; }; "
+        ));
+    }
+
+    #[test]
+    fn move_command_checks_mv_before_execution() {
+        let command = build_remote_file_command(
+            RemoteFileOperation::Move,
+            &[item("/src/a.txt", "/dst/a.txt", false)],
+        )
+        .expect("move command");
+
+        assert!(command.starts_with(
+            "command -v mv >/dev/null 2>&1 || { printf '%s\\n' \
+'required remote command not found: mv' >&2; exit 127; }; "
+        ));
+    }
+
+    #[test]
+    fn command_availability_is_checked_once_for_multiple_items() {
+        let command = build_remote_file_command(
+            RemoteFileOperation::Copy,
+            &[
+                item("/src/a.txt", "/dst/a.txt", false),
+                item("/src/b.txt", "/dst/b.txt", false),
+            ],
+        )
+        .expect("copy command");
+
+        assert_eq!(1, command.matches("command -v cp").count());
     }
 
     #[test]

@@ -33,6 +33,8 @@ pub struct Root {
     view: AnyView,
     pub(crate) active_sheet: Option<ActiveSheet>,
     pub(crate) active_dialogs: Vec<ActiveDialog>,
+    next_dialog_handle: u64,
+    dialog_generation: u64,
     pub(super) focused_input: Option<Entity<InputState>>,
     pub notification: Entity<NotificationList>,
     pub(crate) tooltip_overlay: Entity<TooltipOverlay>,
@@ -42,6 +44,10 @@ pub struct Root {
     /// Used to handle rapid dialog opening/closing to maintain correct focus chain.
     pending_focus_restore: Option<WeakFocusHandle>,
 }
+
+/// Identifies a dialog opened in a [`Root`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DialogHandle(u64);
 
 #[derive(Clone)]
 pub(crate) struct ActiveSheet {
@@ -54,6 +60,7 @@ pub(crate) struct ActiveSheet {
 
 #[derive(Clone)]
 pub(crate) struct ActiveDialog {
+    handle: DialogHandle,
     focus_handle: FocusHandle,
     /// The previous focused handle before opening the Dialog.
     previous_focused_handle: Option<WeakFocusHandle>,
@@ -62,11 +69,13 @@ pub(crate) struct ActiveDialog {
 
 impl ActiveDialog {
     pub(crate) fn new(
+        handle: DialogHandle,
         focus_handle: FocusHandle,
         previous_focused_handle: Option<WeakFocusHandle>,
         builder: impl Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     ) -> Self {
         Self {
+            handle,
             focus_handle,
             previous_focused_handle,
             builder: Rc::new(builder),
@@ -82,6 +91,8 @@ impl Root {
             view: view.into(),
             active_sheet: None,
             active_dialogs: Vec::new(),
+            next_dialog_handle: 0,
+            dialog_generation: 0,
             focused_input: None,
             notification: cx.new(|cx| NotificationList::new(window, cx)),
             tooltip_overlay: cx.new(|_| TooltipOverlay::new()),
@@ -246,6 +257,22 @@ impl Root {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     {
+        self.open_dialog_with_handle(
+            move |_, dialog, window, cx| build(dialog, window, cx),
+            window,
+            cx,
+        );
+    }
+
+    pub fn open_dialog_with_handle<F>(
+        &mut self,
+        build: F,
+        window: &mut Window,
+        cx: &mut Context<'_, Root>,
+    ) -> DialogHandle
+    where
+        F: Fn(DialogHandle, Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
         let mut previous_focused_handle = window.focused(cx).map(|h| h.downgrade());
 
         // Use pending focus restore if available to maintain correct focus chain
@@ -256,13 +283,21 @@ impl Root {
 
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
+        let handle = DialogHandle(self.next_dialog_handle);
+        self.next_dialog_handle = self
+            .next_dialog_handle
+            .checked_add(1)
+            .expect("dialog handle space exhausted");
 
         self.active_dialogs.push(ActiveDialog::new(
+            handle,
             focus_handle,
             previous_focused_handle,
-            build,
+            move |dialog, window, cx| build(handle, dialog, window, cx),
         ));
+        self.dialog_generation = self.dialog_generation.wrapping_add(1);
         cx.notify();
+        handle
     }
 
     fn close_dialog_internal(&mut self) -> Option<FocusHandle> {
@@ -274,13 +309,48 @@ impl Root {
     }
 
     pub fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        self.dialog_generation = self.dialog_generation.wrapping_add(1);
+        self.pending_focus_restore = None;
         if let Some(handle) = self.close_dialog_internal() {
             window.focus(&handle, cx);
         }
         cx.notify();
     }
 
+    pub fn close_dialog_by_handle(
+        &mut self,
+        handle: DialogHandle,
+        window: &mut Window,
+        cx: &mut Context<'_, Root>,
+    ) -> bool {
+        let Some(index) = self
+            .active_dialogs
+            .iter()
+            .position(|dialog| dialog.handle == handle)
+        else {
+            return false;
+        };
+        let removed = self.active_dialogs.remove(index);
+        self.dialog_generation = self.dialog_generation.wrapping_add(1);
+        self.pending_focus_restore = None;
+        if let Some(next_dialog) = self.active_dialogs.get_mut(index) {
+            next_dialog.previous_focused_handle = removed.previous_focused_handle;
+        } else {
+            self.focused_input = None;
+            if let Some(handle) = removed
+                .previous_focused_handle
+                .and_then(|handle| handle.upgrade())
+            {
+                window.focus(&handle, cx);
+            }
+        }
+        cx.notify();
+        true
+    }
+
     pub(crate) fn defer_close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        self.dialog_generation = self.dialog_generation.wrapping_add(1);
+        let dialog_generation = self.dialog_generation;
         if let Some(handle) = self.close_dialog_internal() {
             let dialogs_count = self.active_dialogs.len();
 
@@ -290,6 +360,9 @@ impl Root {
             cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(*ANIMATION_DURATION).await;
                 let _ = this.update_in(cx, |this, window, cx| {
+                    if this.dialog_generation != dialog_generation {
+                        return;
+                    }
                     let current_dialogs_count = this.active_dialogs.len();
                     // Only restore focus if no new dialogs were opened during animation
                     if current_dialogs_count == dialogs_count {
@@ -304,6 +377,8 @@ impl Root {
     }
 
     pub fn close_all_dialogs(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
+        self.dialog_generation = self.dialog_generation.wrapping_add(1);
+        self.pending_focus_restore = None;
         self.focused_input = None;
         let previous_focused_handle = self
             .active_dialogs

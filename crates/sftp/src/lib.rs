@@ -1,9 +1,12 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod file_operations;
+mod remote_exec;
 mod remote_file_command;
 mod russh_impl;
 mod server_copy;
+mod server_copy_command;
+mod server_copy_direct;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -18,8 +21,9 @@ pub use file_operations::{
 pub use remote_file_command::{RemoteFileOperation, build_remote_file_command};
 pub use russh_impl::RusshSftpClient;
 pub use server_copy::{
-    CopyPlanEntry, ServerCopyItem, ServerCopyRequest, copy_between_servers, join_copy_path,
-    relay_copy,
+    CopyPlanEntry, DirectCopyApproval, DirectCopyApprovalFuture, DirectCopyDecision,
+    DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind, ServerCopyItem, ServerCopyRequest,
+    copy_between_servers, join_copy_path, relay_copy,
 };
 
 #[derive(Debug, Clone)]
@@ -56,6 +60,13 @@ pub struct TransferProgress {
     pub current_file: Option<String>,
     pub current_file_transferred: u64,
     pub current_file_total: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DirectoryConflictPolicy {
+    #[default]
+    Merge,
+    Replace,
 }
 
 #[derive(Debug)]
@@ -148,6 +159,7 @@ pub trait SftpClient: Send + Sync {
         &mut self,
         local_path: &str,
         remote_path: &str,
+        conflict_policy: DirectoryConflictPolicy,
         cancelled: Arc<AtomicBool>,
         progress: ProgressCallback,
     ) -> Result<()>;

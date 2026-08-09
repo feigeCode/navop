@@ -1,9 +1,13 @@
-use super::{OverwritePolicy, parse_overwrite_policy, prepare_local_target, sftp_tool_registry};
+use super::{
+    OverwritePolicy, parse_overwrite_policy, prepare_local_target, prepare_remote_upload_target,
+    remote_upload_directory_policy, sftp_tool_registry,
+};
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig, StoredConnection};
 use serde_json::json;
+use sftp::{DirectoryConflictPolicy, PathMetadata};
 use std::fs;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -124,6 +128,68 @@ fn sftp_overwrite_policy_rejects_unknown_values() {
         .expect_err("unknown overwrite policy should fail");
 
     assert!(error.to_string().contains("invalid on_exists"));
+}
+
+#[test]
+fn sftp_remote_upload_overwrite_preserves_target_for_staged_replace() {
+    let remote_directory = PathMetadata {
+        size: 0,
+        modified: SystemTime::UNIX_EPOCH,
+        is_dir: true,
+        permissions: 0,
+    };
+
+    assert!(
+        !prepare_remote_upload_target(
+            "/srv/app",
+            OverwritePolicy::Overwrite,
+            Some(&remote_directory)
+        )
+        .expect("overwrite should continue without deleting the target")
+    );
+    assert_eq!(
+        DirectoryConflictPolicy::Replace,
+        remote_upload_directory_policy(OverwritePolicy::Overwrite, Some(&remote_directory))
+    );
+}
+
+#[test]
+fn sftp_remote_upload_uses_merge_without_an_existing_directory_conflict() {
+    assert_eq!(
+        DirectoryConflictPolicy::Merge,
+        remote_upload_directory_policy(OverwritePolicy::Overwrite, None)
+    );
+    assert_eq!(
+        DirectoryConflictPolicy::Merge,
+        remote_upload_directory_policy(
+            OverwritePolicy::Fail,
+            Some(&PathMetadata {
+                size: 0,
+                modified: SystemTime::UNIX_EPOCH,
+                is_dir: true,
+                permissions: 0,
+            })
+        )
+    );
+}
+
+#[test]
+fn sftp_remote_upload_fail_and_skip_policies_still_apply_before_transfer() {
+    let remote_file = PathMetadata {
+        size: 1,
+        modified: SystemTime::UNIX_EPOCH,
+        is_dir: false,
+        permissions: 0,
+    };
+
+    let error =
+        prepare_remote_upload_target("/srv/app.txt", OverwritePolicy::Fail, Some(&remote_file))
+            .expect_err("fail policy must reject an existing target");
+    assert!(error.to_string().contains("target already exists"));
+    assert!(
+        prepare_remote_upload_target("/srv/app.txt", OverwritePolicy::Skip, Some(&remote_file))
+            .expect("skip policy should be accepted")
+    );
 }
 
 #[test]

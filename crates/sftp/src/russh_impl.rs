@@ -1,7 +1,7 @@
 use crate::server_copy::CopyFileRequest;
 use crate::{
-    FileEntry, PathMetadata, ProgressCallback, SftpClient, TransferCancelled, TransferProgress,
-    validate_read_size,
+    DirectoryConflictPolicy, FileEntry, PathMetadata, ProgressCallback, SftpClient,
+    TransferCancelled, TransferProgress, validate_read_size,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -128,13 +128,19 @@ enum RemotePathKind {
 
 #[async_trait]
 trait RemoteReplaceOps {
+    async fn create_directory_exclusive(&self, path: &str) -> Result<()>;
     async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()>;
     async fn remove_file_if_exists(&self, path: &str) -> Result<()>;
+    async fn remove_tree_if_exists(&self, path: &str) -> Result<()>;
     async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>>;
 }
 
 #[async_trait]
 impl RemoteReplaceOps for SftpSession {
+    async fn create_directory_exclusive(&self, path: &str) -> Result<()> {
+        self.create_dir(path).await.map_err(|error| anyhow!(error))
+    }
+
     async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()> {
         self.rename(old_path, new_path)
             .await
@@ -151,6 +157,10 @@ impl RemoteReplaceOps for SftpSession {
         }
     }
 
+    async fn remove_tree_if_exists(&self, path: &str) -> Result<()> {
+        remove_remote_tree_if_exists(self, path).await
+    }
+
     async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>> {
         match self.symlink_metadata(path).await {
             Ok(metadata) if metadata.is_dir() => Ok(Some(RemotePathKind::Directory)),
@@ -163,11 +173,100 @@ impl RemoteReplaceOps for SftpSession {
     }
 }
 
+async fn remove_remote_tree_if_exists(sftp: &SftpSession, root: &str) -> Result<()> {
+    match sftp.symlink_metadata(root).await {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            return match sftp.remove_file(root).await {
+                Ok(()) => Ok(()),
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                    Ok(())
+                }
+                Err(error) => Err(anyhow!("Failed to remove remote path {}: {}", root, error)),
+            };
+        }
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(anyhow!(
+                "Failed to inspect remote directory {} before cleanup: {}",
+                root,
+                error
+            ));
+        }
+    }
+
+    let mut pending = vec![root.to_owned()];
+    let mut directories = Vec::new();
+    while let Some(directory) = pending.pop() {
+        let entries = sftp.read_dir(&directory).await.map_err(|error| {
+            anyhow!(
+                "Failed to read remote directory {} during cleanup: {}",
+                directory,
+                error
+            )
+        })?;
+        directories.push(directory.clone());
+
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let path = if directory == "/" {
+                format!("/{name}")
+            } else {
+                format!("{}/{}", directory.trim_end_matches('/'), name)
+            };
+            match sftp.symlink_metadata(&path).await {
+                Ok(metadata) if metadata.is_dir() => pending.push(path),
+                Ok(_) => match sftp.remove_file(&path).await {
+                    Ok(()) => {}
+                    Err(SftpError::Status(status))
+                        if status.status_code == StatusCode::NoSuchFile => {}
+                    Err(error) => {
+                        return Err(anyhow!(
+                            "Failed to remove remote file {} during cleanup: {}",
+                            path,
+                            error
+                        ));
+                    }
+                },
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {}
+                Err(error) => {
+                    return Err(anyhow!(
+                        "Failed to inspect remote path {} during cleanup: {}",
+                        path,
+                        error
+                    ));
+                }
+            }
+        }
+    }
+
+    directories.sort_by_key(|path| std::cmp::Reverse(path.len()));
+    for directory in directories {
+        match sftp.remove_dir(&directory).await {
+            Ok(()) => {}
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {}
+            Err(error) => {
+                return Err(anyhow!(
+                    "Failed to remove remote directory {} during cleanup: {}",
+                    directory,
+                    error
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl RemoteReplaceTemp {
     fn sibling_path_for(target: &str, marker: &str) -> Result<String> {
         if target.is_empty() || target.ends_with('/') || target.contains('\0') {
             return Err(anyhow!(
-                "Remote replace target must be a non-empty file path without a trailing slash"
+                "Remote replace target must be a non-empty path without a trailing slash"
             ));
         }
 
@@ -180,7 +279,7 @@ impl RemoteReplaceTemp {
         };
         if name.is_empty() || name == "." || name == ".." {
             return Err(anyhow!(
-                "Remote replace target must identify a regular file name"
+                "Remote replace target must identify a valid final path component"
             ));
         }
         let temporary_name = format!(".{name}.{marker}-{}", uuid::Uuid::new_v4());
@@ -226,23 +325,39 @@ impl RemoteReplaceTemp {
         ))
     }
 
-    async fn cleanup<O>(&mut self, sftp: &O)
+    async fn cleanup<O>(&mut self, sftp: &O) -> Result<()>
     where
         O: RemoteReplaceOps + Sync + ?Sized,
     {
         if self.committed || self.cleaned {
-            return;
+            return Ok(());
         }
 
-        match sftp.remove_file_if_exists(&self.path).await {
-            Ok(()) => self.cleaned = true,
-            Err(error) => {
-                tracing::debug!(
-                    path = %self.path,
-                    error = %error,
-                    "failed to remove abandoned remote temporary file"
-                );
-            }
+        if let Err(error) = sftp.remove_file_if_exists(&self.path).await {
+            tracing::warn!(
+                path = %self.path,
+                error = %error,
+                "failed to remove abandoned remote temporary file"
+            );
+            return Err(error);
+        }
+        self.cleaned = true;
+        Ok(())
+    }
+
+    fn include_cleanup_failure(
+        &self,
+        primary_error: anyhow::Error,
+        cleanup_result: Result<()>,
+    ) -> anyhow::Error {
+        match cleanup_result {
+            Ok(()) => primary_error,
+            Err(cleanup_error) => anyhow!(
+                "{}; additionally failed to remove staged file {}: {}",
+                primary_error,
+                self.path,
+                cleanup_error
+            ),
         }
     }
 
@@ -261,53 +376,60 @@ impl RemoteReplaceTemp {
         match sftp.path_kind(target).await {
             Ok(Some(RemotePathKind::Other)) => {}
             Ok(Some(RemotePathKind::Directory)) => {
-                self.cleanup(sftp).await;
-                return Err(anyhow!(
+                let primary_error = anyhow!(
                     "Failed to replace remote file {} because the existing target is a directory: {}",
                     target,
                     initial_error
-                ));
+                );
+                let cleanup_result = self.cleanup(sftp).await;
+                return Err(self.include_cleanup_failure(primary_error, cleanup_result));
             }
             Ok(None) => {
-                self.cleanup(sftp).await;
-                return Err(anyhow!(
+                let primary_error = anyhow!(
                     "Failed to publish remote file {} and no existing target was found: {}",
                     target,
                     initial_error
-                ));
+                );
+                let cleanup_result = self.cleanup(sftp).await;
+                return Err(self.include_cleanup_failure(primary_error, cleanup_result));
             }
             Err(inspect_error) => {
-                self.cleanup(sftp).await;
-                return Err(anyhow!(
+                let primary_error = anyhow!(
                     "Failed to inspect remote target {} after rename failed ({}): {}",
                     target,
                     initial_error,
                     inspect_error
-                ));
+                );
+                let cleanup_result = self.cleanup(sftp).await;
+                return Err(self.include_cleanup_failure(primary_error, cleanup_result));
             }
         }
 
         let backup_path = match Self::backup_path_for(target) {
             Ok(path) => path,
-            Err(error) => {
-                self.cleanup(sftp).await;
-                return Err(error);
+            Err(path_error) => {
+                let cleanup_result = self.cleanup(sftp).await;
+                return Err(self.include_cleanup_failure(path_error, cleanup_result));
             }
         };
 
         if let Err(backup_error) = sftp.rename_path(target, &backup_path).await {
-            self.cleanup(sftp).await;
-            return Err(anyhow!(
+            let primary_error = anyhow!(
                 "Failed to replace remote file {}: the server rejected direct replacement ({}), and the original could not be moved to a backup: {}",
                 target,
                 initial_error,
                 backup_error
-            ));
+            );
+            let cleanup_result = self.cleanup(sftp).await;
+            return Err(self.include_cleanup_failure(primary_error, cleanup_result));
         }
 
         match sftp.rename_path(&self.path, target).await {
             Ok(()) => {
                 self.committed = true;
+                // The replacement is already live. Do not convert backup cleanup into a
+                // transfer failure because callers may retry an operation that succeeded.
+                // Keep the published target and log the exact retained backup path instead.
                 if let Err(error) = sftp.remove_file_if_exists(&backup_path).await {
                     tracing::warn!(
                         path = %backup_path,
@@ -319,18 +441,34 @@ impl RemoteReplaceTemp {
             }
             Err(publish_error) => {
                 let restore_result = sftp.rename_path(&backup_path, target).await;
-                self.cleanup(sftp).await;
+                let cleanup_result = self.cleanup(sftp).await;
 
-                match restore_result {
-                    Ok(()) => Err(anyhow!(
+                match (restore_result, cleanup_result) {
+                    (Ok(()), Ok(())) => Err(anyhow!(
                         "Failed to publish replacement for remote file {}; the original file was restored: {}",
                         target,
                         publish_error
                     )),
-                    Err(restore_error) => Err(anyhow!(
+                    (Ok(()), Err(cleanup_error)) => Err(anyhow!(
+                        "Failed to publish replacement for remote file {}; the original file was restored, but staged file {} could not be removed: {}; publish failed: {}",
+                        target,
+                        self.path,
+                        cleanup_error,
+                        publish_error
+                    )),
+                    (Err(restore_error), Ok(())) => Err(anyhow!(
                         "Failed to publish replacement for remote file {}, and the original could not be restored to its original path. The original remains at {}: {}; restore failed: {}",
                         target,
                         backup_path,
+                        publish_error,
+                        restore_error
+                    )),
+                    (Err(restore_error), Err(cleanup_error)) => Err(anyhow!(
+                        "Failed to publish replacement for remote file {}, and the original could not be restored to its original path. The original remains at {}, and staged file {} could not be removed: {}; publish failed: {}; restore failed: {}",
+                        target,
+                        backup_path,
+                        self.path,
+                        cleanup_error,
                         publish_error,
                         restore_error
                     )),
@@ -346,6 +484,247 @@ impl Drop for RemoteReplaceTemp {
             tracing::warn!(
                 path = %self.path,
                 "remote temporary file may have been abandoned"
+            );
+        }
+    }
+}
+
+/// A directory replacement is uploaded or relayed into a unique sibling
+/// directory first. The complete staged tree is published only after every
+/// child has been copied successfully.
+pub(crate) struct RemoteDirectoryReplace {
+    path: String,
+    committed: bool,
+    cleaned: bool,
+}
+
+impl RemoteDirectoryReplace {
+    async fn create<O>(operations: &O, target: &str) -> Result<Self>
+    where
+        O: RemoteReplaceOps + Sync + ?Sized,
+    {
+        let mut last_error = None;
+        for _ in 0..8 {
+            let path = RemoteReplaceTemp::sibling_path_for(target, "navop-part-dir")?;
+            match operations.create_directory_exclusive(&path).await {
+                Ok(()) => {
+                    return Ok(Self {
+                        path,
+                        committed: false,
+                        cleaned: false,
+                    });
+                }
+                Err(create_error) => match operations.path_kind(&path).await {
+                    Ok(Some(_)) => {
+                        last_error = Some(create_error);
+                    }
+                    Ok(None) => {
+                        return Err(anyhow!(
+                            "Failed to create remote staging directory beside {}: {}",
+                            target,
+                            create_error
+                        ));
+                    }
+                    Err(inspect_error) => {
+                        return Err(anyhow!(
+                            "Failed to create remote staging directory beside {} ({}), and failed to inspect the candidate safely: {}",
+                            target,
+                            create_error,
+                            inspect_error
+                        ));
+                    }
+                },
+            }
+        }
+
+        Err(anyhow!(
+            "Failed to allocate a unique remote staging directory beside {}: {}",
+            target,
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "all candidate names were unavailable".to_owned())
+        ))
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    async fn cleanup<O>(&mut self, operations: &O) -> Result<()>
+    where
+        O: RemoteReplaceOps + Sync + ?Sized,
+    {
+        if self.committed || self.cleaned {
+            return Ok(());
+        }
+        operations.remove_tree_if_exists(&self.path).await?;
+        self.cleaned = true;
+        Ok(())
+    }
+
+    async fn commit<O>(mut self, operations: &O, target: &str) -> Result<()>
+    where
+        O: RemoteReplaceOps + Sync + ?Sized,
+    {
+        let target_kind = match operations.path_kind(target).await {
+            Ok(kind) => kind,
+            Err(inspect_error) => {
+                let cleanup_result = self.cleanup(operations).await;
+                return match cleanup_result {
+                    Ok(()) => Err(anyhow!(
+                        "Failed to inspect remote directory target {} before replacement: {}",
+                        target,
+                        inspect_error
+                    )),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "Failed to inspect remote directory target {} before replacement: {}; additionally failed to remove staged directory {}: {}",
+                        target,
+                        inspect_error,
+                        self.path,
+                        cleanup_error
+                    )),
+                };
+            }
+        };
+
+        match target_kind {
+            None => {
+                return match operations.rename_path(&self.path, target).await {
+                    Ok(()) => {
+                        self.committed = true;
+                        Ok(())
+                    }
+                    Err(publish_error) => {
+                        let cleanup_result = self.cleanup(operations).await;
+                        match cleanup_result {
+                            Ok(()) => Err(anyhow!(
+                                "Failed to publish staged remote directory {}: {}",
+                                target,
+                                publish_error
+                            )),
+                            Err(cleanup_error) => Err(anyhow!(
+                                "Failed to publish staged remote directory {}: {}; additionally failed to remove staged directory {}: {}",
+                                target,
+                                publish_error,
+                                self.path,
+                                cleanup_error
+                            )),
+                        }
+                    }
+                };
+            }
+            Some(RemotePathKind::Other) => {
+                let cleanup_result = self.cleanup(operations).await;
+                let message = format!(
+                    "Cannot replace remote directory {} because the existing target is not a real directory; choose Keep Both or Skip instead",
+                    target
+                );
+                return match cleanup_result {
+                    Ok(()) => Err(anyhow!(message)),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "{}; additionally failed to remove staged directory {}: {}",
+                        message,
+                        self.path,
+                        cleanup_error
+                    )),
+                };
+            }
+            Some(RemotePathKind::Directory) => {}
+        }
+
+        let backup_path = match RemoteReplaceTemp::backup_path_for(target) {
+            Ok(path) => path,
+            Err(path_error) => {
+                let cleanup_result = self.cleanup(operations).await;
+                return match cleanup_result {
+                    Ok(()) => Err(path_error),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "{}; additionally failed to remove staged directory {}: {}",
+                        path_error,
+                        self.path,
+                        cleanup_error
+                    )),
+                };
+            }
+        };
+        if let Err(backup_error) = operations.rename_path(target, &backup_path).await {
+            let cleanup_result = self.cleanup(operations).await;
+            return match cleanup_result {
+                Ok(()) => Err(anyhow!(
+                    "Failed to move existing remote directory {} to a backup before replacement: {}",
+                    target,
+                    backup_error
+                )),
+                Err(cleanup_error) => Err(anyhow!(
+                    "Failed to move existing remote directory {} to a backup before replacement: {}; additionally failed to remove staged directory {}: {}",
+                    target,
+                    backup_error,
+                    self.path,
+                    cleanup_error
+                )),
+            };
+        }
+
+        match operations.rename_path(&self.path, target).await {
+            Ok(()) => {
+                self.committed = true;
+                // The replacement is already live. Do not convert backup cleanup into a
+                // transfer failure because callers may retry an operation that succeeded.
+                // Keep the published target and log the exact retained backup path instead.
+                if let Err(error) = operations.remove_tree_if_exists(&backup_path).await {
+                    tracing::warn!(
+                        path = %backup_path,
+                        error = %error,
+                        "remote directory was replaced but its backup could not be removed"
+                    );
+                }
+                Ok(())
+            }
+            Err(publish_error) => {
+                let restore_result = operations.rename_path(&backup_path, target).await;
+                let cleanup_result = self.cleanup(operations).await;
+
+                match (restore_result, cleanup_result) {
+                    (Ok(()), Ok(())) => Err(anyhow!(
+                        "Failed to publish replacement for remote directory {}; the original directory was restored: {}",
+                        target,
+                        publish_error
+                    )),
+                    (Ok(()), Err(cleanup_error)) => Err(anyhow!(
+                        "Failed to publish replacement for remote directory {}; the original directory was restored, but staged directory {} could not be removed: {}; publish failed: {}",
+                        target,
+                        self.path,
+                        cleanup_error,
+                        publish_error
+                    )),
+                    (Err(restore_error), Ok(())) => Err(anyhow!(
+                        "Failed to publish replacement for remote directory {}, and the original could not be restored to its original path. The original remains at {}: {}; restore failed: {}",
+                        target,
+                        backup_path,
+                        publish_error,
+                        restore_error
+                    )),
+                    (Err(restore_error), Err(cleanup_error)) => Err(anyhow!(
+                        "Failed to publish replacement for remote directory {}, and the original could not be restored to its original path. The original remains at {}, and staged directory {} could not be removed: {}; publish failed: {}; restore failed: {}",
+                        target,
+                        backup_path,
+                        self.path,
+                        cleanup_error,
+                        publish_error,
+                        restore_error
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl Drop for RemoteDirectoryReplace {
+    fn drop(&mut self) {
+        if !self.committed && !self.cleaned {
+            tracing::warn!(
+                path = %self.path,
+                "remote temporary directory may have been abandoned"
             );
         }
     }
@@ -368,8 +747,8 @@ where
     let (mut file, written) = match operation(file).await {
         Ok(result) => result,
         Err(error) => {
-            temporary.cleanup(sftp).await;
-            return Err(error);
+            let cleanup_result = temporary.cleanup(sftp).await;
+            return Err(temporary.include_cleanup_failure(error, cleanup_result));
         }
     };
 
@@ -419,8 +798,8 @@ where
 
     if let Err(error) = validation {
         let _ = file.shutdown().await;
-        temporary.cleanup(sftp).await;
-        return Err(error);
+        let cleanup_result = temporary.cleanup(sftp).await;
+        return Err(temporary.include_cleanup_failure(error, cleanup_result));
     }
 
     temporary.commit(sftp, target).await?;
@@ -695,6 +1074,75 @@ impl RusshSftpClient {
             owner: SessionOwner::Shared { client },
             raw_sftp: None,
         })
+    }
+
+    pub(crate) async fn ensure_copy_directory(&mut self, path: &str) -> Result<()> {
+        let create_error = match self.sftp.create_dir(path).await {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+
+        match self.sftp.symlink_metadata(path).await {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            Ok(_) => Err(anyhow!(
+                "Cannot copy a directory to {} because the existing target is not a directory; choose Keep Both or Skip instead",
+                path
+            )),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Err(
+                anyhow!("Failed to create directory {}: {}", path, create_error),
+            ),
+            Err(inspect_error) => Err(anyhow!(
+                "Failed to create directory {} ({}), and failed to inspect the target safely: {}",
+                path,
+                create_error,
+                inspect_error
+            )),
+        }
+    }
+
+    pub(crate) async fn begin_directory_replace(
+        &mut self,
+        target: &str,
+    ) -> Result<RemoteDirectoryReplace> {
+        RemoteDirectoryReplace::create(&self.sftp, target).await
+    }
+
+    pub(crate) async fn abort_directory_replace(
+        &mut self,
+        mut replacement: RemoteDirectoryReplace,
+    ) -> Result<()> {
+        replacement.cleanup(&self.sftp).await
+    }
+
+    pub(crate) async fn commit_directory_replace(
+        &mut self,
+        replacement: RemoteDirectoryReplace,
+        target: &str,
+    ) -> Result<()> {
+        replacement.commit(&self.sftp, target).await
+    }
+
+    pub(crate) async fn reserve_direct_copy_target(
+        &mut self,
+        path: &str,
+        is_dir: bool,
+    ) -> Result<()> {
+        if is_dir {
+            self.sftp
+                .create_dir(path)
+                .await
+                .map_err(|error| anyhow!("Failed to reserve directory {path}: {error}"))?;
+        } else {
+            let _file = self
+                .sftp
+                .open_with_flags(
+                    path,
+                    OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+                )
+                .await
+                .map_err(|error| anyhow!("Failed to reserve file {path}: {error}"))?;
+        }
+        Ok(())
     }
 
     /// 在已有 SSH 连接上创建一个新的 RawSftpSession 用于流水线操作
@@ -2015,6 +2463,7 @@ impl SftpClient for RusshSftpClient {
         &mut self,
         local_path: &str,
         remote_path: &str,
+        conflict_policy: DirectoryConflictPolicy,
         cancelled: Arc<AtomicBool>,
         progress: ProgressCallback,
     ) -> Result<()> {
@@ -2034,8 +2483,7 @@ impl SftpClient for RusshSftpClient {
             for entry in read_dir {
                 let entry = entry.map_err(|e| anyhow!("Failed to read entry: {}", e))?;
                 let path = entry.path();
-                let metadata = entry
-                    .metadata()
+                let metadata = std::fs::symlink_metadata(&path)
                     .map_err(|e| anyhow!("Failed to get metadata for {:?}: {}", path, e))?;
 
                 if metadata.is_dir() {
@@ -2052,110 +2500,146 @@ impl SftpClient for RusshSftpClient {
             .filter(|(_, is_dir, _)| !is_dir)
             .map(|(_, _, size)| size)
             .sum();
-        let mut transferred: u64 = 0;
+        let mut replacement = if conflict_policy == DirectoryConflictPolicy::Replace {
+            Some(self.begin_directory_replace(remote_path).await?)
+        } else {
+            self.ensure_copy_directory(remote_path).await?;
+            None
+        };
+        let upload_root = replacement
+            .as_ref()
+            .map(|replacement| replacement.path().to_owned())
+            .unwrap_or_else(|| remote_path.to_owned());
 
-        let _ = self.sftp.create_dir(remote_path).await;
+        let upload_result: Result<u64> = async {
+            let mut dirs: Vec<_> = entries.iter().filter(|(_, is_dir, _)| *is_dir).collect();
+            dirs.sort_by_key(|dir| dir.0.as_os_str().len());
 
-        let mut dirs: Vec<_> = entries.iter().filter(|(_, is_dir, _)| *is_dir).collect();
-        dirs.sort_by_key(|dir| dir.0.as_os_str().len());
-
-        for (dir_path, _, _) in dirs {
-            ensure_not_cancelled(&cancelled)?;
-            let relative = dir_path
-                .strip_prefix(local_base)
-                .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
-            let relative_str = relative.to_string_lossy();
-            if relative_str.is_empty() {
-                continue;
+            for (dir_path, _, _) in dirs {
+                ensure_not_cancelled(&cancelled)?;
+                let relative = dir_path
+                    .strip_prefix(local_base)
+                    .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
+                let relative_str = relative.to_string_lossy();
+                if relative_str.is_empty() {
+                    continue;
+                }
+                let remote_dir = format!(
+                    "{}/{}",
+                    upload_root.trim_end_matches('/'),
+                    relative_str.replace('\\', "/")
+                );
+                self.ensure_copy_directory(&remote_dir).await?;
             }
-            let remote_dir = format!(
-                "{}/{}",
-                remote_path.trim_end_matches('/'),
-                relative_str.replace('\\', "/")
-            );
-            let _ = self.sftp.create_dir(&remote_dir).await;
-        }
 
-        let files: Vec<_> = entries.iter().filter(|(_, is_dir, _)| !*is_dir).collect();
-        let start_time = Instant::now();
+            let files: Vec<_> = entries.iter().filter(|(_, is_dir, _)| !*is_dir).collect();
+            let start_time = Instant::now();
+            let mut transferred: u64 = 0;
 
-        for (file_path, _, file_size) in files {
-            ensure_not_cancelled(&cancelled)?;
-            let relative = file_path
-                .strip_prefix(local_base)
-                .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
-            let relative_str = relative.to_string_lossy().replace('\\', "/");
-            let remote_file_path =
-                format!("{}/{}", remote_path.trim_end_matches('/'), relative_str);
+            for (file_path, _, file_size) in files {
+                ensure_not_cancelled(&cancelled)?;
+                let relative = file_path
+                    .strip_prefix(local_base)
+                    .map_err(|e| anyhow!("Failed to strip prefix: {}", e))?;
+                let relative_str = relative.to_string_lossy().replace('\\', "/");
+                let remote_file_path =
+                    format!("{}/{}", upload_root.trim_end_matches('/'), relative_str);
 
-            let current_file_name = file_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+                let current_file_name = file_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-            let local_file = File::open(file_path)
-                .await
-                .map_err(|e| anyhow!("Failed to open local file {:?}: {}", file_path, e))?;
-            let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
-            let committed_before = transferred;
-            let expected_size = *file_size;
-            let current_file_transferred = with_remote_replace(
-                &self.sftp,
-                &remote_file_path,
-                expected_size,
-                |mut remote_file| async {
-                    let mut buffer = vec![0u8; BUFFER_SIZE];
-                    let mut current_file_transferred: u64 = 0;
+                let local_file = File::open(file_path)
+                    .await
+                    .map_err(|e| anyhow!("Failed to open local file {:?}: {}", file_path, e))?;
+                let mut local_file = BufReader::with_capacity(BUFFER_SIZE, local_file);
+                let committed_before = transferred;
+                let expected_size = *file_size;
+                let current_file_transferred = with_remote_replace(
+                    &self.sftp,
+                    &remote_file_path,
+                    expected_size,
+                    |mut remote_file| async {
+                        let mut buffer = vec![0u8; BUFFER_SIZE];
+                        let mut current_file_transferred: u64 = 0;
 
-                    loop {
-                        ensure_not_cancelled(&cancelled)?;
-                        let bytes_read = local_file
-                            .read(&mut buffer)
-                            .await
-                            .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
+                        loop {
+                            ensure_not_cancelled(&cancelled)?;
+                            let bytes_read = local_file
+                                .read(&mut buffer)
+                                .await
+                                .map_err(|e| anyhow!("Failed to read from local file: {}", e))?;
 
-                        if bytes_read == 0 {
-                            break;
+                            if bytes_read == 0 {
+                                break;
+                            }
+
+                            remote_file
+                                .write_all(&buffer[..bytes_read])
+                                .await
+                                .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
+
+                            current_file_transferred += bytes_read as u64;
+
+                            let elapsed = start_time.elapsed().as_secs_f64();
+                            let displayed_transferred = committed_before + current_file_transferred;
+                            let speed = if elapsed > 0.0 {
+                                displayed_transferred as f64 / elapsed
+                            } else {
+                                0.0
+                            };
+
+                            progress(TransferProgress {
+                                transferred: displayed_transferred,
+                                total: total_size,
+                                speed,
+                                current_file: Some(current_file_name.clone()),
+                                current_file_transferred,
+                                current_file_total: expected_size,
+                            });
                         }
 
-                        remote_file
-                            .write_all(&buffer[..bytes_read])
-                            .await
-                            .map_err(|e| anyhow!("Failed to write to remote file: {}", e))?;
-
-                        current_file_transferred += bytes_read as u64;
-
-                        let elapsed = start_time.elapsed().as_secs_f64();
-                        let displayed_transferred = committed_before + current_file_transferred;
-                        let speed = if elapsed > 0.0 {
-                            displayed_transferred as f64 / elapsed
-                        } else {
-                            0.0
-                        };
-
-                        progress(TransferProgress {
-                            transferred: displayed_transferred,
-                            total: total_size,
-                            speed,
-                            current_file: Some(current_file_name.clone()),
-                            current_file_transferred,
-                            current_file_total: expected_size,
-                        });
-                    }
-
-                    ensure_not_cancelled(&cancelled)?;
-                    Ok((remote_file, current_file_transferred))
-                },
-            )
-            .await
-            .map_err(|error| {
-                anyhow!(
-                    "Failed to upload {} without replacing the original: {}",
-                    remote_file_path,
-                    error
+                        ensure_not_cancelled(&cancelled)?;
+                        Ok((remote_file, current_file_transferred))
+                    },
                 )
-            })?;
-            transferred = committed_before + current_file_transferred;
+                .await
+                .map_err(|error| {
+                    anyhow!(
+                        "Failed to upload {} without replacing the original: {}",
+                        remote_file_path,
+                        error
+                    )
+                })?;
+                transferred = committed_before + current_file_transferred;
+            }
+
+            ensure_not_cancelled(&cancelled)?;
+            Ok(transferred)
+        }
+        .await;
+
+        let transferred = match upload_result {
+            Ok(transferred) => transferred,
+            Err(upload_error) => {
+                if let Some(replacement) = replacement.take()
+                    && let Err(cleanup_error) = self.abort_directory_replace(replacement).await
+                {
+                    return Err(anyhow!(
+                        "{}; additionally failed to remove staged directory for {}: {}",
+                        upload_error,
+                        remote_path,
+                        cleanup_error
+                    ));
+                }
+                return Err(upload_error);
+            }
+        };
+
+        if let Some(replacement) = replacement {
+            self.commit_directory_replace(replacement, remote_path)
+                .await?;
         }
 
         progress(TransferProgress {
@@ -2200,6 +2684,9 @@ mod tests {
         entries: StdMutex<HashMap<String, FakeRemoteEntry>>,
         reject_overwrite: bool,
         fail_staged_publish: bool,
+        fail_restore: bool,
+        fail_file_cleanup: bool,
+        fail_tree_cleanup: bool,
     }
 
     impl FakeRemoteReplaceOps {
@@ -2208,11 +2695,29 @@ mod tests {
                 entries: StdMutex::new(entries.into_iter().collect()),
                 reject_overwrite: true,
                 fail_staged_publish: false,
+                fail_restore: false,
+                fail_file_cleanup: false,
+                fail_tree_cleanup: false,
             }
         }
 
         fn with_failed_staged_publish(mut self) -> Self {
             self.fail_staged_publish = true;
+            self
+        }
+
+        fn with_failed_restore(mut self) -> Self {
+            self.fail_restore = true;
+            self
+        }
+
+        fn with_failed_file_cleanup(mut self) -> Self {
+            self.fail_file_cleanup = true;
+            self
+        }
+
+        fn with_failed_tree_cleanup(mut self) -> Self {
+            self.fail_tree_cleanup = true;
             self
         }
 
@@ -2223,6 +2728,15 @@ mod tests {
 
     #[async_trait]
     impl RemoteReplaceOps for FakeRemoteReplaceOps {
+        async fn create_directory_exclusive(&self, path: &str) -> Result<()> {
+            let mut entries = self.entries.lock().expect("fake remote lock");
+            if entries.contains_key(path) {
+                return Err(anyhow!("remote path already exists"));
+            }
+            entries.insert(path.to_owned(), FakeRemoteEntry::Directory);
+            Ok(())
+        }
+
         async fn rename_path(&self, old_path: &str, new_path: &str) -> Result<()> {
             let mut entries = self.entries.lock().expect("fake remote lock");
             if self.reject_overwrite && entries.contains_key(new_path) {
@@ -2234,15 +2748,41 @@ mod tests {
             {
                 return Err(anyhow!("simulated staged publish failure"));
             }
+            if self.fail_restore && old_path.contains(".navop-backup-") {
+                return Err(anyhow!("simulated restore failure"));
+            }
 
             let entry = entries
                 .remove(old_path)
                 .ok_or_else(|| anyhow!("missing rename source {old_path}"))?;
+            if entry == FakeRemoteEntry::Directory {
+                let prefix = format!("{old_path}/");
+                let descendants = entries
+                    .keys()
+                    .filter(|path| path.starts_with(&prefix))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                for descendant in descendants {
+                    let entry = entries
+                        .remove(&descendant)
+                        .expect("fake descendant must still exist");
+                    entries.insert(
+                        format!("{new_path}/{}", descendant.trim_start_matches(&prefix)),
+                        entry,
+                    );
+                }
+            }
             entries.insert(new_path.to_owned(), entry);
             Ok(())
         }
 
         async fn remove_file_if_exists(&self, path: &str) -> Result<()> {
+            if self.fail_file_cleanup
+                && path.contains(".navop-part-")
+                && !path.contains(".navop-part-dir-")
+            {
+                return Err(anyhow!("simulated staged file cleanup failure"));
+            }
             let mut entries = self.entries.lock().expect("fake remote lock");
             match entries.get(path) {
                 Some(FakeRemoteEntry::Directory) => {
@@ -2254,6 +2794,16 @@ mod tests {
                 }
                 None => Ok(()),
             }
+        }
+
+        async fn remove_tree_if_exists(&self, path: &str) -> Result<()> {
+            if self.fail_tree_cleanup && path.contains(".navop-part-dir-") {
+                return Err(anyhow!("simulated staged tree cleanup failure"));
+            }
+            let mut entries = self.entries.lock().expect("fake remote lock");
+            let prefix = format!("{path}/");
+            entries.retain(|entry_path, _| entry_path != path && !entry_path.starts_with(&prefix));
+            Ok(())
         }
 
         async fn path_kind(&self, path: &str) -> Result<Option<RemotePathKind>> {
@@ -2496,6 +3046,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_file_replace_reports_staging_cleanup_failure_after_restore() {
+        let target = "/srv/notes.txt";
+        let temporary_path = "/srv/.notes.txt.navop-part-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::File("original content")),
+            (
+                temporary_path.to_owned(),
+                FakeRemoteEntry::File("replacement content"),
+            ),
+        ])
+        .with_failed_staged_publish()
+        .with_failed_file_cleanup();
+        let temporary = RemoteReplaceTemp {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("publish and cleanup failures must both be reported");
+        let message = error.to_string();
+
+        assert!(message.contains("original file was restored"));
+        assert!(message.contains(temporary_path));
+        assert!(message.contains("simulated staged file cleanup failure"));
+        assert!(message.contains("simulated staged publish failure"));
+        let entries = operations.entries();
+        assert_eq!(
+            entries.get(target),
+            Some(&FakeRemoteEntry::File("original content"))
+        );
+        assert_eq!(
+            entries.get(temporary_path),
+            Some(&FakeRemoteEntry::File("replacement content"))
+        );
+        assert_eq!(
+            entries.len(),
+            2,
+            "the error must accurately report the retained staged file"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_file_replace_reports_restore_and_cleanup_failures() {
+        let target = "/srv/notes.txt";
+        let temporary_path = "/srv/.notes.txt.navop-part-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::File("original content")),
+            (
+                temporary_path.to_owned(),
+                FakeRemoteEntry::File("replacement content"),
+            ),
+        ])
+        .with_failed_staged_publish()
+        .with_failed_restore()
+        .with_failed_file_cleanup();
+        let temporary = RemoteReplaceTemp {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("publish, restore, and cleanup failures must all be reported");
+        let message = error.to_string();
+
+        assert!(message.contains("original remains at"));
+        assert!(message.contains("staged file"));
+        assert!(message.contains(temporary_path));
+        assert!(message.contains("simulated staged publish failure"));
+        assert!(message.contains("simulated restore failure"));
+        assert!(message.contains("simulated staged file cleanup failure"));
+        let entries = operations.entries();
+        assert!(
+            entries.keys().any(|path| path.contains(".navop-backup-")),
+            "the error must accurately report the retained original backup"
+        );
+        assert_eq!(
+            entries.get(temporary_path),
+            Some(&FakeRemoteEntry::File("replacement content"))
+        );
+    }
+
+    #[tokio::test]
     async fn remote_replace_does_not_replace_existing_directory() {
         let target = "/srv/notes.txt";
         let temporary_path = "/srv/.notes.txt.navop-part-test";
@@ -2521,6 +3159,253 @@ mod tests {
         let entries = operations.entries();
         assert_eq!(entries.get(target), Some(&FakeRemoteEntry::Directory));
         assert_eq!(entries.len(), 1, "temporary file must be cleaned");
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_removes_entries_missing_from_source() {
+        let target = "/srv/app";
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{target}/legacy.txt"),
+                FakeRemoteEntry::File("legacy"),
+            ),
+            (format!("{target}/config"), FakeRemoteEntry::Directory),
+            (
+                format!("{target}/config/old.toml"),
+                FakeRemoteEntry::File("old"),
+            ),
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+            (
+                format!("{temporary_path}/config"),
+                FakeRemoteEntry::Directory,
+            ),
+            (
+                format!("{temporary_path}/config/a.toml"),
+                FakeRemoteEntry::File("new config"),
+            ),
+        ]);
+        let temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        temporary
+            .commit(&operations, target)
+            .await
+            .expect("staged directory must replace the complete target tree");
+
+        let entries = operations.entries();
+        assert_eq!(entries.get(target), Some(&FakeRemoteEntry::Directory));
+        assert_eq!(
+            entries.get(&format!("{target}/new.txt")),
+            Some(&FakeRemoteEntry::File("new"))
+        );
+        assert_eq!(
+            entries.get(&format!("{target}/config/a.toml")),
+            Some(&FakeRemoteEntry::File("new config"))
+        );
+        assert!(!entries.contains_key(&format!("{target}/legacy.txt")));
+        assert!(!entries.contains_key(&format!("{target}/config/old.toml")));
+        assert!(
+            entries
+                .keys()
+                .all(|path| !path.contains(".navop-part-dir-") && !path.contains(".navop-backup-")),
+            "staging and backup trees must be gone after a successful publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_restores_original_when_publish_fails() {
+        let target = "/srv/app";
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{target}/legacy.txt"),
+                FakeRemoteEntry::File("legacy"),
+            ),
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+        ])
+        .with_failed_staged_publish();
+        let temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("failed staged publish must restore the original directory");
+
+        assert!(
+            error
+                .to_string()
+                .contains("original directory was restored")
+        );
+        let entries = operations.entries();
+        assert_eq!(entries.get(target), Some(&FakeRemoteEntry::Directory));
+        assert_eq!(
+            entries.get(&format!("{target}/legacy.txt")),
+            Some(&FakeRemoteEntry::File("legacy"))
+        );
+        assert!(!entries.contains_key(temporary_path));
+        assert!(
+            entries.keys().all(|path| !path.contains(".navop-backup-")),
+            "restored transaction must not leave a backup tree"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_cleans_staging_when_new_target_publish_fails() {
+        let target = "/srv/app";
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+        ])
+        .with_failed_staged_publish();
+        let temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("failed publish to an absent target must be reported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to publish staged remote directory")
+        );
+        let entries = operations.entries();
+        assert!(!entries.contains_key(target));
+        assert!(
+            entries.is_empty(),
+            "the complete staging tree must be removed after publish failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_rejects_non_directory_target() {
+        let target = "/srv/app";
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::File("original")),
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+        ]);
+        let temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("a file or symlink target must not be replaced as a directory");
+
+        assert!(error.to_string().contains("not a real directory"));
+        let entries = operations.entries();
+        assert_eq!(
+            entries.get(target),
+            Some(&FakeRemoteEntry::File("original"))
+        );
+        assert_eq!(entries.len(), 1, "the staged directory must be removed");
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_reports_restore_and_cleanup_failures() {
+        let target = "/srv/app";
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (target.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{target}/legacy.txt"),
+                FakeRemoteEntry::File("legacy"),
+            ),
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+        ])
+        .with_failed_staged_publish()
+        .with_failed_restore()
+        .with_failed_tree_cleanup();
+        let temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        let error = temporary
+            .commit(&operations, target)
+            .await
+            .expect_err("all failed recovery steps must be reported");
+        let message = error.to_string();
+
+        assert!(message.contains("original remains at"));
+        assert!(message.contains("staged directory"));
+        assert!(message.contains("could not be removed"));
+        let entries = operations.entries();
+        assert!(
+            entries.keys().any(|path| path.contains(".navop-backup-")),
+            "the error must accurately report the retained original backup"
+        );
+        assert!(
+            entries.contains_key(temporary_path),
+            "the error must accurately report the retained staged tree"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_directory_replace_abort_removes_the_complete_staging_tree() {
+        let temporary_path = "/srv/.app.navop-part-dir-test";
+        let operations = FakeRemoteReplaceOps::new([
+            (temporary_path.to_owned(), FakeRemoteEntry::Directory),
+            (
+                format!("{temporary_path}/nested"),
+                FakeRemoteEntry::Directory,
+            ),
+            (
+                format!("{temporary_path}/nested/new.txt"),
+                FakeRemoteEntry::File("new"),
+            ),
+        ]);
+        let mut temporary = RemoteDirectoryReplace {
+            path: temporary_path.to_owned(),
+            committed: false,
+            cleaned: false,
+        };
+
+        temporary
+            .cleanup(&operations)
+            .await
+            .expect("aborting must remove the complete staging tree");
+
+        assert!(operations.entries().is_empty());
     }
 
     #[tokio::test]

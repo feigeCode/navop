@@ -12,6 +12,7 @@ use gpui::{
     ParentElement, PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle,
     Window, actions, div, prelude::*, px, uniform_list,
 };
+use gpui_component::menu::LocalMenuStyle;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, InteractiveElementExt, ObjectIcon, Sizable,
     Size, WindowExt,
@@ -45,8 +46,8 @@ use remote_image_preview::{
 };
 use rust_i18n::t;
 use sftp::{
-    RemoteFileOperation, RusshSftpClient, ServerCopyItem, SftpClient, TransferCancelled,
-    TransferProgress, build_remote_file_command, calculate_directory_size,
+    DirectoryConflictPolicy, RemoteFileOperation, RusshSftpClient, ServerCopyItem, SftpClient,
+    TransferCancelled, TransferProgress, build_remote_file_command, calculate_directory_size,
     remote_path_is_same_or_descendant,
 };
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
@@ -57,7 +58,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
-use gpui_component::menu::LocalMenuStyle;
 
 actions!(terminal_file_manager, [PasteUpload]);
 
@@ -419,6 +419,13 @@ struct RemoteClipboardEntry {
 struct RemoteFileClipboard {
     kind: RemoteClipboardKind,
     entries: Vec<RemoteClipboardEntry>,
+}
+
+fn can_paste_remote_file_clipboard(
+    clipboard: Option<&RemoteFileClipboard>,
+    is_connected: bool,
+) -> bool {
+    is_connected && clipboard.is_some_and(|clipboard| !clipboard.entries.is_empty())
 }
 
 /// 文件管理器面板事件
@@ -1014,17 +1021,18 @@ async fn exec_remote_command_output(
 
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let mut exit_status = 0u32;
+    let mut exit_status = None;
 
     while let Some(event) = channel.recv().await {
         match event {
             ChannelEvent::Data(data) => stdout.extend(data),
             ChannelEvent::ExtendedData { data, .. } => stderr.extend(data),
-            ChannelEvent::ExitStatus(status) => exit_status = status,
+            ChannelEvent::ExitStatus(status) => exit_status = Some(status),
             ChannelEvent::ExitSignal {
                 signal_name,
                 error_message,
             } => {
+                let _ = channel.close().await;
                 anyhow::bail!("remote command failed with signal {signal_name}: {error_message}");
             }
             ChannelEvent::Eof | ChannelEvent::Close => break,
@@ -1032,6 +1040,9 @@ async fn exec_remote_command_output(
     }
 
     let _ = channel.close().await;
+    let Some(exit_status) = exit_status else {
+        anyhow::bail!("remote command closed without reporting an exit status");
+    };
     Ok(RemoteCommandOutput {
         stdout: String::from_utf8_lossy(&stdout).to_string(),
         stderr: String::from_utf8_lossy(&stderr).to_string(),
@@ -1055,7 +1066,6 @@ async fn remote_extract_has_conflict(
     }
 }
 
-/// 从 StoredConnection 构建 SshConnectConfig
 // ── FileManagerPanel ──────────────────────────────────────────
 
 /// 终端侧边栏文件管理器面板
@@ -2081,6 +2091,7 @@ impl FileManagerPanel {
                         target_path: join_remote_path(&target_dir, &target_name),
                         is_dir: entry.is_dir,
                         size: entry.size,
+                        directory_conflict_policy: DirectoryConflictPolicy::Merge,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -2090,10 +2101,8 @@ impl FileManagerPanel {
                 RemoteClipboardKind::Copy => RemoteFileOperation::Copy,
                 RemoteClipboardKind::Cut => RemoteFileOperation::Move,
             };
-            for item in &items {
-                let command = build_remote_file_command(operation, std::slice::from_ref(item))?;
-                exec_remote_command(session_manager.clone(), &command).await?;
-            }
+            let command = build_remote_file_command(operation, &items)?;
+            exec_remote_command(session_manager, &command).await?;
             Ok::<_, anyhow::Error>(())
         });
 
@@ -2365,6 +2374,7 @@ impl FileManagerPanel {
                     .upload_dir_with_progress(
                         local_path.to_string_lossy().as_ref(),
                         &remote_path,
+                        DirectoryConflictPolicy::Merge,
                         cancelled,
                         Box::new(move |progress: TransferProgress| {
                             progress_for_callback
@@ -3796,6 +3806,8 @@ impl FileManagerPanel {
         let upload_panel = cx.entity();
         let has_selection = !self.selected_indices.is_empty();
         let is_connected = self.connection_state == ConnectionState::Connected;
+        let can_paste = can_paste_remote_file_clipboard(self.file_clipboard.as_ref(), is_connected);
+        let paste_target_dir = self.current_path.clone();
         let is_favorite = self.is_current_path_favorite();
         let favorite_paths = self.favorite_paths.clone();
         let border = self.colors.border;
@@ -3900,6 +3912,8 @@ impl FileManagerPanel {
                             .dropdown_menu_with_anchor(
                                 Anchor::TopRight,
                                 move |menu, window, _cx| {
+                                    let paste_panel = upload_panel.clone();
+                                    let paste_target_dir = paste_target_dir.clone();
                                     let upload_files_panel = upload_panel.clone();
                                     let upload_folder_panel = upload_panel.clone();
                                     let new_file_panel = upload_panel.clone();
@@ -3908,68 +3922,84 @@ impl FileManagerPanel {
                                     let delete_panel = upload_panel.clone();
                                     menu.local_style(menu_color)
                                         .item(
-                                        PopupMenuItem::new(t!("FileManager.upload_file"))
-                                            .icon(IconName::Upload)
-                                            .on_click(window.listener_for(
-                                                &upload_files_panel,
-                                                move |this, _, window, cx| {
-                                                    this.select_and_upload_files(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new(t!("FileManager.upload_folder"))
-                                            .icon(IconName::Upload)
-                                            .on_click(window.listener_for(
-                                                &upload_folder_panel,
-                                                move |this, _, window, cx| {
-                                                    this.select_and_upload_folder(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new(t!("FileManager.new_file"))
-                                            .icon(IconName::File)
-                                            .on_click(window.listener_for(
-                                                &new_file_panel,
-                                                move |this, _, window, cx| {
-                                                    this.show_new_file_dialog(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new(t!("FileManager.new_folder"))
-                                            .icon(IconName::NewFolder)
-                                            .on_click(window.listener_for(
-                                                &new_folder_panel,
-                                                move |this, _, window, cx| {
-                                                    this.show_new_folder_dialog(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new(t!("FileManager.download"))
-                                            .icon(IconName::ArrowDown)
-                                            .disabled(!has_selection)
-                                            .on_click(window.listener_for(
-                                                &download_panel,
-                                                move |this, _, window, cx| {
-                                                    this.download_selected(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new(t!("FileManager.delete"))
-                                            .icon(IconName::Remove)
-                                            .disabled(!has_selection)
-                                            .on_click(window.listener_for(
-                                                &delete_panel,
-                                                move |this, _, window, cx| {
-                                                    this.delete_selected(window, cx);
-                                                },
-                                            )),
-                                    )
+                                            PopupMenuItem::new(t!("FileManager.paste"))
+                                                .icon(IconName::Paste)
+                                                .disabled(!can_paste)
+                                                .on_click(window.listener_for(
+                                                    &paste_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.paste_remote_file_clipboard(
+                                                            paste_target_dir.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.upload_file"))
+                                                .icon(IconName::Upload)
+                                                .on_click(window.listener_for(
+                                                    &upload_files_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.select_and_upload_files(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.upload_folder"))
+                                                .icon(IconName::Upload)
+                                                .on_click(window.listener_for(
+                                                    &upload_folder_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.select_and_upload_folder(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.new_file"))
+                                                .icon(IconName::File)
+                                                .on_click(window.listener_for(
+                                                    &new_file_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.show_new_file_dialog(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.new_folder"))
+                                                .icon(IconName::NewFolder)
+                                                .on_click(window.listener_for(
+                                                    &new_folder_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.show_new_folder_dialog(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.download"))
+                                                .icon(IconName::ArrowDown)
+                                                .disabled(!has_selection)
+                                                .on_click(window.listener_for(
+                                                    &download_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.download_selected(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!("FileManager.delete"))
+                                                .icon(IconName::Remove)
+                                                .disabled(!has_selection)
+                                                .on_click(window.listener_for(
+                                                    &delete_panel,
+                                                    move |this, _, window, cx| {
+                                                        this.delete_selected(window, cx);
+                                                    },
+                                                )),
+                                        )
                                 },
                             ),
                     )
@@ -4615,6 +4645,13 @@ impl FileManagerPanel {
         } else {
             view.read(cx).current_path.clone()
         };
+        let can_paste = {
+            let view = view.read(cx);
+            can_paste_remote_file_clipboard(
+                view.file_clipboard.as_ref(),
+                view.connection_state == ConnectionState::Connected,
+            )
+        };
         let item_for_properties = view
             .read(cx)
             .filtered_indices
@@ -4659,6 +4696,7 @@ impl FileManagerPanel {
             .item(
                 PopupMenuItem::new(t!("FileManager.paste"))
                     .icon(IconName::Paste)
+                    .disabled(!can_paste)
                     .on_click(
                         window.listener_for(&view_paste, move |this, _, window, cx| {
                             this.paste_remote_file_clipboard(
@@ -5431,12 +5469,39 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
-        build_retry_reset_plan, clear_remote_listing_state, frame_move_options,
+        ConnectionState, NavigationRecoveryPlan, RemoteClipboardEntry, RemoteClipboardKind,
+        RemoteFileClipboard, build_navigation_recovery_plan, build_retry_reset_plan,
+        can_paste_remote_file_clipboard, clear_remote_listing_state, frame_move_options,
         should_apply_directory_result, should_refresh_after_upload,
     };
     use one_core::sidebar_contribution::SidebarPlacement;
     use std::collections::HashSet;
+
+    #[test]
+    fn paste_availability_does_not_depend_on_a_selected_file() {
+        let clipboard = RemoteFileClipboard {
+            kind: RemoteClipboardKind::Copy,
+            entries: vec![RemoteClipboardEntry {
+                name: "notes.txt".to_string(),
+                source_path: "/srv/notes.txt".to_string(),
+                is_dir: false,
+                size: 10,
+            }],
+        };
+
+        assert!(can_paste_remote_file_clipboard(Some(&clipboard), true));
+        assert!(!can_paste_remote_file_clipboard(Some(&clipboard), false));
+        assert!(!can_paste_remote_file_clipboard(None, true));
+
+        let empty_clipboard = RemoteFileClipboard {
+            kind: RemoteClipboardKind::Cut,
+            entries: Vec::new(),
+        };
+        assert!(!can_paste_remote_file_clipboard(
+            Some(&empty_clipboard),
+            true
+        ));
+    }
 
     #[test]
     fn build_retry_reset_plan_prefers_explicit_working_dir() {
