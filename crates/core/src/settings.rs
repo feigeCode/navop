@@ -1390,7 +1390,7 @@ mod tests {
     use gpui_component::{Theme, ThemeMode};
 
     use super::{
-        AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
+        AiChatSettings, AiChatToolExecutionMode, AppSettings, CustomFont, DEFAULT_TERMINAL_THEME,
         HomeConnectionLayout, HomePageStyle, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
         LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
         PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,

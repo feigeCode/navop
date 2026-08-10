@@ -483,7 +483,8 @@ fn measure_cell_preferred_width(
     }
 
     let display_text = SharedString::from(text.to_string());
-    let mut font = window.text_style().font();
+    let text_style = window.text_style();
+    let mut font = text_style.font();
     if is_header && font.weight < FontWeight::MEDIUM {
         font.weight = FontWeight::MEDIUM;
     }
@@ -494,6 +495,7 @@ fn measure_cell_preferred_width(
         background_color: None,
         underline: None,
         strikethrough: None,
+        letter_spacing: text_style.letter_spacing,
     };
     let runs = measurement_runs(&cache, &base_run);
     let font_size = px(theme.typography.text_size);
@@ -550,6 +552,7 @@ fn measurement_runs(
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: base_run.letter_spacing,
         });
     }
 

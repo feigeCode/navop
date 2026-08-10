@@ -906,6 +906,9 @@ mod tests {
     #[test]
     fn workspace_list_uses_manual_sort_order() {
         let (conn, _) = test_repository();
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
         let repo = WorkspaceRepository::new(conn);
         let mut first = workspace("first");
         let mut second = workspace("second");
@@ -1303,6 +1306,9 @@ mod tests {
             .to_string();
         assert!(!error.contains(invalid_encrypted_value));
         assert!(!error.contains("sensitive-unreadable.example.com"));
+            prompt_username: None,
+            prompt_password: None,
+            keyboard_interactive: None,
         assert!(!error.contains("\"params\""));
     }
 

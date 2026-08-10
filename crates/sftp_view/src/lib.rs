@@ -882,7 +882,7 @@ fn is_valid_entry_name(name: &str) -> bool {
 
 fn breadcrumb_item(label: impl Into<SharedString>) -> BreadcrumbItem {
     BreadcrumbItem::new(label)
-        .flex_shrink(1.0)
+        .flex_shrink()
         .min_w(px(35.))
         .max_w(px(BREADCRUMB_ITEM_MAX_WIDTH))
         .overflow_hidden()

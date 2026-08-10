@@ -3227,7 +3227,7 @@ where
                     this.child(
                         h_flex()
                             .id("table-body")
-                            .flex_grow(1.0)
+                            .flex_grow()
                             .size_full()
                             .when(self.options.scrollbar_visible.bottom, |this| {
                                 this.pb(SCROLLBAR_WIDTH)
@@ -3293,7 +3293,7 @@ where
                                         },
                                     ),
                                 )
-                                .flex_grow(1.0)
+                                .flex_grow()
                                 .size_full()
                                 .with_sizing_behavior(ListSizingBehavior::Auto)
                                 .track_scroll(&self.vertical_scroll_handle)

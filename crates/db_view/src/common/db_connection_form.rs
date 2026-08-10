@@ -2543,7 +2543,7 @@ impl DbConnectionForm {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .flex_shrink(1.0)
+                                            .flex_shrink()
                                             .min_w_0()
                                             .when(is_checking, |div| {
                                                 div.text_color(cx.theme().muted_foreground).child(
@@ -3014,6 +3014,9 @@ mod tests {
                 port: 22,
                 username: "root".to_string(),
                 auth_method: SshAuthMethod::Agent,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
                 terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,

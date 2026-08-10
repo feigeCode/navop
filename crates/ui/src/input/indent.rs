@@ -100,6 +100,7 @@ impl TextElement {
                 background_color: None,
                 strikethrough: None,
                 underline: None,
+                letter_spacing: None,
             }],
             None,
         );

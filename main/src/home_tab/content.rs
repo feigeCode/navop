@@ -228,7 +228,7 @@ impl HomePage {
                                     slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
                                         .max_w(MODERN_HOME_CARD_MAX_WIDTH)
                                         .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .flex_grow(1.0)
+                                        .flex_grow()
                                 })
                                 .child(self.render_connection_card(
                                     conn.clone(),
@@ -265,7 +265,7 @@ impl HomePage {
                         slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
                             .max_w(MODERN_HOME_CARD_MAX_WIDTH)
                             .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                            .flex_grow(1.0)
+                            .flex_grow()
                     })
                     .child(self.render_connection_card(conn, selected_id, idx, cx)),
             );
@@ -356,7 +356,7 @@ impl HomePage {
                                     slot.min_w(MODERN_HOME_CARD_MIN_WIDTH)
                                         .max_w(MODERN_HOME_CARD_MAX_WIDTH)
                                         .flex_basis(MODERN_HOME_CARD_MIN_WIDTH)
-                                        .flex_grow(1.0)
+                                        .flex_grow()
                                 })
                                 .child(self.render_connection_card(conn, selected_id, idx, cx)),
                         ),

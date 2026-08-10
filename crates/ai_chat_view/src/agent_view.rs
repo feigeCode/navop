@@ -3666,7 +3666,7 @@ impl Render for AgentChatView {
             .w_full()
             .min_w_0()
             .when(self.sidebar_mode, |this| {
-                this.min_h_0().flex_shrink(1.0).overflow_y_scroll()
+                this.min_h_0().flex_shrink().overflow_y_scroll()
             })
             .when(!self.sidebar_mode, |this| {
                 this.flex_shrink_0().overflow_hidden()

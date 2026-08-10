@@ -53,7 +53,7 @@ impl HomePage {
                                         .id("modern-home-recent-column")
                                         .min_w_0()
                                         .flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)
-                                        .flex_grow(2.0)
+                                        .flex_grow_factor(2.0)
                                         .child(self.render_recent_connections_panel(window, cx)),
                                 )
                                 .child(
@@ -61,7 +61,7 @@ impl HomePage {
                                         .id("modern-home-side-column")
                                         .min_w_0()
                                         .flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)
-                                        .flex_grow(1.0)
+                                        .flex_grow()
                                         .gap_3()
                                         .child(render_create_panel(cx.entity(), window, cx))
                                         .child(render_workspace_tools(cx.entity(), window, cx))
@@ -246,7 +246,7 @@ impl HomePage {
             .child(
                 v_flex()
                     .min_w_0()
-                    .flex_grow(1.0)
+                    .flex_grow()
                     .gap_0p5()
                     .child(
                         div()
@@ -294,7 +294,7 @@ fn render_brand(cx: &gpui::App) -> impl IntoElement {
         .child(
             v_flex()
                 .min_w_0()
-                .flex_grow(1.0)
+                .flex_grow()
                 .gap_1()
                 .child(
                     div()
@@ -409,7 +409,7 @@ fn render_status_panel(
     let key_view = view;
 
     surface_panel("modern-home-status-panel", cx)
-        .flex_grow(1.0)
+        .flex_grow()
         .child(panel_header(t!("Home.StartCenter.status"), None, cx))
         .child(
             v_flex()
@@ -492,7 +492,7 @@ fn panel_header(title: impl IntoElement, badge: Option<String>, cx: &gpui::App) 
             .child(
                 div()
                     .min_w_0()
-                    .flex_grow(1.0)
+                    .flex_grow()
                     .text_sm()
                     .font_semibold()
                     .text_color(cx.theme().foreground)
@@ -599,7 +599,7 @@ fn utility_row(
         .child(
             v_flex()
                 .min_w_0()
-                .flex_grow(1.0)
+                .flex_grow()
                 .gap_0p5()
                 .child(
                     div()
@@ -659,7 +659,7 @@ fn status_row(
         .child(
             v_flex()
                 .min_w_0()
-                .flex_grow(1.0)
+                .flex_grow()
                 .gap_0p5()
                 .child(
                     div()

@@ -3367,7 +3367,7 @@ impl TabContainer {
                 h_flex()
                     .id("tabs")
                     .debug_selector(|| "tabs".to_owned())
-                    .flex_shrink(1.0)
+                    .flex_shrink()
                     .min_w_0()
                     .h_full()
                     .items_center()

@@ -1532,7 +1532,7 @@ impl Render for DatabaseObjects {
                                 },
                             )
                         })
-                        .flex_grow(1.0)
+                        .flex_grow()
                         .size_full()
                         .with_sizing_behavior(ListSizingBehavior::Auto),
                     ),

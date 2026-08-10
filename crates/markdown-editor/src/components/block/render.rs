@@ -843,7 +843,7 @@ impl Block {
                 "{} ",
                 "#".repeat(level as usize)
             ))))
-            .child(div().min_w(px(0.0)).flex_grow(1.0).child(text))
+            .child(div().min_w(px(0.0)).flex_grow().child(text))
             .into_any_element()
     }
 
@@ -1491,7 +1491,7 @@ impl Block {
                 let mut element =
                     div()
                         .min_w(px(0.0))
-                        .flex_grow(1.0)
+                        .flex_grow()
                         .border(px(1.0))
                         .border_color(c.table_border)
                         .px(px(d.table_cell_padding_x))
@@ -2219,7 +2219,7 @@ impl Render for Block {
                         let max_width =
                             px(effective_list_item_image_width(self, viewport_width, d));
                         if let Some(runtime) = self.image_runtime() {
-                            div().flex_grow(1.0).child(self.render_image_content(
+                            div().flex_grow().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
                                 px(d.image_root_max_height),
@@ -2228,7 +2228,7 @@ impl Render for Block {
                                 &strings,
                             ))
                         } else {
-                            div().min_w(px(0.0)).flex_grow(1.0).child(
+                            div().min_w(px(0.0)).flex_grow().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2243,7 +2243,7 @@ impl Render for Block {
                             )
                         }
                     } else {
-                        div().min_w(px(0.0)).flex_grow(1.0).child(
+                        div().min_w(px(0.0)).flex_grow().child(
                             self.render_text_or_mixed_inline_visuals(
                                 &theme,
                                 focused,
@@ -2314,7 +2314,7 @@ impl Render for Block {
                             let max_width =
                                 px(effective_list_item_image_width(self, viewport_width, d));
                             if let Some(runtime) = self.image_runtime() {
-                                div().flex_grow(1.0).child(self.render_image_content(
+                                div().flex_grow().child(self.render_image_content(
                                     runtime,
                                     max_width.into(),
                                     px(d.image_root_max_height),
@@ -2323,7 +2323,7 @@ impl Render for Block {
                                     &strings,
                                 ))
                             } else {
-                                div().min_w(px(0.0)).flex_grow(1.0).child(
+                                div().min_w(px(0.0)).flex_grow().child(
                                     self.render_text_or_mixed_inline_visuals(
                                         &theme,
                                         focused,
@@ -2338,7 +2338,7 @@ impl Render for Block {
                                 )
                             }
                         } else {
-                            div().min_w(px(0.0)).flex_grow(1.0).child(
+                            div().min_w(px(0.0)).flex_grow().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2376,7 +2376,7 @@ impl Render for Block {
                         let max_width =
                             px(effective_list_item_image_width(self, viewport_width, d));
                         if let Some(runtime) = self.image_runtime() {
-                            div().flex_grow(1.0).child(self.render_image_content(
+                            div().flex_grow().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
                                 px(d.image_root_max_height),
@@ -2385,7 +2385,7 @@ impl Render for Block {
                                 &strings,
                             ))
                         } else {
-                            div().min_w(px(0.0)).flex_grow(1.0).child(
+                            div().min_w(px(0.0)).flex_grow().child(
                                 self.render_text_or_mixed_inline_visuals(
                                     &theme,
                                     focused,
@@ -2400,7 +2400,7 @@ impl Render for Block {
                             )
                         }
                     } else {
-                        div().min_w(px(0.0)).flex_grow(1.0).child(
+                        div().min_w(px(0.0)).flex_grow().child(
                             self.render_text_or_mixed_inline_visuals(
                                 &theme,
                                 focused,
@@ -2447,7 +2447,7 @@ impl Render for Block {
                 } else {
                     div()
                         .min_w(px(0.0))
-                        .flex_grow(1.0)
+                        .flex_grow()
                         .text_size(px(t.text_size))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(accent)
@@ -2509,7 +2509,7 @@ impl Render for Block {
                     .child(
                         div()
                             .min_w(px(0.0))
-                            .flex_grow(1.0)
+                            .flex_grow()
                             .text_color(c.text_quote)
                             .child(self.render_text_or_mixed_inline_visuals(
                                 &theme,

@@ -118,7 +118,7 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
     assert!(content.contains("max_w(px(1160.0))"));
     assert!(content.contains("MODERN_HOME_CARD_MIN_WIDTH"));
     assert!(content.contains("MODERN_HOME_CARD_MAX_WIDTH"));
-    assert!(content.contains(".flex_grow(1.0)"));
+    assert!(content.contains(".flex_grow()"));
     assert!(card.contains("px(76.0)"));
     assert!(!card.contains(".shadow_sm()\n            .group"));
     assert!(render.contains("self.render_modern_home(window, cx)"));
@@ -160,11 +160,11 @@ fn modern_start_center_separates_primary_work_from_supporting_tools() {
     assert!(modern_home.contains(".flex_basis(START_CENTER_MAIN_COLUMN_WIDTH)"));
     assert!(modern_home.contains(".flex_basis(START_CENTER_SIDE_COLUMN_WIDTH)"));
     assert!(modern_home.contains(".items_stretch()"));
-    assert!(modern_home.contains(".flex_grow(2.0)"));
-    assert!(modern_home.contains(".flex_grow(1.0)"));
+    assert!(modern_home.contains(".flex_grow_factor(2.0)"));
+    assert!(modern_home.contains(".flex_grow()"));
     assert!(
         modern_home
-            .contains("surface_panel(\"modern-home-status-panel\", cx)\n        .flex_grow(1.0)")
+            .contains("surface_panel(\"modern-home-status-panel\", cx)\n        .flex_grow()")
     );
     assert!(modern_home.contains("render_recent_connections_panel"));
     assert!(modern_home.contains("render_create_panel"));
@@ -283,7 +283,7 @@ fn modern_home_cards_are_small_and_fill_each_row() {
             .count()
             >= 3
     );
-    assert!(content.matches(".flex_grow(1.0)").count() >= 3);
+    assert!(content.matches(".flex_grow()").count() >= 3);
 }
 
 #[test]

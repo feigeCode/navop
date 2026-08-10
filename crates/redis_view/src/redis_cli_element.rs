@@ -811,6 +811,7 @@ fn paint_text_with_cell_width(
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: None,
         }],
         Some(cell_width), // 使用 cell_width 确保等宽渲染
     );

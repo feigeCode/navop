@@ -149,6 +149,7 @@ fn build_text_runs(
             background_color,
             underline,
             strikethrough,
+            letter_spacing: base_run.letter_spacing,
         });
     }
 
@@ -240,6 +241,7 @@ fn build_code_text_runs(
                 wavy: false,
             }),
             strikethrough: None,
+            letter_spacing: base_run.letter_spacing,
         });
     }
 
@@ -713,6 +715,7 @@ impl Element for BlockTextElement {
             background_color: None,
             underline: None,
             strikethrough: None,
+            letter_spacing: style.letter_spacing,
         };
 
         let runs: Vec<TextRun> = if !is_placeholder {
@@ -838,6 +841,7 @@ impl Element for BlockTextElement {
                             background_color: None,
                             underline: None,
                             strikethrough: None,
+                            letter_spacing: style.letter_spacing,
                         }],
                         None,
                     )
@@ -1092,7 +1096,7 @@ mod tests {
             window
                 .text_system()
                 .shape_text(
-                    text.to_string().into(),
+                    text.to_string(),
                     px(16.0),
                     &[TextRun {
                         len: text.len(),
@@ -1101,6 +1105,7 @@ mod tests {
                         background_color: None,
                         underline: None,
                         strikethrough: None,
+                        letter_spacing: None,
                     }],
                     Some(width),
                     None,
@@ -1334,6 +1339,7 @@ mod tests {
                 background_color: None,
                 underline: None,
                 strikethrough: None,
+                letter_spacing: None,
             };
             let runs = super::build_text_runs(
                 block,
@@ -1397,6 +1403,7 @@ mod tests {
                 background_color: None,
                 underline: None,
                 strikethrough: None,
+                letter_spacing: None,
             };
             let runs = build_code_text_runs(block, &display_text, &base_run, px(1.0), &colors);
 
