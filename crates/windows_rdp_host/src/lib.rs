@@ -16,6 +16,7 @@ mod lifecycle;
 #[cfg(all(test, windows_rdp_host_native))]
 mod native_tests;
 mod options;
+mod shutdown_registry;
 
 pub use capabilities::WindowsRdpHostCapabilities;
 pub use credential::WindowsRdpCredentialBundle;
@@ -37,4 +38,9 @@ pub use lifecycle::WindowsRdpHostLifecycle;
 pub use options::{
     WINDOWS_RDP_MAX_HOST_UTF16_CODE_UNITS, WindowsRdpColorDepth, WindowsRdpConnectionOptions,
     WindowsRdpHostOptions, WindowsRdpParentWindow,
+};
+pub use shutdown_registry::{
+    WindowsRdpDrainSnapshot, WindowsRdpRegistration, WindowsRdpRegistrationError,
+    WindowsRdpShutdownCompletion, WindowsRdpShutdownLifecycle, WindowsRdpShutdownRegistry,
+    WindowsRdpShutdownReport, WindowsRdpTerminalOutcome,
 };
