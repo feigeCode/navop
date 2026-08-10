@@ -479,11 +479,8 @@ fn keyboard_interactive_answers_for_terminal(
 }
 
 fn is_ssh_password_prompt(prompt: &str) -> bool {
-    prompt
-        .trim()
-        .trim_end_matches(':')
-        .to_ascii_lowercase()
-        .ends_with("password")
+    let prompt = prompt.trim().trim_end_matches(':');
+    prompt.eq_ignore_ascii_case("password") || prompt.to_ascii_lowercase().ends_with("'s password")
 }
 
 fn resolve_ssh_connection(
@@ -4668,6 +4665,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_mfa_responder_prompts_for_one_time_password() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, Some("login-secret".to_string()), None);
+        let pending = responder.clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::JumpServer,
+                    name: "MFA".to_string(),
+                    instructions: "Enter your one-time password".to_string(),
+                    prompts: vec![ssh::KeyboardInteractivePrompt {
+                        prompt: "One-time password:".to_string(),
+                        echo: false,
+                    }],
+                })
+                .await
+        });
+
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv()).await,
+            Ok(Some(TerminalEvent::SshMfaChanged))
+        ));
+        assert_eq!(
+            Some(TerminalMfaRequest {
+                name: "MFA".to_string(),
+                instructions: "Enter your one-time password".to_string(),
+                prompts: vec![TerminalMfaPrompt {
+                    prompt: "One-time password:".to_string(),
+                    echo: false,
+                }],
+            }),
+            responder.pending_request()
+        );
+        assert!(responder.submit(vec!["123456".to_string()]));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert_eq!(vec!["123456".to_string()], task.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
     async fn terminal_mfa_responder_cancel_clears_pending_request() {
         let (event_tx, mut event_rx) = unbounded_channel();
         let responder = TerminalMfaResponder::new(event_tx, None, None);
@@ -4753,6 +4792,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vec!["target123".to_string()], target_password);
+    }
+
+    #[test]
+    fn terminal_mfa_does_not_replace_one_time_password_with_login_password() {
+        let answers = keyboard_interactive_answers_for_terminal(
+            &KeyboardInteractiveRequest {
+                target: ssh::KeyboardInteractiveTarget::TargetServer,
+                name: "MFA".to_string(),
+                instructions: "Enter your one-time password".to_string(),
+                prompts: vec![ssh::KeyboardInteractivePrompt {
+                    prompt: "One-time password:".to_string(),
+                    echo: false,
+                }],
+            },
+            &["123456".to_string()],
+            None,
+            Some("login-secret"),
+        )
+        .unwrap();
+
+        assert_eq!(vec!["123456".to_string()], answers);
     }
 
     #[test]
