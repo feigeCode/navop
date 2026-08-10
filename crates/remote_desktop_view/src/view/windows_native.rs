@@ -56,8 +56,17 @@ trait NativePresentationSink {
     fn hide(&mut self) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NativePresentationState {
+    #[default]
+    Open,
+    Closing,
+    Destroyed,
+}
+
 #[derive(Debug, Default)]
 struct WindowsNativePresentation {
+    state: NativePresentationState,
     active: bool,
     visible: bool,
     latest_bounds: Option<Win32ClientPhysicalBounds>,
@@ -69,6 +78,9 @@ impl WindowsNativePresentation {
         bounds: Win32ClientPhysicalBounds,
         sink: &mut S,
     ) -> Result<(), S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(());
+        }
         self.latest_bounds = Some(bounds);
         if self.active {
             sink.set_bounds(bounds)?;
@@ -81,6 +93,9 @@ impl WindowsNativePresentation {
         focus_child: bool,
         sink: &mut S,
     ) -> Result<(), S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(());
+        }
         if self.active {
             return Ok(());
         }
@@ -100,6 +115,9 @@ impl WindowsNativePresentation {
     }
 
     fn focus<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<(), S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(());
+        }
         if self.active && self.visible {
             sink.focus_child()?;
         }
@@ -107,6 +125,9 @@ impl WindowsNativePresentation {
     }
 
     fn deactivate<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<(), S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(());
+        }
         if !self.active && !self.visible {
             return Ok(());
         }
@@ -119,6 +140,36 @@ impl WindowsNativePresentation {
         self.visible = false;
         Ok(())
     }
+
+    fn begin_close<S: NativePresentationSink>(&mut self, sink: &mut S) -> Result<bool, S::Error> {
+        if self.state != NativePresentationState::Open {
+            return Ok(false);
+        }
+
+        // Close callback admission before touching focus or visibility. Even
+        // when either operation fails, late resize/focus/activate calls must
+        // never reopen the native child.
+        self.state = NativePresentationState::Closing;
+        let focus_result = sink.focus_parent();
+        let hide_result = if self.visible { sink.hide() } else { Ok(()) };
+        self.active = false;
+        self.visible = false;
+        focus_result.and(hide_result)?;
+        Ok(true)
+    }
+
+    fn finish_destroy(&mut self) {
+        if self.state == NativePresentationState::Closing {
+            self.state = NativePresentationState::Destroyed;
+        }
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeCloseProgress {
+    Ready,
+    WaitingForEvents { generation: u64 },
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -151,6 +202,10 @@ impl WindowsNativeAdapter {
             presentation: WindowsNativePresentation::default(),
             host,
         })
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.host.generation()
     }
 
     pub(crate) fn update_bounds(
@@ -194,6 +249,79 @@ impl WindowsNativeAdapter {
         };
         self.presentation.deactivate(&mut sink)?;
         Ok(())
+    }
+
+    pub(crate) fn begin_close(
+        &mut self,
+        focus_parent: &mut dyn FnMut(),
+    ) -> anyhow::Result<NativeCloseProgress> {
+        let mut sink = WindowsNativeHostSink {
+            host: &mut self.host,
+            focus_parent: Some(focus_parent),
+        };
+        if let Err(error) = self.presentation.begin_close(&mut sink) {
+            tracing::warn!(
+                ?error,
+                "failed to hide Windows native RDP presentation while closing"
+            );
+        }
+
+        use windows_rdp_host::{WindowsRdpHostLifecycle, WindowsRdpRequestCloseStatus};
+        match self.host.lifecycle() {
+            WindowsRdpHostLifecycle::Closed | WindowsRdpHostLifecycle::Closing => {
+                Ok(NativeCloseProgress::Ready)
+            }
+            WindowsRdpHostLifecycle::Open => match self.host.request_close()? {
+                WindowsRdpRequestCloseStatus::CanProceed => Ok(NativeCloseProgress::Ready),
+                WindowsRdpRequestCloseStatus::WaitForEvents => {
+                    Ok(NativeCloseProgress::WaitingForEvents {
+                        generation: self.host.generation(),
+                    })
+                }
+            },
+        }
+    }
+
+    pub(crate) fn close_confirmed(
+        &self,
+        state: &mut super::native_events::NativeRdpEventState,
+    ) -> bool {
+        super::native_events::drain_native_events(&self.host, state)
+            .into_iter()
+            .any(|effect| effect == super::native_events::NativeRdpUiEffect::CloseConfirmed)
+    }
+
+    pub(crate) fn finish_destroy(&mut self) -> anyhow::Result<()> {
+        self.host.close()?;
+        self.presentation.finish_destroy();
+        Ok(())
+    }
+
+    pub(crate) fn force_close(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
+        let mut sink = WindowsNativeHostSink {
+            host: &mut self.host,
+            focus_parent: Some(focus_parent),
+        };
+        if let Err(error) = self.presentation.begin_close(&mut sink) {
+            tracing::warn!(
+                ?error,
+                "failed to hide Windows native RDP presentation while force-closing"
+            );
+        }
+
+        if self.host.lifecycle() == windows_rdp_host::WindowsRdpHostLifecycle::Open
+            && let Err(error) = self.host.disconnect()
+        {
+            tracing::warn!(
+                ?error,
+                "failed to disconnect Windows native RDP before destroy"
+            );
+        }
+        self.finish_destroy()
+    }
+
+    pub(crate) fn is_destroyed(&self) -> bool {
+        self.host.is_closed()
     }
 }
 
@@ -239,8 +367,8 @@ mod tests {
     use gpui::{Bounds, point, px, size};
 
     use super::{
-        NativePresentationSink, Win32ClientPhysicalBounds, WindowsNativePresentation,
-        logical_bounds_to_physical,
+        NativePresentationSink, NativePresentationState, Win32ClientPhysicalBounds,
+        WindowsNativePresentation, logical_bounds_to_physical,
     };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,6 +509,114 @@ mod tests {
         presentation.update_bounds(latest, &mut recorder).unwrap();
 
         assert_eq!(vec![Command::SetBounds(latest)], recorder.commands);
+    }
+
+    #[test]
+    fn begin_close_focuses_parent_then_hides_and_is_idempotent() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(false, &mut recorder).unwrap();
+        recorder.commands.clear();
+
+        assert!(presentation.begin_close(&mut recorder).unwrap());
+        assert!(!presentation.begin_close(&mut recorder).unwrap());
+        assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
+        assert_eq!(NativePresentationState::Closing, presentation.state);
+    }
+
+    #[test]
+    fn closing_gate_ignores_late_resize_activate_focus_and_deactivate() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.update_bounds(bounds(), &mut recorder).unwrap();
+        presentation.activate(true, &mut recorder).unwrap();
+        presentation.begin_close(&mut recorder).unwrap();
+        recorder.commands.clear();
+
+        let late = Win32ClientPhysicalBounds {
+            x: 30,
+            y: 50,
+            width: 1280,
+            height: 720,
+        };
+        presentation.update_bounds(late, &mut recorder).unwrap();
+        presentation.activate(true, &mut recorder).unwrap();
+        presentation.focus(&mut recorder).unwrap();
+        presentation.deactivate(&mut recorder).unwrap();
+
+        assert!(recorder.commands.is_empty());
+        assert_eq!(Some(bounds()), presentation.latest_bounds);
+    }
+
+    #[test]
+    fn finish_destroy_is_idempotent() {
+        let mut presentation = WindowsNativePresentation::default();
+        let mut recorder = Recorder::default();
+
+        presentation.begin_close(&mut recorder).unwrap();
+        presentation.finish_destroy();
+        presentation.finish_destroy();
+
+        assert_eq!(NativePresentationState::Destroyed, presentation.state);
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct PresentationError;
+
+    #[derive(Default)]
+    struct FailingCloseRecorder {
+        commands: Vec<Command>,
+    }
+
+    impl NativePresentationSink for FailingCloseRecorder {
+        type Error = PresentationError;
+
+        fn set_bounds(&mut self, bounds: Win32ClientPhysicalBounds) -> Result<(), Self::Error> {
+            self.commands.push(Command::SetBounds(bounds));
+            Ok(())
+        }
+
+        fn show(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Show);
+            Ok(())
+        }
+
+        fn focus_child(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusChild);
+            Ok(())
+        }
+
+        fn focus_parent(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::FocusParent);
+            Err(PresentationError)
+        }
+
+        fn hide(&mut self) -> Result<(), Self::Error> {
+            self.commands.push(Command::Hide);
+            Err(PresentationError)
+        }
+    }
+
+    #[test]
+    fn failed_begin_close_keeps_the_admission_gate_closed() {
+        let mut presentation = WindowsNativePresentation {
+            active: true,
+            visible: true,
+            ..WindowsNativePresentation::default()
+        };
+        let mut recorder = FailingCloseRecorder::default();
+
+        assert_eq!(
+            Err(PresentationError),
+            presentation.begin_close(&mut recorder)
+        );
+        assert_eq!(vec![Command::FocusParent, Command::Hide], recorder.commands);
+        assert_eq!(NativePresentationState::Closing, presentation.state);
+        assert!(!presentation.active);
+        assert!(!presentation.visible);
     }
 
     #[test]

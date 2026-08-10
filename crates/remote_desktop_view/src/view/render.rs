@@ -196,8 +196,8 @@ impl TabContent for RemoteDesktopView {
     fn try_close(
         &mut self,
         _tab_id: &str,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Task<bool> {
         self.cursor.reset_session();
         close_runtime_once(&mut self.input_tx);
@@ -209,6 +209,72 @@ impl TabContent for RemoteDesktopView {
         self._initial_layout_task.take();
         self._output_ready_task.take();
         self._presentation_task.take();
+
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        {
+            let Some(native) = self.windows_native.as_mut() else {
+                return Task::ready(true);
+            };
+            let generation = native.generation();
+            let focus_handle = self.focus_handle.clone();
+            let progress = {
+                let mut focus_parent = || window.focus(&focus_handle, cx);
+                native.begin_close(&mut focus_parent)
+            };
+
+            let progress = match progress {
+                Ok(progress) => progress,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "failed to request graceful Windows native RDP close"
+                    );
+                    return Task::ready(matches!(
+                        self.force_close_windows_native(generation),
+                        WindowsNativeClosePoll::Closed
+                    ));
+                }
+            };
+
+            match progress {
+                windows_native::NativeCloseProgress::Ready => {
+                    return Task::ready(matches!(
+                        self.finish_windows_native_close(generation),
+                        WindowsNativeClosePoll::Closed
+                    ));
+                }
+                windows_native::NativeCloseProgress::WaitingForEvents { generation } => {
+                    let deadline = Instant::now() + WINDOWS_NATIVE_CLOSE_TIMEOUT;
+                    return cx.spawn(async move |this, cx| {
+                        loop {
+                            let timed_out = Instant::now() >= deadline;
+                            let poll = this.update(cx, |this, _| {
+                                if timed_out {
+                                    this.force_close_windows_native(generation)
+                                } else {
+                                    this.poll_windows_native_close(generation)
+                                }
+                            });
+                            match poll {
+                                Ok(WindowsNativeClosePoll::Closed) => return true,
+                                Ok(WindowsNativeClosePoll::Failed) => return false,
+                                Ok(WindowsNativeClosePoll::Pending) => {}
+                                Err(_) => {
+                                    // Entity release runs the synchronous owner-thread
+                                    // force-close fallback before this task can observe it.
+                                    return true;
+                                }
+                            }
+                            cx.background_executor()
+                                .timer(Duration::from_millis(16))
+                                .await;
+                        }
+                    });
+                }
+            }
+        }
+
+        let _ = (window, cx);
         Task::ready(true)
     }
 }

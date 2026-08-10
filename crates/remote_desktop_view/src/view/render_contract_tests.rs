@@ -73,6 +73,64 @@ fn remote_cursor_never_calls_gpui_paint_only_cursor_apis_from_output_callbacks()
 }
 
 #[test]
+fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
+    let render = include_str!("render.rs").replace("\r\n", "\n");
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+
+    let close_start = render
+        .find("fn try_close(")
+        .expect("remote desktop close implementation");
+    let close_end = render[close_start..]
+        .find("\n}\n\nimpl Render for RemoteDesktopView")
+        .map(|offset| close_start + offset)
+        .expect("end of remote desktop close implementation");
+    let close = &render[close_start..close_end];
+
+    for token in [
+        "native.begin_close(&mut focus_parent)",
+        "NativeCloseProgress::Ready",
+        "NativeCloseProgress::WaitingForEvents",
+        "poll_windows_native_close(generation)",
+        "WINDOWS_NATIVE_CLOSE_TIMEOUT",
+        "force_close_windows_native(generation)",
+    ] {
+        assert!(close.contains(token), "missing native close token: {token}");
+    }
+    assert!(close.contains("let timed_out = Instant::now() >= deadline;"));
+    assert!(close.contains("if timed_out {"));
+    assert!(
+        close.contains(
+            "} else {\n                                    this.poll_windows_native_close"
+        )
+    );
+
+    let release_start = view
+        .find("cx.on_release(move |this, cx|")
+        .expect("view release hook");
+    let release_end = view[release_start..]
+        .find("\n        })\n        .detach();")
+        .map(|offset| release_start + offset)
+        .expect("end of view release hook");
+    let release = &view[release_start..release_end];
+    assert!(release.contains("native.force_close(&mut focus_parent)"));
+    assert!(release.contains("window.focus(&focus_handle, cx);"));
+
+    for token in [
+        "NativePresentationState::Closing",
+        "self.state != NativePresentationState::Open",
+        "self.host.request_close()?",
+        "self.host.disconnect()",
+        "self.host.close()?",
+    ] {
+        assert!(
+            native.contains(token),
+            "missing native shutdown state-machine token: {token}"
+        );
+    }
+}
+
+#[test]
 fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cursor() {
     let input = include_str!("input.rs");
     let move_start = input

@@ -494,6 +494,20 @@ fn native_callback_dispatch_enforces_owner_thread_and_quiescent_close() {
             "dispatch_event(",
         ],
     );
+    assert_tokens_in_scope(
+        dispatch_source,
+        "NavopRdpResult close_callback_gate(",
+        "\n}\n\nNavopRdpResult dispatch_event(",
+        &[
+            "host->callback_state == CallbackState::Closed",
+            "host->callback_state == CallbackState::Open",
+            "host->callback_state = CallbackState::Closing",
+            "host->callbacks_in_flight != UINT32_C(0)",
+            "host->callback = nullptr",
+            "host->callback_context = nullptr",
+            "host->callback_state = CallbackState::Closed",
+        ],
+    );
     assert_contains_all(
         dispatch_source,
         &[
@@ -555,6 +569,7 @@ fn native_callback_dispatch_enforces_owner_thread_and_quiescent_close() {
             "native_dispatch_invokes_the_registered_callback_once",
             "reentrant_unregister_is_rejected_until_callback_returns",
             "reentrant_destroy_preserves_the_handle_until_callback_returns",
+            "nested_dispatch_result",
             "wrong_thread_dispatch_unregister_and_destroy_are_rejected",
             "native_dispatch_rejects_invalid_events_without_poisoning_callback",
             "navop_rdp_test_dispatch_event",

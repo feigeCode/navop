@@ -52,6 +52,8 @@ const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(150);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 const REMOTE_DESKTOP_DIAGNOSTICS_ENV: &str = "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS";
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+const WINDOWS_NATIVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
@@ -80,6 +82,14 @@ enum SessionResetReason {
     Reconnecting,
     ConnectionFailure,
     Terminated,
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsNativeClosePoll {
+    Pending,
+    Closed,
+    Failed,
 }
 
 fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
@@ -135,6 +145,8 @@ pub struct RemoteDesktopView {
     _presentation_pacing_task: Option<Task<()>>,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     windows_native: Option<windows_native::WindowsNativeAdapter>,
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    native_event_state: Option<native_events::NativeRdpEventState>,
 }
 
 impl RemoteDesktopView {
@@ -148,6 +160,28 @@ impl RemoteDesktopView {
 
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            if this.windows_native.is_some() {
+                let focus_handle = this.focus_handle.clone();
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    window.focus(&focus_handle, cx);
+                });
+                let mut focus_parent = || {};
+                let destroyed = this.windows_native.as_mut().is_some_and(|native| {
+                    if let Err(error) = native.force_close(&mut focus_parent) {
+                        tracing::warn!(
+                            ?error,
+                            "failed to force-close Windows native RDP during view release"
+                        );
+                    }
+                    native.is_destroyed()
+                });
+                if destroyed {
+                    this.windows_native.take();
+                    this.native_event_state.take();
+                }
+            }
+
             this.output_rx.take();
             this.presentation_tx.take();
             this.presentation_queue.clear();
@@ -220,6 +254,8 @@ impl RemoteDesktopView {
             _presentation_pacing_task: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native: None,
+            #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+            native_event_state: None,
         }
     }
 
@@ -252,6 +288,9 @@ impl RemoteDesktopView {
         &mut self,
         presentation: windows_native::WindowsNativeAdapter,
     ) {
+        self.native_event_state = Some(native_events::NativeRdpEventState::new(
+            presentation.generation(),
+        ));
         self.windows_native = Some(presentation);
     }
 
@@ -310,6 +349,82 @@ impl RemoteDesktopView {
 
         let _ = &mut focus_parent;
         false
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn poll_windows_native_close(&mut self, generation: u64) -> WindowsNativeClosePoll {
+        let Some(native) = self.windows_native.as_mut() else {
+            return WindowsNativeClosePoll::Closed;
+        };
+        if native.generation() != generation {
+            return WindowsNativeClosePoll::Failed;
+        }
+        let Some(event_state) = self.native_event_state.as_mut() else {
+            return WindowsNativeClosePoll::Failed;
+        };
+        if !native.close_confirmed(event_state) {
+            return WindowsNativeClosePoll::Pending;
+        }
+
+        match native.finish_destroy() {
+            Ok(()) => {
+                self.windows_native.take();
+                self.native_event_state.take();
+                WindowsNativeClosePoll::Closed
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to destroy Windows native RDP after close confirmation"
+                );
+                WindowsNativeClosePoll::Failed
+            }
+        }
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn finish_windows_native_close(&mut self, generation: u64) -> WindowsNativeClosePoll {
+        let Some(native) = self.windows_native.as_mut() else {
+            return WindowsNativeClosePoll::Closed;
+        };
+        if native.generation() != generation {
+            return WindowsNativeClosePoll::Failed;
+        }
+
+        match native.finish_destroy() {
+            Ok(()) => {
+                self.windows_native.take();
+                self.native_event_state.take();
+                WindowsNativeClosePoll::Closed
+            }
+            Err(error) => {
+                tracing::warn!(?error, "failed to destroy Windows native RDP");
+                WindowsNativeClosePoll::Failed
+            }
+        }
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn force_close_windows_native(&mut self, generation: u64) -> WindowsNativeClosePoll {
+        let Some(native) = self.windows_native.as_mut() else {
+            return WindowsNativeClosePoll::Closed;
+        };
+        if native.generation() != generation {
+            return WindowsNativeClosePoll::Failed;
+        }
+
+        let mut focus_parent = || {};
+        match native.force_close(&mut focus_parent) {
+            Ok(()) => {
+                self.windows_native.take();
+                self.native_event_state.take();
+                WindowsNativeClosePoll::Closed
+            }
+            Err(error) => {
+                tracing::warn!(?error, "failed to force-close Windows native RDP");
+                WindowsNativeClosePoll::Failed
+            }
+        }
     }
 }
 

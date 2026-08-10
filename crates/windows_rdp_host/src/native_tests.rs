@@ -1099,16 +1099,19 @@ struct ReentrantDestroyContext {
     host_slot: *mut *mut NativeRdpHost,
     calls: u32,
     destroy_result: NativeResult,
+    nested_dispatch_result: NativeResult,
 }
 
 unsafe extern "C" fn reentrant_destroy_callback(
     context: *mut c_void,
-    _event: *const NavopRdpEvent,
-    _payload: *const u8,
+    event: *const NavopRdpEvent,
+    payload: *const u8,
 ) {
     let context = unsafe { &mut *context.cast::<ReentrantDestroyContext>() };
     context.calls += 1;
     context.destroy_result = unsafe { navop_rdp_destroy(context.host_slot) };
+    context.nested_dispatch_result =
+        unsafe { navop_rdp_test_dispatch_event(*context.host_slot, event, payload) };
 }
 
 #[test]
@@ -1120,6 +1123,7 @@ fn reentrant_destroy_preserves_the_handle_until_callback_returns() {
         host_slot: &mut host,
         calls: 0,
         destroy_result: RESULT_OK,
+        nested_dispatch_result: RESULT_OK,
     };
     unsafe {
         register_callback(
@@ -1137,7 +1141,13 @@ fn reentrant_destroy_preserves_the_handle_until_callback_returns() {
     );
     assert_eq!(context.calls, 1);
     assert_eq!(context.destroy_result, RESULT_CALLBACK_IN_FLIGHT);
+    assert_eq!(context.nested_dispatch_result, RESULT_INVALID_ARGUMENT);
     assert_eq!(host, original_host);
+    assert_eq!(
+        unsafe { navop_rdp_test_dispatch_event(host, &native_event, ptr::null()) },
+        RESULT_INVALID_ARGUMENT
+    );
+    assert_eq!(context.calls, 1);
 
     assert_eq!(unsafe { navop_rdp_destroy(&mut host) }, RESULT_OK);
     assert!(host.is_null());

@@ -48,14 +48,17 @@ NavopRdpResult close_callback_gate(
     if (host == nullptr) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
-    if (host->callbacks_in_flight != UINT32_C(0)) {
-        return NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT;
-    }
     if (host->callback_state == CallbackState::Closed) {
         return NAVOP_RDP_RESULT_OK;
     }
 
-    host->callback_state = CallbackState::Closing;
+    if (host->callback_state == CallbackState::Open) {
+        host->callback_state = CallbackState::Closing;
+    }
+    if (host->callbacks_in_flight != UINT32_C(0)) {
+        return NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT;
+    }
+
     host->callback = nullptr;
     host->callback_context = nullptr;
     host->callback_state = CallbackState::Closed;
