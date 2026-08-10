@@ -173,6 +173,13 @@ pub(crate) enum NativeCloseProgress {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeDestroyProgress {
+    PendingCallbacks,
+    Destroyed,
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 pub(crate) struct WindowsNativeAdapter {
     presentation: WindowsNativePresentation,
     host: windows_rdp_host::WindowsRdpHost,
@@ -344,13 +351,25 @@ impl WindowsNativeAdapter {
         super::native_events::drain_native_events(&self.host, state)
     }
 
-    pub(crate) fn finish_destroy(&mut self) -> anyhow::Result<()> {
-        self.host.close()?;
-        self.presentation.finish_destroy();
-        Ok(())
+    pub(crate) fn finish_destroy(
+        &mut self,
+    ) -> Result<NativeDestroyProgress, windows_rdp_host::WindowsRdpHostError> {
+        match self.host.close() {
+            Ok(()) => {
+                self.presentation.finish_destroy();
+                Ok(NativeDestroyProgress::Destroyed)
+            }
+            Err(windows_rdp_host::WindowsRdpHostError::CallbackInFlight) => {
+                Ok(NativeDestroyProgress::PendingCallbacks)
+            }
+            Err(error) => Err(error),
+        }
     }
 
-    pub(crate) fn force_close(&mut self, focus_parent: &mut dyn FnMut()) -> anyhow::Result<()> {
+    pub(crate) fn force_close(
+        &mut self,
+        focus_parent: &mut dyn FnMut(),
+    ) -> Result<NativeDestroyProgress, windows_rdp_host::WindowsRdpHostError> {
         let mut sink = WindowsNativeHostSink {
             host: &mut self.host,
             focus_parent: Some(focus_parent),

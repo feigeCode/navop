@@ -180,6 +180,67 @@ fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableRe
     }
 }
 
+impl RemoteDesktopView {
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn retry_windows_native_close(
+        generation: u64,
+        mut mode: WindowsNativeCloseRetryMode,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let started_at = Instant::now();
+        let graceful_deadline = started_at + WINDOWS_NATIVE_CLOSE_TIMEOUT;
+        let hard_deadline = match mode {
+            WindowsNativeCloseRetryMode::WaitForConfirmation => {
+                graceful_deadline + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT
+            }
+            WindowsNativeCloseRetryMode::ForceClose => {
+                started_at + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT
+            }
+        };
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                let now = Instant::now();
+                if now >= hard_deadline {
+                    tracing::warn!(
+                        generation,
+                        "timed out waiting for Windows native RDP callback quiescence"
+                    );
+                    return false;
+                }
+                if matches!(mode, WindowsNativeCloseRetryMode::WaitForConfirmation)
+                    && now >= graceful_deadline
+                {
+                    mode = WindowsNativeCloseRetryMode::ForceClose;
+                }
+
+                let poll = this.update(cx, |this, _| match mode {
+                    WindowsNativeCloseRetryMode::WaitForConfirmation => {
+                        this.poll_windows_native_close(generation)
+                    }
+                    WindowsNativeCloseRetryMode::ForceClose => {
+                        this.force_close_windows_native(generation)
+                    }
+                });
+                match poll {
+                    Ok(WindowsNativeClosePoll::Closed) => return true,
+                    Ok(WindowsNativeClosePoll::Failed) => return false,
+                    Ok(WindowsNativeClosePoll::Pending) => {}
+                    Err(_) => {
+                        // Entity release owns the synchronous owner-thread
+                        // force-close fallback once this view is gone.
+                        return true;
+                    }
+                }
+
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+            }
+        })
+    }
+}
+
 impl Focusable for RemoteDesktopView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -272,47 +333,36 @@ impl TabContent for RemoteDesktopView {
                         ?error,
                         "failed to request graceful Windows native RDP close"
                     );
-                    return Task::ready(matches!(
-                        self.force_close_windows_native(generation),
-                        WindowsNativeClosePoll::Closed
-                    ));
+                    return match self.force_close_windows_native(generation) {
+                        WindowsNativeClosePoll::Closed => Task::ready(true),
+                        WindowsNativeClosePoll::Failed => Task::ready(false),
+                        WindowsNativeClosePoll::Pending => Self::retry_windows_native_close(
+                            generation,
+                            WindowsNativeCloseRetryMode::ForceClose,
+                            cx,
+                        ),
+                    };
                 }
             };
 
             match progress {
                 windows_native::NativeCloseProgress::Ready => {
-                    return Task::ready(matches!(
-                        self.finish_windows_native_close(generation),
-                        WindowsNativeClosePoll::Closed
-                    ));
+                    return match self.finish_windows_native_close(generation) {
+                        WindowsNativeClosePoll::Closed => Task::ready(true),
+                        WindowsNativeClosePoll::Failed => Task::ready(false),
+                        WindowsNativeClosePoll::Pending => Self::retry_windows_native_close(
+                            generation,
+                            WindowsNativeCloseRetryMode::ForceClose,
+                            cx,
+                        ),
+                    };
                 }
                 windows_native::NativeCloseProgress::WaitingForEvents { generation } => {
-                    let deadline = Instant::now() + WINDOWS_NATIVE_CLOSE_TIMEOUT;
-                    return cx.spawn(async move |this, cx| {
-                        loop {
-                            let timed_out = Instant::now() >= deadline;
-                            let poll = this.update(cx, |this, _| {
-                                if timed_out {
-                                    this.force_close_windows_native(generation)
-                                } else {
-                                    this.poll_windows_native_close(generation)
-                                }
-                            });
-                            match poll {
-                                Ok(WindowsNativeClosePoll::Closed) => return true,
-                                Ok(WindowsNativeClosePoll::Failed) => return false,
-                                Ok(WindowsNativeClosePoll::Pending) => {}
-                                Err(_) => {
-                                    // Entity release runs the synchronous owner-thread
-                                    // force-close fallback before this task can observe it.
-                                    return true;
-                                }
-                            }
-                            cx.background_executor()
-                                .timer(Duration::from_millis(16))
-                                .await;
-                        }
-                    });
+                    return Self::retry_windows_native_close(
+                        generation,
+                        WindowsNativeCloseRetryMode::WaitForConfirmation,
+                        cx,
+                    );
                 }
             }
         }

@@ -67,6 +67,8 @@ const WINDOWS_NATIVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 const WINDOWS_NATIVE_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+const WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 static NEXT_WINDOWS_NATIVE_RDP_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
@@ -104,6 +106,13 @@ enum WindowsNativeClosePoll {
     Pending,
     Closed,
     Failed,
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsNativeCloseRetryMode {
+    WaitForConfirmation,
+    ForceClose,
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -228,13 +237,17 @@ impl RemoteDesktopView {
                 });
                 let mut focus_parent = || {};
                 let destroyed = this.windows_native.as_mut().is_some_and(|native| {
-                    if let Err(error) = native.force_close(&mut focus_parent) {
-                        tracing::warn!(
-                            ?error,
-                            "failed to force-close Windows native RDP during view release"
-                        );
+                    match native.force_close(&mut focus_parent) {
+                        Ok(windows_native::NativeDestroyProgress::Destroyed) => true,
+                        Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false,
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                "failed to force-close Windows native RDP during view release"
+                            );
+                            native.is_destroyed()
+                        }
                     }
-                    native.is_destroyed()
                 });
                 if destroyed {
                     this.windows_native.take();
@@ -577,7 +590,8 @@ impl RemoteDesktopView {
         tracing::warn!(?error, stage, "failed to initialize Windows native RDP");
         let mut focus_parent = || {};
         let canvas_retry_available = match native.force_close(&mut focus_parent) {
-            Ok(()) => true,
+            Ok(windows_native::NativeDestroyProgress::Destroyed) => true,
+            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false,
             Err(close_error) => {
                 tracing::warn!(
                     ?close_error,
@@ -698,10 +712,13 @@ impl RemoteDesktopView {
         }
 
         match native.finish_destroy() {
-            Ok(()) => {
+            Ok(windows_native::NativeDestroyProgress::Destroyed) => {
                 self.windows_native.take();
                 self.native_event_state.take();
                 WindowsNativeClosePoll::Closed
+            }
+            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {
+                WindowsNativeClosePoll::Pending
             }
             Err(error) => {
                 tracing::warn!(
@@ -723,10 +740,13 @@ impl RemoteDesktopView {
         }
 
         match native.finish_destroy() {
-            Ok(()) => {
+            Ok(windows_native::NativeDestroyProgress::Destroyed) => {
                 self.windows_native.take();
                 self.native_event_state.take();
                 WindowsNativeClosePoll::Closed
+            }
+            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {
+                WindowsNativeClosePoll::Pending
             }
             Err(error) => {
                 tracing::warn!(?error, "failed to destroy Windows native RDP");
@@ -746,10 +766,13 @@ impl RemoteDesktopView {
 
         let mut focus_parent = || {};
         match native.force_close(&mut focus_parent) {
-            Ok(()) => {
+            Ok(windows_native::NativeDestroyProgress::Destroyed) => {
                 self.windows_native.take();
                 self.native_event_state.take();
                 WindowsNativeClosePoll::Closed
+            }
+            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {
+                WindowsNativeClosePoll::Pending
             }
             Err(error) => {
                 tracing::warn!(?error, "failed to force-close Windows native RDP");

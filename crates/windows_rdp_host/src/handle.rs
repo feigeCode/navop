@@ -474,8 +474,8 @@ mod tests {
     use super::*;
     use crate::ffi::{
         NativeEventCallback, NavopRdpConnectionOptions, NavopRdpCredentialBundle, NavopRdpEvent,
-        ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_INTERNAL_ERROR, RESULT_INVALID_ARGUMENT,
-        RESULT_INVALID_STATE,
+        ProbeFn, RESULT_ALLOCATION_FAILED, RESULT_CALLBACK_IN_FLIGHT, RESULT_INTERNAL_ERROR,
+        RESULT_INVALID_ARGUMENT, RESULT_INVALID_STATE,
     };
     use crate::options::WindowsRdpColorDepth;
 
@@ -494,6 +494,7 @@ mod tests {
         last_context: *mut c_void,
         synchronous_event: Option<FakeEvent>,
         unregister_event: Option<FakeEvent>,
+        unregister_results: std::collections::VecDeque<NativeResult>,
         unregister_failures_remaining: usize,
         destroy_failures_remaining: usize,
         nonclearing_destroy_calls_remaining: usize,
@@ -537,6 +538,7 @@ mod tests {
                 last_context: ptr::null_mut(),
                 synchronous_event: None,
                 unregister_event: None,
+                unregister_results: std::collections::VecDeque::new(),
                 unregister_failures_remaining: 0,
                 destroy_failures_remaining: 0,
                 nonclearing_destroy_calls_remaining: 0,
@@ -962,9 +964,14 @@ mod tests {
             let mut state = state.borrow_mut();
             state.call_order.push("unregister");
             state.unregister_calls += 1;
+            if let Some(result) = state.unregister_results.pop_front() {
+                if result != RESULT_OK {
+                    return Err(result);
+                }
+            }
             if state.unregister_failures_remaining > 0 {
                 state.unregister_failures_remaining -= 1;
-                return None;
+                return Err(RESULT_INTERNAL_ERROR);
             }
             let result = (
                 state.active_callback,
@@ -973,10 +980,11 @@ mod tests {
             );
             state.active_callback = None;
             state.active_context = ptr::null_mut();
-            Some(result)
+            Ok(result)
         });
-        let Some((callback, context, unregister_event)) = unregister_result else {
-            return RESULT_INTERNAL_ERROR;
+        let (callback, context, unregister_event) = match unregister_result {
+            Ok(result) => result,
+            Err(result) => return result,
         };
         if let (Some(callback), Some(event)) = (callback, unregister_event) {
             emit_callback(callback, context, event);
@@ -1971,6 +1979,47 @@ mod tests {
             call_order(),
             vec!["register", "unregister", "unregister", "destroy"]
         );
+    }
+
+    #[test]
+    fn callback_in_flight_close_is_retryable_without_destroying_or_reopening_event_gate() {
+        reset_fake_state();
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .unregister_results
+                .push_back(RESULT_CALLBACK_IN_FLIGHT);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(host.close(), Err(WindowsRdpHostError::CallbackInFlight));
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closing);
+        assert!(!host.is_closed());
+        assert!(active_callback_is_retained());
+        assert_eq!(unregister_calls(), 1);
+        assert_eq!(destroy_calls(), 0);
+        assert_eq!(call_order(), vec!["register", "unregister"]);
+
+        emit_active_callback(fake_event(42, 9, 90, &[9]));
+        assert!(host.drain_events().is_empty());
+
+        host.close()
+            .expect("callback-in-flight close should be retryable");
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Closed);
+        assert!(host.is_closed());
+        assert!(active_callback_is_cleared());
+        assert_eq!(unregister_calls(), 2);
+        assert_eq!(destroy_calls(), 1);
+        assert_eq!(
+            call_order(),
+            vec!["register", "unregister", "unregister", "destroy"]
+        );
+
+        host.close().expect("closed host should remain idempotent");
+        assert_eq!(unregister_calls(), 2);
+        assert_eq!(destroy_calls(), 1);
     }
 
     #[test]

@@ -91,19 +91,36 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "native.begin_close(&mut focus_parent)",
         "NativeCloseProgress::Ready",
         "NativeCloseProgress::WaitingForEvents",
-        "poll_windows_native_close(generation)",
-        "WINDOWS_NATIVE_CLOSE_TIMEOUT",
+        "finish_windows_native_close(generation)",
         "force_close_windows_native(generation)",
+        "WindowsNativeCloseRetryMode::WaitForConfirmation",
+        "WindowsNativeCloseRetryMode::ForceClose",
+        "Self::retry_windows_native_close(",
     ] {
         assert!(close.contains(token), "missing native close token: {token}");
     }
-    assert!(close.contains("let timed_out = Instant::now() >= deadline;"));
-    assert!(close.contains("if timed_out {"));
-    assert!(
-        close.contains(
-            "} else {\n                                    this.poll_windows_native_close"
-        )
+
+    let retry = function_body(
+        &render,
+        "fn retry_windows_native_close(",
+        "impl Focusable for RemoteDesktopView",
     );
+    for token in [
+        "WINDOWS_NATIVE_CLOSE_TIMEOUT",
+        "WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT",
+        "hard_deadline",
+        "this.poll_windows_native_close(generation)",
+        "this.force_close_windows_native(generation)",
+        "WindowsNativeClosePoll::Pending",
+        "Duration::from_millis(16)",
+    ] {
+        assert!(
+            retry.contains(token),
+            "missing native close retry token: {token}"
+        );
+    }
+    assert!(retry.contains("if now >= hard_deadline"));
+    assert!(retry.contains("return false;"));
 
     let release_start = view
         .find("cx.on_release(move |this, cx|")
@@ -121,7 +138,9 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "self.state != NativePresentationState::Open",
         "self.host.request_close()?",
         "self.host.disconnect()",
-        "self.host.close()?",
+        "WindowsRdpHostError::CallbackInFlight",
+        "NativeDestroyProgress::PendingCallbacks",
+        "NativeDestroyProgress::Destroyed",
     ] {
         assert!(
             native.contains(token),
@@ -291,7 +310,10 @@ fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_st
         "pub(crate) fn attach_windows_native_presentation",
     );
     assert!(failure.contains("let canvas_retry_available = match native.force_close"));
-    assert!(failure.contains("Ok(()) => true"));
+    assert!(failure.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => true"));
+    assert!(
+        failure.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false")
+    );
     assert!(failure.contains("Err(close_error) =>"));
     assert!(failure.contains("false"));
     assert!(failure.contains(
