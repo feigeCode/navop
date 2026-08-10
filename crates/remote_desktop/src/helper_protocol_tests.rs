@@ -1,9 +1,13 @@
 use super::*;
-use crate::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
+use crate::{
+    RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,
+    RemoteDesktopSize,
+};
 
 fn rdp_options() -> RemoteDesktopConnectionOptions {
     RemoteDesktopConnectionOptions {
         protocol: RemoteDesktopProtocol::Rdp,
+        backend_preference: RemoteDesktopBackendPreference::Auto,
         destination: "10.2.178.12:3389".to_string(),
         username: Some("administrator".to_string()),
         password: Some("Seeyon123@cd".to_string()),

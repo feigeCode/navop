@@ -22,8 +22,8 @@ mod output_debug;
 pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{
-    RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSharedFolder,
-    RemoteDesktopSize,
+    RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,
+    RemoteDesktopSharedFolder, RemoteDesktopSize,
 };
 pub use connection_test::{RemoteDesktopConnectionTestFailure, test_connection};
 pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};

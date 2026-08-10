@@ -120,7 +120,8 @@ mod tests {
     use super::*;
     use one_core::storage::{
         DatabaseType, DbConnectionConfig, ProxyConfig, ProxyType, RedisMode, RedisParams,
-        RemoteDesktopParams, RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
+        RemoteDesktopBackendPreference, RemoteDesktopParams,
+        RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
     };
 
     fn redis_connection(id: i64, name: &str, workspace_id: Option<i64>) -> StoredConnection {
@@ -722,12 +723,16 @@ mod tests {
                     password: Some("secret".to_string()),
                     credential_reference: None,
                 }),
-                backend_preference: Default::default(),
+                backend_preference: RemoteDesktopBackendPreference::WindowsNative,
             },
             None,
         );
 
         let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Rdp).unwrap();
+        assert_eq!(
+            RemoteDesktopBackendPreference::WindowsNative,
+            options.backend_preference
+        );
         let proxy = options.proxy.expect("proxy should be mapped");
 
         assert!(options.audio_playback);
@@ -751,13 +756,17 @@ mod tests {
                 read_only: false,
                 audio_playback: true,
                 proxy: None,
-                backend_preference: Default::default(),
+                backend_preference: RemoteDesktopBackendPreference::WindowsNative,
             },
             None,
         );
 
         let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Vnc).unwrap();
 
+        assert_eq!(
+            RemoteDesktopBackendPreference::Canvas,
+            options.backend_preference
+        );
         assert!(!options.audio_playback);
     }
 
@@ -1747,6 +1756,10 @@ pub(crate) fn remote_desktop_options(
     let params = conn.to_remote_desktop_params().ok()?;
     Some(RemoteDesktopConnectionOptions {
         protocol,
+        backend_preference: match protocol {
+            RemoteDesktopProtocol::Rdp => params.backend_preference,
+            RemoteDesktopProtocol::Vnc => one_core::storage::RemoteDesktopBackendPreference::Canvas,
+        },
         destination: format!("{}:{}", params.host, params.port),
         username: params.username,
         password: params.password,

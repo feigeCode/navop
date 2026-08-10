@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use connection_tunnel::ProxyTunnelConfig;
+pub use one_core::storage::RemoteDesktopBackendPreference;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +32,7 @@ impl RemoteDesktopProtocol {
 #[derive(Clone)]
 pub struct RemoteDesktopConnectionOptions {
     pub protocol: RemoteDesktopProtocol,
+    pub backend_preference: RemoteDesktopBackendPreference,
     pub destination: String,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -48,8 +50,13 @@ impl RemoteDesktopConnectionOptions {
             one_core::storage::RemoteDesktopProtocol::Rdp => RemoteDesktopProtocol::Rdp,
             one_core::storage::RemoteDesktopProtocol::Vnc => RemoteDesktopProtocol::Vnc,
         };
+        let backend_preference = match protocol {
+            RemoteDesktopProtocol::Rdp => params.backend_preference,
+            RemoteDesktopProtocol::Vnc => RemoteDesktopBackendPreference::Canvas,
+        };
         Self {
             protocol,
+            backend_preference,
             destination: format!("{}:{}", params.host, params.port),
             username: params.username,
             password: params.password,
@@ -81,6 +88,7 @@ impl fmt::Debug for RemoteDesktopConnectionOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteDesktopConnectionOptions")
             .field("protocol", &self.protocol)
+            .field("backend_preference", &self.backend_preference)
             .field("destination", &self.destination)
             .field("username_present", &self.username.is_some())
             .field("username_len", &option_len(&self.username))
@@ -134,6 +142,7 @@ fn preserved_secret(value: Option<String>) -> Option<String> {
 mod tests {
     use one_core::storage::{
         ProxyConfig as StoredProxyConfig, ProxyType as StoredProxyType,
+        RemoteDesktopBackendPreference as StoredRemoteDesktopBackendPreference,
         RemoteDesktopParams as StoredRemoteDesktopParams,
         RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
     };
@@ -144,6 +153,7 @@ mod tests {
     fn connection_options_debug_redacts_credentials_folders_and_proxy_address() {
         let options = RemoteDesktopConnectionOptions {
             protocol: RemoteDesktopProtocol::Rdp,
+            backend_preference: RemoteDesktopBackendPreference::Auto,
             destination: "10.2.178.12:3389".to_string(),
             username: Some("administrator".to_string()),
             password: Some("secret".to_string()),
@@ -206,10 +216,14 @@ mod tests {
                     password: Some("proxy-secret".to_string()),
                     credential_reference: None,
                 }),
-                backend_preference: Default::default(),
+                backend_preference: StoredRemoteDesktopBackendPreference::WindowsNative,
             });
 
         assert_eq!(RemoteDesktopProtocol::Rdp, options.protocol);
+        assert_eq!(
+            StoredRemoteDesktopBackendPreference::WindowsNative,
+            options.backend_preference
+        );
         assert_eq!("xrdp.example:3390", options.destination);
         assert_eq!(Some("alice".to_string()), options.username);
         assert_eq!(Some("secret".to_string()), options.password);
@@ -239,10 +253,14 @@ mod tests {
                 read_only: false,
                 audio_playback: true,
                 proxy: None,
-                backend_preference: Default::default(),
+                backend_preference: StoredRemoteDesktopBackendPreference::WindowsNative,
             });
 
         assert_eq!(RemoteDesktopProtocol::Vnc, options.protocol);
+        assert_eq!(
+            StoredRemoteDesktopBackendPreference::Canvas,
+            options.backend_preference
+        );
         assert!(!options.audio_playback);
     }
 }

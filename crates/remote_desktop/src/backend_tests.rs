@@ -3,8 +3,8 @@ use std::fs;
 use tempfile::TempDir;
 
 use crate::{
-    RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopProviderRegistry,
-    backend::RemoteDesktopProviderVersionError,
+    RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,
+    RemoteDesktopProviderRegistry, backend::RemoteDesktopProviderVersionError,
 };
 use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType, TunnelGuard};
 
@@ -127,6 +127,7 @@ fn proxied_options_use_loopback_destination_and_keep_guard() {
 fn options(protocol: RemoteDesktopProtocol) -> RemoteDesktopConnectionOptions {
     RemoteDesktopConnectionOptions {
         protocol,
+        backend_preference: RemoteDesktopBackendPreference::Auto,
         destination: "127.0.0.1:3389".to_string(),
         username: None,
         password: None,
