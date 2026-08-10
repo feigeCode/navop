@@ -94,6 +94,7 @@ shell-words = "1.1.1"
 smallvec = "1"
 smol = "2"
 sys-locale = "0.3.2"
+sysinfo = { version = "0.31.4", default-features = false, features = ["user"] }
 tracing = "0.1.41"
 
 

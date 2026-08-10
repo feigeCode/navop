@@ -5,6 +5,7 @@ use crate::{
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use russh::ChannelMsg;
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
 use russh_sftp::client::RawSftpSession;
@@ -19,7 +20,7 @@ use ssh::{
     ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig, add_legacy_algorithm_hint,
     authenticate_with_strategy, build_client_preferred_algorithms_with_legacy, defaults,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -35,6 +36,8 @@ const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
 const PIPELINE_CHUNK_SIZE: u32 = 61440; // 60 KB per read request (within 65535 packet limit)
 const MAX_INFLIGHT_REQUESTS: usize = 64; // 最多 64 个并发请求
 const PIPELINE_THRESHOLD: u64 = 512 * 1024; // 超过 512 KB 的文件才走流水线
+const OWNER_LOOKUP_BATCH_SIZE: usize = 128;
+const OWNER_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A downloaded file is written beside its destination and becomes visible
 /// only after the complete byte range has been verified and synced.
@@ -1053,11 +1056,45 @@ enum SessionOwner {
     },
 }
 
+struct OwnerLookupChannel(Option<russh::Channel<client::Msg>>);
+
+impl OwnerLookupChannel {
+    fn new(channel: russh::Channel<client::Msg>) -> Self {
+        Self(Some(channel))
+    }
+
+    fn channel(&mut self) -> &mut russh::Channel<client::Msg> {
+        self.0
+            .as_mut()
+            .expect("owner lookup channel is available until it is closed")
+    }
+
+    async fn close(mut self) {
+        if let Some(channel) = self.0.take() {
+            let _ = channel.close().await;
+        }
+    }
+}
+
+impl Drop for OwnerLookupChannel {
+    fn drop(&mut self) {
+        let Some(channel) = self.0.take() else {
+            return;
+        };
+
+        tokio::spawn(async move {
+            let _ = channel.close().await;
+        });
+    }
+}
+
 pub struct RusshSftpClient {
     sftp: SftpSession,
     owner: SessionOwner,
     /// 懒初始化的原始 SFTP 会话，用于流水线下载
     raw_sftp: Option<Arc<RawSftpSession>>,
+    owner_names: BTreeMap<u32, Option<String>>,
+    owner_lookup_disabled: bool,
 }
 
 impl RusshSftpClient {
@@ -1073,6 +1110,8 @@ impl RusshSftpClient {
             sftp,
             owner: SessionOwner::Shared { client },
             raw_sftp: None,
+            owner_names: BTreeMap::new(),
+            owner_lookup_disabled: false,
         })
     }
 
@@ -1143,6 +1182,123 @@ impl RusshSftpClient {
                 .map_err(|error| anyhow!("Failed to reserve file {path}: {error}"))?;
         }
         Ok(())
+    }
+
+    async fn resolve_entry_owners(&mut self, entries: &mut [FileEntry]) {
+        if !self.owner_lookup_disabled {
+            let unresolved = entries
+                .iter()
+                .filter(|entry| entry.user.as_deref().is_none_or(|user| user.is_empty()))
+                .filter_map(|entry| entry.uid)
+                .filter(|uid| !self.owner_names.contains_key(uid))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .take(OWNER_LOOKUP_BATCH_SIZE)
+                .collect::<Vec<_>>();
+
+            if !unresolved.is_empty() {
+                match self.lookup_owner_names(&unresolved).await {
+                    Ok(mut names) => {
+                        for uid in unresolved {
+                            self.owner_names.insert(uid, names.remove(&uid));
+                        }
+                    }
+                    Err(error) => {
+                        tracing::debug!(
+                            "SFTP owner name lookup is unavailable; keeping numeric UIDs: {}",
+                            error
+                        );
+                        self.owner_lookup_disabled = true;
+                    }
+                }
+            }
+        }
+
+        for entry in entries {
+            if entry.user.as_deref().is_some_and(|user| !user.is_empty()) {
+                continue;
+            }
+
+            let Some(uid) = entry.uid else {
+                continue;
+            };
+            if let Some(Some(user)) = self.owner_names.get(&uid) {
+                entry.user = Some(user.clone());
+            }
+        }
+    }
+
+    async fn lookup_owner_names(&self, uids: &[u32]) -> Result<BTreeMap<u32, String>> {
+        if uids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let command = build_owner_lookup_command(uids);
+        let (stdout, exit_status) = self.run_owner_lookup_command(&command).await?;
+        if exit_status != 0 {
+            return Err(anyhow!(
+                "remote owner lookup command exited with status {}",
+                exit_status
+            ));
+        }
+
+        Ok(parse_owner_lookup_output(&stdout))
+    }
+
+    async fn run_owner_lookup_command(&self, command: &str) -> Result<(String, u32)> {
+        tokio::time::timeout(OWNER_LOOKUP_TIMEOUT, async {
+            let channel = match &self.owner {
+                SessionOwner::Owned { session, .. } => session.channel_open_session().await?,
+                SessionOwner::Shared { client } => {
+                    let mut guard = client.lock().await;
+                    guard.open_raw_channel().await?
+                }
+            };
+            let mut channel = OwnerLookupChannel::new(channel);
+
+            channel.channel().exec(true, command).await?;
+
+            let mut stdout = Vec::new();
+            let mut exit_status = None;
+            let mut exit_signal = None;
+
+            while let Some(message) = channel.channel().wait().await {
+                match message {
+                    ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
+                    ChannelMsg::ExitStatus {
+                        exit_status: status,
+                    } => exit_status = Some(status),
+                    ChannelMsg::ExitSignal {
+                        signal_name,
+                        error_message,
+                        ..
+                    } => {
+                        exit_signal = Some((format!("{signal_name:?}"), error_message));
+                        break;
+                    }
+                    ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+
+            channel.close().await;
+
+            if let Some((signal_name, error_message)) = exit_signal {
+                return Err(anyhow!(
+                    "remote owner lookup terminated by signal {}: {}",
+                    signal_name,
+                    error_message
+                ));
+            }
+
+            let exit_status = exit_status.ok_or_else(|| {
+                anyhow!("remote owner lookup closed without reporting an exit status")
+            })?;
+
+            Ok((String::from_utf8_lossy(&stdout).into_owned(), exit_status))
+        })
+        .await
+        .map_err(|_| anyhow!("remote owner lookup timed out"))?
     }
 
     /// 在已有 SSH 连接上创建一个新的 RawSftpSession 用于流水线操作
@@ -1781,6 +1937,8 @@ impl SftpClient for RusshSftpClient {
                 _jump_session: jump_session,
             },
             raw_sftp: None,
+            owner_names: BTreeMap::new(),
+            owner_lookup_disabled: false,
         })
     }
 
@@ -1827,6 +1985,8 @@ impl SftpClient for RusshSftpClient {
                 group,
             });
         }
+
+        self.resolve_entry_owners(&mut entries).await;
 
         entries.sort_by(|a, b| {
             if a.is_dir == b.is_dir {
@@ -2680,6 +2840,33 @@ impl SftpClient for RusshSftpClient {
     }
 }
 
+fn build_owner_lookup_command(uids: &[u32]) -> String {
+    let uids = uids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "command -v id >/dev/null 2>&1 || exit 127; \
+         for uid in {uids}; do \
+         name=$(id -nu \"$uid\" 2>/dev/null) || continue; \
+         [ -n \"$name\" ] && printf '%s\\t%s\\n' \"$uid\" \"$name\"; \
+         done; exit 0"
+    )
+}
+
+fn parse_owner_lookup_output(output: &str) -> BTreeMap<u32, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (uid, user) = line.split_once('\t')?;
+            let uid = uid.parse::<u32>().ok()?;
+            let user = user.trim();
+            (!user.is_empty()).then(|| (uid, user.to_owned()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3493,5 +3680,25 @@ mod tests {
             fs::metadata(temporary_path).await.is_err(),
             "temporary name must disappear after commit"
         );
+    }
+
+    #[test]
+    fn owner_lookup_command_contains_only_requested_numeric_uids() {
+        let command = build_owner_lookup_command(&[0, 1000, 1001]);
+
+        assert!(command.contains("for uid in 0 1000 1001"));
+        assert!(command.contains("id -nu \"$uid\""));
+    }
+
+    #[test]
+    fn owner_lookup_output_ignores_malformed_rows() {
+        let owners = parse_owner_lookup_output(
+            "0\troot\n1000\tdeploy\nnot-a-uid\tignored\n1001\t\nmalformed\n",
+        );
+
+        assert_eq!(Some(&"root".to_string()), owners.get(&0));
+        assert_eq!(Some(&"deploy".to_string()), owners.get(&1000));
+        assert!(!owners.contains_key(&1001));
+        assert_eq!(2, owners.len());
     }
 }

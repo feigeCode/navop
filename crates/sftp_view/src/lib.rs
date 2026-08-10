@@ -595,7 +595,24 @@ fn format_permissions(mode: u32, is_dir: bool) -> String {
 fn local_file_owner(metadata: &std::fs::Metadata) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
 
-    Some(metadata.uid().to_string())
+    static USER_NAMES: std::sync::OnceLock<std::collections::BTreeMap<u32, String>> =
+        std::sync::OnceLock::new();
+
+    let uid = metadata.uid();
+    let user_names = USER_NAMES.get_or_init(|| {
+        sysinfo::Users::new_with_refreshed_list()
+            .list()
+            .iter()
+            .map(|user| (**user.id(), user.name().to_owned()))
+            .collect()
+    });
+
+    Some(
+        user_names
+            .get(&uid)
+            .cloned()
+            .unwrap_or_else(|| uid.to_string()),
+    )
 }
 
 #[cfg(not(unix))]

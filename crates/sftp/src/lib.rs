@@ -43,12 +43,10 @@ pub struct FileEntry {
 impl FileEntry {
     /// Returns the owner reported by the remote server.
     ///
-    /// SFTP v3 servers commonly expose only a numeric UID. Newer/proprietary
-    /// servers may also expose a user name, in which case both values are kept
-    /// visible rather than incorrectly resolving a remote UID on the local host.
+    /// SFTP v3 servers commonly expose only a numeric UID. When the remote user
+    /// name is available, prefer it and keep the UID only as a fallback.
     pub fn owner_display(&self) -> Option<String> {
         match (&self.user, self.uid) {
-            (Some(user), Some(uid)) if !user.is_empty() => Some(format!("{user} ({uid})")),
             (Some(user), _) if !user.is_empty() => Some(user.clone()),
             (_, Some(uid)) => Some(uid.to_string()),
             _ => None,
@@ -223,9 +221,9 @@ mod tests {
     }
 
     #[test]
-    fn owner_display_prefers_server_user_name_and_keeps_uid() {
+    fn owner_display_prefers_server_user_name() {
         assert_eq!(
-            Some("deploy (1001)".to_string()),
+            Some("deploy".to_string()),
             file_entry(Some("deploy"), Some(1001)).owner_display()
         );
     }

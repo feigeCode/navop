@@ -390,6 +390,7 @@ struct RemoteFileItem {
     modified: SystemTime,
     is_dir: bool,
     permissions: String,
+    owner: Option<String>,
     directory_size: DirectorySizeState,
 }
 
@@ -1810,13 +1811,17 @@ impl FileManagerPanel {
                         this.items = entries
                             .into_iter()
                             .filter(|e| e.name != "." && e.name != "..")
-                            .map(|e| RemoteFileItem {
-                                name: e.name,
-                                size: e.size,
-                                modified: e.modified,
-                                is_dir: e.is_dir,
-                                permissions: format!("{:o}", e.permissions & 0o7777),
-                                directory_size: DirectorySizeState::Unknown,
+                            .map(|e| {
+                                let owner = e.owner_display();
+                                RemoteFileItem {
+                                    name: e.name,
+                                    size: e.size,
+                                    modified: e.modified,
+                                    is_dir: e.is_dir,
+                                    permissions: format!("{:o}", e.permissions & 0o7777),
+                                    owner,
+                                    directory_size: DirectorySizeState::Unknown,
+                                }
                             })
                             .collect();
                         this.sort_items();
@@ -2148,6 +2153,7 @@ impl FileManagerPanel {
         } else {
             item.permissions.clone()
         };
+        let owner = item.owner.clone().unwrap_or_else(|| "-".to_string());
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
@@ -2183,6 +2189,10 @@ impl FileManagerPanel {
                         .child(property_row(
                             t!("FileManager.property_permissions").to_string(),
                             permissions.clone(),
+                        ))
+                        .child(property_row(
+                            t!("FileManager.property_owner").to_string(),
+                            owner.clone(),
                         )),
                 )
                 .close_button(true)
@@ -5604,6 +5614,7 @@ mod tests {
             modified: std::time::UNIX_EPOCH,
             is_dir: false,
             permissions: String::new(),
+            owner: None,
             directory_size: super::DirectorySizeState::Unknown,
         };
         let ready_directory = super::RemoteFileItem {
@@ -5612,6 +5623,7 @@ mod tests {
             modified: std::time::UNIX_EPOCH,
             is_dir: true,
             permissions: String::new(),
+            owner: None,
             directory_size: super::DirectorySizeState::Ready(0),
         };
         let calculating_directory = super::RemoteFileItem {
@@ -5639,6 +5651,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5647,6 +5660,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: true,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5655,6 +5669,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
         ];
@@ -5686,6 +5701,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5694,6 +5710,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: true,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5702,6 +5719,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
         ];
@@ -5753,6 +5771,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5761,6 +5780,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: true,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
             super::RemoteFileItem {
@@ -5769,6 +5789,7 @@ mod tests {
                 modified: std::time::UNIX_EPOCH,
                 is_dir: false,
                 permissions: String::new(),
+                owner: None,
                 directory_size: super::DirectorySizeState::Unknown,
             },
         ];

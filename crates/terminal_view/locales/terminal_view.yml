@@ -1757,6 +1757,10 @@ FileManager:
     en: Permissions
     zh-CN: 权限
     zh-HK: 權限
+  property_owner:
+    en: Owner
+    zh-CN: 拥有者
+    zh-HK: 擁有者
   copy_ready:
     en: Files copied. Choose a destination and paste.
     zh-CN: 已复制文件，请选择目标位置后粘贴
