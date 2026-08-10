@@ -1823,6 +1823,46 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Rollback:** 若 graceful close 不稳定，可保留短 timeout 后强制销毁，但不得跳过 focus/hide/unadvise。
 
+#### Execution Notes (2026-08-10) — callback quiescence 与有界关闭重试切片
+
+- **Red evidence:** `WindowsNativeAdapter::force_close` 从 `Result<()>` 迁移为显式
+  `NativeDestroyProgress` 后，初始化失败路径仍匹配旧的 `Ok(())`。先更新
+  `explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_start`
+  contract，要求只有 `Destroyed` 才允许显式 Canvas retry，并确认该测试因生产代码
+  仍是旧匹配而按预期失败。
+- **Green implementation:** `WindowsRdpHost::close` 遇到 native
+  `CALLBACK_IN_FLIGHT` 时保持 `Closing`、callback/context 与 opaque handle，不调用
+  destroy，也不重新打开 Rust callback admission gate；后续 owner-thread turn 可重试
+  unregister，成功后再执行唯一一次 destroy。`WindowsNativeAdapter` 将这一状态映射为
+  `NativeDestroyProgress::PendingCallbacks`，只有 `Destroyed` 才结束 presentation
+  ownership。普通 `try_close` 先等待 graceful close confirmation，2 秒后进入 force
+  close；force close 继续等待 callback quiescence，并有额外 2 秒 hard deadline，
+  每 16ms 在 GPUI owner thread 重试，避免无限等待。初始化失败同样只有确认 native
+  已销毁时才开放 Canvas retry。
+- **Release boundary:** entity release 仍在 owner thread 同步调用 force close；
+  `Destroyed` 才取出 native adapter/event state，`PendingCallbacks` 或错误不会冒充
+  cleanup 已完成。若 entity 已在异步 close task 重试期间释放，
+  `WeakEntity::update` 的错误只表示 entity 已 release，此时由 release fallback 接管。
+  app-exit host drain、dispatcher 投递失败和 UI shutdown race 仍需后续独立切片。
+- **Automated verification:** macOS host 上 `cargo fmt --all -- --check` 和
+  `git diff --check` 通过；`windows_rdp_host` 为 90 unit + 20 contract tests passed；
+  `remote_desktop_view` 默认 135 passed，`windows-native-rdp` feature-on 145 passed。
+  `windows_rdp_host --all-targets --no-deps -D warnings` Clippy 通过；
+  `remote_desktop_view --all-targets --features windows-native-rdp --no-deps` 在仅豁免仓库
+  既有 `frame_sync.rs` `derivable_impls` 后以 `-D warnings` 通过。两路独立只读审查
+  未发现本切片阻断性的重复 destroy、callback gate、状态迁移或死锁问题。
+- **Windows runner verification:** commit
+  `4df7548c5f9b3a7353bf5b14d21f800dce47b84d` 的手动 Windows workflow run
+  [`31386493350`](https://github.com/feigeCode/navop/actions/runs/31386493350)
+  成功。`Windows RDP probe (x86_64-pc-windows-msvc)` 与
+  `Windows RDP probe (i686-pc-windows-msvc)` 的 `Build ATL/MSVC probe` 均成功，
+  `Test (windows, x86_64-pc-windows-msvc)` 的 `Test Windows` 也成功。
+- **Verification boundary:** runner 证明当前 x64/i686 MSVC/ATL probe 可编译链接，
+  并证明 Windows x86_64 自动化测试通过；它不证明真实 ActiveX/RDP session、
+  交互式 child `HWND`、COM apartment shutdown、应用退出 drain 或连接中关闭 tab。
+  连接中、已连接、重连中关闭 tab及应用直接退出各重复 20 次的人工验证仍 pending，
+  因此 Task 7 整体继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback
