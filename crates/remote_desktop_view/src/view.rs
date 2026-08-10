@@ -131,6 +131,49 @@ fn next_windows_native_rdp_generation() -> u64 {
     NEXT_WINDOWS_NATIVE_RDP_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn detach_windows_native_cleanup(
+    mut native: windows_native::WindowsNativeAdapter,
+    cx: &App,
+    reason: &'static str,
+) {
+    let generation = native.generation();
+    let deadline = Instant::now() + WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT;
+    cx.spawn(async move |cx| {
+        loop {
+            let mut focus_parent = || {};
+            match native.force_close(&mut focus_parent) {
+                Ok(windows_native::NativeDestroyProgress::Destroyed) => return,
+                Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => {}
+                Err(_) if native.is_destroyed() => return,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        generation,
+                        reason,
+                        "failed to retry detached Windows native RDP cleanup"
+                    );
+                }
+            }
+
+            if Instant::now() >= deadline {
+                tracing::error!(
+                    generation,
+                    reason,
+                    "leaking Windows native RDP adapter after detached cleanup timed out"
+                );
+                let _ = Box::leak(Box::new(native));
+                return;
+            }
+
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
+        }
+    })
+    .detach();
+}
+
 pub struct RemoteDesktopViewConfig {
     pub options: RemoteDesktopConnectionOptions,
     pub title: String,
@@ -230,28 +273,26 @@ impl RemoteDesktopView {
         cx.on_release(move |this, cx| {
             close_runtime_once(&mut this.input_tx);
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-            if this.windows_native.is_some() {
+            if let Some(mut native) = this.windows_native.take() {
+                this.native_event_state.take();
                 let focus_handle = this.focus_handle.clone();
                 let _ = window_handle.update(cx, |_, window, cx| {
                     window.focus(&focus_handle, cx);
                 });
                 let mut focus_parent = || {};
-                let destroyed = this.windows_native.as_mut().is_some_and(|native| {
-                    match native.force_close(&mut focus_parent) {
-                        Ok(windows_native::NativeDestroyProgress::Destroyed) => true,
-                        Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false,
-                        Err(error) => {
-                            tracing::warn!(
-                                ?error,
-                                "failed to force-close Windows native RDP during view release"
-                            );
-                            native.is_destroyed()
-                        }
+                let needs_detached_cleanup = match native.force_close(&mut focus_parent) {
+                    Ok(windows_native::NativeDestroyProgress::Destroyed) => false,
+                    Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => true,
+                    Err(error) => {
+                        tracing::warn!(
+                            ?error,
+                            "failed to force-close Windows native RDP during view release"
+                        );
+                        !native.is_destroyed()
                     }
-                });
-                if destroyed {
-                    this.windows_native.take();
-                    this.native_event_state.take();
+                };
+                if needs_detached_cleanup {
+                    detach_windows_native_cleanup(native, cx, "view release");
                 }
             }
 
@@ -494,6 +535,7 @@ impl RemoteDesktopView {
                 native,
                 "layout",
                 anyhow::anyhow!("native RDP layout disappeared before initialization"),
+                cx,
             );
             return;
         };
@@ -502,19 +544,20 @@ impl RemoteDesktopView {
                 native,
                 "layout",
                 anyhow::anyhow!("native RDP layout became invalid during initialization"),
+                cx,
             );
             return;
         };
         if let Err(error) =
             native.update_bounds(bounds, point(px(0.0), px(0.0)), window.scale_factor())
         {
-            self.fail_windows_native_presentation(native, "bounds", error);
+            self.fail_windows_native_presentation(native, "bounds", error, cx);
             return;
         }
         let (host, port) = match parse_destination(&self.options.destination) {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                self.fail_windows_native_presentation(native, "endpoint", error);
+                self.fail_windows_native_presentation(native, "endpoint", error, cx);
                 return;
             }
         };
@@ -527,12 +570,12 @@ impl RemoteDesktopView {
         ) {
             Ok(options) => options,
             Err(error) => {
-                self.fail_windows_native_presentation(native, "connection-options", error);
+                self.fail_windows_native_presentation(native, "connection-options", error, cx);
                 return;
             }
         };
         if let Err(error) = native.connect(&connection_options) {
-            self.fail_windows_native_presentation(native, "connect", error);
+            self.fail_windows_native_presentation(native, "connect", error, cx);
             return;
         }
 
@@ -586,20 +629,25 @@ impl RemoteDesktopView {
         mut native: windows_native::WindowsNativeAdapter,
         stage: &'static str,
         error: impl std::fmt::Debug,
+        cx: &mut Context<Self>,
     ) {
         tracing::warn!(?error, stage, "failed to initialize Windows native RDP");
         let mut focus_parent = || {};
-        let canvas_retry_available = match native.force_close(&mut focus_parent) {
-            Ok(windows_native::NativeDestroyProgress::Destroyed) => true,
-            Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false,
-            Err(close_error) => {
-                tracing::warn!(
-                    ?close_error,
-                    "failed to destroy Windows native RDP after initialization failure"
-                );
-                false
-            }
-        };
+        let (canvas_retry_available, needs_detached_cleanup) =
+            match native.force_close(&mut focus_parent) {
+                Ok(windows_native::NativeDestroyProgress::Destroyed) => (true, false),
+                Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => (false, true),
+                Err(close_error) => {
+                    tracing::warn!(
+                        ?close_error,
+                        "failed to destroy Windows native RDP after initialization failure"
+                    );
+                    (false, !native.is_destroyed())
+                }
+            };
+        if needs_detached_cleanup {
+            detach_windows_native_cleanup(native, cx, stage);
+        }
         self.fail_presentation_initialization(
             presentation::RemoteDesktopPresentation::NativeWindows,
             canvas_retry_available,

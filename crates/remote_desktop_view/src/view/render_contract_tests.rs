@@ -132,6 +132,80 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     let release = &view[release_start..release_end];
     assert!(release.contains("native.force_close(&mut focus_parent)"));
     assert!(release.contains("window.focus(&focus_handle, cx);"));
+    let native_take = release
+        .find("let Some(mut native) = this.windows_native.take()")
+        .expect("release must take ownership of the native adapter");
+    let event_state_take = release
+        .find("this.native_event_state.take();")
+        .expect("release must invalidate the native event reducer");
+    let force_close = release
+        .find("native.force_close(&mut focus_parent)")
+        .expect("release must synchronously attempt owner-thread cleanup");
+    let detached_cleanup = release
+        .find("detach_windows_native_cleanup(native, cx, \"view release\")")
+        .expect("release must retain pending native cleanup on the owner thread");
+    assert!(native_take < event_state_take);
+    assert!(event_state_take < force_close);
+    assert!(native_take < detached_cleanup);
+    assert!(release.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => false"));
+    assert!(
+        release.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => true")
+    );
+    assert!(release.contains("!native.is_destroyed()"));
+    assert!(release.contains("if needs_detached_cleanup"));
+
+    let detached_cleanup = function_body(
+        &view,
+        "fn detach_windows_native_cleanup(",
+        "pub struct RemoteDesktopViewConfig",
+    );
+    for token in [
+        "WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT",
+        "cx.spawn(async move |cx|",
+        "native.force_close(&mut focus_parent)",
+        "NativeDestroyProgress::PendingCallbacks",
+        "Duration::from_millis(16)",
+        "Box::leak(Box::new(native))",
+        ".detach();",
+    ] {
+        assert!(
+            detached_cleanup.contains(token),
+            "missing detached native cleanup token: {token}"
+        );
+    }
+    assert!(!detached_cleanup.contains("background_spawn"));
+    assert!(!detached_cleanup.contains("tokio::spawn"));
+    let foreground_spawn = detached_cleanup
+        .find("cx.spawn(async move |cx|")
+        .expect("foreground cleanup spawn");
+    let force_close = detached_cleanup
+        .find("native.force_close(&mut focus_parent)")
+        .expect("detached force close");
+    let destroyed_return = detached_cleanup
+        .find("NativeDestroyProgress::Destroyed) => return")
+        .expect("destroyed cleanup termination");
+    let already_destroyed_return = detached_cleanup
+        .find("Err(_) if native.is_destroyed() => return")
+        .expect("already-destroyed cleanup termination");
+    let deadline = detached_cleanup
+        .find("if Instant::now() >= deadline")
+        .expect("detached cleanup deadline");
+    let leak = detached_cleanup
+        .find("Box::leak(Box::new(native))")
+        .expect("fail-closed adapter leak");
+    let timer = detached_cleanup
+        .find("timer(Duration::from_millis(16))")
+        .expect("detached cleanup retry timer");
+    let detach = detached_cleanup
+        .rfind(".detach();")
+        .expect("detached cleanup task ownership");
+    assert!(foreground_spawn < force_close);
+    assert!(force_close < destroyed_return);
+    assert!(destroyed_return < already_destroyed_return);
+    assert!(already_destroyed_return < deadline);
+    assert!(deadline < leak);
+    assert!(leak < timer);
+    assert!(timer < detach);
 
     for token in [
         "NativePresentationState::Closing",
@@ -267,6 +341,16 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
             >= 5,
         "all post-create initialization failures must close the native host and fail closed"
     );
+    for (offset, _) in post_create.match_indices("self.fail_windows_native_presentation(") {
+        let invocation = &post_create[offset..];
+        let end = invocation
+            .find(");")
+            .expect("native initialization failure invocation");
+        assert!(
+            invocation[..end].contains("cx"),
+            "native initialization failure cleanup must retain ownership on the GPUI thread"
+        );
+    }
 }
 
 #[test]
@@ -309,13 +393,21 @@ fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_st
         "fn fail_windows_native_presentation",
         "pub(crate) fn attach_windows_native_presentation",
     );
-    assert!(failure.contains("let canvas_retry_available = match native.force_close"));
-    assert!(failure.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => true"));
+    assert!(failure.contains("cx: &mut Context<Self>"));
+    assert!(failure.contains("let (canvas_retry_available, needs_detached_cleanup) ="));
+    assert!(failure.contains("match native.force_close(&mut focus_parent)"));
     assert!(
-        failure.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false")
+        failure.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => (true, false)")
+    );
+    assert!(
+        failure.contains(
+            "Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => (false, true)"
+        )
     );
     assert!(failure.contains("Err(close_error) =>"));
-    assert!(failure.contains("false"));
+    assert!(failure.contains("(false, !native.is_destroyed())"));
+    assert!(failure.contains("if needs_detached_cleanup"));
+    assert!(failure.contains("detach_windows_native_cleanup(native, cx, stage);"));
     assert!(failure.contains(
         "RemoteDesktopPresentation::NativeWindows,\n            canvas_retry_available,"
     ));
