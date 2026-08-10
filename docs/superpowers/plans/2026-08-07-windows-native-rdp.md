@@ -1720,14 +1720,14 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - 未激活 tab 永远不显示 native child。
 - parent resize、tab bar resize、sidebar resize、window move/DPI change 都更新 bounds。
 
-- [ ] **Red:** presentation mock 测试 activate/deactivate 调用顺序和幂等。
-- [ ] **Red:** logical→physical bounds tests 覆盖 100/125/150/200%。
-- [ ] **Red:** inactive tab 收到 resize 时只缓存，不错误 show。
-- [ ] **Green:** 参考 WebView 的 prepaint bounds 同步实现 native element/adapter。
-- [ ] **Green:** 实现 focus handoff 和初始 hidden。
-- [ ] **Green:** native ActiveX 自行接收输入时关闭 canvas input path。
-- [ ] **Refactor:** bounds conversion 纯函数化；native command 从 render 代码抽离。
-- [ ] **Review:** 检查 GPUI content mask、tab padding、scroll、window border 坐标。
+- [x] **Red:** presentation mock 测试 activate/deactivate 调用顺序和幂等。
+- [x] **Red:** logical→physical bounds tests 覆盖 100/125/150/200%。
+- [x] **Red:** inactive tab 收到 resize 时只缓存，不错误 show。
+- [x] **Green:** 参考 WebView 的 prepaint bounds 同步实现 native element/adapter。
+- [x] **Green:** 实现 focus handoff 和初始 hidden。
+- [x] **Green:** native ActiveX 自行接收输入时关闭 canvas input path。
+- [x] **Refactor:** bounds conversion 纯函数化；native command 从 render 代码抽离。
+- [x] **Review:** 检查 GPUI content mask、tab padding、scroll、window border 坐标。
 - [ ] **Verify:** 快速切换 RDP/终端/WebView tab，resize sidebar/window，跨 monitor 拖动。
 
 **Acceptance:**
@@ -1756,6 +1756,17 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `ElementExt::on_prepaint` 获取自身真实 bounds，而不是依赖 root children 的
   `first()`/`last()` 顺序。该 bounds 继续作为 native child 的唯一布局输入，状态条不会
   被纳入 Win32 child rectangle。
+- **Task 6 contract coverage:** presentation sink 测试覆盖 activate 的
+  bounds → show → focus 顺序、deactivate 的 focus parent → hide 顺序、重复调用幂等，
+  以及 active/inactive resize 行为。`logical_bounds_to_physical` 测试显式覆盖
+  100/125/150/200% scale、负坐标、零尺寸和非法 scale factor。native backend 的
+  keyboard、mouse、scroll 与 Canvas child 均由 `uses_windows_native` gate 排除。
+- **Coordinate-space review:** GPUI `on_prepaint` 返回顶层 window client 的 logical
+  pixel bounds，而 native child 的 parent 是该顶层 window `HWND`；host ABI 接收 parent
+  client-area physical pixels。因此当前 `(bounds - (0, 0)) * scale_factor` 是有意的
+  parent-client → physical 转换，不应减去 screen origin 或 window frame origin。
+  WebView 同样直接使用 GPUI bounds origin。只有未来 parent 改为嵌套 child `HWND` 时，
+  `parent_client_origin` 才需要非零值。
 - **Automated verification:** macOS host 上
   `cargo test --locked -p remote_desktop_view` 通过 134 个测试；
   `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 通过 144 个
@@ -1766,8 +1777,12 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `--no-deps` 后仍被既有 `remote_desktop_view/src/view/frame_sync.rs` 的
   `derivable_impls` 阻断。本切片的 Windows/MSVC/ATL 编译链接交由推送后的 GitHub
   Windows runner 核验。
-- **Still pending:** 本切片不勾选 Task 6 整体完成；100/125/150/200% DPI、inactive
-  resize、快速 tab 切换、sidebar/window resize 和跨 monitor 的交互桌面验证仍待执行。
+- **Windows runner verification:** commit `676505675f80e6b16666e0589ed315174e01ba9d`
+  的手动 Windows workflow run `31374676400` 已成功；x86_64 与 i686 ATL/MSVC RDP
+  probe、Windows x86_64 workspace `Test Windows` 均通过。
+- **Still pending:** 自动化 DPI 与 inactive resize contract 已完成；真实 Windows
+  交互桌面上的快速 tab 切换、sidebar/window resize、视觉 bounds 对齐、per-monitor DPI
+  与跨 monitor 拖动仍待人工验证，因此 Task 6 的 **Verify** 项继续保持未勾选。
 
 ---
 
