@@ -282,7 +282,7 @@ impl WindowsNativeAdapter {
         }
     }
 
-    pub(crate) fn close_confirmed(
+    pub(super) fn close_confirmed(
         &self,
         state: &mut super::native_events::NativeRdpEventState,
     ) -> bool {
