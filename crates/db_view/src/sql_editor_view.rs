@@ -8,7 +8,8 @@ use gpui::{
     ParentElement, Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::input::{InputContextMenuItem, InputEvent};
+use gpui_component::input::{Input, InputContextMenuItem, InputEvent, InputState};
+use gpui_component::notification::Notification;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
@@ -18,8 +19,11 @@ use one_core::storage::{DatabaseType, QueryDirectoryScope, default_query_directo
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use one_ui::resize_handle::{ResizePanel, resize_handle};
+use parking_lot::RwLock;
 use rust_i18n::t;
 use smol::Timer;
+use std::fs::OpenOptions;
+use std::io;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -34,6 +38,93 @@ const SQL_EDITOR_INPUT_CONTEXT: &str = "SqlEditor > Input";
 const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
 const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-enter"];
 const TOGGLE_LINE_COMMENT_KEY_BINDINGS: [&str; 2] = ["cmd-/", "ctrl-/"];
+
+#[derive(Debug, PartialEq, Eq)]
+enum QueryFileNameError {
+    Empty,
+    Invalid,
+    AlreadyExists,
+    ReadDirectory(String),
+}
+
+fn query_file_path_for_name(directory: &Path, name: &str) -> Result<PathBuf, QueryFileNameError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(QueryFileNameError::Empty);
+    }
+    if is_invalid_query_file_name(name) {
+        return Err(QueryFileNameError::Invalid);
+    }
+
+    let file_name = if Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("sql"))
+    {
+        name.to_owned()
+    } else {
+        format!("{name}.sql")
+    };
+    if file_name.eq_ignore_ascii_case(".sql") {
+        return Err(QueryFileNameError::Invalid);
+    }
+
+    match std::fs::read_dir(directory) {
+        Ok(entries) => {
+            if entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&file_name)
+            }) {
+                return Err(QueryFileNameError::AlreadyExists);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(QueryFileNameError::ReadDirectory(error.to_string())),
+    }
+
+    Ok(directory.join(file_name))
+}
+
+fn is_invalid_query_file_name(name: &str) -> bool {
+    const INVALID_CHARACTERS: [char; 9] = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+    const RESERVED_NAMES: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    if matches!(name, "." | "..")
+        || name.chars().any(char::is_control)
+        || name
+            .chars()
+            .any(|character| INVALID_CHARACTERS.contains(&character))
+    {
+        return true;
+    }
+    let base_name = name.split('.').next().unwrap_or(name);
+    RESERVED_NAMES
+        .iter()
+        .any(|reserved| base_name.eq_ignore_ascii_case(reserved))
+}
+
+fn write_sql_file(file_path: &Path, sql: &str) -> io::Result<()> {
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(file_path, sql)
+}
+
+fn write_new_sql_file(file_path: &Path, sql: &str) -> io::Result<()> {
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(file_path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, sql.as_bytes()))
+}
 
 gpui::actions!(
     sql_editor_view,
@@ -550,7 +641,8 @@ pub struct SqlEditorTab {
     supports_schema: bool,
     uses_schema_as_database: bool,
     focus_handle: FocusHandle,
-    file_path: PathBuf,
+    file_path: Arc<RwLock<PathBuf>>,
+    requires_name: Arc<AtomicBool>,
     _save_task: Option<Task<()>>,
     result_panel_size: Pixels,
     resizing: bool,
@@ -598,6 +690,7 @@ impl SqlEditorTab {
         );
 
         let should_load_file = config.file_path.is_some();
+        let requires_name = Arc::new(AtomicBool::new(!should_load_file));
         let resolved_file_path = match config.file_path {
             Some(path) => path,
             None => match config.new_file_directory {
@@ -625,7 +718,8 @@ impl SqlEditorTab {
             supports_schema,
             uses_schema_as_database,
             focus_handle,
-            file_path: resolved_file_path.clone(),
+            file_path: Arc::new(RwLock::new(resolved_file_path.clone())),
+            requires_name: requires_name.clone(),
             _save_task: None,
             result_panel_size: RESULT_PANEL_DEFAULT_SIZE,
             resizing: false,
@@ -639,7 +733,7 @@ impl SqlEditorTab {
         instance.configure_editor_context_menu(cx);
         instance.bind_select_event(cx);
         instance.bind_transaction_mode_select_event(window, cx);
-        instance.bind_auto_save(auto_save_seq, is_dirty, window, cx);
+        instance.bind_auto_save(auto_save_seq, is_dirty, requires_name, window, cx);
         instance.load_databases_async(
             initial_select_value,
             initial_schema,
@@ -715,8 +809,8 @@ impl SqlEditorTab {
         dir_path.join(file_name)
     }
 
-    pub fn get_file_path(&self) -> &PathBuf {
-        &self.file_path
+    pub fn get_file_path(&self) -> PathBuf {
+        self.file_path.read().clone()
     }
 
     fn bind_select_event(&self, cx: &mut Context<Self>) {
@@ -793,6 +887,7 @@ impl SqlEditorTab {
         &self,
         auto_save_seq: Arc<AtomicU64>,
         is_dirty: Arc<AtomicBool>,
+        requires_name: Arc<AtomicBool>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -824,6 +919,7 @@ impl SqlEditorTab {
                     let seq_clone = auto_save_seq.clone();
                     let dirty_clone = is_dirty.clone();
                     let file_path_clone = file_path.clone();
+                    let requires_name_clone = requires_name.clone();
                     let editor_clone = editor_entity.clone();
 
                     // 启动防抖定时保存
@@ -841,6 +937,10 @@ impl SqlEditorTab {
                             return;
                         }
 
+                        if requires_name_clone.load(Ordering::Relaxed) {
+                            return;
+                        }
+
                         // 执行保存
                         let _ = cx.update(|cx| {
                             let sql = editor_clone.read(cx).get_text(cx);
@@ -848,28 +948,15 @@ impl SqlEditorTab {
                                 return;
                             }
 
-                            // 创建目录
-                            if let Some(parent) = file_path_clone.parent() {
-                                if let Err(e) = std::fs::create_dir_all(parent) {
-                                    error!(
-                                        "{}",
-                                        t!(
-                                            "SqlEditorView.create_dir_failed",
-                                            path = format!("{:?}", parent),
-                                            error = e
-                                        )
-                                    );
-                                    return;
-                                }
-                            }
+                            let file_path = file_path_clone.read().clone();
 
                             // 写入文件
-                            if let Err(e) = std::fs::write(&file_path_clone, &sql) {
+                            if let Err(e) = write_sql_file(&file_path, &sql) {
                                 error!(
                                     "{}",
                                     t!(
                                         "SqlEditorView.auto_save_failed",
-                                        path = format!("{:?}", file_path_clone),
+                                        path = format!("{:?}", file_path),
                                         error = e
                                     )
                                 );
@@ -1545,24 +1632,130 @@ impl SqlEditorTab {
         .detach();
     }
 
-    pub fn save_query(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.save_to_file(cx);
-    }
-
-    fn save_to_file(&self, cx: &App) {
+    pub fn save_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let sql = self.get_sql_text(cx);
-        let file_path = self.file_path.clone();
-
-        if let Some(parent) = file_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                error!("Failed to create directory {:?}: {}", parent, e);
-                return;
+        if self.requires_name.load(Ordering::Relaxed) {
+            if sql.trim().is_empty() {
+                return true;
+            }
+            self.show_save_name_dialog(window, cx);
+            return false;
+        }
+        match self.save_to_file(cx) {
+            Ok(()) => true,
+            Err(error) => {
+                self.notify_save_failed(error, window, cx);
+                false
             }
         }
+    }
 
-        if let Err(e) = std::fs::write(&file_path, sql) {
-            error!("Failed to save SQL file {:?}: {}", file_path, e);
+    fn save_to_file(&self, cx: &App) -> io::Result<()> {
+        let sql = self.get_sql_text(cx);
+        let file_path = self.file_path.read().clone();
+        write_sql_file(&file_path, &sql)?;
+        self.is_dirty.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn show_save_name_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("Query.enter_query_name").to_string())
+        });
+        let input_for_focus = input.clone();
+        let view = cx.entity();
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let input_for_ok = input.clone();
+            let view_for_ok = view.clone();
+            dialog
+                .title(t!("Query.save_query_title").to_string())
+                .w(px(380.0))
+                .confirm()
+                .on_ok(move |_, window, cx| {
+                    let name = input_for_ok.read(cx).value().trim().to_owned();
+                    view_for_ok.update(cx, |view, cx| view.save_named_query(&name, window, cx))
+                })
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(h_flex().child(t!("Query.enter_query_name").to_string()))
+                        .child(Input::new(&input).w_full()),
+                )
+        });
+        window.defer(cx, move |window, cx| {
+            input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+        });
+    }
+
+    fn save_named_query(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let directory = self
+            .file_path
+            .read()
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let file_path = match query_file_path_for_name(&directory, name) {
+            Ok(file_path) => file_path,
+            Err(error) => {
+                self.notify_query_name_error(error, window, cx);
+                return false;
+            }
+        };
+        let sql = self.get_sql_text(cx);
+        if sql.trim().is_empty() {
+            window.push_notification(t!("Query.query_content_empty").to_string(), cx);
+            return false;
         }
+        if let Err(error) = write_new_sql_file(&file_path, &sql) {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                self.notify_query_name_error(QueryFileNameError::AlreadyExists, window, cx);
+            } else {
+                self.notify_save_failed(error, window, cx);
+            }
+            return false;
+        }
+
+        *self.file_path.write() = file_path;
+        self.requires_name.store(false, Ordering::Relaxed);
+        self.finish_successful_save(window, cx);
+        true
+    }
+
+    fn notify_query_name_error(
+        &self,
+        error: QueryFileNameError,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let message = match error {
+            QueryFileNameError::Empty => t!("Query.query_name_empty").to_string(),
+            QueryFileNameError::Invalid => t!("Query.query_name_invalid").to_string(),
+            QueryFileNameError::AlreadyExists => t!("Query.query_name_exists").to_string(),
+            QueryFileNameError::ReadDirectory(error) => {
+                t!("Query.query_save_failed", error = error).to_string()
+            }
+        };
+        window.push_notification(Notification::error(message).autohide(true), cx);
+    }
+
+    fn notify_save_failed(&self, error: io::Error, window: &mut Window, cx: &mut Context<Self>) {
+        let message = t!("Query.query_save_failed", error = error).to_string();
+        window.push_notification(Notification::error(message).autohide(true), cx);
+    }
+
+    fn finish_successful_save(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_dirty.store(false, Ordering::Relaxed);
+        window.push_notification(t!("Query.query_saved").to_string(), cx);
+        cx.emit(SqlEditorEvent::QuerySaved {
+            connection_id: self.connection_id.clone(),
+            database: self.database_select.read(cx).selected_value().cloned(),
+        });
     }
 
     pub fn save_and_close(
@@ -1572,7 +1765,9 @@ impl SqlEditorTab {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.save_to_file(cx);
+        if !self.save_query(_window, cx) {
+            return;
+        }
         tab_container.update(cx, |container, cx| {
             container.force_close_tab_by_id(&tab_id, _window, cx);
         });
@@ -1589,12 +1784,14 @@ impl SqlEditorTab {
             return;
         }
 
-        self.save_to_file(cx);
-        window.push_notification(t!("Query.query_saved").to_string(), cx);
-        cx.emit(SqlEditorEvent::QuerySaved {
-            connection_id: self.connection_id.clone(),
-            database: self.database_select.read(cx).selected_value().cloned(),
-        });
+        if self.requires_name.load(Ordering::Relaxed) {
+            self.show_save_name_dialog(window, cx);
+            return;
+        }
+        match self.save_to_file(cx) {
+            Ok(()) => self.finish_successful_save(window, cx),
+            Err(error) => self.notify_save_failed(error, window, cx),
+        }
     }
 
     fn handle_show_results(
@@ -1929,6 +2126,7 @@ impl Clone for SqlEditorTab {
             uses_schema_as_database: self.uses_schema_as_database,
             focus_handle: self.focus_handle.clone(),
             file_path: self.file_path.clone(),
+            requires_name: self.requires_name.clone(),
             _save_task: None,
             result_panel_size: self.result_panel_size,
             resizing: false,
@@ -1978,8 +2176,7 @@ impl TabContent for SqlEditorTab {
             window.push_notification(t!("Query.transaction_finish_before_close").to_string(), cx);
             return Task::ready(false);
         }
-        self.save_query(window, cx);
-        Task::ready(true)
+        Task::ready(self.save_query(window, cx))
     }
 }
 
@@ -2073,17 +2270,19 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        ManualTransactionAction, ManualTransactionSession, RUN_ALL_QUERY_KEY_BINDINGS,
-        RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SQL_EDITOR_CONTEXT,
-        SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment, initial_database_select_value,
-        manual_transaction_control_sql, should_render_schema_select, sql_text_for_run_all,
-        sql_text_for_run_current, sql_text_for_run_cursor_statement, sql_text_for_toolbar_run,
-        supports_manual_transactions, toggle_sql_line_comments,
+        ManualTransactionAction, ManualTransactionSession, QueryFileNameError,
+        RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
+        SQL_EDITOR_CONTEXT, SQL_EDITOR_INPUT_CONTEXT, ToggleLineComment,
+        initial_database_select_value, manual_transaction_control_sql, query_file_path_for_name,
+        should_render_schema_select, sql_text_for_run_all, sql_text_for_run_current,
+        sql_text_for_run_cursor_statement, sql_text_for_toolbar_run, supports_manual_transactions,
+        toggle_sql_line_comments, write_new_sql_file, write_sql_file,
     };
     use db::DbManager;
     use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
     use gpui_component::input;
     use one_core::storage::DatabaseType;
+    use std::path::PathBuf;
 
     const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
 
@@ -2109,6 +2308,133 @@ mod tests {
                     .map(str::to_string)
             })
             .or(Some(sql))
+    }
+
+    fn temp_query_dir(test_name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "navop-sql-editor-{test_name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&path).expect("temporary query directory should be created");
+        path
+    }
+
+    #[test]
+    fn query_file_path_requires_non_empty_name() {
+        let directory = temp_query_dir("empty-name");
+
+        assert_eq!(
+            Err(QueryFileNameError::Empty),
+            query_file_path_for_name(&directory, "")
+        );
+        assert_eq!(
+            Err(QueryFileNameError::Empty),
+            query_file_path_for_name(&directory, "   ")
+        );
+
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn query_file_path_rejects_path_components() {
+        let directory = temp_query_dir("path-components");
+
+        assert_eq!(
+            Err(QueryFileNameError::Invalid),
+            query_file_path_for_name(&directory, "../report")
+        );
+        assert_eq!(
+            Err(QueryFileNameError::Invalid),
+            query_file_path_for_name(&directory, "nested/report")
+        );
+
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn query_file_path_rejects_cross_platform_invalid_names() {
+        let directory = temp_query_dir("invalid-names");
+
+        assert_eq!(
+            Err(QueryFileNameError::Invalid),
+            query_file_path_for_name(&directory, "report:daily")
+        );
+        assert_eq!(
+            Err(QueryFileNameError::Invalid),
+            query_file_path_for_name(&directory, "CON")
+        );
+        assert_eq!(
+            Err(QueryFileNameError::Invalid),
+            query_file_path_for_name(&directory, "nul.sql")
+        );
+
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn query_file_path_appends_sql_extension_once() {
+        let directory = temp_query_dir("extension");
+
+        assert_eq!(
+            Ok(directory.join("report.sql")),
+            query_file_path_for_name(&directory, "report")
+        );
+        assert_eq!(
+            Ok(directory.join("report.sql")),
+            query_file_path_for_name(&directory, "report.sql")
+        );
+
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn query_file_path_rejects_duplicate_name_case_insensitively() {
+        let directory = temp_query_dir("duplicate");
+        let existing_path = directory.join("Report.sql");
+        std::fs::write(&existing_path, "select 1;").expect("fixture query should be written");
+
+        assert_eq!(
+            Err(QueryFileNameError::AlreadyExists),
+            query_file_path_for_name(&directory, "report")
+        );
+        assert_eq!(
+            "select 1;",
+            std::fs::read_to_string(existing_path).expect("fixture query should remain readable")
+        );
+
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn write_sql_file_overwrites_current_named_query() {
+        let directory = temp_query_dir("overwrite");
+        let file_path = directory.join("report.sql");
+        std::fs::write(&file_path, "select 1;").expect("fixture query should be written");
+
+        write_sql_file(&file_path, "select 2;").expect("named query should be overwritten");
+
+        assert_eq!(
+            "select 2;",
+            std::fs::read_to_string(file_path).expect("saved query should be readable")
+        );
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
+    }
+
+    #[test]
+    fn write_new_sql_file_does_not_overwrite_existing_query() {
+        let directory = temp_query_dir("create-new");
+        let file_path = directory.join("report.sql");
+        std::fs::write(&file_path, "select 1;").expect("fixture query should be written");
+
+        let error = write_new_sql_file(&file_path, "select 2;")
+            .expect_err("new query save should reject an existing file");
+
+        assert_eq!(std::io::ErrorKind::AlreadyExists, error.kind());
+        assert_eq!(
+            "select 1;",
+            std::fs::read_to_string(file_path).expect("existing query should remain unchanged")
+        );
+        std::fs::remove_dir_all(directory).expect("temporary query directory should be removed");
     }
 
     #[test]

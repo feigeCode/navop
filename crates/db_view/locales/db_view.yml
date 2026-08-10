@@ -1227,6 +1227,22 @@ Query:
     en: Query Name
     zh-CN: 查询名称
     zh-HK: 查詢名稱
+  query_name_empty:
+    en: Query name cannot be empty
+    zh-CN: 查询名称不能为空
+    zh-HK: 查詢名稱不能為空
+  query_name_exists:
+    en: A query with this name already exists
+    zh-CN: 已存在同名查询
+    zh-HK: 已存在同名查詢
+  query_name_invalid:
+    en: Query name is not a valid file name
+    zh-CN: 查询名称不是有效的文件名
+    zh-HK: 查詢名稱不是有效的檔案名稱
+  query_save_failed:
+    en: "Failed to save query: %{error}"
+    zh-CN: "保存查询失败：%{error}"
+    zh-HK: "儲存查詢失敗：%{error}"
   query_saved:
     en: Query saved successfully
     zh-CN: 查询保存成功
@@ -1263,6 +1279,14 @@ Query:
     en: Save
     zh-CN: 保存
     zh-HK: 儲存
+  save_query_title:
+    en: Save Query
+    zh-CN: 保存查询
+    zh-HK: 儲存查詢
+  enter_query_name:
+    en: Enter a query name
+    zh-CN: 请输入查询名称
+    zh-HK: 請輸入查詢名稱
   select_database:
     en: Select database...
     zh-CN: 选择数据库...
