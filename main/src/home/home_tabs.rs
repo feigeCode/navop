@@ -226,26 +226,36 @@ mod tests {
     }
 
     #[test]
-    fn persistent_sidebar_uses_original_color_rail_icons() {
+    fn persistent_sidebar_uses_line_style_rail_icons() {
         let source = include_str!("../persistent_connection_sidebar/rail.rs");
         let icons = include_str!("../../../crates/ui/src/icon.rs");
         let visuals = include_str!("../connection_visuals.rs");
         let remote_render = include_str!("../../../crates/remote_desktop_view/src/view/render.rs");
+        let rdp_line = include_str!("../../../crates/assets/assets/icons/rdp_line.svg");
+        let vnc_line = include_str!("../../../crates/assets/assets/icons/vnc_line.svg");
         let rdp = include_str!("../../../crates/assets/assets/icons/rdp.svg");
         let vnc = include_str!("../../../crates/assets/assets/icons/vnc.svg");
 
         assert!(source.contains("IconName::User"));
         assert!(source.contains("connection_type_rail_icon"));
-        assert!(visuals.contains("ConnectionType::All => IconName::Server"));
-        assert!(visuals.contains("ConnectionType::SshSftp => IconName::TerminalColor"));
+        assert!(visuals.contains("ConnectionType::All => IconName::ServerLine"));
+        assert!(visuals.contains("ConnectionType::SshSftp => IconName::TerminalLine"));
+        assert!(visuals.contains("ConnectionType::Rdp => IconName::RdpLine"));
+        assert!(visuals.contains("ConnectionType::Vnc => IconName::VncLine"));
+        assert!(visuals.contains(".mono()"));
         assert!(visuals.contains("ConnectionType::Rdp => IconName::Rdp"));
         assert!(visuals.contains("ConnectionType::Vnc => IconName::Vnc"));
         assert!(visuals.contains(".color()"));
         assert!(icons.contains("icons/user.svg"));
-        assert!(icons.contains("icons/server.svg"));
-        assert!(icons.contains("icons/rdp.svg"));
+        assert!(icons.contains("icons/server_line.svg"));
+        assert!(icons.contains("icons/rdp_line.svg"));
         assert!(remote_render.contains("RemoteDesktopProtocol::Rdp => IconName::Rdp.color()"));
         assert!(remote_render.contains("RemoteDesktopProtocol::Vnc => IconName::Vnc.color()"));
+        assert!(rdp_line.contains("stroke=\"currentColor\""));
+        assert!(!rdp_line.contains("<text"));
+        assert!(!rdp_line.contains("fill=\"#"));
+        assert!(vnc_line.contains("stroke=\"currentColor\""));
+        assert!(!vnc_line.contains("<text"));
         assert!(rdp.contains("fill=\"#3B82F6\""));
         assert!(rdp.contains("fill=\"#EFF6FF\""));
         assert!(!rdp.contains("#0B1220"));

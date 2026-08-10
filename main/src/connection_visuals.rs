@@ -50,15 +50,31 @@ const fn connection_type_icon_name(kind: ConnectionType) -> IconName {
     }
 }
 
-/// Original-color icon used by navigation and filtering surfaces.
+const fn connection_type_navigation_icon_name(kind: ConnectionType) -> IconName {
+    match kind {
+        ConnectionType::All => IconName::ServerLine,
+        ConnectionType::Database => IconName::DatabaseLine,
+        ConnectionType::SshSftp => IconName::TerminalLine,
+        ConnectionType::Redis => IconName::RedisLine,
+        ConnectionType::MongoDB => IconName::MongoDBLine,
+        ConnectionType::Serial => IconName::SerialLine,
+        ConnectionType::PortForwarding => IconName::PortForwardingLine,
+        ConnectionType::Rdp => IconName::RdpLine,
+        ConnectionType::Vnc => IconName::VncLine,
+    }
+}
+
+/// Monochrome line icon used by navigation and filtering surfaces.
 pub(crate) fn connection_type_navigation_icon(
     kind: ConnectionType,
     size: ConnectionVisualSize,
 ) -> Icon {
-    connection_type_icon(kind, size)
+    connection_type_navigation_icon_name(kind)
+        .mono()
+        .with_size(size.icon_size())
 }
 
-/// Navigation-rail icon with the shared rail glyph size.
+/// Monochrome navigation-rail icon with the shared rail glyph size.
 pub(crate) fn connection_type_rail_icon(kind: ConnectionType) -> Icon {
     connection_type_navigation_icon(kind, ConnectionVisualSize::Rail)
 }
@@ -193,6 +209,28 @@ mod tests {
 
         for (connection_type, icon_name) in expected {
             assert_eq!(connection_type_icon_name(connection_type), icon_name);
+        }
+    }
+
+    #[test]
+    fn connection_navigation_icons_map_to_monochrome_line_assets() {
+        let expected = [
+            (ConnectionType::All, IconName::ServerLine),
+            (ConnectionType::Database, IconName::DatabaseLine),
+            (ConnectionType::SshSftp, IconName::TerminalLine),
+            (ConnectionType::Redis, IconName::RedisLine),
+            (ConnectionType::MongoDB, IconName::MongoDBLine),
+            (ConnectionType::Serial, IconName::SerialLine),
+            (ConnectionType::PortForwarding, IconName::PortForwardingLine),
+            (ConnectionType::Rdp, IconName::RdpLine),
+            (ConnectionType::Vnc, IconName::VncLine),
+        ];
+
+        for (connection_type, icon_name) in expected {
+            assert_eq!(
+                connection_type_navigation_icon_name(connection_type),
+                icon_name
+            );
         }
     }
 
