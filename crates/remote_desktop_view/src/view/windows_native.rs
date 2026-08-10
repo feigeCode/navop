@@ -179,16 +179,53 @@ pub(crate) struct WindowsNativeAdapter {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Debug)]
+pub(crate) enum WindowsNativeAdapterCreateError {
+    WindowHandle(raw_window_handle::HandleError),
+    ParentHandleNotWin32,
+    Host(windows_rdp_host::WindowsRdpHostError),
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl std::fmt::Display for WindowsNativeAdapterCreateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WindowHandle(error) => {
+                write!(formatter, "failed to get GPUI window handle: {error}")
+            }
+            Self::ParentHandleNotWin32 => {
+                formatter.write_str("GPUI window did not expose a Win32 parent handle")
+            }
+            Self::Host(error) => error.fmt(formatter),
+        }
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+impl std::error::Error for WindowsNativeAdapterCreateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::WindowHandle(error) => Some(error),
+            Self::ParentHandleNotWin32 => None,
+            Self::Host(error) => Some(error),
+        }
+    }
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 impl WindowsNativeAdapter {
-    pub(crate) fn create(window: &gpui::Window, generation: u64) -> anyhow::Result<Self> {
+    pub(crate) fn create(
+        window: &gpui::Window,
+        generation: u64,
+    ) -> Result<Self, WindowsNativeAdapterCreateError> {
         use raw_window_handle::RawWindowHandle;
         use windows_rdp_host::{WindowsRdpHostOptions, WindowsRdpParentWindow};
 
         let raw = raw_window_handle::HasWindowHandle::window_handle(window)
-            .map_err(|error| anyhow::anyhow!("failed to get GPUI window handle: {error:?}"))?
+            .map_err(WindowsNativeAdapterCreateError::WindowHandle)?
             .as_raw();
         let RawWindowHandle::Win32(handle) = raw else {
-            anyhow::bail!("GPUI window did not expose a Win32 parent handle");
+            return Err(WindowsNativeAdapterCreateError::ParentHandleNotWin32);
         };
         let parent = unsafe { WindowsRdpParentWindow::from_raw(handle.hwnd.get() as usize) };
         let host = unsafe {
@@ -196,7 +233,8 @@ impl WindowsNativeAdapter {
                 parent,
                 WindowsRdpHostOptions::new(generation),
             )
-        }?;
+        }
+        .map_err(WindowsNativeAdapterCreateError::Host)?;
 
         Ok(Self {
             presentation: WindowsNativePresentation::default(),

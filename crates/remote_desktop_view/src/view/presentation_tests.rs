@@ -1,5 +1,7 @@
 use one_core::storage::RemoteDesktopBackendPreference;
 
+#[cfg(feature = "windows-native-rdp")]
+use super::presentation::classify_windows_native_create_error;
 use super::presentation::{
     RemoteDesktopPlatform, RemoteDesktopPresentation, RemoteDesktopPresentationError,
     RemoteDesktopPresentationSelection, RemoteDesktopPresentationState, WindowsNativeRdpCapability,
@@ -40,6 +42,8 @@ fn windows_auto_falls_back_to_canvas_only_for_pre_connect_unavailability() {
         WindowsNativeRdpUnavailableReason::FeatureDisabled,
         WindowsNativeRdpUnavailableReason::UnsupportedPlatform,
         WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable,
+        WindowsNativeRdpUnavailableReason::ClassNotRegistered,
+        WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing,
     ] {
         assert_eq!(
             Ok(selection(RemoteDesktopPresentation::Canvas, Some(reason))),
@@ -68,16 +72,22 @@ fn windows_auto_does_not_fallback_when_the_capability_probe_fails() {
 
 #[test]
 fn explicit_windows_native_reports_unavailable_instead_of_falling_back() {
-    let reason = WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable;
-
-    assert_eq!(
-        Err(RemoteDesktopPresentationError::NativeUnavailable(reason)),
-        select_remote_desktop_presentation(
-            RemoteDesktopPlatform::Windows,
-            RemoteDesktopBackendPreference::WindowsNative,
-            WindowsNativeRdpCapability::Unavailable(reason),
-        )
-    );
+    for reason in [
+        WindowsNativeRdpUnavailableReason::FeatureDisabled,
+        WindowsNativeRdpUnavailableReason::UnsupportedPlatform,
+        WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable,
+        WindowsNativeRdpUnavailableReason::ClassNotRegistered,
+        WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing,
+    ] {
+        assert_eq!(
+            Err(RemoteDesktopPresentationError::NativeUnavailable(reason)),
+            select_remote_desktop_presentation(
+                RemoteDesktopPlatform::Windows,
+                RemoteDesktopBackendPreference::WindowsNative,
+                WindowsNativeRdpCapability::Unavailable(reason),
+            )
+        );
+    }
 }
 
 #[test]
@@ -262,6 +272,42 @@ fn current_non_windows_factory_uses_canvas_without_claiming_a_fallback() {
     assert_eq!(
         Ok(selection(RemoteDesktopPresentation::Canvas, None)),
         create_remote_desktop_presentation(RemoteDesktopBackendPreference::Auto)
+    );
+}
+
+#[cfg(feature = "windows-native-rdp")]
+#[test]
+fn create_time_hresult_classification_only_allows_known_unavailability() {
+    use windows_rdp_host::{WindowsRdpHostError, WindowsRdpHresult};
+
+    const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
+    const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+    const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+
+    assert_eq!(
+        Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered),
+        classify_windows_native_create_error(WindowsRdpHostError::NativeHresult {
+            result: -4,
+            hresult: WindowsRdpHresult::from_code(REGDB_E_CLASSNOTREG),
+        })
+    );
+    assert_eq!(
+        Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing),
+        classify_windows_native_create_error(WindowsRdpHostError::NativeHresult {
+            result: -4,
+            hresult: WindowsRdpHresult::from_code(E_NOINTERFACE),
+        })
+    );
+    assert_eq!(
+        None,
+        classify_windows_native_create_error(WindowsRdpHostError::NativeHresult {
+            result: -4,
+            hresult: WindowsRdpHresult::from_code(E_FAIL),
+        })
+    );
+    assert_eq!(
+        None,
+        classify_windows_native_create_error(WindowsRdpHostError::Internal)
     );
 }
 

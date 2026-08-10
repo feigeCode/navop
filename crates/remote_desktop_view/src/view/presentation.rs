@@ -1386,6 +1386,8 @@ pub(crate) enum WindowsNativeRdpUnavailableReason {
     FeatureDisabled,
     UnsupportedPlatform,
     ProbeReportedUnavailable,
+    ClassNotRegistered,
+    RequiredInterfaceMissing,
 }
 
 /// A stable, non-fallback classification for failures while probing the native
@@ -1436,6 +1438,25 @@ pub(crate) enum RemoteDesktopPresentationState {
     Closing,
     NativeChildDestroyed,
     Released,
+}
+
+#[cfg(feature = "windows-native-rdp")]
+pub(crate) const fn classify_windows_native_create_error(
+    error: windows_rdp_host::WindowsRdpHostError,
+) -> Option<WindowsNativeRdpUnavailableReason> {
+    use windows_rdp_host::WindowsRdpHostError;
+
+    const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
+    const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+
+    match error {
+        WindowsRdpHostError::NativeHresult { hresult, .. } => match hresult.code() {
+            REGDB_E_CLASSNOTREG => Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered),
+            E_NOINTERFACE => Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 pub(crate) const fn select_remote_desktop_presentation(

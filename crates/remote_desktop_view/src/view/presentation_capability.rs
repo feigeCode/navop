@@ -128,9 +128,7 @@ fn probe_windows_native_rdp_capability() -> WindowsNativeRdpCapability {
 }
 
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
-const fn map_probe_failure(
-    error: windows_rdp_host::WindowsRdpHostError,
-) -> WindowsNativeRdpProbeFailure {
+fn map_probe_failure(error: windows_rdp_host::WindowsRdpHostError) -> WindowsNativeRdpProbeFailure {
     use windows_rdp_host::WindowsRdpHostError;
 
     match error {
