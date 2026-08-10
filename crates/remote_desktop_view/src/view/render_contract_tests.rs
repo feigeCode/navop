@@ -91,8 +91,8 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "native.begin_close(&mut focus_parent)",
         "NativeCloseProgress::Ready",
         "NativeCloseProgress::WaitingForEvents",
-        "finish_windows_native_close(generation)",
-        "force_close_windows_native(generation)",
+        "finish_windows_native_close(registration, cx)",
+        "force_close_windows_native(registration, cx)",
         "WindowsNativeCloseRetryMode::WaitForConfirmation",
         "WindowsNativeCloseRetryMode::ForceClose",
         "Self::retry_windows_native_close(",
@@ -109,8 +109,8 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "WINDOWS_NATIVE_CLOSE_TIMEOUT",
         "WINDOWS_NATIVE_FORCE_CLOSE_TIMEOUT",
         "hard_deadline",
-        "this.poll_windows_native_close(generation)",
-        "this.force_close_windows_native(generation)",
+        "this.poll_windows_native_close(registration, cx)",
+        "this.force_close_windows_native(registration, cx)",
         "WindowsNativeClosePoll::Pending",
         "Duration::from_millis(16)",
     ] {
@@ -142,17 +142,18 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         .find("native.force_close(&mut focus_parent)")
         .expect("release must synchronously attempt owner-thread cleanup");
     let detached_cleanup = release
-        .find("detach_windows_native_cleanup(native, cx, \"view release\")")
+        .find("detach_windows_native_cleanup(native, registration, cx, \"view release\")")
         .expect("release must retain pending native cleanup on the owner thread");
     assert!(native_take < event_state_take);
     assert!(event_state_take < force_close);
     assert!(native_take < detached_cleanup);
-    assert!(release.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => false"));
+    assert!(release.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => true"));
     assert!(
-        release.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => true")
+        release.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false")
     );
-    assert!(release.contains("!native.is_destroyed()"));
-    assert!(release.contains("if needs_detached_cleanup"));
+    assert!(release.contains("native.is_destroyed()"));
+    assert!(release.contains("if destroyed"));
+    assert!(release.contains("mark_windows_native_rdp_detached"));
 
     let detached_cleanup = function_body(
         &view,
@@ -164,6 +165,9 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         "cx.spawn(async move |cx|",
         "native.force_close(&mut focus_parent)",
         "NativeDestroyProgress::PendingCallbacks",
+        "record_windows_native_rdp_terminal_async",
+        "WindowsRdpTerminalOutcome::Destroyed",
+        "WindowsRdpTerminalOutcome::TimedOutLeaked",
         "Duration::from_millis(16)",
         "Box::leak(Box::new(native))",
         ".detach();",
@@ -181,11 +185,23 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
     let force_close = detached_cleanup
         .find("native.force_close(&mut focus_parent)")
         .expect("detached force close");
-    let destroyed_return = detached_cleanup
-        .find("NativeDestroyProgress::Destroyed) => return")
+    let destroyed_branch = detached_cleanup
+        .find("NativeDestroyProgress::Destroyed) => {")
+        .expect("destroyed cleanup branch");
+    let destroyed_terminal = detached_cleanup[destroyed_branch..]
+        .find("WindowsRdpTerminalOutcome::Destroyed")
+        .map(|offset| destroyed_branch + offset)
+        .expect("destroyed terminal completion");
+    let destroyed_return = detached_cleanup[destroyed_terminal..]
+        .find("return;")
+        .map(|offset| destroyed_terminal + offset)
         .expect("destroyed cleanup termination");
-    let already_destroyed_return = detached_cleanup
-        .find("Err(_) if native.is_destroyed() => return")
+    let already_destroyed_branch = detached_cleanup
+        .find("Err(_) if native.is_destroyed() => {")
+        .expect("already-destroyed cleanup branch");
+    let already_destroyed_return = detached_cleanup[already_destroyed_branch..]
+        .find("return;")
+        .map(|offset| already_destroyed_branch + offset)
         .expect("already-destroyed cleanup termination");
     let deadline = detached_cleanup
         .find("if Instant::now() >= deadline")
@@ -200,7 +216,9 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
         .rfind(".detach();")
         .expect("detached cleanup task ownership");
     assert!(foreground_spawn < force_close);
-    assert!(force_close < destroyed_return);
+    assert!(force_close < destroyed_branch);
+    assert!(destroyed_branch < destroyed_terminal);
+    assert!(destroyed_terminal < destroyed_return);
     assert!(destroyed_return < already_destroyed_return);
     assert!(already_destroyed_return < deadline);
     assert!(deadline < leak);
@@ -221,6 +239,240 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
             "missing native shutdown state-machine token: {token}"
         );
     }
+}
+
+#[test]
+fn windows_native_hosts_keep_full_shutdown_registrations_through_every_terminal_path() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let initialize = function_body(
+        &view,
+        "fn ensure_windows_native_presentation",
+        "fn fail_presentation_initialization",
+    );
+    let create = initialize
+        .find("WindowsNativeAdapter::create")
+        .expect("native presentation creation");
+    let register = initialize[create..]
+        .find("register_windows_native_rdp")
+        .map(|offset| create + offset)
+        .expect("application shutdown registration");
+    let post_create = initialize
+        .find("let Some(bounds)")
+        .expect("post-create native initialization");
+    assert!(
+        create < register && register < post_create,
+        "the created adapter must be admitted before bounds, connect, or attach work"
+    );
+    assert!(initialize.contains("native.generation()"));
+    assert!(initialize.contains("WindowsRdpRegistrationError"));
+    assert!(initialize.contains("fail_unregistered_windows_native_presentation"));
+    assert!(
+        initialize
+            .matches("fail_windows_native_presentation(")
+            .count()
+            >= 5,
+        "every admitted post-create failure must retain its full registration"
+    );
+    assert!(initialize.contains("self.attach_windows_native_presentation(native, registration,"));
+
+    assert!(
+        view.contains(
+            "windows_native_registration: Option<windows_rdp_host::WindowsRdpRegistration>"
+        )
+    );
+    assert!(view.contains("windows_native_registration: None"));
+
+    let failure = function_body(
+        &view,
+        "fn fail_windows_native_presentation",
+        "fn fail_unregistered_windows_native_presentation",
+    );
+    assert!(failure.contains("registration: windows_rdp_host::WindowsRdpRegistration"));
+    assert!(failure.contains("WindowsRdpTerminalOutcome::Destroyed"));
+    assert!(
+        failure.contains("detach_windows_native_cleanup(native, Some(registration), cx, stage)")
+    );
+
+    let attach = function_body(
+        &view,
+        "fn attach_windows_native_presentation",
+        "pub(super) fn update_windows_native_bounds",
+    );
+    assert!(attach.contains("registration: windows_rdp_host::WindowsRdpRegistration"));
+    assert!(attach.contains("registration.generation()"));
+    assert!(attach.contains("presentation.generation()"));
+    assert!(attach.contains("self.windows_native_registration = Some(registration);"));
+
+    let release_start = view
+        .find("cx.on_release(move |this, cx|")
+        .expect("view release hook");
+    let release_end = view[release_start..]
+        .find("\n        })\n        .detach();")
+        .map(|offset| release_start + offset)
+        .expect("end of view release hook");
+    let release = &view[release_start..release_end];
+    let native_take = release
+        .find("this.windows_native.take()")
+        .expect("native adapter take");
+    let registration_take = release
+        .find("this.windows_native_registration.take()")
+        .expect("shutdown registration take");
+    let force_close = release
+        .find("native.force_close(&mut focus_parent)")
+        .expect("owner-thread force close");
+    assert!(native_take < registration_take);
+    assert!(registration_take < force_close);
+    assert!(release.contains("WindowsRdpTerminalOutcome::Destroyed"));
+    assert!(release.contains("Some(registration)"));
+    assert!(
+        release.contains("WindowsRdpTerminalOutcome::OwnerLost"),
+        "a registration whose adapter ownership disappeared must still converge the app drain"
+    );
+}
+
+#[test]
+fn windows_native_shutdown_controller_drains_on_the_foreground_and_leaks_before_timeout_completion()
+{
+    let controller = [
+        include_str!("../windows_native_shutdown.rs"),
+        include_str!("../windows_native_shutdown/platform.rs"),
+        include_str!("../windows_native_shutdown/platform/drain.rs"),
+    ]
+    .join("\n")
+    .replace("\r\n", "\n");
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+
+    for token in [
+        "WindowsRdpShutdownRegistry",
+        "BTreeMap<WindowsRdpRegistration, WindowsNativeRdpOwner>",
+        "WeakEntity<RemoteDesktopView>",
+        "registry.begin_drain()",
+        "registry.pending_registrations()",
+        ".fail_closed_report()",
+        "owner.update(cx",
+        "force_close_windows_native_for_shutdown",
+        "quarantine_windows_native_for_shutdown",
+        "cx.spawn(async move |cx|",
+        "Duration::from_millis(16)",
+    ] {
+        assert!(
+            controller.contains(token),
+            "missing shutdown controller token: {token}"
+        );
+    }
+    let missing_owner_branch = controller
+        .find("fn record_missing_owner(")
+        .expect("missing-owner branch");
+    let owner_lost = controller[missing_owner_branch..]
+        .find("WindowsRdpTerminalOutcome::OwnerLost")
+        .expect("missing-owner terminal completion after the deadline");
+    assert!(
+        controller[missing_owner_branch..missing_owner_branch + owner_lost]
+            .contains("if deadline_elapsed"),
+        "owner loss must only become terminal after the bounded drain deadline"
+    );
+    assert!(
+        controller[missing_owner_branch..]
+            .contains("Windows native RDP shutdown registration has no owner")
+    );
+    let detached_owner_branch = controller
+        .find("fn record_stalled_detached_owner(")
+        .expect("detached-owner branch");
+    let detached_owner_lost = controller[detached_owner_branch..]
+        .find("WindowsRdpTerminalOutcome::OwnerLost")
+        .expect("detached owner must converge after the bounded drain deadline");
+    assert!(
+        controller[detached_owner_branch..detached_owner_branch + detached_owner_lost]
+            .contains("deadline_elapsed"),
+        "detached cleanup must retain its normal owner-thread deadline before app drain fallback"
+    );
+    assert!(
+        controller[detached_owner_branch..].contains("detached cleanup did not report a terminal")
+    );
+    let released_owner_branch = controller
+        .find("fn record_released_view_owner(")
+        .expect("released-view owner branch");
+    let released_owner_end = controller[released_owner_branch..]
+        .find("\n}\n\nfn ")
+        .map(|offset| released_owner_branch + offset)
+        .expect("end of released-view owner branch");
+    let released_owner = &controller[released_owner_branch..released_owner_end];
+    assert!(
+        released_owner.contains("deadline_elapsed"),
+        "a released weak view must retain the bounded deadline before owner-loss completion"
+    );
+    assert!(released_owner.contains("record_windows_native_rdp_view_owner_lost_async"));
+    let drain = function_body(
+        &controller,
+        "async fn drain(",
+        "pub fn shutdown_windows_native_rdp",
+    );
+    assert!(
+        drain.contains("return fail_closed_report;"),
+        "controller loss must return the last conservative drain report"
+    );
+    assert!(
+        !drain.contains("WindowsNativeRdpShutdownReport::default()"),
+        "controller loss must not be misreported as an empty successful drain"
+    );
+    let shutdown_entrypoint = function_body(
+        &controller,
+        "pub fn shutdown_windows_native_rdp(cx: &mut App)",
+        "\n}\n",
+    );
+    assert!(
+        shutdown_entrypoint.contains("WindowsNativeRdpShutdownReport::unavailable_controller()"),
+        "a missing shutdown controller must produce an explicitly incomplete report"
+    );
+    assert!(!controller.contains("WindowsNativeAdapter"));
+    assert!(!controller.contains("WindowsRdpHost"));
+    assert!(!controller.contains("background_spawn"));
+    assert!(!controller.contains("tokio::spawn"));
+
+    let detached_cleanup = function_body(
+        &view,
+        "fn detach_windows_native_cleanup(",
+        "pub struct RemoteDesktopViewConfig",
+    );
+    assert!(
+        detached_cleanup.contains("registration: Option<windows_rdp_host::WindowsRdpRegistration>")
+    );
+    let leak = detached_cleanup
+        .find("Box::leak(Box::new(native))")
+        .expect("fail-closed adapter leak");
+    let timed_out = detached_cleanup
+        .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
+        .expect("timeout completion");
+    assert!(
+        leak < timed_out,
+        "the complete adapter must be leaked before recording timeout completion"
+    );
+
+    let quarantine = function_body(
+        &view,
+        "fn quarantine_windows_native_for_shutdown",
+        "fn poll_windows_native_close",
+    );
+    assert!(quarantine.contains("self.windows_native_registration == Some(registration)"));
+    assert!(
+        quarantine.contains("return false;"),
+        "registration/adapter mismatches must be observable by the drain controller"
+    );
+    let quarantine_take = quarantine
+        .find(".windows_native\n            .take()")
+        .expect("quarantine adapter take");
+    let quarantine_leak = quarantine
+        .find("Box::leak(Box::new(native))")
+        .expect("quarantine adapter leak");
+    let quarantine_terminal = quarantine
+        .find("WindowsRdpTerminalOutcome::TimedOutLeaked")
+        .expect("quarantine timeout completion");
+    assert!(quarantine_take < quarantine_leak);
+    assert!(quarantine_leak < quarantine_terminal);
+    assert!(
+        quarantine.contains("\n        true\n"),
+        "successful quarantine must be acknowledged to the drain controller"
+    );
 }
 
 #[test]
@@ -394,20 +646,21 @@ fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_st
         "pub(crate) fn attach_windows_native_presentation",
     );
     assert!(failure.contains("cx: &mut Context<Self>"));
-    assert!(failure.contains("let (canvas_retry_available, needs_detached_cleanup) ="));
+    assert!(failure.contains("let destroyed = match native.force_close(&mut focus_parent)"));
     assert!(failure.contains("match native.force_close(&mut focus_parent)"));
+    assert!(failure.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => true"));
     assert!(
-        failure.contains("Ok(windows_native::NativeDestroyProgress::Destroyed) => (true, false)")
-    );
-    assert!(
-        failure.contains(
-            "Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => (false, true)"
-        )
+        failure.contains("Ok(windows_native::NativeDestroyProgress::PendingCallbacks) => false")
     );
     assert!(failure.contains("Err(close_error) =>"));
-    assert!(failure.contains("(false, !native.is_destroyed())"));
+    assert!(failure.contains("native.is_destroyed()"));
+    assert!(failure.contains("let canvas_retry_available = destroyed;"));
+    assert!(failure.contains("let needs_detached_cleanup = !destroyed;"));
     assert!(failure.contains("if needs_detached_cleanup"));
-    assert!(failure.contains("detach_windows_native_cleanup(native, cx, stage);"));
+    assert!(failure.contains("mark_windows_native_rdp_detached(registration, cx)"));
+    assert!(
+        failure.contains("detach_windows_native_cleanup(native, Some(registration), cx, stage);")
+    );
     assert!(failure.contains(
         "RemoteDesktopPresentation::NativeWindows,\n            canvas_retry_available,"
     ));

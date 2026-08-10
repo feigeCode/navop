@@ -183,10 +183,11 @@ fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableRe
 impl RemoteDesktopView {
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     fn retry_windows_native_close(
-        generation: u64,
+        registration: windows_rdp_host::WindowsRdpRegistration,
         mut mode: WindowsNativeCloseRetryMode,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        let generation = registration.generation();
         let started_at = Instant::now();
         let graceful_deadline = started_at + WINDOWS_NATIVE_CLOSE_TIMEOUT;
         let hard_deadline = match mode {
@@ -214,12 +215,12 @@ impl RemoteDesktopView {
                     mode = WindowsNativeCloseRetryMode::ForceClose;
                 }
 
-                let poll = this.update(cx, |this, _| match mode {
+                let poll = this.update(cx, |this, cx| match mode {
                     WindowsNativeCloseRetryMode::WaitForConfirmation => {
-                        this.poll_windows_native_close(generation)
+                        this.poll_windows_native_close(registration, cx)
                     }
                     WindowsNativeCloseRetryMode::ForceClose => {
-                        this.force_close_windows_native(generation)
+                        this.force_close_windows_native(registration, cx)
                     }
                 });
                 match poll {
@@ -319,7 +320,19 @@ impl TabContent for RemoteDesktopView {
             let Some(native) = self.windows_native.as_mut() else {
                 return Task::ready(true);
             };
-            let generation = native.generation();
+            let Some(registration) = self.windows_native_registration else {
+                tracing::error!("Windows native RDP adapter has no shutdown registration");
+                return Task::ready(false);
+            };
+            if native.generation() != registration.generation() {
+                tracing::error!(
+                    token = registration.token(),
+                    registration_generation = registration.generation(),
+                    adapter_generation = native.generation(),
+                    "Windows native RDP adapter registration mismatch"
+                );
+                return Task::ready(false);
+            }
             let focus_handle = self.focus_handle.clone();
             let progress = {
                 let mut focus_parent = || window.focus(&focus_handle, cx);
@@ -333,11 +346,11 @@ impl TabContent for RemoteDesktopView {
                         ?error,
                         "failed to request graceful Windows native RDP close"
                     );
-                    return match self.force_close_windows_native(generation) {
+                    return match self.force_close_windows_native(registration, cx) {
                         WindowsNativeClosePoll::Closed => Task::ready(true),
                         WindowsNativeClosePoll::Failed => Task::ready(false),
                         WindowsNativeClosePoll::Pending => Self::retry_windows_native_close(
-                            generation,
+                            registration,
                             WindowsNativeCloseRetryMode::ForceClose,
                             cx,
                         ),
@@ -347,19 +360,28 @@ impl TabContent for RemoteDesktopView {
 
             match progress {
                 windows_native::NativeCloseProgress::Ready => {
-                    return match self.finish_windows_native_close(generation) {
+                    return match self.finish_windows_native_close(registration, cx) {
                         WindowsNativeClosePoll::Closed => Task::ready(true),
                         WindowsNativeClosePoll::Failed => Task::ready(false),
                         WindowsNativeClosePoll::Pending => Self::retry_windows_native_close(
-                            generation,
+                            registration,
                             WindowsNativeCloseRetryMode::ForceClose,
                             cx,
                         ),
                     };
                 }
                 windows_native::NativeCloseProgress::WaitingForEvents { generation } => {
+                    if generation != registration.generation() {
+                        tracing::error!(
+                            token = registration.token(),
+                            registration_generation = registration.generation(),
+                            close_generation = generation,
+                            "Windows native RDP close generation changed unexpectedly"
+                        );
+                        return Task::ready(false);
+                    }
                     return Self::retry_windows_native_close(
-                        generation,
+                        registration,
                         WindowsNativeCloseRetryMode::WaitForConfirmation,
                         cx,
                     );

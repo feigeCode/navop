@@ -175,25 +175,55 @@ fn log_ssh_session_shutdown(
     }
 }
 
-/// Await the bounded application-owned SSH teardown before invoking GPUI's
-/// platform quit routine.
+fn log_windows_native_rdp_shutdown(
+    reason: &'static str,
+    report: remote_desktop_view::WindowsNativeRdpShutdownReport,
+) {
+    if report.incomplete() {
+        tracing::warn!(
+            reason,
+            requested = report.requested(),
+            destroyed = report.destroyed(),
+            timed_out_leaked = report.timed_out_leaked(),
+            owner_lost = report.owner_lost(),
+            controller_unavailable = report.controller_unavailable(),
+            "Windows native RDP shutdown completed with incomplete cleanup"
+        );
+    } else {
+        tracing::info!(
+            reason,
+            requested = report.requested(),
+            destroyed = report.destroyed(),
+            "Windows native RDP shutdown completed"
+        );
+    }
+}
+
+/// Await bounded application-owned resource teardown before invoking GPUI's
+/// platform quit routine. Native RDP hosts drain before their shared SSH
+/// transports so COM/child-window cleanup retains a live application owner.
 ///
 /// This is intentionally the only production helper that calls `cx.quit()`.
-/// Repeated callers join the same idempotent `SshSessionService::shutdown`
-/// lifecycle rather than creating an independent transport teardown.
-pub(crate) fn shutdown_ssh_sessions_and_quit(cx: &mut App, reason: &'static str) {
-    let Some(shutdown_task) = spawn_ssh_session_shutdown(cx) else {
-        tracing::error!(
-            reason,
-            "SSH session service global is missing; quitting without shared-session teardown"
-        );
-        cx.quit();
-        return;
-    };
+/// Repeated callers join the same idempotent Native RDP drain and
+/// `SshSessionService::shutdown` lifecycle.
+pub(crate) fn shutdown_application_resources_and_quit(cx: &mut App, reason: &'static str) {
+    let rdp_shutdown_task = remote_desktop_view::shutdown_windows_native_rdp(cx);
 
     cx.spawn(async move |cx| {
-        let shutdown_result = shutdown_task.await;
-        log_ssh_session_shutdown(reason, shutdown_result);
+        let rdp_shutdown_report = rdp_shutdown_task.await;
+        log_windows_native_rdp_shutdown(reason, rdp_shutdown_report);
+
+        let ssh_shutdown_task = cx.update(|cx| spawn_ssh_session_shutdown(cx));
+        if let Some(shutdown_task) = ssh_shutdown_task {
+            let shutdown_result = shutdown_task.await;
+            log_ssh_session_shutdown(reason, shutdown_result);
+        } else {
+            tracing::error!(
+                reason,
+                "SSH session service global is missing; quitting after remaining application teardown"
+            );
+        }
+
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();
@@ -699,7 +729,7 @@ fn quit_app(cx: &mut App) {
 
 fn request_active_window_quit(cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
-        shutdown_ssh_sessions_and_quit(cx, "quit without an active window");
+        shutdown_application_resources_and_quit(cx, "quit without an active window");
         return;
     };
     cx.defer(move |cx| {
@@ -714,7 +744,7 @@ fn request_window_quit(window: &mut Window, cx: &mut App) {
         .try_global::<GlobalOnetCliApp>()
         .map(|global| global.app.clone())
     else {
-        shutdown_ssh_sessions_and_quit(cx, "quit without the application entity");
+        shutdown_application_resources_and_quit(cx, "quit without the application entity");
         return;
     };
     app.update(cx, |app, cx| {
@@ -1678,7 +1708,7 @@ impl OnetCliApp {
             let _ = this.update(cx, |app, cx| {
                 app.quit_state.finish_close(can_quit);
                 if can_quit {
-                    shutdown_ssh_sessions_and_quit(cx, "confirmed application quit");
+                    shutdown_application_resources_and_quit(cx, "confirmed application quit");
                 }
             });
         })
@@ -2004,24 +2034,33 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_and_update_quit_paths_await_shared_ssh_shutdown() {
+    fn confirmed_and_update_quit_paths_await_all_application_resource_shutdown() {
         let source = include_str!("onetcli_app.rs").replace("\r\n", "\n");
         let helper_start = source
-            .find("pub(crate) fn shutdown_ssh_sessions_and_quit")
-            .expect("shared SSH shutdown helper");
+            .find("pub(crate) fn shutdown_application_resources_and_quit")
+            .expect("shared application resource shutdown helper");
         let helper_end = source[helper_start..]
             .find("\n}\n\n#[derive(Clone, Copy")
             .map(|offset| helper_start + offset)
-            .expect("shared SSH shutdown helper end");
+            .expect("shared application resource shutdown helper end");
         let helper = &source[helper_start..helper_end];
-        let await_shutdown = helper
+        let start_rdp_shutdown = helper
+            .find("remote_desktop_view::shutdown_windows_native_rdp(cx)")
+            .expect("start Windows native RDP shutdown");
+        let await_rdp_shutdown = helper
+            .find("let rdp_shutdown_report = rdp_shutdown_task.await;")
+            .expect("await Windows native RDP shutdown");
+        let await_ssh_shutdown = helper
             .find("let shutdown_result = shutdown_task.await;")
             .expect("await SSH shutdown");
         let platform_quit = helper
             .find("cx.update(|cx| cx.quit())")
             .expect("platform quit");
 
-        assert!(await_shutdown < platform_quit);
+        assert!(start_rdp_shutdown < await_rdp_shutdown);
+        assert!(await_rdp_shutdown < await_ssh_shutdown);
+        assert!(await_ssh_shutdown < platform_quit);
+        assert!(helper.contains("log_windows_native_rdp_shutdown"));
 
         let confirm_start = source.find("fn confirm_quit").expect("confirm_quit");
         let confirm_end = source[confirm_start..]
@@ -2029,11 +2068,11 @@ mod tests {
             .map(|offset| confirm_start + offset)
             .expect("confirm_quit end");
         let confirm_quit = &source[confirm_start..confirm_end];
-        assert!(confirm_quit.contains("shutdown_ssh_sessions_and_quit"));
+        assert!(confirm_quit.contains("shutdown_application_resources_and_quit"));
         assert!(!confirm_quit.contains("cx.quit()"));
 
         let update_dialog = include_str!("update/dialog.rs");
-        assert!(update_dialog.contains("shutdown_ssh_sessions_and_quit"));
+        assert!(update_dialog.contains("shutdown_application_resources_and_quit"));
         assert!(!update_dialog.contains("cx.quit()"));
     }
 

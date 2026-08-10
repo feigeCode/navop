@@ -1896,6 +1896,67 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   UI shutdown race，以及连接中/已连接/重连中关 tab和应用直接退出各重复 20 次的人工
   验证仍 pending，因此 Task 5、Task 7 与整个计划均不得标记完成。
 
+#### Execution Notes (2026-08-10) — application-exit Native RDP drain
+
+- **Red evidence:** 主程序 source contract
+  `confirmed_and_update_quit_paths_await_all_application_resource_shutdown` 先要求共享退出
+  helper 启动并等待 Native RDP drain，再等待 SSH shutdown，最后才调用 `cx.quit()`；
+  初次运行因缺少 `remote_desktop_view::shutdown_windows_native_rdp(cx)` 而按预期失败。
+  host registry 的 `OwnerLost` contract 在 API 尚不存在时先编译失败；应用级 controller
+  contract 随后先因 missing owner 在 deadline 后没有 terminal completion 而失败。
+  独立审查发现 Detached owner 若 cleanup task 永不回报仍可能无限等待后，又先增加
+  deadline convergence contract，并确认它因缺少 detached `OwnerLost` fallback 而失败。
+- **Green implementation:** 新增 application-owned Native RDP shutdown controller：
+  native adapter 创建成功后立即向 `WindowsRdpShutdownRegistry` 注册完整
+  token/generation，并在 attach、初始化失败、普通 tab close、entity release 和
+  detached cleanup 路径始终成对转移 adapter 与 registration。首次 drain 关闭 admission，
+  捕获 pending registrations，并设置全局 2 秒 deadline；GPUI foreground 每 16ms 在 owner
+  thread 请求 force close。deadline 到期后，仍由 live view 持有的完整 adapter 先
+  `Box::leak` quarantine，再记录 `TimedOutLeaked`；owner metadata 丢失或 Detached cleanup
+  未回报时记录独立的 `OwnerLost`，不冒充 adapter 已 destroy 或已确认 leak，从而保证应用
+  drain 有界收敛。迟到 completion 通过 registry tombstone 返回 `AlreadyTerminal`，不会
+  重复计数或重分类。Windows feature/target 下若 application controller global 根本不存在，
+  shutdown entrypoint 现在返回显式 `controller_unavailable` fail-closed report，而不是把
+  零计数默认报告误当成成功；该状态纳入 `incomplete()`，并由主程序退出日志单独记录，且不
+  虚构 registration 或 terminal outcome。
+- **Application exit order:** `shutdown_application_resources_and_quit` 成为 production
+  唯一调用 `cx.quit()` 的 helper。正常确认退出保持
+  `close_all_tabs().await → Native RDP drain → SSH shutdown → GPUI quit`；更新安装路径复用
+  同一 application-resource helper，并保持 Native RDP → SSH → quit 的顺序。重复调用继续
+  join 同一幂等 registry/service shutdown lifecycle；缺少 SSH global 只能跳过 SSH，
+  不能跳过已经完成的 Native RDP drain。
+- **Refactor:** controller 按 public report、Windows registry/owner state、bounded drain
+  polling 拆为三个职责文件，分别为 96、181、238 行；drain loop 又拆为 admission、
+  snapshot、owner classification、view polling 和 terminal-report helper，保持源文件与
+  函数规模门禁。
+- **Local automated verification:** macOS host 上，refactor 前的完整验证为
+  `windows_rdp_host` 106 passed、host contract 20 passed、
+  `remote_desktop_view` default 137 passed、feature-on 147 passed、`main` 424 passed，
+  `cargo check -p main` default/feature-on 均通过。strict
+  `windows_rdp_host --all-targets --no-deps -D warnings` Clippy 通过；
+  `remote_desktop_view --all-targets --features windows-native-rdp --no-deps` 在仅豁免
+  仓库既有 `frame_sync.rs` `derivable_impls` 后以 `-D warnings` 通过；`main`
+  `--all-targets --no-deps` 在仅豁免既有
+  `iter_overeager_cloned`/`derivable_impls`/`needless_lifetimes` 后以 `-D warnings`
+  通过。最终提交前完整重跑结果为：`windows_rdp_host` 127 passed、
+  `remote_desktop_view` default 138 passed、feature-on 148 passed、`main` 424 passed；
+  `cargo check -p main` default/feature-on 均通过；上述三个 strict Clippy 命令均通过；
+  `cargo fmt --all -- --check` 与 `git diff --check` 通过。过程中额外补上
+  controller-global 缺失的 Red/Green contract，并通过精确 cfg 消除普通非 Windows
+  build 中该 fail-closed constructor 的 dead-code warning。
+- **Independent review:** 三路独立只读审查确认 registry accounting、stale/duplicate
+  terminal completion、main 退出顺序与 Windows cfg 边界没有阻断问题；最终 spot review
+  再次确认 Detached owner 只在全局 deadline 后记录 `OwnerLost`，drain 可收敛，且迟到
+  `Destroyed`/`TimedOutLeaked` completion 只得到 `AlreadyTerminal`。审查剩余问题聚焦
+  owner-thread dispatcher delivery failure、GPUI/UI shutdown task cancellation 与
+  platform-driven quit race，属于 Task 7 下一自动化切片。
+- **Verification boundary:** 本切片尚未证明 Windows-only GPUI/COM 编译链接、真实
+  ActiveX session、COM apartment shutdown 或 platform-driven quit race；推送后的 GitHub
+  Windows runner 只用于补充 x64/i686 MSVC/ATL probe 与 Windows x64 自动化证据。错误密码、
+  server refusal、网络中断、服务器重启、快速 RDP/terminal/WebView tab 切换、resize、
+  per-monitor DPI/跨 monitor、连接中/已连接/重连中关 tab以及应用直接退出各重复 20 次仍
+  pending。因此 Task 5、Task 6、Task 7 与整个计划继续保持未完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback
