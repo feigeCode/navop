@@ -181,7 +181,6 @@ pub(super) struct PresentationState {
     generation: u64,
     framebuffer: Option<RgbaFramebuffer>,
     surface: Option<Arc<RemoteDesktopSurface>>,
-    surface_stale: bool,
 }
 
 impl Default for PresentationState {
@@ -191,7 +190,6 @@ impl Default for PresentationState {
             generation: 0,
             framebuffer: None,
             surface: None,
-            surface_stale: false,
         }
     }
 }
@@ -244,7 +242,6 @@ impl PresentationState {
                 self.generation = generation;
                 self.framebuffer = None;
                 self.surface = None;
-                self.surface_stale = false;
                 PresentationResult::Acknowledged
             }
             PresentationCommand::Connected { generation } => {
@@ -252,7 +249,6 @@ impl PresentationState {
                     self.connected = true;
                     self.framebuffer = None;
                     self.surface = None;
-                    self.surface_stale = false;
                     PresentationResult::Acknowledged
                 } else {
                     PresentationResult::Skipped
@@ -336,24 +332,22 @@ impl PresentationState {
         bgra: Vec<u8>,
         latest_frame_ticket: &AtomicU64,
     ) -> PresentationResult {
-        let Some(framebuffer) = self.framebuffer.as_mut() else {
-            return rejected_delta(generation, width, height, "missing base framebuffer");
-        };
-        if let Err(error) =
-            apply_bgra_rects_to_framebuffer(framebuffer, width, height, &rects, &bgra)
         {
-            return rejected_delta(generation, width, height, error);
+            let Some(framebuffer) = self.framebuffer.as_mut() else {
+                return rejected_delta(generation, width, height, "missing base framebuffer");
+            };
+            if let Err(error) =
+                apply_bgra_rects_to_framebuffer(framebuffer, width, height, &rects, &bgra)
+            {
+                return rejected_delta(generation, width, height, error);
+            }
         }
 
-        if !is_latest_frame(ticket, latest_frame_ticket) {
-            self.surface = None;
-            self.surface_stale = true;
-            return prepared_frame(generation, width, height, None, PreparedFrameKind::Delta);
-        }
-
-        let surface = if self.surface_stale {
-            RemoteDesktopSurface::from_framebuffer(framebuffer)
-        } else if let Some(surface) = self.surface.as_ref() {
+        let framebuffer = self
+            .framebuffer
+            .as_ref()
+            .expect("framebuffer must remain available after applying a delta");
+        let surface = if let Some(surface) = self.surface.as_ref() {
             surface.with_dirty_rects(framebuffer, &rects)
         } else {
             RemoteDesktopSurface::from_framebuffer(framebuffer)
@@ -363,13 +357,11 @@ impl PresentationState {
             Err(error) => {
                 self.framebuffer = None;
                 self.surface = None;
-                self.surface_stale = false;
                 return rejected_delta(generation, width, height, error);
             }
         };
 
         self.surface = Some(surface.clone());
-        self.surface_stale = false;
         let visible_surface = is_latest_frame(ticket, latest_frame_ticket).then_some(surface);
         prepared_frame(
             generation,
@@ -403,28 +395,21 @@ impl PresentationState {
         };
         self.framebuffer = Some(framebuffer);
 
-        if !is_latest_frame(ticket, latest_frame_ticket) {
-            self.surface = None;
-            self.surface_stale = true;
-            return prepared_frame(
-                generation,
-                width,
-                height,
-                None,
-                PreparedFrameKind::Base { encoding },
-            );
-        }
-
-        let surface = match RemoteDesktopSurface::from_framebuffer(
-            self.framebuffer
-                .as_ref()
-                .expect("framebuffer assigned above"),
-        ) {
+        let framebuffer = self
+            .framebuffer
+            .as_ref()
+            .expect("framebuffer assigned above");
+        let surface = match self.surface.as_ref() {
+            Some(surface) if surface.width() == width && surface.height() == height => {
+                surface.with_full_framebuffer(framebuffer)
+            }
+            _ => RemoteDesktopSurface::from_framebuffer(framebuffer),
+        };
+        let surface = match surface {
             Ok(surface) => Arc::new(surface),
             Err(error) => {
                 self.framebuffer = None;
                 self.surface = None;
-                self.surface_stale = false;
                 return PresentationResult::RejectedFrame {
                     generation,
                     width,
@@ -435,7 +420,6 @@ impl PresentationState {
         };
 
         self.surface = Some(surface.clone());
-        self.surface_stale = false;
         let visible_surface = is_latest_frame(ticket, latest_frame_ticket).then_some(surface);
         prepared_frame(
             generation,
@@ -843,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn state_skips_stale_surface_build_but_keeps_delta_history() {
+    fn state_hides_stale_delta_but_keeps_texture_and_delta_history() {
         let latest_ticket = AtomicU64::new(1);
         let mut state = PresentationState::default()
             .process(PresentationCommand::Reset { generation: 4 }, &latest_ticket)
@@ -869,6 +853,7 @@ mod tests {
             )
             .state;
 
+        let initial_texture_id = state.surface.as_ref().unwrap().texture().id;
         latest_ticket.store(3, Ordering::Release);
         let stale = state.process(delta_with_ticket(4, 2, 1), &latest_ticket);
         assert!(matches!(
@@ -883,8 +868,10 @@ mod tests {
             stale.state.framebuffer.as_ref().unwrap().as_rgba(),
             &[0, 0, 0, 0, 1, 1, 1, 255]
         );
-        assert!(stale.state.surface.is_none());
-        assert!(stale.state.surface_stale);
+        assert_eq!(
+            initial_texture_id,
+            stale.state.surface.as_ref().unwrap().texture().id
+        );
 
         let latest = stale
             .state
@@ -901,15 +888,14 @@ mod tests {
             latest.state.framebuffer.as_ref().unwrap().as_rgba(),
             &[0, 0, 0, 255, 1, 1, 1, 255]
         );
-        assert_eq!(
-            surface.tiles()[0].image.as_bytes(0).unwrap(),
-            &[0, 0, 0, 255, 1, 1, 1, 255]
-        );
-        assert!(!latest.state.surface_stale);
+        assert_eq!(initial_texture_id, surface.texture().id);
+        let uploads = surface.pending_texture_uploads(0);
+        assert_eq!(1, uploads.len());
+        assert_eq!(uploads[0].bytes, &[0, 0, 0, 255, 1, 1, 1, 255]);
     }
 
     #[test]
-    fn state_skips_stale_full_surface_and_materializes_the_following_delta() {
+    fn state_hides_stale_full_surface_and_reuses_it_for_the_following_delta() {
         let latest_ticket = AtomicU64::new(2);
         let state = PresentationState::default()
             .process(PresentationCommand::Reset { generation: 4 }, &latest_ticket)
@@ -940,8 +926,7 @@ mod tests {
                 ..
             })
         ));
-        assert!(stale_base.state.surface.is_none());
-        assert!(stale_base.state.surface_stale);
+        let texture_id = stale_base.state.surface.as_ref().unwrap().texture().id;
 
         let latest = stale_base
             .state
@@ -954,9 +939,66 @@ mod tests {
         else {
             panic!("delta after stale base should materialize the full framebuffer");
         };
-        assert_eq!(
-            surface.tiles()[0].image.as_bytes(0).unwrap(),
-            &[5, 5, 5, 255, 1, 1, 1, 255]
+        assert_eq!(texture_id, surface.texture().id);
+        let uploads = surface.pending_texture_uploads(0);
+        assert_eq!(1, uploads.len());
+        assert_eq!(uploads[0].bytes, &[5, 5, 5, 255, 1, 1, 1, 255]);
+    }
+
+    #[test]
+    fn same_size_full_frame_reuses_texture_but_resize_replaces_it() {
+        let latest_ticket = AtomicU64::new(1);
+        let state = PresentationState::default()
+            .process(PresentationCommand::Reset { generation: 4 }, &latest_ticket)
+            .state
+            .process(
+                PresentationCommand::Connected { generation: 4 },
+                &latest_ticket,
+            )
+            .state;
+
+        let first = state.process(
+            PresentationCommand::Frame {
+                generation: 4,
+                ticket: 1,
+                frame: PresentationFrame::Bgra {
+                    width: 2,
+                    height: 1,
+                    bgra: vec![0; 8],
+                },
+            },
+            &latest_ticket,
         );
+        let first_texture_id = first.state.surface.as_ref().unwrap().texture().id;
+
+        let second = first.state.process(
+            PresentationCommand::Frame {
+                generation: 4,
+                ticket: 1,
+                frame: PresentationFrame::Bgra {
+                    width: 2,
+                    height: 1,
+                    bgra: vec![1; 8],
+                },
+            },
+            &latest_ticket,
+        );
+        let second_texture_id = second.state.surface.as_ref().unwrap().texture().id;
+        assert_eq!(first_texture_id, second_texture_id);
+
+        let resized = second.state.process(
+            PresentationCommand::Frame {
+                generation: 4,
+                ticket: 1,
+                frame: PresentationFrame::Bgra {
+                    width: 3,
+                    height: 1,
+                    bgra: vec![2; 12],
+                },
+            },
+            &latest_ticket,
+        );
+        let resized_texture_id = resized.state.surface.as_ref().unwrap().texture().id;
+        assert_ne!(second_texture_id, resized_texture_id);
     }
 }

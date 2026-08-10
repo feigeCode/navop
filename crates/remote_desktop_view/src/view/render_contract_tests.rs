@@ -16,12 +16,17 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
         !canvas.contains("window.handle_input("),
         "remote desktops must not register the local platform IME"
     );
-    assert!(canvas.contains("window.paint_image("));
-    assert!(
-        canvas.matches("window.paint_image(").count() >= 2,
-        "framebuffer tiles and remote cursor must be painted in the same bounded canvas"
+    assert!(canvas.contains("window.update_dynamic_texture("));
+    assert_eq!(
+        1,
+        canvas.matches("window.paint_dynamic_texture(").count(),
+        "the framebuffer must be painted as one dynamic texture"
     );
-    assert!(canvas.contains("for tile in frame.tiles()"));
+    assert!(
+        canvas.matches("window.paint_image(").count() == 1,
+        "only the remote cursor should use the RenderImage paint path"
+    );
+    assert!(!canvas.contains("for tile in frame.tiles()"));
     assert!(canvas.contains(".absolute()"));
     assert!(canvas.contains(".inset_0()"));
     assert!(canvas.contains(".size_full()"));
@@ -42,6 +47,8 @@ fn rendered_frame_uses_a_parent_bounded_canvas_without_intrinsic_image_layout() 
         frame_paint < cursor_paint,
         "the remote cursor must be painted over the framebuffer"
     );
+    assert!(source.contains("window.drop_dynamic_texture("));
+    assert!(source.contains("window.drop_image("));
 
     assert_parent_bounded_remote_desktop_content(&source);
 }

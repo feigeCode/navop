@@ -419,7 +419,7 @@ impl RemoteDesktopView {
         self.supersede_pending_presentation_frames();
         self.enqueue_presentation(presentation::PresentationCommand::Reset { generation }, cx);
         if !preserve_presented_frame_during_session_reset(reason) {
-            self.pending_frame_drops.extend(
+            self.retired_textures.retire_all(
                 self.rendered_frames
                     .take_all_distinct(self.latest_frame.take()),
             );

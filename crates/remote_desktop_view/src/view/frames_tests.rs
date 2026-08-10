@@ -1,6 +1,6 @@
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
 
-use super::{apply_bgra_rects_to_framebuffer, copy_bgra_rect_from_framebuffer};
+use super::apply_bgra_rects_to_framebuffer;
 
 #[test]
 fn patches_dirty_rectangles_in_place() {
@@ -91,21 +91,4 @@ fn rejects_a_rectangle_with_an_incorrect_declared_length_atomically() {
 
     assert!(apply_bgra_rects_to_framebuffer(&mut framebuffer, 1, 1, &rects, &[1, 2, 3]).is_err());
     assert_eq!(framebuffer.as_rgba(), &[0, 0, 0, 0]);
-}
-
-#[test]
-fn copies_only_the_requested_bgra_rectangle() {
-    let framebuffer = RgbaFramebuffer::from_bgra(
-        3,
-        2,
-        vec![
-            1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255, 4, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255,
-        ],
-    )
-    .unwrap();
-
-    assert_eq!(
-        vec![2, 0, 0, 255, 3, 0, 0, 255, 5, 0, 0, 255, 6, 0, 0, 255],
-        copy_bgra_rect_from_framebuffer(&framebuffer, 1, 0, 2, 2).unwrap()
-    );
 }

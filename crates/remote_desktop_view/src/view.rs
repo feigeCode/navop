@@ -92,7 +92,7 @@ pub struct RemoteDesktopView {
     focus_handle: FocusHandle,
     latest_frame: Option<Arc<surface::RemoteDesktopSurface>>,
     rendered_frames: RenderedFrameLifecycle<Arc<surface::RemoteDesktopSurface>>,
-    pending_frame_drops: Vec<Arc<surface::RemoteDesktopSurface>>,
+    retired_textures: surface::RetiredTextureQueue,
     cursor: cursor::RemoteCursorState,
     frame_sync: frame_sync::FrameSyncTracker,
     capabilities: Option<RemoteDesktopCapabilities>,
@@ -139,24 +139,21 @@ impl RemoteDesktopView {
             this._initial_layout_task.take();
             this._output_ready_task.take();
             this._presentation_task.take();
-            let mut surfaces = std::mem::take(&mut this.pending_frame_drops);
-            surfaces.extend(
+            this.retired_textures.retire_all(
                 this.rendered_frames
                     .take_all_distinct(this.latest_frame.take()),
             );
-            let mut images = Vec::new();
-            for surface in surfaces {
-                for image in surface.images() {
-                    if !images.contains(image) {
-                        images.push(image.clone());
+            let textures = this.retired_textures.take_all();
+            let cursor_images = this.cursor.release_all_images();
+            let _ = window_handle.update(cx, move |_, window, _| {
+                for texture in textures {
+                    if let Err(error) = window.drop_dynamic_texture(texture) {
+                        tracing::warn!(?error, "failed to release remote desktop texture");
                     }
                 }
-            }
-            images.extend(this.cursor.release_all_images());
-            let _ = window_handle.update(cx, move |_, window, _| {
-                for image in images {
+                for image in cursor_images {
                     if let Err(error) = window.drop_image(image) {
-                        tracing::warn!(?error, "failed to release remote desktop image");
+                        tracing::warn!(?error, "failed to release remote desktop cursor");
                     }
                 }
             });
@@ -175,7 +172,7 @@ impl RemoteDesktopView {
             focus_handle,
             latest_frame: None,
             rendered_frames: RenderedFrameLifecycle::default(),
-            pending_frame_drops: Vec::new(),
+            retired_textures: surface::RetiredTextureQueue::default(),
             cursor: cursor::RemoteCursorState::new(manage_native_cursor),
             frame_sync: frame_sync::FrameSyncTracker::default(),
             capabilities: None,

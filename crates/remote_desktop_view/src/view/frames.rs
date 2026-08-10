@@ -128,38 +128,6 @@ pub(super) fn apply_bgra_rects_to_framebuffer(
     Ok(())
 }
 
-pub(super) fn copy_bgra_rect_from_framebuffer(
-    framebuffer: &RgbaFramebuffer,
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
-) -> anyhow::Result<Vec<u8>> {
-    anyhow::ensure!(width > 0 && height > 0, "framebuffer rectangle is empty");
-    anyhow::ensure!(
-        usize::from(x) + usize::from(width) <= usize::from(framebuffer.width()),
-        "framebuffer rectangle width exceeds framebuffer"
-    );
-    anyhow::ensure!(
-        usize::from(y) + usize::from(height) <= usize::from(framebuffer.height()),
-        "framebuffer rectangle height exceeds framebuffer"
-    );
-
-    let row_bytes = usize::from(width)
-        .checked_mul(4)
-        .ok_or_else(|| anyhow::anyhow!("framebuffer rectangle row size overflow"))?;
-    let capacity = row_bytes
-        .checked_mul(usize::from(height))
-        .ok_or_else(|| anyhow::anyhow!("framebuffer rectangle size overflow"))?;
-    let framebuffer_row_bytes = usize::from(framebuffer.width()) * 4;
-    let mut bgra = Vec::with_capacity(capacity);
-    for row in 0..usize::from(height) {
-        let start = (usize::from(y) + row) * framebuffer_row_bytes + usize::from(x) * 4;
-        bgra.extend_from_slice(&framebuffer.as_rgba()[start..start + row_bytes]);
-    }
-    Ok(bgra)
-}
-
 #[cfg(test)]
 #[path = "frames_tests.rs"]
 mod tests;
