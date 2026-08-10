@@ -78,7 +78,7 @@ const REMOTE_PASTE_SHORTCUT: &str = "ctrl-shift-v";
 
 actions!(
     remote_desktop_view,
-    [SendTab, SendShiftTab, RemoteCopy, RemotePaste]
+    [SendTab, SendShiftTab, RemoteCopy, RemotePaste, UseCanvas]
 );
 
 fn remote_desktop_tab_title(title: &str, tab_index: Option<usize>) -> String {
@@ -357,7 +357,10 @@ impl RemoteDesktopView {
                 }
                 Err(error) => {
                     tracing::warn!(?error, "failed to select the remote desktop presentation");
-                    self.fail_presentation_initialization();
+                    self.fail_presentation_initialization(
+                        presentation::RemoteDesktopPresentation::NativeWindows,
+                        true,
+                    );
                 }
             }
         }
@@ -416,15 +419,20 @@ impl RemoteDesktopView {
                     ?error,
                     "failed to select the Windows native RDP presentation"
                 );
-                self.fail_presentation_initialization();
+                self.fail_presentation_initialization(
+                    presentation::RemoteDesktopPresentation::NativeWindows,
+                    true,
+                );
                 return;
             }
             Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
                 WindowsNativePresentationCreateError::ProxyUnsupported,
             )) => {
                 tracing::warn!("Windows native RDP cannot use the configured SOCKS/HTTP proxy");
-                self.presentation_initialization =
-                    presentation::RemoteDesktopPresentationInitialization::Failed;
+                self.fail_presentation_initialization(
+                    presentation::RemoteDesktopPresentation::NativeWindows,
+                    true,
+                );
                 self.status =
                     SharedString::from(t!("RemoteDesktop.native_proxy_unsupported").to_string());
                 return;
@@ -433,7 +441,10 @@ impl RemoteDesktopView {
                 WindowsNativePresentationCreateError::Adapter(error),
             )) => {
                 tracing::warn!(?error, "failed to create the Windows native RDP host");
-                self.fail_presentation_initialization();
+                self.fail_presentation_initialization(
+                    presentation::RemoteDesktopPresentation::NativeWindows,
+                    true,
+                );
                 return;
             }
         };
@@ -490,10 +501,43 @@ impl RemoteDesktopView {
             presentation::RemoteDesktopPresentationInitialization::Native;
     }
 
-    fn fail_presentation_initialization(&mut self) {
+    fn fail_presentation_initialization(
+        &mut self,
+        attempted_presentation: presentation::RemoteDesktopPresentation,
+        canvas_retry_available: bool,
+    ) {
         self.presentation_initialization =
-            presentation::RemoteDesktopPresentationInitialization::Failed;
+            presentation::RemoteDesktopPresentationInitialization::Failed {
+                attempted_presentation,
+                canvas_retry_available,
+            };
         self.status = SharedString::from(t!("RemoteDesktop.failure_generic").to_string());
+    }
+
+    fn use_canvas(&mut self, _: &UseCanvas, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .presentation_initialization
+            .allows_explicit_canvas_retry()
+        {
+            return;
+        }
+
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        if self.windows_native.is_some() {
+            tracing::warn!(
+                "refusing Canvas retry while a Windows native RDP child is still attached"
+            );
+            return;
+        }
+
+        close_runtime_once(&mut self.input_tx);
+        self.output_rx = None;
+        self.presentation_initialization =
+            presentation::RemoteDesktopPresentationInitialization::Canvas {
+                fallback_reason: None,
+            };
+        self.status = SharedString::from(t!("RemoteDesktop.status_waiting_layout").to_string());
+        cx.notify();
     }
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -505,13 +549,20 @@ impl RemoteDesktopView {
     ) {
         tracing::warn!(?error, stage, "failed to initialize Windows native RDP");
         let mut focus_parent = || {};
-        if let Err(close_error) = native.force_close(&mut focus_parent) {
-            tracing::warn!(
-                ?close_error,
-                "failed to destroy Windows native RDP after initialization failure"
-            );
-        }
-        self.fail_presentation_initialization();
+        let canvas_retry_available = match native.force_close(&mut focus_parent) {
+            Ok(()) => true,
+            Err(close_error) => {
+                tracing::warn!(
+                    ?close_error,
+                    "failed to destroy Windows native RDP after initialization failure"
+                );
+                false
+            }
+        };
+        self.fail_presentation_initialization(
+            presentation::RemoteDesktopPresentation::NativeWindows,
+            canvas_retry_available,
+        );
     }
 
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]

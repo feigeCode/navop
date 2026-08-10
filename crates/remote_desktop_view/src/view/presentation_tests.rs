@@ -15,7 +15,6 @@ use super::presentation::{
 use super::presentation_capability::{
     WindowsNativeRdpBuildVariant, WindowsNativeRdpCapabilityCacheEntry,
     WindowsNativeRdpCapabilityCacheKey, cached_windows_native_rdp_capability,
-    create_remote_desktop_presentation, current_windows_native_rdp_capability,
 };
 
 const fn selection(
@@ -235,7 +234,76 @@ fn presentation_runtime_only_canvas_allows_canvas_backend() {
     );
     assert!(!RemoteDesktopPresentationInitialization::Pending.allows_canvas_runtime());
     assert!(!RemoteDesktopPresentationInitialization::Native.allows_canvas_runtime());
-    assert!(!RemoteDesktopPresentationInitialization::Failed.allows_canvas_runtime());
+    assert!(
+        !RemoteDesktopPresentationInitialization::Failed {
+            attempted_presentation: RemoteDesktopPresentation::NativeWindows,
+            canvas_retry_available: true,
+        }
+        .allows_canvas_runtime()
+    );
+}
+
+#[test]
+fn presentation_initialization_reports_backend_and_stable_fallback_reason() {
+    let fallback_reason = WindowsNativeRdpUnavailableReason::ClassNotRegistered;
+    let canvas = RemoteDesktopPresentationInitialization::Canvas {
+        fallback_reason: Some(fallback_reason),
+    };
+    let failed_native = RemoteDesktopPresentationInitialization::Failed {
+        attempted_presentation: RemoteDesktopPresentation::NativeWindows,
+        canvas_retry_available: true,
+    };
+
+    assert_eq!(
+        None,
+        RemoteDesktopPresentationInitialization::Pending.presentation()
+    );
+    assert_eq!(
+        Some(RemoteDesktopPresentation::Canvas),
+        canvas.presentation()
+    );
+    assert_eq!(
+        Some(RemoteDesktopPresentation::NativeWindows),
+        RemoteDesktopPresentationInitialization::Native.presentation()
+    );
+    assert_eq!(
+        Some(RemoteDesktopPresentation::NativeWindows),
+        failed_native.presentation()
+    );
+
+    assert_eq!(Some(fallback_reason), canvas.fallback_reason());
+    assert_eq!(
+        None,
+        RemoteDesktopPresentationInitialization::Pending.fallback_reason()
+    );
+    assert_eq!(
+        None,
+        RemoteDesktopPresentationInitialization::Native.fallback_reason()
+    );
+    assert_eq!(None, failed_native.fallback_reason());
+}
+
+#[test]
+fn explicit_canvas_retry_is_only_available_after_a_safely_closed_failure() {
+    let retryable = RemoteDesktopPresentationInitialization::Failed {
+        attempted_presentation: RemoteDesktopPresentation::NativeWindows,
+        canvas_retry_available: true,
+    };
+    let unsafe_to_retry = RemoteDesktopPresentationInitialization::Failed {
+        attempted_presentation: RemoteDesktopPresentation::NativeWindows,
+        canvas_retry_available: false,
+    };
+
+    assert!(retryable.allows_explicit_canvas_retry());
+    assert!(!unsafe_to_retry.allows_explicit_canvas_retry());
+    assert!(!RemoteDesktopPresentationInitialization::Pending.allows_explicit_canvas_retry());
+    assert!(
+        !RemoteDesktopPresentationInitialization::Canvas {
+            fallback_reason: None,
+        }
+        .allows_explicit_canvas_retry()
+    );
+    assert!(!RemoteDesktopPresentationInitialization::Native.allows_explicit_canvas_retry());
 }
 
 #[test]
@@ -463,6 +531,8 @@ fn capability_cache_invalidates_when_the_build_variant_changes() {
 #[cfg(not(feature = "windows-native-rdp"))]
 #[test]
 fn feature_off_is_stably_reported_as_pre_connect_unavailable() {
+    use super::presentation_capability::current_windows_native_rdp_capability;
+
     assert_eq!(
         WindowsNativeRdpCapability::Unavailable(WindowsNativeRdpUnavailableReason::FeatureDisabled),
         current_windows_native_rdp_capability()
@@ -472,6 +542,8 @@ fn feature_off_is_stably_reported_as_pre_connect_unavailable() {
 #[cfg(all(feature = "windows-native-rdp", not(target_os = "windows")))]
 #[test]
 fn non_windows_is_stably_reported_as_pre_connect_unavailable() {
+    use super::presentation_capability::current_windows_native_rdp_capability;
+
     assert_eq!(
         WindowsNativeRdpCapability::Unavailable(
             WindowsNativeRdpUnavailableReason::UnsupportedPlatform
@@ -483,6 +555,8 @@ fn non_windows_is_stably_reported_as_pre_connect_unavailable() {
 #[cfg(not(target_os = "windows"))]
 #[test]
 fn current_non_windows_factory_uses_canvas_without_claiming_a_fallback() {
+    use super::presentation_capability::create_remote_desktop_presentation;
+
     assert_eq!(
         Ok(selection(RemoteDesktopPresentation::Canvas, None)),
         create_remote_desktop_presentation(RemoteDesktopBackendPreference::Auto)

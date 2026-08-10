@@ -1671,6 +1671,34 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Rollback:** 移除 `WindowsNativePresentation` 的 UI factory 接入，保留隔离的 host crate 和 canvas 默认路径。
 
+#### Execution Notes (2026-08-10) — presentation 状态条与显式 Canvas retry 切片
+
+- **Red/contract coverage:** `RemoteDesktopPresentationInitialization` 现在显式保存失败时
+  尝试的 backend 和 native child 是否已确认销毁；测试覆盖只有 cleanup 成功后的
+  `Failed` 状态才允许显式 Canvas retry、retry 不同步启动第二个 runtime，以及稳定
+  fallback taxonomy 到 UI locale key 的映射。
+- **Green implementation:** RDP tab 在 native child content bounds 之外显示当前 backend、
+  自动 fallback 原因和可用时的“使用 Canvas 重试”操作。native 初始化失败先执行
+  `force_close`；只有 child 已安全销毁才开放 retry。retry 会关闭并清空可能残留的 Canvas
+  runtime channel，切换 presentation 状态后交给下一次 layout/render 启动唯一 Canvas
+  runtime，不在 action callback 内直接创建 session。
+- **Bounds hardening:** status row 与画面使用纵向 flex；content 通过
+  `ElementExt::on_prepaint` 获取自身真实 bounds，而不是依赖 root children 的
+  `first()`/`last()` 顺序。该 bounds 继续作为 native child 的唯一布局输入，状态条不会
+  被纳入 Win32 child rectangle。
+- **Automated verification:** macOS host 上
+  `cargo test --locked -p remote_desktop_view` 通过 134 个测试；
+  `cargo test --locked -p remote_desktop_view --features windows-native-rdp` 通过 144 个
+  测试；`cargo fmt --all -- --check` 与 `git diff --check` 通过。
+  `cargo clippy --locked -p remote_desktop_view --all-targets --features
+  windows-native-rdp -- -D warnings` 被与本切片无关的既有 workspace lint
+  （`agent_runtime` large-enum/unnecessary-sort、`ssh` large `Err`）阻断；增加
+  `--no-deps` 后仍被既有 `remote_desktop_view/src/view/frame_sync.rs` 的
+  `derivable_impls` 阻断。本切片的 Windows/MSVC/ATL 编译链接交由推送后的 GitHub
+  Windows runner 核验。
+- **Still pending:** 本切片不勾选 Task 6 整体完成；100/125/150/200% DPI、inactive
+  resize、快速 tab 切换、sidebar/window resize 和跨 monitor 的交互桌面验证仍待执行。
+
 ---
 
 ### Task 7: 安全关闭、STA 生命周期与强制关闭兜底

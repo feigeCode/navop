@@ -179,7 +179,11 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
         "WindowsNativePresentationCreateError::ProxyUnsupported,\n            )) =>",
         "WindowsNativePresentationCreateError::Adapter(error),\n            )) =>",
     );
-    assert!(proxy_failure.contains("RemoteDesktopPresentationInitialization::Failed"));
+    assert!(proxy_failure.contains("self.fail_presentation_initialization("));
+    assert!(
+        proxy_failure
+            .contains("RemoteDesktopPresentation::NativeWindows,\n                    true,")
+    );
     assert!(
         !proxy_failure.contains("RemoteDesktopPresentationInitialization::Canvas"),
         "Auto must fail closed rather than bypassing an unsupported proxy via Canvas fallback"
@@ -216,6 +220,109 @@ fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
             >= 5,
         "all post-create initialization failures must close the native host and fail closed"
     );
+}
+
+#[test]
+fn explicit_canvas_retry_requires_confirmed_native_cleanup_and_defers_runtime_start() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let render = include_str!("render.rs").replace("\r\n", "\n");
+
+    assert!(view.contains("[SendTab, SendShiftTab, RemoteCopy, RemotePaste, UseCanvas]"));
+
+    let retry = function_body(
+        &view,
+        "fn use_canvas",
+        "#[cfg(all(feature = \"windows-native-rdp\", target_os = \"windows\"))]\n    fn fail_windows_native_presentation",
+    );
+    let retry_gate = retry
+        .find("allows_explicit_canvas_retry()")
+        .expect("retry state gate");
+    let native_guard = retry
+        .find("if self.windows_native.is_some()")
+        .expect("native child guard");
+    let close_canvas = retry
+        .find("close_runtime_once(&mut self.input_tx);")
+        .expect("existing Canvas runtime close");
+    let select_canvas = retry
+        .find("RemoteDesktopPresentationInitialization::Canvas")
+        .expect("explicit Canvas selection");
+    assert!(retry_gate < native_guard);
+    assert!(native_guard < close_canvas);
+    assert!(close_canvas < select_canvas);
+    assert!(retry.contains("self.output_rx = None;"));
+    assert!(retry.contains("fallback_reason: None"));
+    assert!(retry.contains("cx.notify();"));
+    assert!(
+        !retry.contains("start_runtime"),
+        "the action must let the next render start exactly one Canvas runtime"
+    );
+
+    let failure = function_body(
+        &view,
+        "fn fail_windows_native_presentation",
+        "pub(crate) fn attach_windows_native_presentation",
+    );
+    assert!(failure.contains("let canvas_retry_available = match native.force_close"));
+    assert!(failure.contains("Ok(()) => true"));
+    assert!(failure.contains("Err(close_error) =>"));
+    assert!(failure.contains("false"));
+    assert!(failure.contains(
+        "RemoteDesktopPresentation::NativeWindows,\n            canvas_retry_available,"
+    ));
+
+    assert!(render.contains(".on_action(cx.listener(Self::use_canvas))"));
+    assert!(render.contains("this.use_canvas(&UseCanvas, window, cx);"));
+}
+
+#[test]
+fn rdp_presentation_status_stays_outside_the_native_child_bounds() {
+    let source = include_str!("render.rs").replace("\r\n", "\n");
+
+    for token in [
+        "show_presentation_status",
+        ".fallback_reason()",
+        "allows_explicit_canvas_retry()",
+        "remote-desktop-presentation-status",
+        "remote-desktop-use-canvas",
+        "RemoteDesktop.presentation_backend",
+        "RemoteDesktop.fallback_reason",
+        "RemoteDesktop.use_canvas",
+    ] {
+        assert!(
+            source.contains(token),
+            "missing presentation UI token: {token}"
+        );
+    }
+    for locale_key in [
+        "fallback_feature_disabled",
+        "fallback_unsupported_platform",
+        "fallback_probe_reported_unavailable",
+        "fallback_class_not_registered",
+        "fallback_required_interface_missing",
+    ] {
+        assert!(
+            source.contains(locale_key),
+            "fallback UI must use stable taxonomy key: {locale_key}"
+        );
+    }
+
+    let root = &source[source
+        .find("\n        div()\n            .size_full()\n            .min_w_0()")
+        .expect("remote desktop root")..];
+    assert!(root.contains(".flex()\n            .flex_col()"));
+    assert!(source.contains(".on_prepaint(move |bounds, window, cx|"));
+    assert!(source.contains("view.update_content_bounds(bounds, window.scale_factor())"));
+    assert!(!root.contains(".on_children_prepainted("));
+    let status = root
+        .find(".when(show_presentation_status")
+        .expect("presentation status condition");
+    let content = root.rfind(".child(content)").expect("content child");
+    assert!(
+        status < content,
+        "the status row must be laid out before the native-child content bounds"
+    );
+    assert!(!source.contains("show_status_overlay"));
+    assert!(!source.contains("remote-desktop-status-overlay"));
 }
 
 #[test]
@@ -303,7 +410,8 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
     let root = &source[root_start..];
 
     for constraint in [
-        ".size_full()",
+        ".w_full()",
+        ".flex_grow(1.0)",
         ".min_w_0()",
         ".min_h_0()",
         ".relative()",
@@ -330,10 +438,15 @@ fn assert_parent_bounded_remote_desktop_content(source: &str) {
         ".size_full()",
         ".min_w_0()",
         ".min_h_0()",
+        ".flex()",
+        ".flex_col()",
         ".overflow_hidden()",
     ] {
         assert!(root.contains(constraint));
     }
+    assert!(content.contains(".on_prepaint(move |bounds, window, cx|"));
+    assert!(content.contains("view.update_content_bounds(bounds, window.scale_factor())"));
+    assert!(!root.contains(".on_children_prepainted("));
 }
 
 #[test]

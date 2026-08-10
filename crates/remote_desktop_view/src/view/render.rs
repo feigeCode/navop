@@ -1,4 +1,5 @@
 use gpui::prelude::FluentBuilder;
+use gpui_component::{ElementExt as _, Sizable as _, button::Button};
 
 use super::*;
 use crate::pointer::scale_filled_remote_cursor_bounds;
@@ -143,6 +144,40 @@ fn remote_cursor_bounds(
         point(px(local.left), px(local.top)),
         size(px(local.width), px(local.height)),
     ))
+}
+
+fn localized_presentation_backend(
+    initialization: presentation::RemoteDesktopPresentationInitialization,
+) -> String {
+    match initialization.presentation() {
+        None => t!("RemoteDesktop.backend_selecting").to_string(),
+        Some(presentation::RemoteDesktopPresentation::Canvas) => {
+            t!("RemoteDesktop.backend_canvas").to_string()
+        }
+        Some(presentation::RemoteDesktopPresentation::NativeWindows) => {
+            t!("RemoteDesktop.backend_windows_native").to_string()
+        }
+    }
+}
+
+fn localized_fallback_reason(reason: presentation::WindowsNativeRdpUnavailableReason) -> String {
+    match reason {
+        presentation::WindowsNativeRdpUnavailableReason::FeatureDisabled => {
+            t!("RemoteDesktop.fallback_feature_disabled").to_string()
+        }
+        presentation::WindowsNativeRdpUnavailableReason::UnsupportedPlatform => {
+            t!("RemoteDesktop.fallback_unsupported_platform").to_string()
+        }
+        presentation::WindowsNativeRdpUnavailableReason::ProbeReportedUnavailable => {
+            t!("RemoteDesktop.fallback_probe_reported_unavailable").to_string()
+        }
+        presentation::WindowsNativeRdpUnavailableReason::ClassNotRegistered => {
+            t!("RemoteDesktop.fallback_class_not_registered").to_string()
+        }
+        presentation::WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing => {
+            t!("RemoteDesktop.fallback_required_interface_missing").to_string()
+        }
+    }
 }
 
 impl Focusable for RemoteDesktopView {
@@ -335,11 +370,19 @@ impl Render for RemoteDesktopView {
             cursor: self.cursor.paint_state(self.remote_size),
         };
         let uses_windows_native = self.uses_windows_native_presentation();
+        let show_presentation_status = self.options.protocol == RemoteDesktopProtocol::Rdp;
+        let presentation_initialization = self.presentation_initialization;
+        let presentation_backend = localized_presentation_backend(presentation_initialization);
+        let fallback_reason = presentation_initialization
+            .fallback_reason()
+            .map(localized_fallback_reason);
+        let canvas_retry_available = presentation_initialization.allows_explicit_canvas_retry();
         let view = cx.entity();
 
         let content = div()
             .id("remote-desktop-content")
-            .size_full()
+            .w_full()
+            .flex_grow(1.0)
             .min_w_0()
             .min_h_0()
             .relative()
@@ -435,6 +478,11 @@ impl Render for RemoteDesktopView {
                         .text_color(cx.theme().muted_foreground)
                         .child(self.status.clone()),
                 )
+            })
+            .on_prepaint(move |bounds, window, cx| {
+                view.update(cx, |view, view_cx| {
+                    view.update_content_bounds(bounds, window.scale_factor(), view_cx);
+                });
             });
 
         div()
@@ -442,13 +490,53 @@ impl Render for RemoteDesktopView {
             .min_w_0()
             .min_h_0()
             .relative()
+            .flex()
+            .flex_col()
             .overflow_hidden()
-            .on_children_prepainted(move |bounds, window, cx| {
-                if let Some(bounds) = bounds.first().copied() {
-                    view.update(cx, |view, cx| {
-                        view.update_content_bounds(bounds, window.scale_factor(), cx);
-                    });
-                }
+            .on_action(cx.listener(Self::use_canvas))
+            .when(show_presentation_status, |this| {
+                this.child(
+                    div()
+                        .id("remote-desktop-presentation-status")
+                        .w_full()
+                        .h(cx.theme().geometry.layout.status_bar)
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().background)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            div().flex_none().whitespace_nowrap().child(
+                                t!(
+                                    "RemoteDesktop.presentation_backend",
+                                    backend = presentation_backend
+                                )
+                                .to_string(),
+                            ),
+                        )
+                        .when_some(fallback_reason, |this, reason| {
+                            this.child(div().min_w_0().flex_1().truncate().child(
+                                t!("RemoteDesktop.fallback_reason", reason = reason).to_string(),
+                            ))
+                        })
+                        .when(canvas_retry_available, |this| {
+                            this.child(
+                                Button::new("remote-desktop-use-canvas")
+                                    .small()
+                                    .outline()
+                                    .compact()
+                                    .label(t!("RemoteDesktop.use_canvas").to_string())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.use_canvas(&UseCanvas, window, cx);
+                                    })),
+                            )
+                        }),
+                )
             })
             .child(content)
     }

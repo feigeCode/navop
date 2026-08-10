@@ -53,6 +53,50 @@ RemoteDesktop:
     en: Windows native RDP does not support the configured SOCKS/HTTP proxy yet. Use the Canvas backend instead.
     zh-CN: Windows 原生 RDP 暂不支持已配置的 SOCKS/HTTP 代理，请改用 Canvas 后端。
     zh-HK: Windows 原生 RDP 暫不支援已設定的 SOCKS/HTTP 代理，請改用 Canvas 後端。
+  presentation_backend:
+    en: "Backend: %{backend}"
+    zh-CN: "后端：%{backend}"
+    zh-HK: "後端：%{backend}"
+  backend_selecting:
+    en: Selecting
+    zh-CN: 正在选择
+    zh-HK: 正在選擇
+  backend_canvas:
+    en: Canvas
+    zh-CN: Canvas
+    zh-HK: Canvas
+  backend_windows_native:
+    en: Windows native RDP
+    zh-CN: Windows 原生 RDP
+    zh-HK: Windows 原生 RDP
+  fallback_reason:
+    en: "Fallback reason: %{reason}"
+    zh-CN: "回退原因：%{reason}"
+    zh-HK: "回退原因：%{reason}"
+  fallback_feature_disabled:
+    en: Native RDP is disabled in this build
+    zh-CN: 当前构建未启用原生 RDP
+    zh-HK: 目前版本未啟用原生 RDP
+  fallback_unsupported_platform:
+    en: Native RDP is unavailable on this platform
+    zh-CN: 当前平台不支持原生 RDP
+    zh-HK: 目前平台不支援原生 RDP
+  fallback_probe_reported_unavailable:
+    en: Windows reported that native RDP is unavailable
+    zh-CN: Windows 报告原生 RDP 不可用
+    zh-HK: Windows 回報原生 RDP 不可用
+  fallback_class_not_registered:
+    en: The Windows RDP component is not registered
+    zh-CN: Windows RDP 组件未注册
+    zh-HK: Windows RDP 元件未註冊
+  fallback_required_interface_missing:
+    en: The Windows RDP component is missing a required interface
+    zh-CN: Windows RDP 组件缺少必需接口
+    zh-HK: Windows RDP 元件缺少必要介面
+  use_canvas:
+    en: Retry with Canvas
+    zh-CN: 使用 Canvas 重试
+    zh-HK: 使用 Canvas 重試
   session_taken_over_notification:
     en: Another user connected to the remote server. This RDP session was disconnected and the tab was closed.
     zh-CN: 另一位用户已连接到远程服务器，当前 RDP 会话已断开，页签已自动关闭。

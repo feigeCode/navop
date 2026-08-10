@@ -1448,12 +1448,44 @@ pub(crate) enum RemoteDesktopPresentationInitialization {
         fallback_reason: Option<WindowsNativeRdpUnavailableReason>,
     },
     Native,
-    Failed,
+    Failed {
+        attempted_presentation: RemoteDesktopPresentation,
+        canvas_retry_available: bool,
+    },
 }
 
 impl RemoteDesktopPresentationInitialization {
+    pub(crate) const fn presentation(self) -> Option<RemoteDesktopPresentation> {
+        match self {
+            Self::Pending => None,
+            Self::Canvas { .. } => Some(RemoteDesktopPresentation::Canvas),
+            Self::Native => Some(RemoteDesktopPresentation::NativeWindows),
+            Self::Failed {
+                attempted_presentation,
+                ..
+            } => Some(attempted_presentation),
+        }
+    }
+
+    pub(crate) const fn fallback_reason(self) -> Option<WindowsNativeRdpUnavailableReason> {
+        match self {
+            Self::Canvas { fallback_reason } => fallback_reason,
+            Self::Pending | Self::Native | Self::Failed { .. } => None,
+        }
+    }
+
     pub(crate) const fn allows_canvas_runtime(self) -> bool {
         matches!(self, Self::Canvas { .. })
+    }
+
+    pub(crate) const fn allows_explicit_canvas_retry(self) -> bool {
+        matches!(
+            self,
+            Self::Failed {
+                canvas_retry_available: true,
+                ..
+            }
+        )
     }
 }
 
