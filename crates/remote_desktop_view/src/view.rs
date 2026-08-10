@@ -38,6 +38,8 @@ mod output;
 // Task 0 freezes this contract before later tasks wire it into the view runtime.
 #[allow(dead_code)]
 mod presentation;
+#[allow(dead_code)]
+mod presentation_capability;
 mod render;
 mod resize;
 mod surface;

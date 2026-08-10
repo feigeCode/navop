@@ -1376,15 +1376,53 @@ pub(crate) enum RemoteDesktopPlatform {
     Other,
 }
 
+/// A pre-connect reason that makes the native backend predictably unavailable.
+///
+/// Only this classification may trigger the `Auto` preference's Canvas
+/// fallback. Runtime authentication, certificate, Gateway, server-policy, and
+/// network failures never enter this model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WindowsNativeRdpAvailability {
+pub(crate) enum WindowsNativeRdpUnavailableReason {
+    FeatureDisabled,
+    UnsupportedPlatform,
+    ProbeReportedUnavailable,
+}
+
+/// A stable, non-fallback classification for failures while probing the native
+/// boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowsNativeRdpProbeFailure {
+    InvalidArgument,
+    AbiMismatch,
+    AllocationFailed,
+    Internal,
+    WrongThread,
+    CallbackInFlight,
+    InvalidState,
+    NativeReturnedNullHandle,
+    NativeDidNotClearHandle,
+    InvalidNativeResponse,
+    UnexpectedNativeResult(i32),
+    NativeHresult { result: i32, hresult: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowsNativeRdpCapability {
     Available,
-    UnavailableNotBuilt,
+    Unavailable(WindowsNativeRdpUnavailableReason),
+    ProbeFailed(WindowsNativeRdpProbeFailure),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RemoteDesktopPresentationSelection {
+    pub(crate) presentation: RemoteDesktopPresentation,
+    pub(crate) fallback_reason: Option<WindowsNativeRdpUnavailableReason>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteDesktopPresentationError {
-    UnavailableNotBuilt,
+    NativeUnavailable(WindowsNativeRdpUnavailableReason),
+    NativeProbeFailed(WindowsNativeRdpProbeFailure),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1400,59 +1438,60 @@ pub(crate) enum RemoteDesktopPresentationState {
     Released,
 }
 
-pub(crate) const fn current_windows_native_rdp_availability() -> WindowsNativeRdpAvailability {
-    WindowsNativeRdpAvailability::UnavailableNotBuilt
-}
-
-pub(crate) const fn create_remote_desktop_presentation(
-    preference: RemoteDesktopBackendPreference,
-) -> Result<RemoteDesktopPresentation, RemoteDesktopPresentationError> {
-    select_remote_desktop_presentation(
-        current_remote_desktop_platform(),
-        preference,
-        current_windows_native_rdp_availability(),
-    )
-}
-
 pub(crate) const fn select_remote_desktop_presentation(
     platform: RemoteDesktopPlatform,
     preference: RemoteDesktopBackendPreference,
-    native_availability: WindowsNativeRdpAvailability,
-) -> Result<RemoteDesktopPresentation, RemoteDesktopPresentationError> {
+    native_capability: WindowsNativeRdpCapability,
+) -> Result<RemoteDesktopPresentationSelection, RemoteDesktopPresentationError> {
     if matches!(platform, RemoteDesktopPlatform::Other) {
-        return Ok(RemoteDesktopPresentation::Canvas);
+        return Ok(canvas_selection(None));
     }
 
-    classify_windows_presentation(preference, native_availability)
+    classify_windows_presentation(preference, native_capability)
 }
 
 #[cfg(target_os = "windows")]
-const fn current_remote_desktop_platform() -> RemoteDesktopPlatform {
+pub(crate) const fn current_remote_desktop_platform() -> RemoteDesktopPlatform {
     RemoteDesktopPlatform::Windows
 }
 
 #[cfg(not(target_os = "windows"))]
-const fn current_remote_desktop_platform() -> RemoteDesktopPlatform {
+pub(crate) const fn current_remote_desktop_platform() -> RemoteDesktopPlatform {
     RemoteDesktopPlatform::Other
 }
 
 const fn classify_windows_presentation(
     preference: RemoteDesktopBackendPreference,
-    native_availability: WindowsNativeRdpAvailability,
-) -> Result<RemoteDesktopPresentation, RemoteDesktopPresentationError> {
-    match (preference, native_availability) {
-        (RemoteDesktopBackendPreference::Canvas, _) => Ok(RemoteDesktopPresentation::Canvas),
+    native_capability: WindowsNativeRdpCapability,
+) -> Result<RemoteDesktopPresentationSelection, RemoteDesktopPresentationError> {
+    match (preference, native_capability) {
+        (RemoteDesktopBackendPreference::Canvas, _) => Ok(canvas_selection(None)),
         (
             RemoteDesktopBackendPreference::Auto | RemoteDesktopBackendPreference::WindowsNative,
-            WindowsNativeRdpAvailability::Available,
-        ) => Ok(RemoteDesktopPresentation::NativeWindows),
-        (
-            RemoteDesktopBackendPreference::Auto,
-            WindowsNativeRdpAvailability::UnavailableNotBuilt,
-        ) => Ok(RemoteDesktopPresentation::Canvas),
+            WindowsNativeRdpCapability::Available,
+        ) => Ok(RemoteDesktopPresentationSelection {
+            presentation: RemoteDesktopPresentation::NativeWindows,
+            fallback_reason: None,
+        }),
+        (RemoteDesktopBackendPreference::Auto, WindowsNativeRdpCapability::Unavailable(reason)) => {
+            Ok(canvas_selection(Some(reason)))
+        }
         (
             RemoteDesktopBackendPreference::WindowsNative,
-            WindowsNativeRdpAvailability::UnavailableNotBuilt,
-        ) => Err(RemoteDesktopPresentationError::UnavailableNotBuilt),
+            WindowsNativeRdpCapability::Unavailable(reason),
+        ) => Err(RemoteDesktopPresentationError::NativeUnavailable(reason)),
+        (
+            RemoteDesktopBackendPreference::Auto | RemoteDesktopBackendPreference::WindowsNative,
+            WindowsNativeRdpCapability::ProbeFailed(failure),
+        ) => Err(RemoteDesktopPresentationError::NativeProbeFailed(failure)),
+    }
+}
+
+const fn canvas_selection(
+    fallback_reason: Option<WindowsNativeRdpUnavailableReason>,
+) -> RemoteDesktopPresentationSelection {
+    RemoteDesktopPresentationSelection {
+        presentation: RemoteDesktopPresentation::Canvas,
+        fallback_reason,
     }
 }
