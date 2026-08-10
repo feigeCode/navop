@@ -174,6 +174,7 @@ impl TabContent for RemoteDesktopView {
     }
 
     fn on_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab_active = true;
         if !self.activate_windows_native(false) {
             return;
         }
@@ -182,11 +183,14 @@ impl TabContent for RemoteDesktopView {
         // Defer the native focus handoff by one UI turn so the ActiveX child is
         // the final focus owner. A rapid deactivate makes focus() a no-op.
         cx.defer_in(window, |this, _, _| {
-            this.focus_windows_native();
+            if this.tab_active {
+                this.focus_windows_native();
+            }
         });
     }
 
     fn on_deactivate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab_active = false;
         let focus_handle = self.focus_handle.clone();
         self.deactivate_windows_native(|| {
             window.focus(&focus_handle, cx);
@@ -299,6 +303,7 @@ impl Render for RemoteDesktopView {
         }
         self.drain_output(window, cx);
         self.sync_local_clipboard(window, cx);
+        self.ensure_presentation(window, cx);
         self.flush_pending_start(cx);
         self.flush_pending_resize();
         if let Some(latest_frame) = self.latest_frame.take() {

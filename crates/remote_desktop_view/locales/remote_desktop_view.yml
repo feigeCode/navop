@@ -49,6 +49,10 @@ RemoteDesktop:
     en: Remote desktop connection failed. Check the connection settings and try again.
     zh-CN: 远程桌面连接失败，请检查连接配置后重试。
     zh-HK: 遠端桌面連線失敗，請檢查連線設定後重試。
+  native_proxy_unsupported:
+    en: Windows native RDP does not support the configured SOCKS/HTTP proxy yet. Use the Canvas backend instead.
+    zh-CN: Windows 原生 RDP 暂不支持已配置的 SOCKS/HTTP 代理，请改用 Canvas 后端。
+    zh-HK: Windows 原生 RDP 暫不支援已設定的 SOCKS/HTTP 代理，請改用 Canvas 後端。
   session_taken_over_notification:
     en: Another user connected to the remote server. This RDP session was disconnected and the tab was closed.
     zh-CN: 另一位用户已连接到远程服务器，当前 RDP 会话已断开，页签已自动关闭。

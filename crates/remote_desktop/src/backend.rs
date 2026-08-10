@@ -84,14 +84,14 @@ pub(crate) fn resolve_proxy_options(
     let Some(proxy) = options.proxy.take() else {
         return Ok((options, None));
     };
-    let (host, port) = split_destination(&options.destination)?;
+    let (host, port) = parse_destination(&options.destination)?;
     let tunnel = start_proxy_tunnel(proxy, host, port)?;
     let local_addr = tunnel.local_addr();
     options.destination = local_addr.to_string();
     Ok((options, Some(tunnel.into())))
 }
 
-fn split_destination(destination: &str) -> anyhow::Result<(String, u16)> {
+pub fn parse_destination(destination: &str) -> anyhow::Result<(String, u16)> {
     let (host, port) = destination
         .trim()
         .rsplit_once(':')

@@ -4,7 +4,7 @@ use tempfile::TempDir;
 
 use crate::{
     RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,
-    RemoteDesktopProviderRegistry, backend::RemoteDesktopProviderVersionError,
+    RemoteDesktopProviderRegistry, backend::RemoteDesktopProviderVersionError, parse_destination,
 };
 use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType, TunnelGuard};
 
@@ -122,6 +122,29 @@ fn proxied_options_use_loopback_destination_and_keep_guard() {
             .is_loopback()
     );
     assert!(matches!(guard, Some(TunnelGuard::Proxy(_))));
+}
+
+#[test]
+fn parse_destination_supports_host_ipv4_and_ipv6() {
+    assert_eq!(
+        ("rdp.example".to_string(), 3389),
+        parse_destination("rdp.example:3389").unwrap()
+    );
+    assert_eq!(
+        ("127.0.0.1".to_string(), 3390),
+        parse_destination("127.0.0.1:3390").unwrap()
+    );
+    assert_eq!(
+        ("::1".to_string(), 3389),
+        parse_destination("[::1]:3389").unwrap()
+    );
+}
+
+#[test]
+fn parse_destination_rejects_missing_or_invalid_endpoint_parts() {
+    for destination in ["rdp.example", ":3389", "rdp.example:not-a-port"] {
+        assert!(parse_destination(destination).is_err(), "{destination}");
+    }
 }
 
 fn options(protocol: RemoteDesktopProtocol) -> RemoteDesktopConnectionOptions {

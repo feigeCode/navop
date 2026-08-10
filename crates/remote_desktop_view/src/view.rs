@@ -1,9 +1,14 @@
 use std::sync::{Arc, OnceLock, atomic::AtomicU64};
 use std::time::{Duration, Instant};
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+use std::sync::atomic::Ordering;
+
 use gpui::*;
 use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+use remote_desktop::parse_destination;
 use remote_desktop::{
     RemoteDesktopCapabilities, RemoteDesktopConnectionOptions, RemoteDesktopFailure,
     RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
@@ -35,16 +40,19 @@ mod input;
 mod native_events;
 mod notifications;
 mod output;
-// Task 0 freezes this contract before later tasks wire it into the view runtime.
+// The full selection taxonomy is exercised by cross-platform contract tests,
+// while several variants are only constructed by the Windows production path.
 #[allow(dead_code)]
 mod presentation;
+// Capability probing is compiled for contract tests on every platform but is
+// only consumed by the production presentation factory on Windows.
 #[allow(dead_code)]
 mod presentation_capability;
 mod render;
 mod resize;
 mod surface;
-// Task 6 freezes the GPUI/native-child presentation adapter before Task 8
-// enables the production presentation factory.
+// Pure lifecycle/bounds tests run cross-platform; the production adapter and
+// sink are only constructed by the Windows native-RDP build.
 #[allow(dead_code)]
 mod windows_native;
 
@@ -56,6 +64,8 @@ const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
 const REMOTE_DESKTOP_DIAGNOSTICS_ENV: &str = "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS";
 #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
 const WINDOWS_NATIVE_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+static NEXT_WINDOWS_NATIVE_RDP_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
@@ -94,8 +104,20 @@ enum WindowsNativeClosePoll {
     Failed,
 }
 
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+#[derive(Debug)]
+enum WindowsNativePresentationCreateError {
+    ProxyUnsupported,
+    Adapter(windows_native::WindowsNativeAdapterCreateError),
+}
+
 fn preserve_presented_frame_during_session_reset(reason: SessionResetReason) -> bool {
     matches!(reason, SessionResetReason::Reconnecting)
+}
+
+#[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+fn next_windows_native_rdp_generation() -> u64 {
+    NEXT_WINDOWS_NATIVE_RDP_GENERATION.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct RemoteDesktopViewConfig {
@@ -145,6 +167,8 @@ pub struct RemoteDesktopView {
     _output_ready_task: Option<Task<()>>,
     _presentation_task: Option<Task<()>>,
     _presentation_pacing_task: Option<Task<()>>,
+    presentation_initialization: presentation::RemoteDesktopPresentationInitialization,
+    tab_active: bool,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     windows_native: Option<windows_native::WindowsNativeAdapter>,
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -158,6 +182,13 @@ impl RemoteDesktopView {
         cx: &mut Context<Self>,
     ) -> Self {
         let manage_native_cursor = config.options.protocol == RemoteDesktopProtocol::Rdp;
+        let presentation_initialization = if config.options.protocol == RemoteDesktopProtocol::Vnc {
+            presentation::RemoteDesktopPresentationInitialization::Canvas {
+                fallback_reason: None,
+            }
+        } else {
+            presentation::RemoteDesktopPresentationInitialization::Pending
+        };
         let focus_handle = cx.focus_handle();
 
         cx.on_release(move |this, cx| {
@@ -254,6 +285,8 @@ impl RemoteDesktopView {
             _output_ready_task: None,
             _presentation_task: None,
             _presentation_pacing_task: None,
+            presentation_initialization,
+            tab_active: false,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
             windows_native: None,
             #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
@@ -282,18 +315,223 @@ impl RemoteDesktopView {
         }
     }
 
-    // Task 6 freezes the attach seam before Task 8 wires the production
-    // presentation factory. Keep this allowance scoped to that staged seam.
-    #[allow(dead_code)]
+    pub(super) fn ensure_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            self.presentation_initialization,
+            presentation::RemoteDesktopPresentationInitialization::Pending
+        ) {
+            return;
+        }
+        if self.options.protocol != RemoteDesktopProtocol::Rdp {
+            self.presentation_initialization =
+                presentation::RemoteDesktopPresentationInitialization::Canvas {
+                    fallback_reason: None,
+                };
+            return;
+        }
+
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        {
+            self.ensure_windows_native_presentation(window, cx);
+        }
+
+        #[cfg(not(all(feature = "windows-native-rdp", target_os = "windows")))]
+        {
+            let _ = (window, cx);
+            let creation = presentation::create_remote_desktop_presentation_with(
+                presentation::current_remote_desktop_platform(),
+                self.options.backend_preference,
+                presentation_capability::current_windows_native_rdp_capability,
+                || Ok::<(), std::convert::Infallible>(()),
+                |error| match *error {},
+            );
+            match creation {
+                Ok(presentation::RemoteDesktopPresentationCreation::Canvas { fallback_reason }) => {
+                    self.presentation_initialization =
+                        presentation::RemoteDesktopPresentationInitialization::Canvas {
+                            fallback_reason,
+                        };
+                }
+                Ok(presentation::RemoteDesktopPresentationCreation::Native(())) => {
+                    unreachable!("native Windows presentation is unavailable in this build")
+                }
+                Err(error) => {
+                    tracing::warn!(?error, "failed to select the remote desktop presentation");
+                    self.fail_presentation_initialization();
+                }
+            }
+        }
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn ensure_windows_native_presentation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.options.backend_preference
+            != one_core::storage::RemoteDesktopBackendPreference::Canvas
+            && self
+                .content_bounds
+                .and_then(|bounds| resize::resize_dimensions(bounds, window.scale_factor()))
+                .is_none()
+        {
+            return;
+        }
+
+        let proxy_configured = self.options.proxy.is_some();
+        let creation = presentation::create_remote_desktop_presentation_with(
+            presentation::current_remote_desktop_platform(),
+            self.options.backend_preference,
+            presentation_capability::current_windows_native_rdp_capability,
+            || {
+                if proxy_configured {
+                    return Err(WindowsNativePresentationCreateError::ProxyUnsupported);
+                }
+                windows_native::WindowsNativeAdapter::create(
+                    window,
+                    next_windows_native_rdp_generation(),
+                )
+                .map_err(WindowsNativePresentationCreateError::Adapter)
+            },
+            |error| match error {
+                WindowsNativePresentationCreateError::ProxyUnsupported => None,
+                WindowsNativePresentationCreateError::Adapter(
+                    windows_native::WindowsNativeAdapterCreateError::Host(error),
+                ) => presentation::classify_windows_native_create_error(*error),
+                WindowsNativePresentationCreateError::Adapter(
+                    windows_native::WindowsNativeAdapterCreateError::WindowHandle(_)
+                    | windows_native::WindowsNativeAdapterCreateError::ParentHandleNotWin32,
+                ) => None,
+            },
+        );
+
+        let mut native = match creation {
+            Ok(presentation::RemoteDesktopPresentationCreation::Canvas { fallback_reason }) => {
+                self.presentation_initialization =
+                    presentation::RemoteDesktopPresentationInitialization::Canvas {
+                        fallback_reason,
+                    };
+                return;
+            }
+            Ok(presentation::RemoteDesktopPresentationCreation::Native(native)) => native,
+            Err(presentation::RemoteDesktopPresentationCreateError::Selection(error)) => {
+                tracing::warn!(
+                    ?error,
+                    "failed to select the Windows native RDP presentation"
+                );
+                self.fail_presentation_initialization();
+                return;
+            }
+            Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
+                WindowsNativePresentationCreateError::ProxyUnsupported,
+            )) => {
+                tracing::warn!("Windows native RDP cannot use the configured SOCKS/HTTP proxy");
+                self.presentation_initialization =
+                    presentation::RemoteDesktopPresentationInitialization::Failed;
+                self.status =
+                    SharedString::from(t!("RemoteDesktop.native_proxy_unsupported").to_string());
+                return;
+            }
+            Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
+                WindowsNativePresentationCreateError::Adapter(error),
+            )) => {
+                tracing::warn!(?error, "failed to create the Windows native RDP host");
+                self.fail_presentation_initialization();
+                return;
+            }
+        };
+
+        let Some(bounds) = self.content_bounds else {
+            self.fail_windows_native_presentation(
+                native,
+                "layout",
+                anyhow::anyhow!("native RDP layout disappeared before initialization"),
+            );
+            return;
+        };
+        let Some(size) = resize::resize_dimensions(bounds, window.scale_factor()) else {
+            self.fail_windows_native_presentation(
+                native,
+                "layout",
+                anyhow::anyhow!("native RDP layout became invalid during initialization"),
+            );
+            return;
+        };
+        if let Err(error) =
+            native.update_bounds(bounds, point(px(0.0), px(0.0)), window.scale_factor())
+        {
+            self.fail_windows_native_presentation(native, "bounds", error);
+            return;
+        }
+        let (host, port) = match parse_destination(&self.options.destination) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.fail_windows_native_presentation(native, "endpoint", error);
+                return;
+            }
+        };
+        let connection_options = match windows_rdp_host::WindowsRdpConnectionOptions::new(
+            host,
+            port,
+            u32::from(size.0),
+            u32::from(size.1),
+            windows_rdp_host::WindowsRdpColorDepth::Bpp32,
+        ) {
+            Ok(options) => options,
+            Err(error) => {
+                self.fail_windows_native_presentation(native, "connection-options", error);
+                return;
+            }
+        };
+        if let Err(error) = native.connect(&connection_options) {
+            self.fail_windows_native_presentation(native, "connect", error);
+            return;
+        }
+
+        self.attach_windows_native_presentation(native, window, cx);
+        self.presentation_initialization =
+            presentation::RemoteDesktopPresentationInitialization::Native;
+    }
+
+    fn fail_presentation_initialization(&mut self) {
+        self.presentation_initialization =
+            presentation::RemoteDesktopPresentationInitialization::Failed;
+        self.status = SharedString::from(t!("RemoteDesktop.failure_generic").to_string());
+    }
+
+    #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+    fn fail_windows_native_presentation(
+        &mut self,
+        mut native: windows_native::WindowsNativeAdapter,
+        stage: &'static str,
+        error: impl std::fmt::Debug,
+    ) {
+        tracing::warn!(?error, stage, "failed to initialize Windows native RDP");
+        let mut focus_parent = || {};
+        if let Err(close_error) = native.force_close(&mut focus_parent) {
+            tracing::warn!(
+                ?close_error,
+                "failed to destroy Windows native RDP after initialization failure"
+            );
+        }
+        self.fail_presentation_initialization();
+    }
+
     #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
     pub(crate) fn attach_windows_native_presentation(
         &mut self,
         presentation: windows_native::WindowsNativeAdapter,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
         self.native_event_state = Some(native_events::NativeRdpEventState::new(
             presentation.generation(),
         ));
         self.windows_native = Some(presentation);
+        if self.tab_active && self.activate_windows_native(false) {
+            cx.defer_in(window, |this, _, _| {
+                if this.tab_active {
+                    this.focus_windows_native();
+                }
+            });
+        }
     }
 
     pub(super) fn update_windows_native_bounds(

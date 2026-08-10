@@ -19,7 +19,9 @@ mod helper_protocol_debug;
 mod input_debug;
 mod output_debug;
 
-pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
+pub use backend::{
+    RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend, parse_destination,
+};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{
     RemoteDesktopBackendPreference, RemoteDesktopConnectionOptions, RemoteDesktopProtocol,

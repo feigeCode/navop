@@ -1,11 +1,15 @@
+use std::cell::RefCell;
+
 use one_core::storage::RemoteDesktopBackendPreference;
 
 #[cfg(feature = "windows-native-rdp")]
 use super::presentation::classify_windows_native_create_error;
 use super::presentation::{
-    RemoteDesktopPlatform, RemoteDesktopPresentation, RemoteDesktopPresentationError,
-    RemoteDesktopPresentationSelection, RemoteDesktopPresentationState, WindowsNativeRdpCapability,
-    WindowsNativeRdpProbeFailure, WindowsNativeRdpUnavailableReason,
+    RemoteDesktopPlatform, RemoteDesktopPresentation, RemoteDesktopPresentationCreateError,
+    RemoteDesktopPresentationCreation, RemoteDesktopPresentationError,
+    RemoteDesktopPresentationInitialization, RemoteDesktopPresentationSelection,
+    RemoteDesktopPresentationState, WindowsNativeRdpCapability, WindowsNativeRdpProbeFailure,
+    WindowsNativeRdpUnavailableReason, create_remote_desktop_presentation_with,
     select_remote_desktop_presentation,
 };
 use super::presentation_capability::{
@@ -22,6 +26,216 @@ const fn selection(
         presentation,
         fallback_reason,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeCreateFailure {
+    ClassNotRegistered,
+    RequiredInterfaceMissing,
+    Unexpected,
+}
+
+const fn classify_test_create_failure(
+    failure: &NativeCreateFailure,
+) -> Option<WindowsNativeRdpUnavailableReason> {
+    match failure {
+        NativeCreateFailure::ClassNotRegistered => {
+            Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered)
+        }
+        NativeCreateFailure::RequiredInterfaceMissing => {
+            Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing)
+        }
+        NativeCreateFailure::Unexpected => None,
+    }
+}
+
+#[test]
+fn presentation_factory_canvas_does_not_probe_or_create() {
+    let calls = RefCell::new(Vec::new());
+
+    let result = create_remote_desktop_presentation_with(
+        RemoteDesktopPlatform::Windows,
+        RemoteDesktopBackendPreference::Canvas,
+        || {
+            calls.borrow_mut().push("probe");
+            WindowsNativeRdpCapability::Available
+        },
+        || {
+            calls.borrow_mut().push("create");
+            Ok::<_, NativeCreateFailure>("native")
+        },
+        classify_test_create_failure,
+    );
+
+    assert_eq!(
+        Ok(RemoteDesktopPresentationCreation::Canvas {
+            fallback_reason: None
+        }),
+        result
+    );
+    assert!(calls.into_inner().is_empty());
+}
+
+#[test]
+fn presentation_factory_non_windows_does_not_probe_or_create() {
+    for preference in [
+        RemoteDesktopBackendPreference::Auto,
+        RemoteDesktopBackendPreference::WindowsNative,
+        RemoteDesktopBackendPreference::Canvas,
+    ] {
+        let calls = RefCell::new(Vec::new());
+        let result = create_remote_desktop_presentation_with(
+            RemoteDesktopPlatform::Other,
+            preference,
+            || {
+                calls.borrow_mut().push("probe");
+                WindowsNativeRdpCapability::Available
+            },
+            || {
+                calls.borrow_mut().push("create");
+                Ok::<_, NativeCreateFailure>("native")
+            },
+            classify_test_create_failure,
+        );
+
+        assert_eq!(
+            Ok(RemoteDesktopPresentationCreation::Canvas {
+                fallback_reason: None
+            }),
+            result
+        );
+        assert!(calls.into_inner().is_empty(), "{preference:?}");
+    }
+}
+
+#[test]
+fn presentation_factory_auto_available_creates_native_once_in_order() {
+    let calls = RefCell::new(Vec::new());
+
+    let result = create_remote_desktop_presentation_with(
+        RemoteDesktopPlatform::Windows,
+        RemoteDesktopBackendPreference::Auto,
+        || {
+            calls.borrow_mut().push("probe");
+            WindowsNativeRdpCapability::Available
+        },
+        || {
+            calls.borrow_mut().push("create");
+            Ok::<_, NativeCreateFailure>("native")
+        },
+        classify_test_create_failure,
+    );
+
+    assert_eq!(
+        Ok(RemoteDesktopPresentationCreation::Native("native")),
+        result
+    );
+    assert_eq!(vec!["probe", "create"], calls.into_inner());
+}
+
+#[test]
+fn presentation_factory_auto_falls_back_for_known_create_unavailability() {
+    for (failure, reason) in [
+        (
+            NativeCreateFailure::ClassNotRegistered,
+            WindowsNativeRdpUnavailableReason::ClassNotRegistered,
+        ),
+        (
+            NativeCreateFailure::RequiredInterfaceMissing,
+            WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing,
+        ),
+    ] {
+        let calls = RefCell::new(Vec::new());
+        let result = create_remote_desktop_presentation_with(
+            RemoteDesktopPlatform::Windows,
+            RemoteDesktopBackendPreference::Auto,
+            || {
+                calls.borrow_mut().push("probe");
+                WindowsNativeRdpCapability::Available
+            },
+            || {
+                calls.borrow_mut().push("create");
+                Err::<&str, _>(failure)
+            },
+            classify_test_create_failure,
+        );
+
+        assert_eq!(
+            Ok(RemoteDesktopPresentationCreation::Canvas {
+                fallback_reason: Some(reason)
+            }),
+            result
+        );
+        assert_eq!(vec!["probe", "create"], calls.into_inner());
+    }
+}
+
+#[test]
+fn presentation_factory_auto_preserves_unexpected_create_error() {
+    let calls = RefCell::new(Vec::new());
+
+    let result = create_remote_desktop_presentation_with(
+        RemoteDesktopPlatform::Windows,
+        RemoteDesktopBackendPreference::Auto,
+        || {
+            calls.borrow_mut().push("probe");
+            WindowsNativeRdpCapability::Available
+        },
+        || {
+            calls.borrow_mut().push("create");
+            Err::<&str, _>(NativeCreateFailure::Unexpected)
+        },
+        classify_test_create_failure,
+    );
+
+    assert_eq!(
+        Err(RemoteDesktopPresentationCreateError::NativeCreate(
+            NativeCreateFailure::Unexpected
+        )),
+        result
+    );
+    assert_eq!(vec!["probe", "create"], calls.into_inner());
+}
+
+#[test]
+fn presentation_factory_explicit_native_never_falls_back_after_create_failure() {
+    for failure in [
+        NativeCreateFailure::ClassNotRegistered,
+        NativeCreateFailure::RequiredInterfaceMissing,
+        NativeCreateFailure::Unexpected,
+    ] {
+        let result = create_remote_desktop_presentation_with(
+            RemoteDesktopPlatform::Windows,
+            RemoteDesktopBackendPreference::WindowsNative,
+            || WindowsNativeRdpCapability::Available,
+            || Err::<&str, _>(failure),
+            classify_test_create_failure,
+        );
+
+        assert_eq!(
+            Err(RemoteDesktopPresentationCreateError::NativeCreate(failure)),
+            result
+        );
+    }
+}
+
+#[test]
+fn presentation_runtime_only_canvas_allows_canvas_backend() {
+    assert!(
+        RemoteDesktopPresentationInitialization::Canvas {
+            fallback_reason: None,
+        }
+        .allows_canvas_runtime()
+    );
+    assert!(
+        RemoteDesktopPresentationInitialization::Canvas {
+            fallback_reason: Some(WindowsNativeRdpUnavailableReason::FeatureDisabled),
+        }
+        .allows_canvas_runtime()
+    );
+    assert!(!RemoteDesktopPresentationInitialization::Pending.allows_canvas_runtime());
+    assert!(!RemoteDesktopPresentationInitialization::Native.allows_canvas_runtime());
+    assert!(!RemoteDesktopPresentationInitialization::Failed.allows_canvas_runtime());
 }
 
 #[test]

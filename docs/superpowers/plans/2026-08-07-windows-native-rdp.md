@@ -1747,6 +1747,74 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 
 **Rollback:** 将默认 preference 保持 Canvas/feature off，不删除 native 代码。
 
+#### Execution Notes (2026-08-10) — production presentation lifecycle wiring slice
+
+- **Red evidence:** 新增纯函数 presentation factory 测试，先冻结非 Windows/显式
+  Canvas 不 probe、不 create，Windows Auto available 只 create 一次且顺序稳定，
+  已知 create-time native unavailable 只允许 Auto 回退，未知 create error 和显式
+  Windows Native create error 都保留原始错误且不回退。新增 presentation runtime
+  state 测试，冻结只有 `Canvas` 状态允许启动现有 canvas backend，`Pending`、
+  `Native`、`Failed` 全部 fail closed。公开 endpoint parser 前新增 host/IPv4/
+  bracketed IPv6、missing port、empty host 和 invalid port 测试。production source
+  contract 继续冻结 render 中 presentation selection 先于 pending canvas start、
+  proxy 检查先于 native host create、native create 后
+  bounds → endpoint → options → connect → attach → `Native` 的顺序、post-create
+  failure 不得转 Canvas，以及 activate/deactivate/attach 的 deferred-focus active
+  gate。
+- **Green implementation:** `RemoteDesktopView` 现在为 RDP 从 `Pending` 开始，为
+  VNC 直接进入 `Canvas`；`start_runtime` 在最终入口检查 presentation state，避免
+  native 和 canvas 同时创建 session。Windows feature-on production path 使用
+  capability probe 和 pure factory 创建 `WindowsNativeAdapter`；Auto 只对
+  `REGDB_E_CLASSNOTREG`/`E_NOINTERFACE` 对应的已知 create-time unavailable reason
+  回退 Canvas，显式 Windows Native 永不静默降级。native host 创建成功后应用
+  physical bounds，解析 destination，构造 host/port/初始尺寸/`Bpp32` options 并调用
+  `connect`；layout、endpoint、options 或 connect 任一失败都会 force-close 已创建
+  host、进入 `Failed`，不会再创建 canvas session，也不会在后续 render 重试。
+  `parse_destination` 从 canvas backend 的私有 helper 提升为
+  `remote_desktop` 公共 API，保持既有 destination 语义。
+- **Proxy boundary:** 现有连接模型中的 SOCKS/HTTP proxy 不等同 RD Gateway；native
+  path 在创建 child/session 前检测到 proxy 即返回专门的
+  `ProxyUnsupported`，classifier 明确返回 `None`，Auto 和显式 Native 都 fail
+  closed，并显示本地化的“改用 Canvas”提示。当前没有静默忽略 proxy 后直接 native
+  连接，也没有把 server/proxy password 当作 Gateway password。
+- **Tab lifecycle:** view 保存显式 `tab_active`。activate 先标记 active，再
+  apply bounds/show，并在下一 UI turn focus；deactivate 先清 active，再 focus
+  parent/hide。若 native adapter 在 tab 已 active 后才 attach，同样立即 activate，
+  再 deferred focus；两个 deferred closure 都会重新检查 `tab_active`，快速切 tab
+  不会让已失活 child 抢回 focus。
+- **Refactor/review:** presentation selection/create contract 与 capability cache
+  继续分离；native generation 使用进程内单调 allocator。两轮独立只读审查未发现
+  可确认的高/中严重度双 session、fallback timing、cleanup、borrow/type 或
+  tab-focus 问题。审查发现非 Windows build 会因移除 staged module 的
+  `dead_code` allowance 产生 warning，现已恢复为带原因的 module-scoped allowance；
+  production 使用点仍由 Windows cfg 和 source contract 覆盖。
+- **Automated verification:** macOS host 上
+  `rtk cargo fmt --all --check` 通过；`remote_desktop` tests 为 98 passed；
+  `remote_desktop_view` 默认 tests 为 130 passed，feature-on tests 为 140 passed；
+  `windows_rdp_host` tests 为 107 passed；`windows-rdp-probe --test contract` 为
+  11 passed；`one-core` 为 425 passed / 3 ignored；`main` 默认和
+  `windows-native-rdp` feature check 均通过；`rtk git diff --check` 通过。
+  `remote_desktop_view` 默认/feature-on 的 `--no-deps` Clippy 在只豁免仓库已有
+  `frame_sync.rs` `derivable_impls` 后通过，`windows_rdp_host --no-deps` Clippy
+  通过。未带豁免的 workspace-dependent Clippy 仍被本切片之外的既有
+  `agent_runtime` `large_enum_variant`/`unnecessary_sort_by`、`ssh`
+  `result_large_err` 以及 `frame_sync.rs` `derivable_impls` 阻断，不能记录为全量
+  Clippy clean。
+- **Manual/Windows verification pending:** 本地 macOS 构建不能编译 MSVC/ATL/
+  mstscax type-library C++，也不证明 Windows-only GPUI borrow/type/link。GitHub
+  Windows x64/x86 runner 将在本提交推送后执行；其成功最多证明 MSVC/ATL/
+  type-library/C++/Rust compile/link 和非交互 native tests，不证明有交互桌面的
+  ActiveX create/show/focus/connect。真实 Windows desktop smoke、RDP server、
+  DPI/tab focus 和 fallback negative matrix 仍未完成。
+- **Known limitations:** 本切片的 native basic connect 只接入 endpoint、初始 display
+  size 和 color depth；username/domain/password、NLA/CredSSP、credential prompt 和
+  安全 buffer lifecycle 仍属于 Task 9，不能声称 native authentication 已完成。
+  native callback queue → GPUI 普通 event/UI reducer 尚未 production 接线，close
+  poll 仍是当前 destructive native event drain owner。当前 backend/fallback reason
+  UI、“使用 Canvas 重试”动作、authentication/certificate/Gateway/server failure
+  全部 negative cases 以及 capability cache 版本变化失效仍待后续 Task 8/9 切片。
+  因此本记录不勾选 Task 8 整体完成。
+
 ---
 
 ### Task 9: username/domain/password、NLA/CredSSP 与凭据安全

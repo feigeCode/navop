@@ -5,6 +5,9 @@ use std::sync::atomic::Ordering;
 
 impl RemoteDesktopView {
     pub(super) fn start_runtime(&mut self, size: (u16, u16), cx: &mut Context<Self>) {
+        if !self.presentation_initialization.allows_canvas_runtime() {
+            return;
+        }
         if self.input_tx.is_some() {
             return;
         }

@@ -131,6 +131,131 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
 }
 
 #[test]
+fn presentation_initialization_precedes_and_gates_canvas_runtime_start() {
+    let render = include_str!("render.rs").replace("\r\n", "\n");
+    let output = include_str!("output.rs").replace("\r\n", "\n");
+
+    let ensure = render
+        .find("self.ensure_presentation(window, cx);")
+        .expect("presentation initialization");
+    let flush = render
+        .find("self.flush_pending_start();")
+        .expect("pending Canvas start");
+    assert!(
+        ensure < flush,
+        "native selection and creation must finish before Canvas can start"
+    );
+
+    let start = function_body(
+        &output,
+        "pub(super) fn start_runtime",
+        "pub(super) fn drain_output",
+    );
+    assert!(start.contains("if !self.presentation_initialization.allows_canvas_runtime()"));
+}
+
+#[test]
+fn windows_native_initialization_orders_create_bounds_connect_and_attach() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let initialize = function_body(
+        &view,
+        "fn ensure_windows_native_presentation",
+        "fn fail_presentation_initialization",
+    );
+
+    let proxy_check = initialize
+        .find("if proxy_configured")
+        .expect("proxy capability check");
+    let create = initialize
+        .find("WindowsNativeAdapter::create")
+        .expect("native presentation creation");
+    assert!(
+        proxy_check < create,
+        "unsupported SOCKS/HTTP proxy settings must fail before creating a native host"
+    );
+    assert!(initialize.contains("WindowsNativePresentationCreateError::ProxyUnsupported => None"));
+    let proxy_failure = function_body(
+        initialize,
+        "WindowsNativePresentationCreateError::ProxyUnsupported,\n            )) =>",
+        "WindowsNativePresentationCreateError::Adapter(error),\n            )) =>",
+    );
+    assert!(proxy_failure.contains("RemoteDesktopPresentationInitialization::Failed"));
+    assert!(
+        !proxy_failure.contains("RemoteDesktopPresentationInitialization::Canvas"),
+        "Auto must fail closed rather than bypassing an unsupported proxy via Canvas fallback"
+    );
+
+    let post_create_start = initialize
+        .find("let Some(bounds)")
+        .expect("post-create native initialization");
+    let post_create = &initialize[post_create_start..];
+    let mut previous = 0;
+    for token in [
+        "native.update_bounds",
+        "parse_destination",
+        "WindowsRdpConnectionOptions::new",
+        "native.connect",
+        "attach_windows_native_presentation",
+        "RemoteDesktopPresentationInitialization::Native",
+    ] {
+        let position = post_create[previous..]
+            .find(token)
+            .map(|offset| previous + offset)
+            .unwrap_or_else(|| panic!("missing ordered native initialization token: {token}"));
+        previous = position + token.len();
+    }
+
+    assert!(
+        !post_create.contains("RemoteDesktopPresentationInitialization::Canvas"),
+        "once a native host exists, later setup/connect failures must not open a Canvas session"
+    );
+    assert!(
+        post_create
+            .matches("fail_windows_native_presentation")
+            .count()
+            >= 5,
+        "all post-create initialization failures must close the native host and fail closed"
+    );
+}
+
+#[test]
+fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
+    let render = include_str!("render.rs").replace("\r\n", "\n");
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let activate = function_body(&render, "fn on_activate", "fn on_deactivate");
+    let deactivate = function_body(&render, "fn on_deactivate", "fn try_close");
+    let attach = function_body(
+        &view,
+        "fn attach_windows_native_presentation",
+        "pub(super) fn update_windows_native_bounds",
+    );
+
+    let active_assignment = activate
+        .find("self.tab_active = true;")
+        .expect("active lifecycle assignment");
+    let native_activation = activate
+        .find("self.activate_windows_native(false)")
+        .expect("native activation");
+    assert!(active_assignment < native_activation);
+    assert!(activate.contains("cx.defer_in(window"));
+    assert!(activate.contains("if this.tab_active"));
+    assert!(activate.contains("this.focus_windows_native();"));
+
+    let inactive_assignment = deactivate
+        .find("self.tab_active = false;")
+        .expect("inactive lifecycle assignment");
+    let native_deactivation = deactivate
+        .find("self.deactivate_windows_native")
+        .expect("native deactivation");
+    assert!(inactive_assignment < native_deactivation);
+
+    assert!(attach.contains("if self.tab_active && self.activate_windows_native(false)"));
+    assert!(attach.contains("cx.defer_in(window"));
+    assert!(attach.contains("if this.tab_active"));
+    assert!(attach.contains("this.focus_windows_native();"));
+}
+
+#[test]
 fn local_pointer_move_makes_the_canvas_cursor_paintable_before_hiding_native_cursor() {
     let input = include_str!("input.rs");
     let move_start = input

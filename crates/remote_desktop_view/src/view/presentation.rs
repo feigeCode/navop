@@ -1427,6 +1427,36 @@ pub(crate) enum RemoteDesktopPresentationError {
     NativeProbeFailed(WindowsNativeRdpProbeFailure),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RemoteDesktopPresentationCreation<T> {
+    Canvas {
+        fallback_reason: Option<WindowsNativeRdpUnavailableReason>,
+    },
+    Native(T),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RemoteDesktopPresentationCreateError<E> {
+    Selection(RemoteDesktopPresentationError),
+    NativeCreate(E),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RemoteDesktopPresentationInitialization {
+    Pending,
+    Canvas {
+        fallback_reason: Option<WindowsNativeRdpUnavailableReason>,
+    },
+    Native,
+    Failed,
+}
+
+impl RemoteDesktopPresentationInitialization {
+    pub(crate) const fn allows_canvas_runtime(self) -> bool {
+        matches!(self, Self::Canvas { .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RemoteDesktopPresentationState {
     Created,
@@ -1469,6 +1499,44 @@ pub(crate) const fn select_remote_desktop_presentation(
     }
 
     classify_windows_presentation(preference, native_capability)
+}
+
+pub(crate) fn create_remote_desktop_presentation_with<T, E>(
+    platform: RemoteDesktopPlatform,
+    preference: RemoteDesktopBackendPreference,
+    probe_native: impl FnOnce() -> WindowsNativeRdpCapability,
+    create_native: impl FnOnce() -> Result<T, E>,
+    classify_create_error: impl FnOnce(&E) -> Option<WindowsNativeRdpUnavailableReason>,
+) -> Result<RemoteDesktopPresentationCreation<T>, RemoteDesktopPresentationCreateError<E>> {
+    if matches!(platform, RemoteDesktopPlatform::Other)
+        || matches!(preference, RemoteDesktopBackendPreference::Canvas)
+    {
+        return Ok(RemoteDesktopPresentationCreation::Canvas {
+            fallback_reason: None,
+        });
+    }
+
+    let selection = select_remote_desktop_presentation(platform, preference, probe_native())
+        .map_err(RemoteDesktopPresentationCreateError::Selection)?;
+    if matches!(selection.presentation, RemoteDesktopPresentation::Canvas) {
+        return Ok(RemoteDesktopPresentationCreation::Canvas {
+            fallback_reason: selection.fallback_reason,
+        });
+    }
+
+    match create_native() {
+        Ok(native) => Ok(RemoteDesktopPresentationCreation::Native(native)),
+        Err(error) => {
+            if matches!(preference, RemoteDesktopBackendPreference::Auto)
+                && let Some(reason) = classify_create_error(&error)
+            {
+                return Ok(RemoteDesktopPresentationCreation::Canvas {
+                    fallback_reason: Some(reason),
+                });
+            }
+            Err(RemoteDesktopPresentationCreateError::NativeCreate(error))
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]

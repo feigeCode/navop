@@ -262,6 +262,13 @@ impl WindowsNativeAdapter {
         Ok(())
     }
 
+    pub(crate) fn connect(
+        &mut self,
+        options: &windows_rdp_host::WindowsRdpConnectionOptions,
+    ) -> Result<(), windows_rdp_host::WindowsRdpHostError> {
+        self.host.connect(options)
+    }
+
     pub(crate) fn activate(&mut self, focus_child: bool) -> anyhow::Result<()> {
         let mut sink = WindowsNativeHostSink {
             host: &mut self.host,
