@@ -25,6 +25,7 @@ pub use diagnostic::{
 };
 pub use error::WindowsRdpHostError;
 pub use error::WindowsRdpHresult;
+pub use error::WindowsRdpHresultKind;
 pub use error::{
     WindowsRdpDiagnosticCategory, WindowsRdpDisconnectReason, WindowsRdpFatalError,
     WindowsRdpFatalErrorKind, WindowsRdpLogonError, WindowsRdpLogonErrorKind, WindowsRdpWarning,

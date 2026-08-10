@@ -570,6 +570,7 @@ fn create_time_hresult_classification_only_allows_known_unavailability() {
 
     const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
     const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+    const E_ACCESSDENIED: i32 = 0x8007_0005_u32 as i32;
     const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 
     assert_eq!(
@@ -584,6 +585,13 @@ fn create_time_hresult_classification_only_allows_known_unavailability() {
         classify_windows_native_create_error(WindowsRdpHostError::NativeHresult {
             result: -4,
             hresult: WindowsRdpHresult::from_code(E_NOINTERFACE),
+        })
+    );
+    assert_eq!(
+        None,
+        classify_windows_native_create_error(WindowsRdpHostError::NativeHresult {
+            result: -4,
+            hresult: WindowsRdpHresult::from_code(E_ACCESSDENIED),
         })
     );
     assert_eq!(

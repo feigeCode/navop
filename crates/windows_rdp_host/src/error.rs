@@ -257,6 +257,36 @@ const fn classify_extended_disconnect_code(code: i32) -> Option<WindowsRdpDiagno
 /// The value is preserved exactly as reported by the Windows API. The facade
 /// intentionally does not expose native error text, endpoint data, or sensitive values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsRdpHresultKind {
+    ClassNotRegistered,
+    NoInterface,
+    InvalidArgument,
+    OutOfMemory,
+    AccessDenied,
+    WrongThread,
+    ComNotInitialized,
+    CallRejected,
+    ServerCallRetryLater,
+    Disconnected,
+    Timeout,
+    Cancelled,
+    Unknown,
+}
+
+const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
+const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+const E_OUTOFMEMORY: i32 = 0x8007_000E_u32 as i32;
+const E_ACCESSDENIED: i32 = 0x8007_0005_u32 as i32;
+const RPC_E_WRONG_THREAD: i32 = 0x8001_010E_u32 as i32;
+const CO_E_NOTINITIALIZED: i32 = 0x8004_01F0_u32 as i32;
+const RPC_E_CALL_REJECTED: i32 = 0x8001_0001_u32 as i32;
+const RPC_E_SERVERCALL_RETRYLATER: i32 = 0x8001_010A_u32 as i32;
+const RPC_E_DISCONNECTED: i32 = 0x8001_0108_u32 as i32;
+const HRESULT_FROM_WIN32_ERROR_TIMEOUT: i32 = 0x8007_05B4_u32 as i32;
+const HRESULT_FROM_WIN32_ERROR_CANCELLED: i32 = 0x8007_04C7_u32 as i32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowsRdpHresult {
     code: i32,
 }
@@ -268,6 +298,24 @@ impl WindowsRdpHresult {
 
     pub const fn code(self) -> i32 {
         self.code
+    }
+
+    pub const fn kind(self) -> WindowsRdpHresultKind {
+        match self.code {
+            REGDB_E_CLASSNOTREG => WindowsRdpHresultKind::ClassNotRegistered,
+            E_NOINTERFACE => WindowsRdpHresultKind::NoInterface,
+            E_INVALIDARG => WindowsRdpHresultKind::InvalidArgument,
+            E_OUTOFMEMORY => WindowsRdpHresultKind::OutOfMemory,
+            E_ACCESSDENIED => WindowsRdpHresultKind::AccessDenied,
+            RPC_E_WRONG_THREAD => WindowsRdpHresultKind::WrongThread,
+            CO_E_NOTINITIALIZED => WindowsRdpHresultKind::ComNotInitialized,
+            RPC_E_CALL_REJECTED => WindowsRdpHresultKind::CallRejected,
+            RPC_E_SERVERCALL_RETRYLATER => WindowsRdpHresultKind::ServerCallRetryLater,
+            RPC_E_DISCONNECTED => WindowsRdpHresultKind::Disconnected,
+            HRESULT_FROM_WIN32_ERROR_TIMEOUT => WindowsRdpHresultKind::Timeout,
+            HRESULT_FROM_WIN32_ERROR_CANCELLED => WindowsRdpHresultKind::Cancelled,
+            _ => WindowsRdpHresultKind::Unknown,
+        }
     }
 }
 
@@ -421,6 +469,51 @@ mod tests {
             error.to_string(),
             "Windows RDP host result 4 with HRESULT 0x80000000"
         );
+    }
+
+    #[test]
+    fn documented_hresult_codes_map_to_stable_kinds_and_preserve_raw_values() {
+        let cases = [
+            (
+                0x8004_0154_u32 as i32,
+                WindowsRdpHresultKind::ClassNotRegistered,
+            ),
+            (0x8000_4002_u32 as i32, WindowsRdpHresultKind::NoInterface),
+            (
+                0x8007_0057_u32 as i32,
+                WindowsRdpHresultKind::InvalidArgument,
+            ),
+            (0x8007_000E_u32 as i32, WindowsRdpHresultKind::OutOfMemory),
+            (0x8007_0005_u32 as i32, WindowsRdpHresultKind::AccessDenied),
+            (0x8001_010E_u32 as i32, WindowsRdpHresultKind::WrongThread),
+            (
+                0x8004_01F0_u32 as i32,
+                WindowsRdpHresultKind::ComNotInitialized,
+            ),
+            (0x8001_0001_u32 as i32, WindowsRdpHresultKind::CallRejected),
+            (
+                0x8001_010A_u32 as i32,
+                WindowsRdpHresultKind::ServerCallRetryLater,
+            ),
+            (0x8001_0108_u32 as i32, WindowsRdpHresultKind::Disconnected),
+            (0x8007_05B4_u32 as i32, WindowsRdpHresultKind::Timeout),
+            (0x8007_04C7_u32 as i32, WindowsRdpHresultKind::Cancelled),
+        ];
+
+        for (code, expected) in cases {
+            let hresult = WindowsRdpHresult::from_code(code);
+            assert_eq!(hresult.kind(), expected, "HRESULT {:#010X}", code as u32);
+            assert_eq!(hresult.code(), code);
+        }
+    }
+
+    #[test]
+    fn unknown_hresult_codes_remain_unknown_and_preserve_signed_raw_values() {
+        for code in [0, -1, i32::MIN, i32::MAX, 0x8000_4005_u32 as i32] {
+            let hresult = WindowsRdpHresult::from_code(code);
+            assert_eq!(hresult.kind(), WindowsRdpHresultKind::Unknown);
+            assert_eq!(hresult.code(), code);
+        }
     }
 
     #[test]

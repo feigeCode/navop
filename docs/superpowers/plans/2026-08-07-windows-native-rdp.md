@@ -1506,7 +1506,7 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - [x] **Red:** fake event sink 顺序、未知 DISPID、未知 error code、callback after generation change。
 - [x] **Red:** secret redaction tests 覆盖 password、Gateway password、username 可配置脱敏和完整 endpoint。
 - [x] **Green:** 建立 connection point/event sink 并保存 advise cookie。
-- [ ] **Green:** 映射 HRESULT、disconnect reason、extended reason、logon code，未知值保留 raw code。
+- [x] **Green:** 映射 HRESULT、disconnect reason、extended reason、logon code，未知值保留 raw code。
 - [ ] **Green:** Rust callback 投递 UI queue，按 generation 过滤。
 - [x] **Green:** destroy 前 `Unadvise`。
 - [x] **Refactor:** 映射表从 UI 文案分离，错误本地化在上层完成。
@@ -1618,10 +1618,44 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   完整 diagnostic object；owner-thread reducer 同时保存 kind 和 raw code。单元测试
   覆盖 documented、signed NTSTATUS、arbitration、未知极值、typed decode 和
   malformed payload 保留 raw event。
-- **Still pending:** native synchronous COM operation 的 HRESULT 尚未通过 ABI 传到
-  Rust；当前切片不能宣称 HRESULT mapping 已完成。GPUI entity/UI queue 接线、真实
-  ActiveX/RDP session 和人工错误密码、拒绝连接、网络中断、服务器重启验证也仍未完成，
-  因此 Task 5 checklist 保持未完成。
+- **Still pending at 2026-08-08:** 截至该切片，native synchronous COM operation 的
+  HRESULT 尚未通过 ABI 传到 Rust；当时不能宣称 HRESULT mapping 已完成。GPUI
+  entity/UI queue 接线、真实 ActiveX/RDP session 和人工错误密码、拒绝连接、网络中断、
+  服务器重启验证也仍未完成，因此 Task 5 checklist 当时保持未完成。后续 ABI 与
+  2026-08-10 facade classification 进展见下一节。
+
+#### Execution Notes (2026-08-10) — synchronous HRESULT stable classification 切片
+
+- **ABI/facade boundary:** 在 2026-08-08 之后完成的 native error diagnostic ABI
+  已通过 `native/host.cpp::record_last_hresult`、
+  `native/windows_rdp_host.h::NavopRdpLastError` 和
+  `src/handle.rs` 的 diagnostic mapping，把 synchronous COM operation 的 HRESULT
+  作为 raw signed `i32` 传到 Rust。本次 2026-08-10 切片在
+  `windows_rdp_host` facade 内补齐 `WindowsRdpHresultKind` 消费路径，不修改
+  C ABI/C++。`WindowsRdpHostError::NativeHresult` 继续分别保存 shim result code 与
+  typed HRESULT，避免混淆两个独立 code space。
+- **Conservative mapping:** 只对高置信、可稳定命名的
+  `REGDB_E_CLASSNOTREG`、`E_NOINTERFACE`、`E_INVALIDARG`、`E_OUTOFMEMORY`、
+  `E_ACCESSDENIED`、`RPC_E_WRONG_THREAD`、`CO_E_NOTINITIALIZED`、
+  `RPC_E_CALL_REJECTED`、`RPC_E_SERVERCALL_RETRYLATER`、`RPC_E_DISCONNECTED`
+  以及由 Win32 timeout/cancel 派生的 HRESULT 分类。`E_FAIL`、成功码和未识别
+  HRESULT 保持 `Unknown`，所有值仍由 `code()` 原样保留 raw signed code，Display
+  继续使用 32-bit hex，不引入 native/UI 文案。
+- **Presentation boundary:** `remote_desktop_view` 不再重复匹配 HRESULT 整数，而是
+  消费 facade stable kind。`Auto` create-time fallback 仍严格只接受
+  `ClassNotRegistered` 和 `NoInterface`；`AccessDenied`、`E_FAIL`、unknown 或其他
+  native error 均不会静默切换 Canvas。
+- **Local verification:** TDD Red 已确认测试因缺少 `WindowsRdpHresultKind`/`kind()`
+  失败；Green 后 `windows_rdp_host` crate tests 109 passed、contract tests
+  20 passed、feature-enabled `remote_desktop_view` tests 144 passed。
+  `cargo clippy --locked -p windows_rdp_host --all-targets --no-deps -- -D warnings`、
+  format check 和 diff check 均通过。
+- **Checklist/verification boundary:** 当前勾选只表示 stable facade mapping 与
+  unit/contract coverage 已完成，不表示 Windows production ABI/runtime acceptance。
+  该 commit 推送后仍须通过 GitHub Windows x86_64/i686 ATL/MSVC probe，才能称为
+  Windows build verified。runner 不能替代真实 ActiveX RDP session、交互桌面以及
+  错误密码、拒绝连接、网络中断、服务器重启的 Windows VM/真机手工验证。GPUI
+  entity/UI queue 接线也仍未完成，因此对应 checklist 和 Task 5 整体保持未完成。
 
 ---
 

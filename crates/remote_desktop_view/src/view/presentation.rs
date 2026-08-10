@@ -1506,15 +1506,16 @@ pub(crate) enum RemoteDesktopPresentationState {
 pub(crate) const fn classify_windows_native_create_error(
     error: windows_rdp_host::WindowsRdpHostError,
 ) -> Option<WindowsNativeRdpUnavailableReason> {
-    use windows_rdp_host::WindowsRdpHostError;
-
-    const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154_u32 as i32;
-    const E_NOINTERFACE: i32 = 0x8000_4002_u32 as i32;
+    use windows_rdp_host::{WindowsRdpHostError, WindowsRdpHresultKind};
 
     match error {
-        WindowsRdpHostError::NativeHresult { hresult, .. } => match hresult.code() {
-            REGDB_E_CLASSNOTREG => Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered),
-            E_NOINTERFACE => Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing),
+        WindowsRdpHostError::NativeHresult { hresult, .. } => match hresult.kind() {
+            WindowsRdpHresultKind::ClassNotRegistered => {
+                Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered)
+            }
+            WindowsRdpHresultKind::NoInterface => {
+                Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing)
+            }
             _ => None,
         },
         _ => None,
