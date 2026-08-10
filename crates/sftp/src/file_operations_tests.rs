@@ -10,6 +10,10 @@ fn entry(path: &str, size: u64, is_dir: bool) -> FileEntry {
         modified: SystemTime::UNIX_EPOCH,
         is_dir,
         permissions: 0,
+        uid: None,
+        gid: None,
+        user: None,
+        group: None,
     }
 }
 

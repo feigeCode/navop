@@ -419,6 +419,7 @@ impl SftpView {
         } else {
             item.permissions.clone()
         };
+        let owner = item.owner.clone().unwrap_or_else(|| "-".to_string());
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
                 .title(t!("File.properties").to_string())
@@ -453,6 +454,10 @@ impl SftpView {
                         .child(property_row(
                             t!("File.property_permissions").to_string(),
                             permissions.clone(),
+                        ))
+                        .child(property_row(
+                            t!("File.property_owner").to_string(),
+                            owner.clone(),
                         )),
                 )
                 .close_button(true)

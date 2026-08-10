@@ -7,6 +7,7 @@ mod endpoint;
 mod endpoint_switcher;
 mod file_clipboard;
 mod file_list_panel;
+mod file_list_preferences;
 mod left_remote;
 mod left_remote_state;
 mod ssh_config;
@@ -270,6 +271,7 @@ struct LocalFileEntry {
     size: u64,
     modified: SystemTime,
     is_dir: bool,
+    owner: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -587,6 +589,18 @@ fn format_permissions(mode: u32, is_dir: bool) -> String {
     result.push(if mode & 0o001 != 0 { 'x' } else { '-' });
 
     result
+}
+
+#[cfg(unix)]
+fn local_file_owner(metadata: &std::fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(metadata.uid().to_string())
+}
+
+#[cfg(not(unix))]
+fn local_file_owner(_metadata: &std::fs::Metadata) -> Option<String> {
+    None
 }
 
 fn format_speed(bytes_per_sec: f64) -> String {
@@ -1428,6 +1442,7 @@ impl SftpView {
                             modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                             is_dir: metadata.is_dir(),
                             permissions: String::new(),
+                            owner: local_file_owner(&metadata),
                             directory_size: DirectorySizeState::Unknown,
                         });
                     }
@@ -1492,13 +1507,17 @@ impl SftpView {
                     tracing::info!("Found {} remote entries", entries.len());
                     let items: Vec<FileItem> = entries
                         .into_iter()
-                        .map(|e| FileItem {
-                            name: e.name,
-                            size: e.size,
-                            modified: e.modified,
-                            is_dir: e.is_dir,
-                            permissions: format_permissions(e.permissions, e.is_dir),
-                            directory_size: DirectorySizeState::Unknown,
+                        .map(|e| {
+                            let owner = e.owner_display();
+                            FileItem {
+                                name: e.name,
+                                size: e.size,
+                                modified: e.modified,
+                                is_dir: e.is_dir,
+                                permissions: format_permissions(e.permissions, e.is_dir),
+                                owner,
+                                directory_size: DirectorySizeState::Unknown,
+                            }
                         })
                         .collect();
                     let _ = view.update(cx, |this, cx| {
@@ -3096,13 +3115,17 @@ impl SftpView {
                 });
                 let items: Vec<FileItem> = sorted_entries
                     .into_iter()
-                    .map(|e| FileItem {
-                        name: e.name,
-                        size: e.size,
-                        modified: e.modified,
-                        is_dir: e.is_dir,
-                        permissions: format_permissions(e.permissions, e.is_dir),
-                        directory_size: DirectorySizeState::Unknown,
+                    .map(|e| {
+                        let owner = e.owner_display();
+                        FileItem {
+                            name: e.name,
+                            size: e.size,
+                            modified: e.modified,
+                            is_dir: e.is_dir,
+                            permissions: format_permissions(e.permissions, e.is_dir),
+                            owner,
+                            directory_size: DirectorySizeState::Unknown,
+                        }
                     })
                     .collect();
 
@@ -3234,6 +3257,7 @@ impl SftpView {
                             size: metadata.len(),
                             modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                             is_dir: metadata.is_dir(),
+                            owner: local_file_owner(&metadata),
                         });
                     }
                 }
@@ -3254,6 +3278,7 @@ impl SftpView {
                         modified: e.modified,
                         is_dir: e.is_dir,
                         permissions: String::new(),
+                        owner: e.owner,
                         directory_size: DirectorySizeState::Unknown,
                     })
                     .collect();

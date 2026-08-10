@@ -11405,6 +11405,8 @@ dependencies = [
  "remote_file_editor",
  "remote_image_preview",
  "rust-i18n",
+ "serde",
+ "serde_json",
  "sftp",
  "ssh",
  "tokio",

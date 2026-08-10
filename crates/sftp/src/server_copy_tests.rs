@@ -16,6 +16,10 @@ fn file(path: &str, size: u64) -> FileEntry {
         modified: SystemTime::UNIX_EPOCH,
         is_dir: false,
         permissions: 0,
+        uid: None,
+        gid: None,
+        user: None,
+        group: None,
     }
 }
 
@@ -56,6 +60,10 @@ fn directory_replace_plan_targets_only_the_staging_tree() {
             modified: SystemTime::UNIX_EPOCH,
             is_dir: true,
             permissions: 0,
+            uid: None,
+            gid: None,
+            user: None,
+            group: None,
         },
         file("/src/app/config/app.toml", 42),
     ];

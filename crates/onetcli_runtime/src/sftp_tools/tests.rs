@@ -1,17 +1,39 @@
 use super::{
-    OverwritePolicy, parse_overwrite_policy, prepare_local_target, prepare_remote_upload_target,
-    remote_upload_directory_policy, sftp_tool_registry,
+    OverwritePolicy, file_entry_json, parse_overwrite_policy, prepare_local_target,
+    prepare_remote_upload_target, remote_upload_directory_policy, sftp_tool_registry,
 };
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig, StoredConnection};
 use serde_json::json;
-use sftp::{DirectoryConflictPolicy, PathMetadata};
+use sftp::{DirectoryConflictPolicy, FileEntry, PathMetadata};
 use std::fs;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
+
+#[test]
+fn sftp_list_entry_json_exposes_remote_owner_metadata() {
+    let value = file_entry_json(FileEntry {
+        name: "report.txt".to_string(),
+        path: "/srv/report.txt".to_string(),
+        size: 42,
+        modified: UNIX_EPOCH,
+        is_dir: false,
+        permissions: 0o100640,
+        uid: Some(1001),
+        gid: Some(1002),
+        user: Some("deploy".to_string()),
+        group: Some("operators".to_string()),
+    });
+
+    assert_eq!(json!("deploy (1001)"), value["owner"]);
+    assert_eq!(json!(1001), value["uid"]);
+    assert_eq!(json!(1002), value["gid"]);
+    assert_eq!(json!("deploy"), value["user"]);
+    assert_eq!(json!("operators"), value["group"]);
+}
 
 #[test]
 fn sftp_registry_exposes_file_transfer_tools() {

@@ -34,6 +34,26 @@ pub struct FileEntry {
     pub modified: SystemTime,
     pub is_dir: bool,
     pub permissions: u32,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub user: Option<String>,
+    pub group: Option<String>,
+}
+
+impl FileEntry {
+    /// Returns the owner reported by the remote server.
+    ///
+    /// SFTP v3 servers commonly expose only a numeric UID. Newer/proprietary
+    /// servers may also expose a user name, in which case both values are kept
+    /// visible rather than incorrectly resolving a remote UID on the local host.
+    pub fn owner_display(&self) -> Option<String> {
+        match (&self.user, self.uid) {
+            (Some(user), Some(uid)) if !user.is_empty() => Some(format!("{user} ({uid})")),
+            (Some(user), _) if !user.is_empty() => Some(user.clone()),
+            (_, Some(uid)) => Some(uid.to_string()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -172,7 +192,23 @@ pub trait SftpClient: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_read_size;
+    use super::{FileEntry, validate_read_size};
+    use std::time::SystemTime;
+
+    fn file_entry(user: Option<&str>, uid: Option<u32>) -> FileEntry {
+        FileEntry {
+            name: "file".to_string(),
+            path: "/file".to_string(),
+            size: 0,
+            modified: SystemTime::UNIX_EPOCH,
+            is_dir: false,
+            permissions: 0,
+            uid,
+            gid: None,
+            user: user.map(str::to_string),
+            group: None,
+        }
+    }
 
     #[test]
     fn validate_read_size_allows_files_within_limit() {
@@ -184,5 +220,22 @@ mod tests {
     fn validate_read_size_rejects_files_larger_than_limit() {
         let error = validate_read_size(1025, 1024).expect_err("应拒绝超限文件");
         assert!(error.to_string().contains("exceeds max readable size"));
+    }
+
+    #[test]
+    fn owner_display_prefers_server_user_name_and_keeps_uid() {
+        assert_eq!(
+            Some("deploy (1001)".to_string()),
+            file_entry(Some("deploy"), Some(1001)).owner_display()
+        );
+    }
+
+    #[test]
+    fn owner_display_falls_back_to_numeric_uid() {
+        assert_eq!(
+            Some("1001".to_string()),
+            file_entry(None, Some(1001)).owner_display()
+        );
+        assert_eq!(None, file_entry(None, None).owner_display());
     }
 }

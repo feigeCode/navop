@@ -168,13 +168,17 @@ impl SftpView {
                 if let Ok(Ok(entries)) = result {
                     let items = entries
                         .into_iter()
-                        .map(|entry| FileItem {
-                            name: entry.name,
-                            size: entry.size,
-                            modified: entry.modified,
-                            is_dir: entry.is_dir,
-                            permissions: format_permissions(entry.permissions, entry.is_dir),
-                            directory_size: crate::DirectorySizeState::Unknown,
+                        .map(|entry| {
+                            let owner = entry.owner_display();
+                            FileItem {
+                                name: entry.name,
+                                size: entry.size,
+                                modified: entry.modified,
+                                is_dir: entry.is_dir,
+                                permissions: format_permissions(entry.permissions, entry.is_dir),
+                                owner,
+                                directory_size: crate::DirectorySizeState::Unknown,
+                            }
                         })
                         .collect();
                     this.local_panel

@@ -1804,6 +1804,10 @@ impl SftpClient for RusshSftpClient {
             let size = metadata.size.unwrap_or(0);
             let is_dir = metadata.is_dir();
             let permissions = metadata.permissions.unwrap_or(0);
+            let uid = metadata.uid;
+            let gid = metadata.gid;
+            let user = metadata.user.clone();
+            let group = metadata.group.clone();
 
             let modified = metadata
                 .mtime
@@ -1817,6 +1821,10 @@ impl SftpClient for RusshSftpClient {
                 modified,
                 is_dir,
                 permissions,
+                uid,
+                gid,
+                user,
+                group,
             });
         }
 
@@ -2257,6 +2265,10 @@ impl SftpClient for RusshSftpClient {
                     modified: entry.modified,
                     is_dir: entry.is_dir,
                     permissions: entry.permissions,
+                    uid: entry.uid,
+                    gid: entry.gid,
+                    user: entry.user,
+                    group: entry.group,
                 });
             }
         }

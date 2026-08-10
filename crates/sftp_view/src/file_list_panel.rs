@@ -1,29 +1,98 @@
 use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement, ListSizingBehavior,
-    MouseButton, MouseDownEvent, ParentElement, Render, Styled, UniformListScrollHandle, Window,
-    div, prelude::*, px, uniform_list,
+    Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Render, Styled,
+    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, ContentState, Icon, IconName, IconSize, InteractiveElementExt, Sizable, h_flex,
+    ActiveTheme, ContentState, Icon, IconName, IconSize, InteractiveElementExt, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     scroll::ScrollableElement,
     tooltip::Tooltip,
     v_flex,
 };
 use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
 use rust_i18n::t;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
 use std::time::SystemTime;
 
 use crate::endpoint::DragSource;
+use crate::file_list_preferences::{
+    FileListPreferenceScope, load_hidden_columns, save_hidden_columns,
+};
 
 const FILE_ROW_HEIGHT: gpui::Pixels = px(44.);
 const NAME_COLUMN_WIDTH: gpui::Pixels = px(250.);
 const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(180.);
 const SIZE_COLUMN_WIDTH: gpui::Pixels = px(100.);
 const KIND_COLUMN_WIDTH: gpui::Pixels = px(80.);
+const OWNER_COLUMN_WIDTH: gpui::Pixels = px(120.);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileColumn {
+    Name,
+    Modified,
+    Size,
+    Kind,
+    Owner,
+}
+
+impl FileColumn {
+    const ALL: [Self; 5] = [
+        Self::Name,
+        Self::Modified,
+        Self::Size,
+        Self::Kind,
+        Self::Owner,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Modified => "modified",
+            Self::Size => "size",
+            Self::Kind => "kind",
+            Self::Owner => "owner",
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Name => t!("File.column_name").to_string(),
+            Self::Modified => t!("File.column_modified").to_string(),
+            Self::Size => t!("File.column_size").to_string(),
+            Self::Kind => t!("File.column_kind").to_string(),
+            Self::Owner => t!("File.column_owner").to_string(),
+        }
+    }
+
+    fn width(self) -> gpui::Pixels {
+        match self {
+            Self::Name => NAME_COLUMN_WIDTH,
+            Self::Modified => MODIFIED_COLUMN_WIDTH,
+            Self::Size => SIZE_COLUMN_WIDTH,
+            Self::Kind => KIND_COLUMN_WIDTH,
+            Self::Owner => OWNER_COLUMN_WIDTH,
+        }
+    }
+
+    fn sort_column(self) -> SortColumn {
+        match self {
+            Self::Name => SortColumn::Name,
+            Self::Modified => SortColumn::Modified,
+            Self::Size => SortColumn::Size,
+            Self::Kind => SortColumn::Kind,
+            Self::Owner => SortColumn::Owner,
+        }
+    }
+
+    fn can_hide(self) -> bool {
+        self != Self::Name
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileContextMenuCapabilities {
@@ -88,6 +157,7 @@ pub struct FileItem {
     pub modified: SystemTime,
     pub is_dir: bool,
     pub permissions: String,
+    pub owner: Option<String>,
     pub directory_size: DirectorySizeState,
 }
 
@@ -105,6 +175,7 @@ pub enum SortColumn {
     Modified,
     Size,
     Kind,
+    Owner,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -261,6 +332,8 @@ pub struct FileListPanel {
     selection_anchor_index: Option<usize>,
     sort_column: SortColumn,
     sort_order: SortOrder,
+    column_preference_scope: FileListPreferenceScope,
+    hidden_columns: BTreeSet<String>,
 
     show_hidden: bool,
     search_query: String,
@@ -287,6 +360,12 @@ impl FileListPanel {
         let search_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("Placeholder.search").to_string())
         });
+        let column_preference_scope = if is_remote {
+            FileListPreferenceScope::Right
+        } else {
+            FileListPreferenceScope::Left
+        };
+        let hidden_columns = load_hidden_columns(column_preference_scope);
 
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.subscribe(
@@ -326,6 +405,8 @@ impl FileListPanel {
             selection_anchor_index: None,
             sort_column: SortColumn::Name,
             sort_order: SortOrder::Ascending,
+            column_preference_scope,
+            hidden_columns,
             show_hidden: false,
             search_query: String::new(),
             search_input,
@@ -566,6 +647,26 @@ impl FileListPanel {
         cx.notify();
     }
 
+    fn is_column_visible(&self, column: FileColumn) -> bool {
+        !column.can_hide() || !self.hidden_columns.contains(column.key())
+    }
+
+    fn toggle_column(&mut self, column: FileColumn, cx: &mut Context<Self>) {
+        if !column.can_hide() {
+            return;
+        }
+
+        if !self.hidden_columns.remove(column.key()) {
+            self.hidden_columns.insert(column.key().to_string());
+        }
+
+        if let Err(error) = save_hidden_columns(self.column_preference_scope, &self.hidden_columns)
+        {
+            tracing::warn!("Failed to save SFTP file-list column settings: {error:#}");
+        }
+        cx.notify();
+    }
+
     fn sort_items(&mut self) {
         let sort_column = self.sort_column;
         let sort_order = self.sort_order;
@@ -584,6 +685,12 @@ impl FileListPanel {
                 SortColumn::Modified => a.modified.cmp(&b.modified),
                 SortColumn::Size => size_sort_key(a).cmp(&size_sort_key(b)),
                 SortColumn::Kind => get_file_kind(&a.name).cmp(&get_file_kind(&b.name)),
+                SortColumn::Owner => a
+                    .owner
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()
+                    .cmp(&b.owner.as_deref().unwrap_or_default().to_lowercase()),
             };
 
             match sort_order {
@@ -633,66 +740,71 @@ impl FileListPanel {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let sort_column = self.sort_column;
         let sort_order = self.sort_order;
-        let name = t!("File.column_name").to_string();
-        let modified = t!("File.column_modified").to_string();
-        let size = t!("File.column_size").to_string();
-        let kind = t!("File.column_kind").to_string();
+        let view = cx.entity();
+        let hidden_columns = self.hidden_columns.clone();
+        let menu_id = match self.column_preference_scope {
+            FileListPreferenceScope::Left => "left-file-list-columns",
+            FileListPreferenceScope::Right => "right-file-list-columns",
+        };
 
-        h_flex()
+        let mut header = h_flex()
             .h(cx.theme().geometry.layout.list_header)
-            .px_3()
+            .px_2()
             .items_center()
             .border_b_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().title_bar)
-            .child(self.render_header_cell(
-                &name,
-                SortColumn::Name,
-                NAME_COLUMN_WIDTH,
-                sort_column,
-                sort_order,
-                cx,
-            ))
-            .child(self.render_header_cell(
-                &modified,
-                SortColumn::Modified,
-                MODIFIED_COLUMN_WIDTH,
-                sort_column,
-                sort_order,
-                cx,
-            ))
-            .child(self.render_header_cell(
-                &size,
-                SortColumn::Size,
-                SIZE_COLUMN_WIDTH,
-                sort_column,
-                sort_order,
-                cx,
-            ))
-            .child(self.render_header_cell(
-                &kind,
-                SortColumn::Kind,
-                KIND_COLUMN_WIDTH,
-                sort_column,
-                sort_order,
-                cx,
-            ))
+            .bg(cx.theme().title_bar);
+
+        for column in FileColumn::ALL {
+            if self.is_column_visible(column) {
+                header = header.child(self.render_header_cell(column, sort_column, sort_order, cx));
+            }
+        }
+
+        header.child(
+            div().ml_auto().child(
+                Button::new(menu_id)
+                    .ghost()
+                    .small()
+                    .compact()
+                    .icon(IconName::Settings)
+                    .tooltip(t!("File.configure_columns"))
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, window, _cx| {
+                        for column in FileColumn::ALL {
+                            let checked =
+                                !column.can_hide() || !hidden_columns.contains(column.key());
+                            let column_view = view.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(column.label())
+                                    .checked(checked)
+                                    .disabled(!column.can_hide())
+                                    .on_click(window.listener_for(
+                                        &column_view,
+                                        move |this, _, _, cx| {
+                                            this.toggle_column(column, cx);
+                                        },
+                                    )),
+                            );
+                        }
+                        menu
+                    }),
+            ),
+        )
     }
 
     fn render_header_cell(
         &self,
-        label: &str,
-        column: SortColumn,
-        width: gpui::Pixels,
+        column: FileColumn,
         current_sort: SortColumn,
         sort_order: SortOrder,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_sorted = current_sort == column;
-        let label = label.to_string();
+        let sort_column = column.sort_column();
+        let is_sorted = current_sort == sort_column;
+        let label = column.label();
 
         h_flex()
-            .w(width)
+            .w(column.width())
             .h_full()
             .px_2()
             .items_center()
@@ -702,7 +814,7 @@ impl FileListPanel {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
-                    this.set_sort(column, cx);
+                    this.set_sort(sort_column, cx);
                 }),
             )
             .child(
@@ -738,113 +850,136 @@ impl FileListPanel {
         let modified = item.modified;
         let directory_size = item.directory_size;
         let size_path = full_path.to_string();
+        let owner = item.owner.clone().unwrap_or_else(|| "-".to_string());
 
         h_flex()
             .h(FILE_ROW_HEIGHT)
             .px_2()
             .items_center()
             .when(is_selected, |el| el.bg(cx.theme().selection))
-            .child(
-                h_flex()
-                    .w(NAME_COLUMN_WIDTH)
-                    .min_w_0()
-                    .overflow_hidden()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Icon::new(if is_dir {
-                            IconName::Folder1
-                        } else {
-                            IconName::File
-                        })
-                        .color()
-                        .with_size(IconSize::Large),
-                    )
-                    .child({
-                        let tooltip_name = display_name.clone();
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .id(("file-name", ix))
-                                    .text_base()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .whitespace_nowrap()
-                                    .child(display_name.clone())
-                                    .tooltip(move |window, cx| {
-                                        Tooltip::new(tooltip_name.clone()).build(window, cx)
-                                    }),
-                            )
-                            .when(!item.permissions.is_empty(), |el| {
-                                el.child(
+            .when(self.is_column_visible(FileColumn::Name), |row| {
+                row.child(
+                    h_flex()
+                        .w(NAME_COLUMN_WIDTH)
+                        .min_w_0()
+                        .overflow_hidden()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Icon::new(if is_dir {
+                                IconName::Folder1
+                            } else {
+                                IconName::File
+                            })
+                            .color()
+                            .with_size(IconSize::Large),
+                        )
+                        .child({
+                            let tooltip_name = display_name.clone();
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(
                                     div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
+                                        .id(("file-name", ix))
+                                        .text_base()
                                         .overflow_hidden()
                                         .text_ellipsis()
                                         .whitespace_nowrap()
-                                        .child(item.permissions.clone()),
+                                        .child(display_name.clone())
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(tooltip_name.clone()).build(window, cx)
+                                        }),
                                 )
-                            })
-                    }),
-            )
-            .child(
-                div()
-                    .w(MODIFIED_COLUMN_WIDTH)
-                    .min_w_0()
-                    .overflow_hidden()
-                    .px_2()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(format_modified_time(modified)),
-            )
-            .child(
-                div()
-                    .id(("file-size", ix))
-                    .w(SIZE_COLUMN_WIDTH)
-                    .min_w_0()
-                    .overflow_hidden()
-                    .px_2()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .when(
-                        is_dir && directory_size == DirectorySizeState::Unknown,
-                        |el| {
-                            el.cursor_pointer()
-                                .text_color(cx.theme().link)
-                                .on_click(cx.listener(move |_this, _, _window, cx| {
-                                    cx.stop_propagation();
-                                    cx.emit(FileListPanelEvent::CalculateSize {
-                                        full_path: size_path.clone(),
-                                    });
-                                }))
-                        },
-                    )
-                    .child(size_label(item)),
-            )
-            .child(
-                div()
-                    .w(KIND_COLUMN_WIDTH)
-                    .min_w_0()
-                    .overflow_hidden()
-                    .px_2()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(if is_dir {
-                        "folder".to_string()
-                    } else {
-                        get_file_kind(&name)
-                    }),
-            )
+                                .when(!item.permissions.is_empty(), |el| {
+                                    el.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .child(item.permissions.clone()),
+                                    )
+                                })
+                        }),
+                )
+            })
+            .when(self.is_column_visible(FileColumn::Modified), |row| {
+                row.child(
+                    div()
+                        .w(MODIFIED_COLUMN_WIDTH)
+                        .min_w_0()
+                        .overflow_hidden()
+                        .px_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(format_modified_time(modified)),
+                )
+            })
+            .when(self.is_column_visible(FileColumn::Size), |row| {
+                row.child(
+                    div()
+                        .id(("file-size", ix))
+                        .w(SIZE_COLUMN_WIDTH)
+                        .min_w_0()
+                        .overflow_hidden()
+                        .px_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .when(
+                            is_dir && directory_size == DirectorySizeState::Unknown,
+                            |el| {
+                                el.cursor_pointer().text_color(cx.theme().link).on_click(
+                                    cx.listener(move |_this, _, _window, cx| {
+                                        cx.stop_propagation();
+                                        cx.emit(FileListPanelEvent::CalculateSize {
+                                            full_path: size_path.clone(),
+                                        });
+                                    }),
+                                )
+                            },
+                        )
+                        .child(size_label(item)),
+                )
+            })
+            .when(self.is_column_visible(FileColumn::Kind), |row| {
+                row.child(
+                    div()
+                        .w(KIND_COLUMN_WIDTH)
+                        .min_w_0()
+                        .overflow_hidden()
+                        .px_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(if is_dir {
+                            "folder".to_string()
+                        } else {
+                            get_file_kind(&name)
+                        }),
+                )
+            })
+            .when(self.is_column_visible(FileColumn::Owner), |row| {
+                row.child(
+                    div()
+                        .w(OWNER_COLUMN_WIDTH)
+                        .min_w_0()
+                        .overflow_hidden()
+                        .px_2()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(owner),
+                )
+            })
     }
 
     fn render_parent_row(&self, _cx: &App) -> impl IntoElement {
@@ -852,21 +987,32 @@ impl FileListPanel {
             .h(FILE_ROW_HEIGHT)
             .px_2()
             .items_center()
-            .child(
-                h_flex()
-                    .w(NAME_COLUMN_WIDTH)
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Icon::new(IconName::Folder1)
-                            .color()
-                            .with_size(IconSize::Large),
-                    )
-                    .child(div().text_base().child("..")),
-            )
-            .child(div().w(MODIFIED_COLUMN_WIDTH).px_2())
-            .child(div().w(SIZE_COLUMN_WIDTH).px_2())
-            .child(div().w(KIND_COLUMN_WIDTH).px_2())
+            .when(self.is_column_visible(FileColumn::Name), |row| {
+                row.child(
+                    h_flex()
+                        .w(NAME_COLUMN_WIDTH)
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Icon::new(IconName::Folder1)
+                                .color()
+                                .with_size(IconSize::Large),
+                        )
+                        .child(div().text_base().child("..")),
+                )
+            })
+            .when(self.is_column_visible(FileColumn::Modified), |row| {
+                row.child(div().w(MODIFIED_COLUMN_WIDTH).px_2())
+            })
+            .when(self.is_column_visible(FileColumn::Size), |row| {
+                row.child(div().w(SIZE_COLUMN_WIDTH).px_2())
+            })
+            .when(self.is_column_visible(FileColumn::Kind), |row| {
+                row.child(div().w(KIND_COLUMN_WIDTH).px_2())
+            })
+            .when(self.is_column_visible(FileColumn::Owner), |row| {
+                row.child(div().w(OWNER_COLUMN_WIDTH).px_2())
+            })
     }
 
     fn render_parent_navigation_row(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1536,9 +1682,10 @@ impl Render for DraggedFileItem {
 #[cfg(test)]
 mod tests {
     use super::{
-        DirectorySizeState, FileContextMenuCapabilities, FileItem, FileListContentState,
-        TransferMenuAction, display_file_name, file_context_menu_capabilities,
-        file_list_content_state, format_file_size, size_sort_key, transfer_menu_action,
+        DirectorySizeState, FileColumn, FileContextMenuCapabilities, FileItem,
+        FileListContentState, TransferMenuAction, display_file_name,
+        file_context_menu_capabilities, file_list_content_state, format_file_size, size_sort_key,
+        transfer_menu_action,
     };
     use crate::endpoint::DragSource;
     use std::collections::HashSet;
@@ -1551,6 +1698,7 @@ mod tests {
             modified: UNIX_EPOCH,
             is_dir: false,
             permissions: String::new(),
+            owner: None,
             directory_size: DirectorySizeState::Unknown,
         }
     }
@@ -1562,6 +1710,7 @@ mod tests {
             modified: UNIX_EPOCH,
             is_dir: true,
             permissions: String::new(),
+            owner: None,
             directory_size: state,
         }
     }
@@ -1599,6 +1748,15 @@ mod tests {
     #[test]
     fn display_file_name_replaces_ansi_control_bytes() {
         assert_eq!("?[1mroot?[0m", display_file_name("\x1b[1mroot\x1b[0m"));
+    }
+
+    #[test]
+    fn name_column_is_always_visible_while_other_columns_are_configurable() {
+        assert!(!FileColumn::Name.can_hide());
+        assert!(FileColumn::Modified.can_hide());
+        assert!(FileColumn::Size.can_hide());
+        assert!(FileColumn::Kind.can_hide());
+        assert!(FileColumn::Owner.can_hide());
     }
 
     #[test]

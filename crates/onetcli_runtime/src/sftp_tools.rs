@@ -312,13 +312,19 @@ fn file_entry_json(entry: sftp::FileEntry) -> Value {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
+    let owner = entry.owner_display();
     json!({
         "name": entry.name,
         "path": entry.path,
         "size": entry.size,
         "modified_unix_secs": modified_unix_secs,
         "is_dir": entry.is_dir,
-        "permissions": entry.permissions
+        "permissions": entry.permissions,
+        "owner": owner,
+        "uid": entry.uid,
+        "gid": entry.gid,
+        "user": entry.user,
+        "group": entry.group
     })
 }
 
