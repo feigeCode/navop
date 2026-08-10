@@ -43,6 +43,7 @@ pub struct WindowsRdpHost {
     event_bridge: Option<Box<EventBridge>>,
     callback_registered: bool,
     bindings: NativeBindings,
+    owner_thread: std::thread::ThreadId,
     _thread_affinity: PhantomData<Rc<()>>,
 }
 
@@ -409,6 +410,7 @@ impl WindowsRdpHost {
             event_bridge: Some(event_bridge),
             callback_registered: true,
             bindings,
+            owner_thread: std::thread::current().id(),
             _thread_affinity: PhantomData,
         })
     }
@@ -457,6 +459,23 @@ fn check_host_result(
 
 impl Drop for WindowsRdpHost {
     fn drop(&mut self) {
+        let current_thread = std::thread::current().id();
+        if current_thread != self.owner_thread {
+            tracing::error!(
+                generation = self.generation,
+                owner_thread = ?self.owner_thread,
+                ?current_thread,
+                callback_registered = self.callback_registered,
+                "leaking Windows native RDP host after wrong-thread drop"
+            );
+            if self.callback_registered
+                && let Some(event_bridge) = self.event_bridge.take()
+            {
+                let _ = Box::leak(event_bridge);
+            }
+            return;
+        }
+
         if self.close().is_err() && self.callback_registered {
             if let Some(event_bridge) = self.event_bridge.take() {
                 let _ = Box::leak(event_bridge);
@@ -470,6 +489,7 @@ mod tests {
     use std::cell::RefCell;
     use std::ffi::c_void;
     use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::ffi::{
@@ -579,6 +599,9 @@ mod tests {
         static FAKE_NATIVE_STATE: RefCell<FakeNativeState> =
             RefCell::new(FakeNativeState::default());
     }
+
+    static WRONG_THREAD_UNREGISTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static WRONG_THREAD_DESTROY_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     fn reset_fake_state() {
         FAKE_NATIVE_STATE.with(|state| {
@@ -1016,6 +1039,25 @@ mod tests {
         if !should_clear {
             return RESULT_OK;
         }
+        unsafe {
+            *host = ptr::null_mut();
+        }
+        RESULT_OK
+    }
+
+    unsafe fn record_cross_thread_unregister(host: *mut NativeRdpHost) -> NativeResult {
+        if host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        WRONG_THREAD_UNREGISTER_CALLS.fetch_add(1, Ordering::SeqCst);
+        RESULT_OK
+    }
+
+    unsafe fn record_cross_thread_destroy(host: *mut *mut NativeRdpHost) -> NativeResult {
+        if host.is_null() {
+            return RESULT_INVALID_ARGUMENT;
+        }
+        WRONG_THREAD_DESTROY_CALLS.fetch_add(1, Ordering::SeqCst);
         unsafe {
             *host = ptr::null_mut();
         }
@@ -2272,6 +2314,34 @@ mod tests {
         }
 
         assert_eq!(call_order(), vec!["register", "unregister", "destroy"]);
+    }
+
+    #[test]
+    fn drop_on_wrong_thread_never_unregisters_or_destroys() {
+        reset_fake_state();
+        WRONG_THREAD_UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        WRONG_THREAD_DESTROY_CALLS.store(0, Ordering::SeqCst);
+        let cross_thread_bindings = NativeBindings {
+            unregister_event_callback: record_cross_thread_unregister,
+            destroy: record_cross_thread_destroy,
+            ..bindings(fake_create)
+        };
+        let host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::new(42), cross_thread_bindings)
+                .expect("fake create should succeed");
+
+        // This intentionally violates the facade's !Send contract to exercise
+        // Drop's fail-closed defense against an unsafe ownership escape. The
+        // allocation has one owner and is not accessed concurrently.
+        let host = Box::into_raw(Box::new(host)) as usize;
+        std::thread::spawn(move || unsafe {
+            drop(Box::from_raw(host as *mut WindowsRdpHost));
+        })
+        .join()
+        .expect("wrong-thread drop harness should not panic");
+
+        assert_eq!(WRONG_THREAD_UNREGISTER_CALLS.load(Ordering::SeqCst), 0);
+        assert_eq!(WRONG_THREAD_DESTROY_CALLS.load(Ordering::SeqCst), 0);
     }
 
     #[test]
