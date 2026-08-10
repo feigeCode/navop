@@ -97,7 +97,10 @@ mod tests {
     fn resolves_relative_package_path_from_local_manifest_directory() {
         assert_eq!(
             resolve_local_reference("/tmp/navop/latest.json", "packages/navop.tar.gz"),
-            "/tmp/navop/packages/navop.tar.gz"
+            PathBuf::from("/tmp/navop")
+                .join("packages/navop.tar.gz")
+                .to_string_lossy()
+                .into_owned()
         );
         assert_eq!(
             resolve_local_reference(

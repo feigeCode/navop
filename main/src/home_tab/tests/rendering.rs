@@ -148,9 +148,9 @@ fn personal_and_team_keys_share_one_toolbar_menu() {
 fn home_overview_is_compact_and_avoids_duplicate_search() {
     let toolbar = include_str!("../toolbar.rs");
     let content = include_str!("../content.rs");
-    let card = include_str!("../connection_card.rs");
+    let card = include_str!("../connection_card.rs").replace("\r\n", "\n");
     let render = include_str!("../render.rs");
-    let modern_home = include_str!("../modern_home.rs");
+    let modern_home = include_str!("../modern_home.rs").replace("\r\n", "\n");
 
     assert!(toolbar.contains("Input::new(&self.search_input)"));
     assert!(content.contains("max_w(px(1160.0))"));
@@ -182,7 +182,7 @@ fn home_overview_is_compact_and_avoids_duplicate_search() {
 
 #[test]
 fn modern_start_center_separates_primary_work_from_supporting_tools() {
-    let modern_home = include_str!("../modern_home.rs");
+    let modern_home = include_str!("../modern_home.rs").replace("\r\n", "\n");
 
     for stable_id in [
         "modern-home-hero",
