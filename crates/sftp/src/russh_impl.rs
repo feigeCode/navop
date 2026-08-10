@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::{self, File, OpenOptions};
@@ -848,6 +849,7 @@ fn ensure_not_cancelled(cancelled: &AtomicBool) -> Result<()> {
 struct SftpHandler {
     identity: HostKeyIdentity,
     host_key_verifier: HostKeyVerifier,
+    accepted_server_public_key: Option<Arc<StdMutex<Option<String>>>>,
 }
 
 impl SftpHandler {
@@ -855,6 +857,19 @@ impl SftpHandler {
         Self {
             identity,
             host_key_verifier,
+            accepted_server_public_key: None,
+        }
+    }
+
+    fn with_server_public_key_capture(
+        identity: HostKeyIdentity,
+        host_key_verifier: HostKeyVerifier,
+        accepted_server_public_key: Arc<StdMutex<Option<String>>>,
+    ) -> Self {
+        Self {
+            identity,
+            host_key_verifier,
+            accepted_server_public_key: Some(accepted_server_public_key),
         }
     }
 }
@@ -866,12 +881,13 @@ impl client::Handler for SftpHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        match self
+        let acceptance = self
             .host_key_verifier
             .verify(&self.identity, server_public_key)
-        {
-            Ok(HostKeyAcceptance::Known) => Ok(true),
-            Ok(HostKeyAcceptance::AcceptedNew) => {
+            .map_err(anyhow::Error::from)?;
+        match acceptance {
+            HostKeyAcceptance::Known => {}
+            HostKeyAcceptance::AcceptedNew => {
                 let details = HostKeyDetails::from_public_key(server_public_key);
                 tracing::warn!(
                     target: "ssh.host_key",
@@ -880,9 +896,8 @@ impl client::Handler for SftpHandler {
                     fingerprint = %details.fingerprint,
                     "accepted and persisted a new SFTP SSH host key"
                 );
-                Ok(true)
             }
-            Ok(HostKeyAcceptance::AcceptedOnce) => {
+            HostKeyAcceptance::AcceptedOnce => {
                 let details = HostKeyDetails::from_public_key(server_public_key);
                 tracing::warn!(
                     target: "ssh.host_key",
@@ -891,9 +906,8 @@ impl client::Handler for SftpHandler {
                     fingerprint = %details.fingerprint,
                     "accepted an SFTP SSH host key once after explicit confirmation"
                 );
-                Ok(true)
             }
-            Ok(HostKeyAcceptance::Insecure) => {
+            HostKeyAcceptance::Insecure => {
                 let details = HostKeyDetails::from_public_key(server_public_key);
                 tracing::warn!(
                     target: "ssh.host_key",
@@ -902,10 +916,15 @@ impl client::Handler for SftpHandler {
                     fingerprint = %details.fingerprint,
                     "accepted an SFTP SSH host key using explicit insecure mode"
                 );
-                Ok(true)
             }
-            Err(rejection) => Err(rejection.into()),
         }
+        if let Some(capture) = &self.accepted_server_public_key {
+            *capture
+                .lock()
+                .map_err(|_| anyhow!("SFTP server host key capture lock was poisoned"))? =
+                Some(server_public_key.to_string());
+        }
+        Ok(true)
     }
 }
 
@@ -1091,6 +1110,7 @@ impl Drop for OwnerLookupChannel {
 pub struct RusshSftpClient {
     sftp: SftpSession,
     owner: SessionOwner,
+    accepted_server_public_key: Option<String>,
     /// 懒初始化的原始 SFTP 会话，用于流水线下载
     raw_sftp: Option<Arc<RawSftpSession>>,
     owner_names: BTreeMap<u32, Option<String>>,
@@ -1109,10 +1129,15 @@ impl RusshSftpClient {
         Ok(Self {
             sftp,
             owner: SessionOwner::Shared { client },
+            accepted_server_public_key: None,
             raw_sftp: None,
             owner_names: BTreeMap::new(),
             owner_lookup_disabled: false,
         })
+    }
+
+    pub(crate) fn accepted_server_public_key(&self) -> Option<&str> {
+        self.accepted_server_public_key.as_deref()
     }
 
     pub(crate) async fn ensure_copy_directory(&mut self, path: &str) -> Result<()> {
@@ -1834,6 +1859,7 @@ impl SftpClient for RusshSftpClient {
             .map(|identity| build_sftp_russh_config(&ssh_config, identity))
             .transpose()?;
         let host_key_verifier = ssh_config.host_key_verifier.clone();
+        let accepted_server_public_key = Arc::new(StdMutex::new(None));
 
         let (mut session, jump_session) = if let Some(ref jump) = ssh_config.jump_server {
             tracing::info!("SFTP: 通过跳板机 {}:{} 连接", jump.host, jump.port);
@@ -1877,8 +1903,11 @@ impl SftpClient for RusshSftpClient {
                 .channel_open_direct_tcpip(&ssh_config.host, ssh_config.port as u32, "127.0.0.1", 0)
                 .await?;
 
-            let handler =
-                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
+            let handler = SftpHandler::with_server_public_key_capture(
+                target_host_key_identity.clone(),
+                host_key_verifier.clone(),
+                accepted_server_public_key.clone(),
+            );
             let session = client::connect_stream(
                 target_russh_config,
                 forwarded_channel.into_stream(),
@@ -1893,8 +1922,11 @@ impl SftpClient for RusshSftpClient {
         } else if let Some(ref proxy) = ssh_config.proxy {
             tracing::info!("SFTP: 通过代理 {}:{} 连接", proxy.host, proxy.port);
             let stream = sftp_connect_via_proxy(proxy, &ssh_config.host, ssh_config.port).await?;
-            let handler =
-                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
+            let handler = SftpHandler::with_server_public_key_capture(
+                target_host_key_identity.clone(),
+                host_key_verifier.clone(),
+                accepted_server_public_key.clone(),
+            );
             let session = client::connect_stream(target_russh_config, stream, handler)
                 .await
                 .map_err(|error| {
@@ -1902,8 +1934,11 @@ impl SftpClient for RusshSftpClient {
                 })?;
             (session, None)
         } else {
-            let handler =
-                SftpHandler::new(target_host_key_identity.clone(), host_key_verifier.clone());
+            let handler = SftpHandler::with_server_public_key_capture(
+                target_host_key_identity.clone(),
+                host_key_verifier.clone(),
+                accepted_server_public_key.clone(),
+            );
             let session = client::connect(
                 target_russh_config,
                 (ssh_config.host.as_str(), ssh_config.port),
@@ -1929,6 +1964,13 @@ impl SftpClient for RusshSftpClient {
         channel.request_subsystem(true, "sftp").await?;
 
         let sftp = SftpSession::new(channel.into_stream()).await?;
+        let accepted_server_public_key = accepted_server_public_key
+            .lock()
+            .map_err(|_| anyhow!("SFTP server host key capture lock was poisoned"))?
+            .clone()
+            .ok_or_else(|| {
+                anyhow!("SFTP connection completed without a verified server host key")
+            })?;
 
         Ok(Self {
             sftp,
@@ -1936,6 +1978,7 @@ impl SftpClient for RusshSftpClient {
                 session,
                 _jump_session: jump_session,
             },
+            accepted_server_public_key: Some(accepted_server_public_key),
             raw_sftp: None,
             owner_names: BTreeMap::new(),
             owner_lookup_disabled: false,

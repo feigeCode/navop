@@ -742,13 +742,13 @@ Transfer:
     zh-CN: "服务器间复制（%{count} 个项目）"
     zh-HK: "伺服器間複製（%{count} 個項目）"
   direct_copy_title:
-    en: Choose server-to-server copy method
-    zh-CN: 选择服务器间复制方式
-    zh-HK: 選擇伺服器間複製方式
+    en: Copy between servers
+    zh-CN: 服务器间复制
+    zh-HK: 伺服器間複製
   direct_copy_intro:
-    en: "A direct server transfer is available. Confirm whether Navop may provide the configured target authentication to the source server so it can connect to the target directly."
-    zh-CN: "检测到可用的服务器直传方式。请确认是否允许 Navop 将已配置的目标服务器认证材料安全提供给源服务器，由源服务器直接连接目标服务器。"
-    zh-HK: "偵測到可用的伺服器直傳方式。請確認是否允許 Navop 將已設定的目標伺服器認證資料安全提供給來源伺服器，由來源伺服器直接連線目標伺服器。"
+    en: "Choose how to copy %{count} item(s)."
+    zh-CN: "选择复制 %{count} 个项目的方式。"
+    zh-HK: "選擇複製 %{count} 個項目的方式。"
   direct_copy_route:
     en: "Transfer route:"
     zh-CN: "传输路径："
@@ -766,13 +766,13 @@ Transfer:
     zh-CN: "Navop → 目标服务器/本机中转连接认证：%{auth}"
     zh-HK: "Navop → 目標伺服器/本機中轉連線認證：%{auth}"
   direct_copy_server_auth_heading:
-    en: "Source server direct transfer (%{strategy})"
-    zh-CN: "源服务器直接传输（%{strategy}）"
-    zh-HK: "來源伺服器直接傳輸（%{strategy}）"
+    en: "Direct transfer (%{strategy})"
+    zh-CN: "直接传输（%{strategy}）"
+    zh-HK: "直接傳輸（%{strategy}）"
   direct_copy_auth_boundary:
-    en: "Navop will run %{strategy} on the source server. The source server will authenticate directly to the target using: %{auth}. File data travels directly from source to target and does not pass through this computer."
-    zh-CN: "Navop 将在源服务器上执行 %{strategy}。源服务器将使用以下方式直接认证目标服务器：%{auth}。文件数据从源服务器直达目标服务器，不经过本机。"
-    zh-HK: "Navop 將在來源伺服器上執行 %{strategy}。來源伺服器將使用以下方式直接驗證目標伺服器：%{auth}。檔案資料從來源伺服器直達目標伺服器，不經過本機。"
+    en: "The source server connects to the target. File data does not pass through this computer."
+    zh-CN: "由源服务器连接目标服务器，文件数据不经过本机。"
+    zh-HK: "由來源伺服器連線目標伺服器，檔案資料不經過本機。"
   direct_copy_target_password_detail:
     en: "Navop will send the configured target password through the existing encrypted SSH connection to a permission-restricted temporary askpass credential on the source server."
     zh-CN: "Navop 会通过当前已加密的 SSH 连接，将已配置的目标服务器密码发送到源服务器上权限受限的临时 askpass 凭据文件。"
@@ -802,33 +802,33 @@ Transfer:
     zh-CN: "源服务器只会使用其自身 OpenSSH 默认身份或 SSH Agent；此认证方式不会发送 Navop 凭据。"
     zh-HK: "來源伺服器只會使用其自身 OpenSSH 預設身分或 SSH Agent；此驗證方式不會傳送 Navop 憑證。"
   direct_copy_security:
-    en: "Target authentication material is sent to the source server only after confirmation, never placed in command arguments or environment variables, and is removed with the source-side temporary directory when authentication or transfer ends. The source server's known_hosts is checked strictly. Jump hosts/proxies, agent forwarding, and PTYs are disabled. If direct authentication or transfer fails, Navop will report the error and will not silently retry through this computer."
-    zh-CN: "目标服务器认证材料只会在确认后发送给源服务器，不会写入命令参数或环境变量，并会在认证或传输结束时随源服务器临时目录一并删除。目标主机密钥将严格使用源服务器的 known_hosts 校验；同时禁用跳板机/代理、Agent 转发和 PTY。直传认证或传输失败时，Navop 会直接报错，不会静默改走本机中转。"
-    zh-HK: "目標伺服器驗證資料只會在確認後傳送給來源伺服器，不會寫入命令參數或環境變數，並會在驗證或傳輸結束時隨來源伺服器臨時目錄一併刪除。目標主機金鑰將嚴格使用來源伺服器的 known_hosts 驗證；同時停用跳板機/代理、Agent 轉發和 PTY。直傳驗證或傳輸失敗時，Navop 會直接回報錯誤，不會靜默改走本機中轉。"
+    en: "The configured target authentication is provided temporarily to the source server. The target host key is pinned to the key already verified by Navop."
+    zh-CN: "已配置的目标认证会临时提供给源服务器；目标主机密钥使用 Navop 已验证的密钥进行校验。"
+    zh-HK: "已設定的目標驗證會暫時提供給來源伺服器；目標主機金鑰使用 Navop 已驗證的金鑰進行校驗。"
   direct_copy_navop_relay_heading:
-    en: Transfer through Navop
-    zh-CN: 通过 Navop 本机中转
-    zh-HK: 透過 Navop 本機中轉
+    en: Through Navop
+    zh-CN: 通过 Navop
+    zh-HK: 透過 Navop
   direct_copy_navop_relay_detail:
-    en: "Navop connects to both servers itself, uses each configured password, private key, passphrase, or SSH agent locally, and relays the file data through this computer. Credentials are never passed from one server to the other or embedded in remote commands."
-    zh-CN: "Navop 将自行连接两台服务器，在本机使用已配置的密码、私钥、口令或 SSH Agent，并通过本机中转文件数据；这些凭据不会暴露给另一台远程服务器。"
-    zh-HK: "Navop 將自行連線兩台伺服器，在本機使用已設定的密碼、私鑰、口令或 SSH Agent，並透過本機中轉檔案資料；這些憑證不會暴露給另一台遠端伺服器。"
+    en: "Navop connects to both servers and relays file data through this computer. Credentials are not provided to the other server."
+    zh-CN: "由 Navop 连接两台服务器，并通过本机中转文件数据；认证信息不会提供给另一台服务器。"
+    zh-HK: "由 Navop 連線兩台伺服器，並透過本機中轉檔案資料；驗證資訊不會提供給另一台伺服器。"
   direct_copy_prompt:
     en: "Choose source-server direct transfer only if you permit the authentication behavior described above. Otherwise choose transfer through Navop or cancel."
     zh-CN: "只有在你允许上述认证行为时才选择源服务器直传；否则请选择通过 Navop 本机中转，或取消本次复制。"
     zh-HK: "只有在你允許上述驗證行為時才選擇來源伺服器直傳；否則請選擇透過 Navop 本機中轉，或取消本次複製。"
   direct_copy_use_direct:
-    en: "Run %{strategy} on source server"
-    zh-CN: "在源服务器执行 %{strategy} 直传"
-    zh-HK: "在來源伺服器執行 %{strategy} 直傳"
+    en: Direct transfer
+    zh-CN: 直接传输
+    zh-HK: 直接傳輸
   direct_copy_use_relay:
-    en: Transfer through Navop
-    zh-CN: 通过 Navop 本机中转
-    zh-HK: 透過 Navop 本機中轉
+    en: Through Navop
+    zh-CN: 通过 Navop
+    zh-HK: 透過 Navop
   direct_copy_cancel:
-    en: Cancel Copy
-    zh-CN: 取消复制
-    zh-HK: 取消複製
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
   auth_password:
     en: Password
     zh-CN: 密码

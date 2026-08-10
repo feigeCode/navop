@@ -9,10 +9,12 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, DialogHandle, WindowExt,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    scroll::ScrollableElement,
+    v_flex,
 };
 use rust_i18n::t;
-use sftp::{DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy, ServerCopyAuthKind};
+use sftp::{DirectCopyDecision, DirectCopyPreview, DirectCopyStrategy};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -151,7 +153,7 @@ fn open_prompt_dialog(
 
         dialog
             .title(t!("Transfer.direct_copy_title").to_string())
-            .w(px(720.))
+            .w(px(600.))
             .child(prompt_content(&preview, cx))
             .on_cancel(move |_, window, cx| {
                 finish_prompt(
@@ -187,7 +189,7 @@ fn open_prompt_dialog(
                     ),
                     prompt_button(
                         "sftp-direct-copy-confirm",
-                        direct_button_label(preview.strategy),
+                        t!("Transfer.direct_copy_use_direct").to_string(),
                         PromptAction::UseDirect,
                         task_id,
                         dialog_handle,
@@ -270,19 +272,14 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
     );
     v_flex()
         .gap_3()
-        .child(t!("Transfer.direct_copy_intro").to_string())
+        .max_h(px(520.))
+        .overflow_y_scrollbar()
+        .child(t!("Transfer.direct_copy_intro", count = preview.item_count).to_string())
         .child(
             h_flex()
                 .gap_2()
                 .child(t!("Transfer.direct_copy_route").to_string())
                 .child(format!("{source}  →  {target}")),
-        )
-        .child(
-            t!(
-                "Transfer.direct_copy_item_count",
-                count = preview.item_count
-            )
-            .to_string(),
         )
         .child(
             div().p_3().rounded_md().bg(cx.theme().secondary).child(
@@ -295,15 +292,7 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                         )
                         .to_string(),
                     )
-                    .child(
-                        t!(
-                            "Transfer.direct_copy_auth_boundary",
-                            strategy = strategy_label(preview.strategy),
-                            auth = auth_label(preview.navop_target_auth)
-                        )
-                        .to_string(),
-                    )
-                    .child(target_auth_transfer_detail(preview))
+                    .child(t!("Transfer.direct_copy_auth_boundary").to_string())
                     .child(t!("Transfer.direct_copy_security").to_string()),
             ),
         )
@@ -312,33 +301,10 @@ fn prompt_content(preview: &DirectCopyPreview, cx: &mut gpui::App) -> AnyElement
                 v_flex()
                     .gap_2()
                     .child(t!("Transfer.direct_copy_navop_relay_heading").to_string())
-                    .child(
-                        t!(
-                            "Transfer.direct_copy_navop_source_auth",
-                            auth = auth_label(preview.navop_source_auth)
-                        )
-                        .to_string(),
-                    )
-                    .child(
-                        t!(
-                            "Transfer.direct_copy_navop_target_auth",
-                            auth = auth_label(preview.navop_target_auth)
-                        )
-                        .to_string(),
-                    )
                     .child(t!("Transfer.direct_copy_navop_relay_detail").to_string()),
             ),
         )
-        .child(t!("Transfer.direct_copy_prompt").to_string())
         .into_any_element()
-}
-
-fn direct_button_label(strategy: DirectCopyStrategy) -> String {
-    t!(
-        "Transfer.direct_copy_use_direct",
-        strategy = strategy_label(strategy)
-    )
-    .to_string()
 }
 
 fn strategy_label(strategy: DirectCopyStrategy) -> String {
@@ -346,48 +312,6 @@ fn strategy_label(strategy: DirectCopyStrategy) -> String {
         DirectCopyStrategy::Rsync => t!("Transfer.strategy_rsync").to_string(),
         DirectCopyStrategy::Scp => t!("Transfer.strategy_scp").to_string(),
     }
-}
-
-fn auth_label(auth: ServerCopyAuthKind) -> String {
-    match auth {
-        ServerCopyAuthKind::Password => t!("Transfer.auth_password").to_string(),
-        ServerCopyAuthKind::PrivateKeyFile => t!("Transfer.auth_private_key_file").to_string(),
-        ServerCopyAuthKind::PrivateKeyContent => {
-            t!("Transfer.auth_private_key_content").to_string()
-        }
-        ServerCopyAuthKind::Agent => t!("Transfer.auth_agent").to_string(),
-        ServerCopyAuthKind::AutoPublicKey => t!("Transfer.auth_auto_public_key").to_string(),
-    }
-}
-
-fn target_auth_transfer_detail(preview: &DirectCopyPreview) -> String {
-    let mut details = vec![match preview.navop_target_auth {
-        ServerCopyAuthKind::Password => {
-            t!("Transfer.direct_copy_target_password_detail").to_string()
-        }
-        ServerCopyAuthKind::PrivateKeyFile => {
-            t!("Transfer.direct_copy_target_private_key_file_detail").to_string()
-        }
-        ServerCopyAuthKind::PrivateKeyContent => {
-            t!("Transfer.direct_copy_target_private_key_content_detail").to_string()
-        }
-        ServerCopyAuthKind::Agent => t!("Transfer.direct_copy_target_agent_detail").to_string(),
-        ServerCopyAuthKind::AutoPublicKey => {
-            t!("Transfer.direct_copy_target_auto_key_detail").to_string()
-        }
-    }];
-    if matches!(
-        preview.navop_target_auth,
-        ServerCopyAuthKind::PrivateKeyFile | ServerCopyAuthKind::PrivateKeyContent
-    ) {
-        if preview.target_auth_has_passphrase {
-            details.push(t!("Transfer.direct_copy_target_passphrase_detail").to_string());
-        }
-        if preview.target_auth_has_certificate {
-            details.push(t!("Transfer.direct_copy_target_certificate_detail").to_string());
-        }
-    }
-    details.join(" ")
 }
 
 fn format_endpoint(username: &str, host: &str, port: u16) -> String {

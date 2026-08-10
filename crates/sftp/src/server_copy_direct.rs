@@ -1,8 +1,9 @@
 use crate::remote_exec::{exec_remote_command, exec_remote_command_with_input};
 use crate::server_copy::DirectCopyStrategy;
 use crate::server_copy_command::{
-    DirectCopyAuthMode, DirectCopyPayloadLengths, build_direct_copy_wrapper, scp_item_is_safe,
-    source_ssh_options_probe_command, target_ssh_command, validate_endpoint,
+    DIRECT_COPY_HOST_KEY_ALIAS, DirectCopyAuthMode, DirectCopyPayloadLengths,
+    build_direct_copy_wrapper, scp_item_is_safe, source_ssh_options_probe_command,
+    target_ssh_command, validate_endpoint,
 };
 use crate::{
     DirectoryConflictPolicy, RusshSftpClient, ServerCopyItem, SftpClient, TransferCancelled,
@@ -42,15 +43,17 @@ impl DirectCopyPlan {
 
 struct DirectCopyCredentials {
     auth_mode: DirectCopyAuthMode,
+    known_hosts: Vec<u8>,
     private_key: Vec<u8>,
     certificate: Vec<u8>,
     secret: Vec<u8>,
 }
 
 impl DirectCopyCredentials {
-    fn empty(auth_mode: DirectCopyAuthMode) -> Self {
+    fn empty(auth_mode: DirectCopyAuthMode, known_hosts: Vec<u8>) -> Self {
         Self {
             auth_mode,
+            known_hosts,
             private_key: Vec::new(),
             certificate: Vec::new(),
             secret: Vec::new(),
@@ -59,6 +62,7 @@ impl DirectCopyCredentials {
 
     fn lengths(&self) -> DirectCopyPayloadLengths {
         DirectCopyPayloadLengths {
+            known_hosts: self.known_hosts.len(),
             private_key: self.private_key.len(),
             certificate: self.certificate.len(),
             secret: self.secret.len(),
@@ -66,8 +70,13 @@ impl DirectCopyCredentials {
     }
 
     fn payload(&self) -> Vec<u8> {
-        let mut payload =
-            Vec::with_capacity(self.private_key.len() + self.certificate.len() + self.secret.len());
+        let mut payload = Vec::with_capacity(
+            self.known_hosts.len()
+                + self.private_key.len()
+                + self.certificate.len()
+                + self.secret.len(),
+        );
+        payload.extend_from_slice(&self.known_hosts);
         payload.extend_from_slice(&self.private_key);
         payload.extend_from_slice(&self.certificate);
         payload.extend_from_slice(&self.secret);
@@ -77,6 +86,7 @@ impl DirectCopyCredentials {
 
 impl Drop for DirectCopyCredentials {
     fn drop(&mut self) {
+        self.known_hosts.zeroize();
         self.private_key.zeroize();
         self.certificate.zeroize();
         self.secret.zeroize();
@@ -167,7 +177,7 @@ pub(crate) async fn execute_direct_copy(
 ) -> Result<()> {
     ensure_not_cancelled(&cancelled)?;
     let credentials =
-        load_direct_copy_credentials(target_config, plan.auth_mode, &cancelled).await?;
+        load_direct_copy_credentials(target, target_config, plan.auth_mode, &cancelled).await?;
     ensure_not_cancelled(&cancelled)?;
     authenticate_direct_copy(source, target_config, &credentials, cancelled.clone()).await?;
 
@@ -219,14 +229,23 @@ the target may be partially written",
 }
 
 async fn load_direct_copy_credentials(
+    target_client: &RusshSftpClient,
     target: &SshConnectConfig,
     expected_mode: DirectCopyAuthMode,
     cancelled: &AtomicBool,
 ) -> Result<DirectCopyCredentials> {
     ensure_not_cancelled(cancelled)?;
+    let known_hosts = format!(
+        "{DIRECT_COPY_HOST_KEY_ALIAS} {}\n",
+        target_client
+            .accepted_server_public_key()
+            .ok_or_else(|| anyhow!("verified target SSH host key is unavailable"))?
+    )
+    .into_bytes();
     let credentials = match &target.auth {
         SshAuth::Password(password) => DirectCopyCredentials {
             auth_mode: DirectCopyAuthMode::Password,
+            known_hosts,
             private_key: Vec::new(),
             certificate: Vec::new(),
             secret: password.as_bytes().to_vec(),
@@ -237,6 +256,7 @@ async fn load_direct_copy_credentials(
             certificate_path,
         } => DirectCopyCredentials {
             auth_mode: DirectCopyAuthMode::from_auth(&target.auth),
+            known_hosts,
             private_key: read_credential_file(key_path, "target private key", cancelled).await?,
             certificate: read_optional_credential_file(
                 certificate_path.as_deref(),
@@ -255,6 +275,7 @@ async fn load_direct_copy_credentials(
             certificate_path,
         } => DirectCopyCredentials {
             auth_mode: DirectCopyAuthMode::from_auth(&target.auth),
+            known_hosts,
             private_key: private_key.as_bytes().to_vec(),
             certificate: read_optional_credential_file(
                 certificate_path.as_deref(),
@@ -268,7 +289,7 @@ async fn load_direct_copy_credentials(
                 .map_or_else(Vec::new, |passphrase| passphrase.as_bytes().to_vec()),
         },
         SshAuth::Agent | SshAuth::AutoPublicKey => {
-            DirectCopyCredentials::empty(DirectCopyAuthMode::ExistingIdentity)
+            DirectCopyCredentials::empty(DirectCopyAuthMode::ExistingIdentity, known_hosts)
         }
     };
 
@@ -316,9 +337,9 @@ async fn authenticate_direct_copy(
         return Ok(());
     }
     bail!(
-        "source server could not authenticate directly to the target (status {}): {}. Verify the \
-target credentials and ensure the target host key already exists in the source server's \
-known_hosts. Navop relay was not started",
+        "source server could not authenticate directly to the target (status {}): {}. Verify \
+source-to-target network reachability and the configured target credentials. The target host key \
+was pinned from Navop's verified target connection. Navop relay was not started",
         output.exit_status,
         command_error(&output.stderr, &output.stdout)
     )

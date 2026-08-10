@@ -3,6 +3,8 @@ use crate::server_copy::DirectCopyStrategy;
 use anyhow::{Result, bail};
 use ssh::{SshAuth, SshConnectConfig};
 
+pub(crate) const DIRECT_COPY_HOST_KEY_ALIAS: &str = "navop-direct-copy-target";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DirectCopyAuthMode {
     ExistingIdentity,
@@ -45,7 +47,7 @@ impl DirectCopyAuthMode {
     }
 
     pub(crate) fn needs_source_helpers(self) -> bool {
-        !matches!(self, Self::ExistingIdentity)
+        true
     }
 
     fn uses_askpass(self) -> bool {
@@ -66,6 +68,7 @@ impl DirectCopyAuthMode {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct DirectCopyPayloadLengths {
+    pub known_hosts: usize,
     pub private_key: usize,
     pub certificate: usize,
     pub secret: usize,
@@ -120,9 +123,6 @@ pub(crate) fn build_direct_copy_wrapper(
     lengths: DirectCopyPayloadLengths,
 ) -> Result<String> {
     validate_payload_lengths(auth_mode, lengths)?;
-    if !auth_mode.needs_source_helpers() {
-        return Ok(format!("exec {command} </dev/null"));
-    }
 
     let mut wrapper = String::from(
         "set -eu\n\
@@ -136,9 +136,15 @@ navop_cleanup() {\n\
 }\n\
 trap navop_cleanup EXIT HUP INT TERM\n",
     );
+    append_payload_file(
+        &mut wrapper,
+        "navop_known_hosts",
+        "known_hosts",
+        lengths.known_hosts,
+    );
 
     match auth_mode {
-        DirectCopyAuthMode::ExistingIdentity => unreachable!(),
+        DirectCopyAuthMode::ExistingIdentity => {}
         DirectCopyAuthMode::Password => {
             append_payload_file(&mut wrapper, "navop_secret", "secret", lengths.secret);
             append_askpass_helper(&mut wrapper);
@@ -289,6 +295,20 @@ fn ssh_options(
     let common = "-o StrictHostKeyChecking=yes -o ForwardAgent=no -o RequestTTY=no \
 -o ClearAllForwardings=yes -o ProxyJump=none -o ProxyCommand=none \
 -o ControlMaster=no -o ControlPath=none -o ConnectTimeout=10";
+    let host_key = match path_style {
+        AuthPathStyle::ShellArguments => {
+            "-o UserKnownHostsFile=\"$navop_known_hosts\" \
+-o HostKeyAlias=navop-direct-copy-target"
+        }
+        AuthPathStyle::RsyncRemoteShell => {
+            "-o UserKnownHostsFile='$navop_known_hosts' \
+-o HostKeyAlias=navop-direct-copy-target"
+        }
+        AuthPathStyle::Probe => {
+            "-o UserKnownHostsFile=/tmp/navop-direct-copy-probe-known-hosts \
+-o HostKeyAlias=navop-direct-copy-target"
+        }
+    };
     let auth = match auth_mode {
         DirectCopyAuthMode::ExistingIdentity => {
             "-o BatchMode=yes -o NumberOfPasswordPrompts=0".to_string()
@@ -330,16 +350,19 @@ fn ssh_options(
             )
         }
     };
-    format!("{auth} {common} {port_flag} {port}")
+    format!("{auth} {host_key} {common} {port_flag} {port}")
 }
 
 fn validate_payload_lengths(
     auth_mode: DirectCopyAuthMode,
     lengths: DirectCopyPayloadLengths,
 ) -> Result<()> {
+    if lengths.known_hosts == 0 {
+        bail!("direct copy requires a verified target host key");
+    }
     match auth_mode {
         DirectCopyAuthMode::ExistingIdentity => {
-            if lengths != DirectCopyPayloadLengths::default() {
+            if lengths.private_key != 0 || lengths.certificate != 0 || lengths.secret != 0 {
                 bail!("existing-identity direct copy must not receive a credential payload");
             }
         }
@@ -428,7 +451,10 @@ fn shell_double_quote_with_internal_variable_expansion(value: &str) -> Result<St
     if value.chars().any(char::is_control) {
         bail!("value contains control characters");
     }
-    let without_allowed_variables = value.replace("$navop_key", "").replace("$navop_cert", "");
+    let without_allowed_variables = value
+        .replace("$navop_known_hosts", "")
+        .replace("$navop_key", "")
+        .replace("$navop_cert", "");
     if without_allowed_variables.contains('$') {
         bail!("unexpected shell variable in rsync remote shell");
     }

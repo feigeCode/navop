@@ -14,6 +14,16 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 
+const KNOWN_HOSTS: &[u8] =
+    b"navop-direct-copy-target ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey\n";
+
+fn known_hosts_lengths() -> DirectCopyPayloadLengths {
+    DirectCopyPayloadLengths {
+        known_hosts: KNOWN_HOSTS.len(),
+        ..DirectCopyPayloadLengths::default()
+    }
+}
+
 fn item(source: &str, target: &str, is_dir: bool) -> ServerCopyItem {
     ServerCopyItem {
         source_path: source.to_string(),
@@ -175,7 +185,7 @@ fn password_commands_use_askpass_compatible_ssh_options_without_embedding_passwo
             DirectCopyAuthMode::Password,
             DirectCopyPayloadLengths {
                 secret: password.len(),
-                ..DirectCopyPayloadLengths::default()
+                ..known_hosts_lengths()
             },
         )
         .expect("password wrapper");
@@ -186,6 +196,139 @@ fn password_commands_use_askpass_compatible_ssh_options_without_embedding_passwo
         assert!(!wrapper.contains(password));
         assert!(!wrapper.contains("sshpass"));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn scp_password_wrapper_executes_askpass_with_pinned_known_hosts() {
+    let password = b"PASSWORD-SECRET";
+    let command = build_direct_copy_commands(
+        DirectCopyStrategy::Scp,
+        DirectCopyAuthMode::Password,
+        "deploy",
+        "server.example",
+        2222,
+        &[item("/src/app.txt", "/dst/app.txt", false)],
+    )
+    .expect("password scp command")
+    .remove(0);
+    let wrapper = build_direct_copy_wrapper(
+        &command,
+        DirectCopyAuthMode::Password,
+        DirectCopyPayloadLengths {
+            known_hosts: KNOWN_HOSTS.len(),
+            secret: password.len(),
+            ..DirectCopyPayloadLengths::default()
+        },
+    )
+    .expect("password scp wrapper");
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let fake_scp = directory.path().join("scp");
+    let captured_password = directory.path().join("password");
+    let captured_known_hosts = directory.path().join("known-hosts");
+    let captured_environment = directory.path().join("environment");
+    let captured_args = directory.path().join("scp-args");
+    std::fs::write(
+        &fake_scp,
+        r#"#!/bin/sh
+set -eu
+"$SSH_ASKPASS" password > "$NAVOP_CAPTURED_PASSWORD"
+printf '%s\n%s\n' "$SSH_ASKPASS_REQUIRE" "$DISPLAY" > "$NAVOP_CAPTURED_ENVIRONMENT"
+: > "$NAVOP_CAPTURED_ARGS"
+previous=
+known_hosts=
+for arg in "$@"; do
+  printf '%s\0' "$arg" >> "$NAVOP_CAPTURED_ARGS"
+  if [ "$previous" = "-o" ]; then
+    case "$arg" in
+      UserKnownHostsFile=*) known_hosts=${arg#UserKnownHostsFile=} ;;
+    esac
+  fi
+  previous=$arg
+done
+[ -n "$known_hosts" ]
+cat "$known_hosts" > "$NAVOP_CAPTURED_KNOWN_HOSTS"
+"#,
+    )
+    .expect("fake scp script");
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(&fake_scp)
+        .expect("fake scp metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&fake_scp, permissions).expect("make fake scp executable");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&wrapper)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                directory.path().display(),
+                inherited_path.to_string_lossy()
+            ),
+        )
+        .env("NAVOP_CAPTURED_PASSWORD", &captured_password)
+        .env("NAVOP_CAPTURED_KNOWN_HOSTS", &captured_known_hosts)
+        .env("NAVOP_CAPTURED_ENVIRONMENT", &captured_environment)
+        .env("NAVOP_CAPTURED_ARGS", &captured_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("execute generated wrapper");
+    let mut payload = Vec::new();
+    payload.extend_from_slice(KNOWN_HOSTS);
+    payload.extend_from_slice(password);
+    child
+        .stdin
+        .take()
+        .expect("wrapper stdin")
+        .write_all(&payload)
+        .expect("write credential payload");
+    let output = child.wait_with_output().expect("wait for wrapper");
+    assert!(
+        output.status.success(),
+        "wrapper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        password,
+        std::fs::read(captured_password)
+            .expect("captured password")
+            .as_slice()
+    );
+    assert_eq!(
+        KNOWN_HOSTS,
+        std::fs::read(captured_known_hosts)
+            .expect("captured known_hosts")
+            .as_slice()
+    );
+    assert_eq!(
+        "force\nnavop:0\n",
+        std::fs::read_to_string(captured_environment).expect("captured askpass environment")
+    );
+    let arguments = std::fs::read(captured_args).expect("captured scp arguments");
+    let arguments = arguments
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(|argument| String::from_utf8(argument.to_vec()).expect("UTF-8 scp argument"))
+        .collect::<Vec<_>>();
+    assert!(arguments.iter().any(|argument| argument == "-o"));
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument.starts_with("UserKnownHostsFile=/tmp/navop-direct-copy."))
+    );
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument == "HostKeyAlias=navop-direct-copy-target")
+    );
 }
 
 #[test]
@@ -218,6 +361,7 @@ fn private_key_commands_use_temporary_identity_and_optional_certificate() {
         &command,
         auth,
         DirectCopyPayloadLengths {
+            known_hosts: KNOWN_HOSTS.len(),
             private_key: 120,
             certificate: 80,
             secret: 16,
@@ -255,6 +399,7 @@ fn rsync_wrapper_expands_temporary_identity_paths_before_invoking_rsync() {
         &command,
         auth,
         DirectCopyPayloadLengths {
+            known_hosts: KNOWN_HOSTS.len(),
             private_key: private_key.len(),
             certificate: certificate.len(),
             secret: 0,
@@ -296,6 +441,7 @@ fn rsync_wrapper_expands_temporary_identity_paths_before_invoking_rsync() {
         .spawn()
         .expect("execute generated wrapper");
     let mut payload = Vec::new();
+    payload.extend_from_slice(KNOWN_HOSTS);
     payload.extend_from_slice(private_key);
     payload.extend_from_slice(certificate);
     child
@@ -359,7 +505,7 @@ fn unencrypted_private_key_stays_in_batch_mode_without_askpass() {
         auth,
         DirectCopyPayloadLengths {
             private_key: 120,
-            ..DirectCopyPayloadLengths::default()
+            ..known_hosts_lengths()
         },
     )
     .expect("private key wrapper");
@@ -368,15 +514,16 @@ fn unencrypted_private_key_stays_in_batch_mode_without_askpass() {
 }
 
 #[test]
-fn existing_identity_wrapper_has_no_temporary_credential_directory() {
+fn existing_identity_wrapper_stages_verified_known_hosts() {
     let wrapper = build_direct_copy_wrapper(
         "ssh target true",
         DirectCopyAuthMode::ExistingIdentity,
-        DirectCopyPayloadLengths::default(),
+        known_hosts_lengths(),
     )
     .expect("existing identity wrapper");
-    assert_eq!("exec ssh target true </dev/null", wrapper);
-    assert!(!wrapper.contains("mktemp"));
+    assert_protected_wrapper(&wrapper);
+    assert!(wrapper.contains("navop_known_hosts=\"$navop_tmp/known_hosts\""));
+    assert!(!wrapper.contains("SSH_ASKPASS"));
 }
 
 #[test]
@@ -386,6 +533,7 @@ fn wrapper_rejects_payload_shape_mismatches() {
             "true",
             DirectCopyAuthMode::ExistingIdentity,
             DirectCopyPayloadLengths {
+                known_hosts: KNOWN_HOSTS.len(),
                 secret: 1,
                 ..DirectCopyPayloadLengths::default()
             }
@@ -411,6 +559,7 @@ fn wrapper_rejects_payload_shape_mismatches() {
                 has_certificate: false,
             },
             DirectCopyPayloadLengths {
+                known_hosts: KNOWN_HOSTS.len(),
                 private_key: 1,
                 ..DirectCopyPayloadLengths::default()
             }
@@ -643,6 +792,8 @@ fn scp_command_does_not_require_double_dash_support() {
 
 fn assert_common_security_options(command: &str) {
     assert!(command.contains("-o StrictHostKeyChecking=yes"));
+    assert!(command.contains("-o UserKnownHostsFile="));
+    assert!(command.contains("-o HostKeyAlias=navop-direct-copy-target"));
     assert!(command.contains("-o ForwardAgent=no"));
     assert!(command.contains("-o RequestTTY=no"));
     assert!(command.contains("-o ClearAllForwardings=yes"));
