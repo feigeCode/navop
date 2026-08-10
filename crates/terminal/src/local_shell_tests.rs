@@ -124,7 +124,7 @@ fn windows_git_bash_profile_uses_the_resolved_command_and_login_arguments() {
 fn git_bash_resolution_supports_machine_and_per_user_installations() {
     let temp = tempfile::tempdir().unwrap();
     let machine_root = temp.path().join("Program Files");
-    let machine_bash = machine_root.join("Git/bin/bash.exe");
+    let machine_bash = machine_root.join("Git").join("bin").join("bash.exe");
     std::fs::create_dir_all(machine_bash.parent().unwrap()).unwrap();
     std::fs::write(&machine_bash, []).unwrap();
 
@@ -140,7 +140,11 @@ fn git_bash_resolution_supports_machine_and_per_user_installations() {
 
     std::fs::remove_file(&machine_bash).unwrap();
     let local_app_data = temp.path().join("LocalAppData");
-    let user_bash = local_app_data.join("Programs/Git/bin/bash.exe");
+    let user_bash = local_app_data
+        .join("Programs")
+        .join("Git")
+        .join("bin")
+        .join("bash.exe");
     std::fs::create_dir_all(user_bash.parent().unwrap()).unwrap();
     std::fs::write(&user_bash, []).unwrap();
 
@@ -159,11 +163,11 @@ fn git_bash_resolution_supports_machine_and_per_user_installations() {
 fn git_bash_resolution_accepts_a_verified_git_for_windows_path_entry() {
     let temp = tempfile::tempdir().unwrap();
     let git_root = temp.path().join("PortableGit");
-    let bash = git_root.join("bin/bash.exe");
+    let bash = git_root.join("bin").join("bash.exe");
     for file in [
         &bash,
-        &git_root.join("cmd/git.exe"),
-        &git_root.join("etc/profile"),
+        &git_root.join("cmd").join("git.exe"),
+        &git_root.join("etc").join("profile"),
     ] {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, []).unwrap();
@@ -178,11 +182,11 @@ fn git_bash_resolution_accepts_a_verified_git_for_windows_path_entry() {
 fn git_bash_resolution_follows_the_git_cmd_path_entry_to_bin_bash() {
     let temp = tempfile::tempdir().unwrap();
     let git_root = temp.path().join("Custom Git");
-    let bash = git_root.join("bin/bash.exe");
+    let bash = git_root.join("bin").join("bash.exe");
     for file in [
         &bash,
-        &git_root.join("cmd/git.exe"),
-        &git_root.join("etc/profile"),
+        &git_root.join("cmd").join("git.exe"),
+        &git_root.join("etc").join("profile"),
     ] {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, []).unwrap();
@@ -196,7 +200,7 @@ fn git_bash_resolution_follows_the_git_cmd_path_entry_to_bin_bash() {
 #[test]
 fn git_bash_resolution_rejects_an_unrelated_bash_alias() {
     let temp = tempfile::tempdir().unwrap();
-    let windows_apps = temp.path().join("Microsoft/WindowsApps");
+    let windows_apps = temp.path().join("Microsoft").join("WindowsApps");
     std::fs::create_dir_all(&windows_apps).unwrap();
     std::fs::write(windows_apps.join("bash.exe"), []).unwrap();
 
