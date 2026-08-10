@@ -205,7 +205,9 @@ impl std::fmt::Display for WindowsNativeAdapterCreateError {
 impl std::error::Error for WindowsNativeAdapterCreateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::WindowHandle(error) => Some(error),
+            // `raw-window-handle` only implements `Error` for `HandleError`
+            // when its optional `std` feature is enabled.
+            Self::WindowHandle(_) => None,
             Self::ParentHandleNotWin32 => None,
             Self::Host(error) => Some(error),
         }
