@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn internal_tool_panel_title_claims_remaining_header_width() {
-        let source = include_str!("tool_dock.rs");
+        let source = include_str!("tool_dock.rs").replace("\r\n", "\n");
         let header_start = source
             .find("fn render_internal_tool_panel_header")
             .expect("internal tool panel header renderer");
