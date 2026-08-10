@@ -34,7 +34,9 @@ fn paint_remote_frame(
     };
 
     let renderer_resource_generation = window.renderer_resource_generation();
-    for upload in frame.pending_texture_uploads(renderer_resource_generation) {
+    let uploads = frame.pending_texture_uploads(renderer_resource_generation);
+    let mut uploaded_count = 0;
+    for upload in uploads.iter() {
         let update_bounds = Bounds::new(
             point(
                 DevicePixels(i32::from(upload.rect.x)),
@@ -45,14 +47,20 @@ fn paint_remote_frame(
                 DevicePixels(i32::from(upload.rect.height)),
             ),
         );
-        match window.update_dynamic_texture(frame.texture().as_ref(), update_bounds, &upload.bytes)
-        {
-            Ok(()) => frame.acknowledge_texture_upload(&upload),
+        match window.update_dynamic_texture(
+            frame.texture().as_ref(),
+            update_bounds,
+            upload.bytes.as_slice(),
+        ) {
+            Ok(()) => uploaded_count += 1,
             Err(error) => {
                 tracing::warn!(?error, "failed to update remote desktop texture");
                 break;
             }
         }
+    }
+    if uploaded_count > 0 {
+        frame.acknowledge_texture_uploads(&uploads[..uploaded_count]);
     }
 
     if let Err(error) =

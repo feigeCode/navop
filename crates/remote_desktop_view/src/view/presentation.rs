@@ -891,7 +891,7 @@ mod tests {
         assert_eq!(initial_texture_id, surface.texture().id);
         let uploads = surface.pending_texture_uploads(0);
         assert_eq!(1, uploads.len());
-        assert_eq!(uploads[0].bytes, &[0, 0, 0, 255, 1, 1, 1, 255]);
+        assert_eq!(uploads[0].bytes.as_slice(), &[0, 0, 0, 255, 1, 1, 1, 255]);
     }
 
     #[test]
@@ -942,7 +942,7 @@ mod tests {
         assert_eq!(texture_id, surface.texture().id);
         let uploads = surface.pending_texture_uploads(0);
         assert_eq!(1, uploads.len());
-        assert_eq!(uploads[0].bytes, &[5, 5, 5, 255, 1, 1, 1, 255]);
+        assert_eq!(uploads[0].bytes.as_slice(), &[5, 5, 5, 255, 1, 1, 1, 255]);
     }
 
     #[test]

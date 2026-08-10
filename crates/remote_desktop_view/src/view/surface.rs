@@ -7,8 +7,8 @@ use std::sync::{
 use gpui::{DevicePixels, DynamicTexture, DynamicTextureId, size};
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
 
-const MAX_TEXTURE_UPLOAD_RECTS: usize = 64;
-const SIMPLIFY_TEXTURE_UPLOADS_THRESHOLD: usize = MAX_TEXTURE_UPLOAD_RECTS * 2;
+const MAX_TEXTURE_UPLOAD_RECTS: usize = 16;
+const SIMPLIFY_TEXTURE_UPLOADS_THRESHOLD: usize = MAX_TEXTURE_UPLOAD_RECTS;
 const MAX_MERGED_AREA_FACTOR: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,32 +34,36 @@ impl TextureRect {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingTextureUpdate {
     sequence_ids: Vec<u64>,
     rect: TextureRect,
+}
+
+struct PreparedDirtyUpdate {
+    rect: TextureRect,
+    bytes: Arc<Vec<u8>>,
+}
+
+struct PreparedDirtyBatch<'a> {
+    framebuffer_bytes: &'a [u8],
+    framebuffer_row_bytes: usize,
+    updates: Vec<PreparedDirtyUpdate>,
 }
 
 #[derive(Debug)]
 struct RemoteDesktopSurfaceState {
     backing_bgra: Arc<Vec<u8>>,
     pending_updates: Vec<PendingTextureUpdate>,
+    prepared_uploads: Arc<Vec<TextureUpload>>,
     next_sequence_id: u64,
     confirmed_renderer_resource_generation: Option<u64>,
-}
-
-#[derive(Debug)]
-struct TextureUploadSnapshot {
-    backing_bgra: Arc<Vec<u8>>,
-    pending_updates: Vec<PendingTextureUpdate>,
-    renderer_resource_generation: Option<u64>,
-    texture_id: DynamicTextureId,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct TextureUpload {
     pub(super) rect: TextureRect,
-    pub(super) bytes: Vec<u8>,
+    pub(super) bytes: Arc<Vec<u8>>,
     sequence_ids: Vec<u64>,
     renderer_resource_generation: Option<u64>,
     texture_id: DynamicTextureId,
@@ -133,6 +137,14 @@ impl RemoteDesktopSurface {
             DevicePixels(i32::from(height)),
         )));
         let full_rect = TextureRect::full(width, height);
+        let backing_bgra = Arc::new(framebuffer.as_rgba().to_vec());
+        let prepared_uploads = Arc::new(vec![TextureUpload {
+            rect: full_rect,
+            bytes: Arc::clone(&backing_bgra),
+            sequence_ids: vec![0],
+            renderer_resource_generation: None,
+            texture_id: texture.id,
+        }]);
 
         Ok(Self {
             id: next_surface_id(),
@@ -140,11 +152,12 @@ impl RemoteDesktopSurface {
             height,
             texture,
             state: Arc::new(Mutex::new(RemoteDesktopSurfaceState {
-                backing_bgra: Arc::new(framebuffer.as_rgba().to_vec()),
+                backing_bgra,
                 pending_updates: vec![PendingTextureUpdate {
                     sequence_ids: vec![0],
                     rect: full_rect,
                 }],
+                prepared_uploads,
                 next_sequence_id: 1,
                 confirmed_renderer_resource_generation: None,
             })),
@@ -168,6 +181,13 @@ impl RemoteDesktopSurface {
             sequence_ids: vec![sequence_id],
             rect: TextureRect::full(self.width, self.height),
         });
+        state.prepared_uploads = Arc::new(vec![TextureUpload {
+            rect: TextureRect::full(self.width, self.height),
+            bytes: Arc::clone(&state.backing_bgra),
+            sequence_ids: vec![sequence_id],
+            renderer_resource_generation: None,
+            texture_id: self.texture.id,
+        }]);
         drop(state);
 
         Ok(self.next_presentation())
@@ -179,15 +199,11 @@ impl RemoteDesktopSurface {
         rects: &[RemoteDesktopFrameRect],
     ) -> anyhow::Result<Self> {
         self.validate_matching_framebuffer(framebuffer)?;
-        let texture_rects = rects
-            .iter()
-            .map(|rect| validate_dirty_rect(self.width, self.height, rect))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        if texture_rects.is_empty() {
+        let prepared_updates = self.prepare_dirty_updates(framebuffer, rects)?;
+        if prepared_updates.is_empty() {
             return Ok(self.clone());
         }
 
-        let framebuffer_bytes = framebuffer.as_rgba();
         let framebuffer_row_bytes = usize::from(self.width)
             .checked_mul(4)
             .ok_or_else(|| anyhow::anyhow!("remote desktop framebuffer row size overflow"))?;
@@ -195,30 +211,77 @@ impl RemoteDesktopSurface {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("remote desktop texture state is poisoned"))?;
-        validate_backing_len(self.width, self.height, state.backing_bgra.len())?;
-
-        for rect in texture_rects {
-            {
-                let backing_bgra = Arc::make_mut(&mut state.backing_bgra);
-                copy_rect_between_bgra_buffers(
-                    framebuffer_bytes,
-                    backing_bgra,
-                    framebuffer_row_bytes,
-                    rect,
-                );
-            }
-            let sequence_id = take_next_sequence_id(&mut state)?;
-            state.pending_updates.push(PendingTextureUpdate {
-                sequence_ids: vec![sequence_id],
-                rect,
-            });
-        }
-        if state.pending_updates.len() > SIMPLIFY_TEXTURE_UPLOADS_THRESHOLD {
-            simplify_pending_texture_regions(&mut state.pending_updates, self.width, self.height);
-        }
+        self.apply_dirty_updates(
+            &mut state,
+            PreparedDirtyBatch {
+                framebuffer_bytes: framebuffer.as_rgba(),
+                framebuffer_row_bytes,
+                updates: prepared_updates,
+            },
+        )?;
         drop(state);
 
         Ok(self.next_presentation())
+    }
+
+    fn apply_dirty_updates(
+        &self,
+        state: &mut RemoteDesktopSurfaceState,
+        batch: PreparedDirtyBatch<'_>,
+    ) -> anyhow::Result<()> {
+        validate_backing_len(self.width, self.height, state.backing_bgra.len())?;
+        let reusable_uploads = take_reusable_uploads(state);
+        for prepared in batch.updates {
+            let backing_bgra = Arc::make_mut(&mut state.backing_bgra);
+            copy_rect_between_bgra_buffers(
+                batch.framebuffer_bytes,
+                backing_bgra,
+                batch.framebuffer_row_bytes,
+                prepared.rect,
+            );
+            let sequence_id = take_next_sequence_id(state)?;
+            state.pending_updates.push(PendingTextureUpdate {
+                sequence_ids: vec![sequence_id],
+                rect: prepared.rect,
+            });
+            Arc::make_mut(&mut state.prepared_uploads).push(TextureUpload {
+                rect: prepared.rect,
+                bytes: prepared.bytes,
+                sequence_ids: vec![sequence_id],
+                renderer_resource_generation: None,
+                texture_id: self.texture.id,
+            });
+        }
+        Arc::make_mut(&mut state.prepared_uploads).extend(reusable_uploads.iter().cloned());
+        if state.pending_updates.len() > SIMPLIFY_TEXTURE_UPLOADS_THRESHOLD {
+            simplify_pending_texture_regions(&mut state.pending_updates, self.width, self.height);
+        }
+        state.prepared_uploads =
+            self.prepare_pending_uploads(&state, state.prepared_uploads.as_slice())?;
+        Ok(())
+    }
+
+    fn prepare_dirty_updates(
+        &self,
+        framebuffer: &RgbaFramebuffer,
+        rects: &[RemoteDesktopFrameRect],
+    ) -> anyhow::Result<Vec<PreparedDirtyUpdate>> {
+        rects
+            .iter()
+            .map(|rect| {
+                let rect = validate_dirty_rect(self.width, self.height, rect)?;
+                let bytes = copy_bgra_rect_from_backing(
+                    framebuffer.as_rgba(),
+                    self.width,
+                    self.height,
+                    rect,
+                )?;
+                Ok(PreparedDirtyUpdate {
+                    rect,
+                    bytes: Arc::new(bytes),
+                })
+            })
+            .collect()
     }
 
     pub(super) fn width(&self) -> u16 {
@@ -236,56 +299,64 @@ impl RemoteDesktopSurface {
     pub(super) fn pending_texture_uploads(
         &self,
         renderer_resource_generation: u64,
-    ) -> Vec<TextureUpload> {
-        let Some(snapshot) = self.texture_upload_snapshot(renderer_resource_generation) else {
-            return Vec::new();
+    ) -> Arc<Vec<TextureUpload>> {
+        let Ok(state) = self.state.lock() else {
+            tracing::warn!(
+                surface_id = self.id,
+                "remote desktop texture state is poisoned while reading uploads"
+            );
+            return Arc::new(Vec::new());
         };
-        snapshot.into_uploads(self.width, self.height)
-    }
-
-    fn texture_upload_snapshot(
-        &self,
-        renderer_resource_generation: u64,
-    ) -> Option<TextureUploadSnapshot> {
-        let Ok(mut state) = self.state.lock() else {
-            return None;
-        };
-        simplify_pending_texture_regions(&mut state.pending_updates, self.width, self.height);
 
         let renderer_resource_generation = (state.confirmed_renderer_resource_generation
             != Some(renderer_resource_generation))
         .then_some(renderer_resource_generation);
-        if renderer_resource_generation.is_none() && state.pending_updates.is_empty() {
-            return None;
+        if renderer_resource_generation.is_none() {
+            return Arc::clone(&state.prepared_uploads);
         }
 
-        Some(TextureUploadSnapshot {
-            backing_bgra: Arc::clone(&state.backing_bgra),
-            pending_updates: state.pending_updates.clone(),
+        Arc::new(vec![TextureUpload {
+            rect: TextureRect::full(self.width, self.height),
+            bytes: Arc::clone(&state.backing_bgra),
+            sequence_ids: pending_sequence_ids(&state.pending_updates),
             renderer_resource_generation,
             texture_id: self.texture.id,
-        })
+        }])
     }
 
+    #[cfg(test)]
     pub(super) fn acknowledge_texture_upload(&self, upload: &TextureUpload) {
-        if upload.texture_id != self.texture.id {
+        self.acknowledge_texture_uploads(std::slice::from_ref(upload));
+    }
+
+    pub(super) fn acknowledge_texture_uploads(&self, uploads: &[TextureUpload]) {
+        let mut has_valid_upload = false;
+        let mut uploaded_sequences = HashSet::new();
+        let mut renderer_resource_generation = None;
+        for upload in uploads {
+            if upload.texture_id != self.texture.id {
+                continue;
+            }
+            has_valid_upload = true;
+            uploaded_sequences.extend(upload.sequence_ids.iter().copied());
+            renderer_resource_generation =
+                renderer_resource_generation.max(upload.renderer_resource_generation);
+        }
+        if !has_valid_upload {
             return;
         }
         let Ok(mut state) = self.state.lock() else {
+            tracing::warn!(
+                surface_id = self.id,
+                "remote desktop texture state is poisoned while acknowledging uploads"
+            );
             return;
         };
-        let uploaded_sequences = upload.sequence_ids.iter().copied().collect::<HashSet<_>>();
         if !uploaded_sequences.is_empty() {
-            for update in &mut state.pending_updates {
-                update
-                    .sequence_ids
-                    .retain(|sequence_id| !uploaded_sequences.contains(sequence_id));
-            }
-            state
-                .pending_updates
-                .retain(|update| !update.sequence_ids.is_empty());
+            remove_uploaded_sequences(&mut state.pending_updates, &uploaded_sequences);
+            remove_uploaded_uploads(&mut state.prepared_uploads, &uploaded_sequences);
         }
-        if let Some(renderer_resource_generation) = upload.renderer_resource_generation {
+        if let Some(renderer_resource_generation) = renderer_resource_generation {
             match state.confirmed_renderer_resource_generation {
                 Some(confirmed) if renderer_resource_generation < confirmed => {}
                 _ => {
@@ -314,39 +385,53 @@ impl RemoteDesktopSurface {
             state: self.state.clone(),
         }
     }
-}
 
-impl TextureUploadSnapshot {
-    fn into_uploads(self, width: u16, height: u16) -> Vec<TextureUpload> {
-        if let Some(renderer_resource_generation) = self.renderer_resource_generation {
-            return vec![TextureUpload {
-                rect: TextureRect::full(width, height),
-                bytes: self.backing_bgra.as_ref().clone(),
-                sequence_ids: pending_sequence_ids(&self.pending_updates),
-                renderer_resource_generation: Some(renderer_resource_generation),
-                texture_id: self.texture_id,
-            }];
-        }
-
-        self.pending_updates
-            .into_iter()
-            .filter_map(|update| {
-                copy_bgra_rect_from_backing(
-                    self.backing_bgra.as_slice(),
-                    width,
-                    height,
-                    update.rect,
-                )
-                .ok()
-                .map(|bytes| TextureUpload {
+    fn prepare_pending_uploads(
+        &self,
+        state: &RemoteDesktopSurfaceState,
+        reusable_uploads: &[TextureUpload],
+    ) -> anyhow::Result<Arc<Vec<TextureUpload>>> {
+        state
+            .pending_updates
+            .iter()
+            .map(|update| {
+                let bytes = reusable_uploads
+                    .iter()
+                    .find(|upload| {
+                        !upload.bytes.is_empty()
+                            && upload.rect == update.rect
+                            && upload.sequence_ids == update.sequence_ids
+                    })
+                    .map(|upload| Arc::clone(&upload.bytes))
+                    .map(Ok)
+                    .unwrap_or_else(|| self.prepare_upload_bytes(state, update))?;
+                Ok(TextureUpload {
                     rect: update.rect,
                     bytes,
-                    sequence_ids: update.sequence_ids,
+                    sequence_ids: update.sequence_ids.clone(),
                     renderer_resource_generation: None,
-                    texture_id: self.texture_id,
+                    texture_id: self.texture.id,
                 })
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map(Arc::new)
+    }
+
+    fn prepare_upload_bytes(
+        &self,
+        state: &RemoteDesktopSurfaceState,
+        update: &PendingTextureUpdate,
+    ) -> anyhow::Result<Arc<Vec<u8>>> {
+        if update.rect == TextureRect::full(self.width, self.height) {
+            return Ok(Arc::clone(&state.backing_bgra));
+        }
+        copy_bgra_rect_from_backing(
+            state.backing_bgra.as_slice(),
+            self.width,
+            self.height,
+            update.rect,
+        )
+        .map(Arc::new)
     }
 }
 
@@ -429,6 +514,16 @@ fn take_next_sequence_id(state: &mut RemoteDesktopSurfaceState) -> anyhow::Resul
     Ok(sequence_id)
 }
 
+fn take_reusable_uploads(state: &mut RemoteDesktopSurfaceState) -> Arc<Vec<TextureUpload>> {
+    let mut reusable_uploads = std::mem::replace(&mut state.prepared_uploads, Arc::new(Vec::new()));
+    for upload in Arc::make_mut(&mut reusable_uploads) {
+        if Arc::ptr_eq(&upload.bytes, &state.backing_bgra) {
+            upload.bytes = Arc::new(Vec::new());
+        }
+    }
+    reusable_uploads
+}
+
 fn copy_rect_between_bgra_buffers(
     source: &[u8],
     destination: &mut [u8],
@@ -487,6 +582,31 @@ fn pending_sequence_ids(updates: &[PendingTextureUpdate]) -> Vec<u64> {
     sequence_ids.sort_unstable();
     sequence_ids.dedup();
     sequence_ids
+}
+
+fn remove_uploaded_sequences(
+    updates: &mut Vec<PendingTextureUpdate>,
+    uploaded_sequences: &HashSet<u64>,
+) {
+    for update in updates.iter_mut() {
+        update
+            .sequence_ids
+            .retain(|sequence_id| !uploaded_sequences.contains(sequence_id));
+    }
+    updates.retain(|update| !update.sequence_ids.is_empty());
+}
+
+fn remove_uploaded_uploads(
+    uploads: &mut Arc<Vec<TextureUpload>>,
+    uploaded_sequences: &HashSet<u64>,
+) {
+    let uploads = Arc::make_mut(uploads);
+    for upload in uploads.iter_mut() {
+        upload
+            .sequence_ids
+            .retain(|sequence_id| !uploaded_sequences.contains(sequence_id));
+    }
+    uploads.retain(|upload| !upload.sequence_ids.is_empty());
 }
 
 fn simplify_pending_texture_regions(
@@ -647,9 +767,8 @@ mod tests {
     }
 
     fn acknowledge_all(surface: &RemoteDesktopSurface, renderer_generation: u64) {
-        for upload in surface.pending_texture_uploads(renderer_generation) {
-            surface.acknowledge_texture_upload(&upload);
-        }
+        let uploads = surface.pending_texture_uploads(renderer_generation);
+        surface.acknowledge_texture_uploads(uploads.as_slice());
     }
 
     #[test]
@@ -665,7 +784,7 @@ mod tests {
         let uploads = surface.pending_texture_uploads(0);
         assert_eq!(1, uploads.len());
         assert_eq!(TextureRect::full(257, 2), uploads[0].rect);
-        assert_eq!(framebuffer.as_rgba(), uploads[0].bytes);
+        assert_eq!(framebuffer.as_rgba(), uploads[0].bytes.as_slice());
     }
 
     #[test]
@@ -712,10 +831,56 @@ mod tests {
     }
 
     #[test]
+    fn texture_upload_payload_is_reused_between_paint_queries() {
+        let mut framebuffer = framebuffer(2, 1);
+        let surface = RemoteDesktopSurface::from_framebuffer(&framebuffer).unwrap();
+        acknowledge_all(&surface, 0);
+        let rect = RemoteDesktopFrameRect {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 1,
+            byte_len: 4,
+        };
+        framebuffer
+            .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &[9, 8, 7, 255])
+            .unwrap();
+        let updated = surface.with_dirty_rects(&framebuffer, &[rect]).unwrap();
+
+        let first_uploads = updated.pending_texture_uploads(0);
+        let second_uploads = updated.pending_texture_uploads(0);
+
+        assert!(
+            Arc::ptr_eq(&first_uploads, &second_uploads),
+            "paint queries must reuse the prepared upload batch"
+        );
+        assert_eq!(
+            first_uploads[0].bytes.as_ptr(),
+            second_uploads[0].bytes.as_ptr(),
+            "paint queries must reuse payloads prepared by the presentation worker"
+        );
+    }
+
+    #[test]
+    fn renderer_reset_full_upload_reuses_backing_payload() {
+        let surface = RemoteDesktopSurface::from_framebuffer(&framebuffer(2, 1)).unwrap();
+
+        let first_uploads = surface.pending_texture_uploads(7);
+        let second_uploads = surface.pending_texture_uploads(7);
+
+        assert_eq!(1, first_uploads.len());
+        assert_eq!(TextureRect::full(2, 1), first_uploads[0].rect);
+        assert!(Arc::ptr_eq(
+            &first_uploads[0].bytes,
+            &second_uploads[0].bytes
+        ));
+    }
+
+    #[test]
     fn old_upload_acknowledgement_does_not_clear_newer_dirty_updates() {
         let mut framebuffer = framebuffer(2, 1);
         let surface = RemoteDesktopSurface::from_framebuffer(&framebuffer).unwrap();
-        let old_upload = surface.pending_texture_uploads(7).remove(0);
+        let old_upload = surface.pending_texture_uploads(7)[0].clone();
         let rect = RemoteDesktopFrameRect {
             x: 1,
             y: 0,
@@ -768,7 +933,7 @@ mod tests {
         let first_update = surface
             .with_dirty_rects(&framebuffer, &[first_rect])
             .unwrap();
-        let snapshot = first_update.texture_upload_snapshot(0).unwrap();
+        let old_uploads = first_update.pending_texture_uploads(0);
 
         let second_rect = RemoteDesktopFrameRect {
             x: 1,
@@ -790,7 +955,6 @@ mod tests {
             .with_dirty_rects(&framebuffer, &[second_rect])
             .unwrap();
 
-        let old_uploads = snapshot.into_uploads(2, 1);
         assert_eq!(1, old_uploads.len());
         assert_eq!(
             TextureRect {
@@ -834,7 +998,7 @@ mod tests {
             .patch_rgba_rect(rect.x, rect.y, rect.width, rect.height, &[9, 8, 7, 255])
             .unwrap();
         let dirty_update = surface.with_dirty_rects(&framebuffer, &[rect]).unwrap();
-        let snapshot = dirty_update.texture_upload_snapshot(0).unwrap();
+        let old_uploads = dirty_update.pending_texture_uploads(0);
 
         let replacement_bytes = vec![1, 2, 3, 255, 4, 5, 6, 255];
         let replacement_framebuffer =
@@ -843,7 +1007,6 @@ mod tests {
             .with_full_framebuffer(&replacement_framebuffer)
             .unwrap();
 
-        let old_uploads = snapshot.into_uploads(2, 1);
         assert_eq!(1, old_uploads.len());
         assert_eq!(
             TextureRect {
@@ -887,14 +1050,14 @@ mod tests {
 
         assert_eq!(1, uploads.len());
         assert_eq!(TextureRect::full(3, 1), uploads[0].rect);
-        assert_eq!(framebuffer.as_rgba(), uploads[0].bytes);
+        assert_eq!(framebuffer.as_rgba(), uploads[0].bytes.as_slice());
     }
 
     #[test]
     fn stale_renderer_generation_ack_does_not_replace_newer_confirmation() {
         let surface = RemoteDesktopSurface::from_framebuffer(&framebuffer(2, 1)).unwrap();
-        let generation_four = surface.pending_texture_uploads(4).remove(0);
-        let generation_five = surface.pending_texture_uploads(5).remove(0);
+        let generation_four = surface.pending_texture_uploads(4)[0].clone();
+        let generation_five = surface.pending_texture_uploads(5)[0].clone();
 
         surface.acknowledge_texture_upload(&generation_five);
         surface.acknowledge_texture_upload(&generation_four);
