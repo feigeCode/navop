@@ -32,6 +32,9 @@ impl SftpView {
             panel.set_left_endpoint(false, cx);
             panel.set_current_path(self.local_current_path.to_string_lossy().to_string(), cx);
         });
+        self.remote_panel.update(cx, |panel, cx| {
+            panel.set_opposite_endpoint_remote(false, cx);
+        });
         self.refresh_local_dir(cx);
         cx.notify();
     }
@@ -64,6 +67,9 @@ impl SftpView {
             panel.set_left_endpoint(true, cx);
             panel.set_current_path(".".to_string(), cx);
             panel.set_items(Vec::new(), cx);
+        });
+        self.remote_panel.update(cx, |panel, cx| {
+            panel.set_opposite_endpoint_remote(true, cx);
         });
         self.connect_left_remote(cx);
         cx.notify();

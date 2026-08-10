@@ -693,6 +693,14 @@ FilePicker:
 
 # 传输相关
 Transfer:
+  transfer_to_left:
+    en: Transfer to left server
+    zh-CN: 传输到左侧服务器
+    zh-HK: 傳輸到左側伺服器
+  transfer_to_right:
+    en: Transfer to right server
+    zh-CN: 传输到右侧服务器
+    zh-HK: 傳輸到右側伺服器
   has_active_tasks:
     en: "There are %{count} file operation(s) in progress (upload/download/delete)."
     zh-CN: "有 %{count} 个文件操作正在进行中（上传/下载/删除）。"

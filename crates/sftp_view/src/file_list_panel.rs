@@ -25,6 +25,62 @@ const MODIFIED_COLUMN_WIDTH: gpui::Pixels = px(180.);
 const SIZE_COLUMN_WIDTH: gpui::Pixels = px(100.);
 const KIND_COLUMN_WIDTH: gpui::Pixels = px(80.);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileContextMenuCapabilities {
+    is_remote: bool,
+    supports_entry_mutation: bool,
+    supports_remote_editing: bool,
+    supports_favorite: bool,
+    supports_delete: bool,
+    supports_upload_picker: bool,
+}
+
+fn file_context_menu_capabilities(source: DragSource) -> FileContextMenuCapabilities {
+    match source {
+        DragSource::LocalLeft => FileContextMenuCapabilities {
+            is_remote: false,
+            supports_entry_mutation: true,
+            supports_remote_editing: false,
+            supports_favorite: true,
+            supports_delete: true,
+            supports_upload_picker: true,
+        },
+        DragSource::RemoteLeft => FileContextMenuCapabilities {
+            is_remote: true,
+            supports_entry_mutation: false,
+            supports_remote_editing: false,
+            supports_favorite: false,
+            supports_delete: false,
+            supports_upload_picker: false,
+        },
+        DragSource::RemoteRight => FileContextMenuCapabilities {
+            is_remote: true,
+            supports_entry_mutation: true,
+            supports_remote_editing: true,
+            supports_favorite: true,
+            supports_delete: true,
+            supports_upload_picker: true,
+        },
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransferMenuAction {
+    Upload,
+    Download,
+    TransferToLeft,
+    TransferToRight,
+}
+
+fn transfer_menu_action(source: DragSource, opposite_is_remote: bool) -> TransferMenuAction {
+    match source {
+        DragSource::LocalLeft => TransferMenuAction::Upload,
+        DragSource::RemoteLeft => TransferMenuAction::TransferToRight,
+        DragSource::RemoteRight if opposite_is_remote => TransferMenuAction::TransferToLeft,
+        DragSource::RemoteRight => TransferMenuAction::Download,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FileItem {
     pub name: String,
@@ -197,6 +253,7 @@ pub struct FileListPanel {
     current_path: String,
     is_remote: bool,
     drag_source: DragSource,
+    opposite_is_remote: bool,
 
     items: Vec<FileItem>,
     filtered_indices: Vec<usize>,
@@ -262,6 +319,7 @@ impl FileListPanel {
             } else {
                 DragSource::LocalLeft
             },
+            opposite_is_remote: false,
             items: Vec::new(),
             filtered_indices: Vec::new(),
             selected_indices: HashSet::new(),
@@ -287,6 +345,14 @@ impl FileListPanel {
             DragSource::LocalLeft
         };
         self.clear_selection();
+        cx.notify();
+    }
+
+    pub fn set_opposite_endpoint_remote(&mut self, is_remote: bool, cx: &mut Context<Self>) {
+        if self.opposite_is_remote == is_remote {
+            return;
+        }
+        self.opposite_is_remote = is_remote;
         cx.notify();
     }
 
@@ -845,18 +911,21 @@ impl FileListPanel {
     }
 
     /// 构建文件项的右键菜单
-    /// 根据 is_remote（远程/本地）和 is_dir（文件夹/文件）显示不同的菜单项
+    /// 根据文件面板端点和项目类型显示该端点真正支持的菜单项。
     fn build_file_context_menu(
         menu: PopupMenu,
         filtered_ix: usize,
         name: &str,
         full_path: &str,
         is_dir: bool,
-        is_remote: bool,
+        source: DragSource,
+        opposite_is_remote: bool,
         view: &Entity<Self>,
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
+        let capabilities = file_context_menu_capabilities(source);
+        let is_remote = capabilities.is_remote;
         let name_for_rename = name.to_string();
         let path_for_rename = full_path.to_string();
         let name_for_download = name.to_string();
@@ -924,8 +993,8 @@ impl FileListPanel {
             )
             .separator();
 
-        // 文件夹专属操作：新建文件、新建文件夹
-        if is_dir {
+        // 左侧远程端点的 CRUD 尚未端点化，不能显示会落到右侧服务器的操作。
+        if is_dir && capabilities.supports_entry_mutation {
             let view_new_file = view_ref.clone();
             let view_new_folder = view_ref.clone();
 
@@ -949,25 +1018,40 @@ impl FileListPanel {
                 .separator();
         }
 
-        // 重命名（通用）
-        let view_rename = view_ref.clone();
-        menu = menu.item(
-            PopupMenuItem::new(t!("File.rename").to_string())
-                .icon(IconName::Edit)
-                .on_click(window.listener_for(&view_rename, move |_this, _, _, cx| {
-                    cx.emit(FileListPanelEvent::Rename {
-                        name: name_for_rename.clone(),
-                        full_path: path_for_rename.clone(),
-                    });
-                })),
-        );
+        if capabilities.supports_entry_mutation {
+            let view_rename = view_ref.clone();
+            menu = menu.item(
+                PopupMenuItem::new(t!("File.rename").to_string())
+                    .icon(IconName::Edit)
+                    .on_click(window.listener_for(&view_rename, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::Rename {
+                            name: name_for_rename.clone(),
+                            full_path: path_for_rename.clone(),
+                        });
+                    })),
+            );
+        }
 
-        // 远程面板：下载
+        // 远程端点：下载或服务器间传输。
         if is_remote {
             let view_download = view_ref.clone();
+            let (label, icon) = match transfer_menu_action(source, opposite_is_remote) {
+                TransferMenuAction::Download => {
+                    (t!("Common.download").to_string(), IconName::ArrowDown)
+                }
+                TransferMenuAction::TransferToLeft => (
+                    t!("Transfer.transfer_to_left").to_string(),
+                    IconName::ArrowLeft,
+                ),
+                TransferMenuAction::TransferToRight => (
+                    t!("Transfer.transfer_to_right").to_string(),
+                    IconName::ArrowRight,
+                ),
+                TransferMenuAction::Upload => unreachable!("remote source cannot upload"),
+            };
             menu = menu.item(
-                PopupMenuItem::new(t!("Common.download").to_string())
-                    .icon(IconName::ArrowDown)
+                PopupMenuItem::new(label)
+                    .icon(icon)
                     .on_click(window.listener_for(&view_download, move |this, _, _, cx| {
                         this.select_context_target(filtered_ix, cx);
                         cx.emit(FileListPanelEvent::Download {
@@ -977,7 +1061,7 @@ impl FileListPanel {
                     })),
             );
 
-            if !is_dir {
+            if capabilities.supports_remote_editing && !is_dir {
                 let view_edit = view_ref.clone();
                 menu = menu.item(
                     PopupMenuItem::new(t!("Common.edit").to_string())
@@ -1009,7 +1093,10 @@ impl FileListPanel {
                 }
             }
 
-            if !is_dir && crate::archive_kind_for_name(name).is_some() {
+            if capabilities.supports_remote_editing
+                && !is_dir
+                && crate::archive_kind_for_name(name).is_some()
+            {
                 let view_extract = view_ref.clone();
                 menu = menu.item(
                     PopupMenuItem::new(t!("File.extract").to_string())
@@ -1025,7 +1112,10 @@ impl FileListPanel {
         }
 
         // 本地面板：上传
-        if !is_remote {
+        if matches!(
+            transfer_menu_action(source, opposite_is_remote),
+            TransferMenuAction::Upload
+        ) {
             let view_upload = view_ref.clone();
             menu = menu.item(
                 PopupMenuItem::new(t!("Common.upload").to_string())
@@ -1038,7 +1128,7 @@ impl FileListPanel {
         }
 
         // 远程面板：修改权限
-        if is_remote {
+        if capabilities.supports_remote_editing {
             let view_permissions = view_ref.clone();
             menu = menu.item(
                 PopupMenuItem::new(t!("File.change_permission").to_string())
@@ -1058,11 +1148,11 @@ impl FileListPanel {
         if is_dir {
             let view_terminal_at = view_ref.clone();
             let view_terminal = view_ref.clone();
-            let view_favorite = view_ref.clone();
 
-            menu = menu
-                .separator()
-                .item(
+            menu = menu.separator();
+            if capabilities.supports_favorite {
+                let view_favorite = view_ref.clone();
+                menu = menu.item(
                     PopupMenuItem::new(t!("FavoritePath.add_path").to_string())
                         .icon(IconName::Star)
                         .on_click(window.listener_for(&view_favorite, move |_this, _, _, cx| {
@@ -1070,7 +1160,9 @@ impl FileListPanel {
                                 full_path: path_for_favorite.clone(),
                             });
                         })),
-                )
+                );
+            }
+            menu = menu
                 .item(
                     PopupMenuItem::new(t!("Terminal.open_here").to_string())
                         .icon(IconName::Terminal)
@@ -1120,19 +1212,20 @@ impl FileListPanel {
                     ),
             );
 
-        // 删除（通用）
-        let view_delete = view_ref.clone();
-        menu = menu.separator().item(
-            PopupMenuItem::new(t!("Common.delete").to_string())
-                .icon(IconName::Remove)
-                .on_click(window.listener_for(&view_delete, move |this, _, _, cx| {
-                    this.select_context_target(filtered_ix, cx);
-                    cx.emit(FileListPanelEvent::Delete {
-                        name: name_for_delete.clone(),
-                        full_path: path_for_delete.clone(),
-                    });
-                })),
-        );
+        if capabilities.supports_delete {
+            let view_delete = view_ref.clone();
+            menu = menu.separator().item(
+                PopupMenuItem::new(t!("Common.delete").to_string())
+                    .icon(IconName::Remove)
+                    .on_click(window.listener_for(&view_delete, move |this, _, _, cx| {
+                        this.select_context_target(filtered_ix, cx);
+                        cx.emit(FileListPanelEvent::Delete {
+                            name: name_for_delete.clone(),
+                            full_path: path_for_delete.clone(),
+                        });
+                    })),
+            );
+        }
 
         if let Some(item) = item_for_properties {
             let view_properties = view_ref.clone();
@@ -1152,7 +1245,7 @@ impl FileListPanel {
         }
 
         // 远程面板文件夹：上传文件、上传文件夹
-        if is_remote && is_dir {
+        if is_remote && is_dir && capabilities.supports_upload_picker {
             let view_upload_file = view_ref.clone();
             let view_upload_folder = view_ref.clone();
 
@@ -1443,9 +1536,11 @@ impl Render for DraggedFileItem {
 #[cfg(test)]
 mod tests {
     use super::{
-        DirectorySizeState, FileItem, FileListContentState, display_file_name,
-        file_list_content_state, format_file_size, size_sort_key,
+        DirectorySizeState, FileContextMenuCapabilities, FileItem, FileListContentState,
+        TransferMenuAction, display_file_name, file_context_menu_capabilities,
+        file_list_content_state, format_file_size, size_sort_key, transfer_menu_action,
     };
+    use crate::endpoint::DragSource;
     use std::collections::HashSet;
     use std::time::UNIX_EPOCH;
 
@@ -1504,6 +1599,67 @@ mod tests {
     #[test]
     fn display_file_name_replaces_ansi_control_bytes() {
         assert_eq!("?[1mroot?[0m", display_file_name("\x1b[1mroot\x1b[0m"));
+    }
+
+    #[test]
+    fn remote_left_context_menu_hides_unimplemented_mutations() {
+        assert_eq!(
+            FileContextMenuCapabilities {
+                is_remote: true,
+                supports_entry_mutation: false,
+                supports_remote_editing: false,
+                supports_favorite: false,
+                supports_delete: false,
+                supports_upload_picker: false,
+            },
+            file_context_menu_capabilities(DragSource::RemoteLeft)
+        );
+    }
+
+    #[test]
+    fn local_and_remote_right_context_menus_keep_supported_actions() {
+        assert_eq!(
+            FileContextMenuCapabilities {
+                is_remote: false,
+                supports_entry_mutation: true,
+                supports_remote_editing: false,
+                supports_favorite: true,
+                supports_delete: true,
+                supports_upload_picker: true,
+            },
+            file_context_menu_capabilities(DragSource::LocalLeft)
+        );
+        assert_eq!(
+            FileContextMenuCapabilities {
+                is_remote: true,
+                supports_entry_mutation: true,
+                supports_remote_editing: true,
+                supports_favorite: true,
+                supports_delete: true,
+                supports_upload_picker: true,
+            },
+            file_context_menu_capabilities(DragSource::RemoteRight)
+        );
+    }
+
+    #[test]
+    fn transfer_menu_action_matches_endpoint_direction() {
+        assert_eq!(
+            TransferMenuAction::Upload,
+            transfer_menu_action(DragSource::LocalLeft, true)
+        );
+        assert_eq!(
+            TransferMenuAction::TransferToRight,
+            transfer_menu_action(DragSource::RemoteLeft, true)
+        );
+        assert_eq!(
+            TransferMenuAction::TransferToLeft,
+            transfer_menu_action(DragSource::RemoteRight, true)
+        );
+        assert_eq!(
+            TransferMenuAction::Download,
+            transfer_menu_action(DragSource::RemoteRight, false)
+        );
     }
 
     #[test]
@@ -1628,6 +1784,7 @@ impl Render for FileListPanel {
                             let current_path = state.current_path.clone();
                             let is_remote = state.is_remote;
                             let drag_source = state.drag_source;
+                            let opposite_is_remote = state.opposite_is_remote;
                             let has_parent = !state.is_at_root();
                             let view = cx.entity();
                             range
@@ -1714,7 +1871,8 @@ impl Render for FileListPanel {
                                     let ctx_name = item_name.clone();
                                     let ctx_full_path = full_path.clone();
                                     let ctx_is_dir = is_dir;
-                                    let ctx_is_remote = is_remote;
+                                    let ctx_drag_source = drag_source;
+                                    let ctx_opposite_is_remote = opposite_is_remote;
                                     let ctx_view = view.clone();
 
                                     div()
@@ -1754,7 +1912,8 @@ impl Render for FileListPanel {
                                                 &ctx_name,
                                                 &ctx_full_path,
                                                 ctx_is_dir,
-                                                ctx_is_remote,
+                                                ctx_drag_source,
+                                                ctx_opposite_is_remote,
                                                 &ctx_view,
                                                 window,
                                                 cx,

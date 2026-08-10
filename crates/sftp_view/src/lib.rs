@@ -5829,33 +5829,36 @@ impl SftpView {
                     .child(
                         h_flex()
                             .gap_1()
-                            .child(
-                                IconButton::new(
-                                    "local_toggle_favorite",
-                                    if is_favorite {
-                                        IconName::StarFill
-                                    } else {
-                                        IconName::Star
-                                    },
-                                )
-                                .role(IconButtonRole::Toolbar)
-                                .tooltip(if is_favorite {
-                                    t!("FavoritePath.remove_current").to_string()
-                                } else {
-                                    t!("FavoritePath.add_current").to_string()
-                                })
-                                .disabled(is_left_remote)
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.toggle_current_local_favorite(window, cx);
-                                    },
-                                )),
-                            )
-                            .child(self.render_local_favorites_menu(favorite_paths, cx))
+                            .when(!is_left_remote, |toolbar| {
+                                toolbar
+                                    .child(
+                                        IconButton::new(
+                                            "local_toggle_favorite",
+                                            if is_favorite {
+                                                IconName::StarFill
+                                            } else {
+                                                IconName::Star
+                                            },
+                                        )
+                                        .role(IconButtonRole::Toolbar)
+                                        .tooltip(if is_favorite {
+                                            t!("FavoritePath.remove_current").to_string()
+                                        } else {
+                                            t!("FavoritePath.add_current").to_string()
+                                        })
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.toggle_current_local_favorite(window, cx);
+                                            }),
+                                        ),
+                                    )
+                                    .child(self.render_local_favorites_menu(favorite_paths, cx))
+                            })
                             .child(
                                 IconButton::new("refresh_local", IconName::Refresh)
                                     .role(IconButtonRole::Toolbar)
                                     .tooltip(t!("Common.refresh"))
+                                    .disabled(!endpoint_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if this.left_remote.is_some() {
                                             this.refresh_left_remote_dir(cx);
@@ -5864,6 +5867,22 @@ impl SftpView {
                                         }
                                     })),
                             )
+                            .when(is_left_remote, |toolbar| {
+                                toolbar.child(
+                                    IconButton::new(
+                                        "left_remote_transfer_to_right",
+                                        IconName::ArrowRight,
+                                    )
+                                    .role(IconButtonRole::Toolbar)
+                                    .tooltip(t!("Transfer.transfer_to_right"))
+                                    .disabled(!has_selection || !endpoint_ready || !is_connected)
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
+                                            this.transfer_left_selection_to_right(window, cx);
+                                        },
+                                    )),
+                                )
+                            })
                             .child(
                                 Button::new("local_file_actions")
                                     .ghost()
@@ -5871,18 +5890,13 @@ impl SftpView {
                                     .compact()
                                     .icon(IconName::Ellipsis)
                                     .tooltip(t!("File.actions"))
-                                    .disabled(is_left_remote && !can_paste)
+                                    .disabled(!endpoint_ready)
                                     .dropdown_menu_with_anchor(
                                         Anchor::TopRight,
                                         move |menu, window, _cx| {
                                             let paste_view = local_actions_view.clone();
                                             let paste_target_dir = paste_target_dir.clone();
-                                            let new_file_view = local_actions_view.clone();
-                                            let new_folder_view = local_actions_view.clone();
-                                            let delete_view = local_actions_view.clone();
-                                            let upload_files_view = local_actions_view.clone();
-                                            let upload_folder_view = local_actions_view.clone();
-                                            menu.item(
+                                            let menu = menu.item(
                                                 PopupMenuItem::new(t!("File.paste").to_string())
                                                     .icon(IconName::Paste)
                                                     .disabled(!can_paste)
@@ -5897,38 +5911,52 @@ impl SftpView {
                                                             );
                                                         },
                                                     )),
-                                            )
-                                            .separator()
-                                            .item(
-                                                PopupMenuItem::new(
-                                                    t!("File.upload_file").to_string(),
+                                            );
+                                            if is_left_remote {
+                                                return menu;
+                                            }
+
+                                            let new_file_view = local_actions_view.clone();
+                                            let new_folder_view = local_actions_view.clone();
+                                            let delete_view = local_actions_view.clone();
+                                            let upload_files_view = local_actions_view.clone();
+                                            let upload_folder_view = local_actions_view.clone();
+                                            menu.separator()
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("File.upload_file").to_string(),
+                                                    )
+                                                    .disabled(!is_connected)
+                                                    .icon(IconName::Upload)
+                                                    .on_click(window.listener_for(
+                                                        &upload_files_view,
+                                                        move |this, _, window, cx| {
+                                                            this.select_and_upload_files(
+                                                                window, cx,
+                                                            );
+                                                        },
+                                                    )),
                                                 )
-                                                .disabled(is_left_remote || !is_connected)
-                                                .icon(IconName::Upload)
-                                                .on_click(window.listener_for(
-                                                    &upload_files_view,
-                                                    move |this, _, window, cx| {
-                                                        this.select_and_upload_files(window, cx);
-                                                    },
-                                                )),
-                                            )
-                                            .item(
-                                                PopupMenuItem::new(
-                                                    t!("File.upload_folder").to_string(),
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("File.upload_folder").to_string(),
+                                                    )
+                                                    .disabled(!is_connected)
+                                                    .icon(IconName::Upload)
+                                                    .on_click(window.listener_for(
+                                                        &upload_folder_view,
+                                                        move |this, _, window, cx| {
+                                                            this.select_and_upload_folder(
+                                                                window, cx,
+                                                            );
+                                                        },
+                                                    )),
                                                 )
-                                                .disabled(is_left_remote || !is_connected)
-                                                .icon(IconName::Upload)
-                                                .on_click(window.listener_for(
-                                                    &upload_folder_view,
-                                                    move |this, _, window, cx| {
-                                                        this.select_and_upload_folder(window, cx);
-                                                    },
-                                                )),
-                                            )
-                                            .item(
-                                                PopupMenuItem::new(t!("File.new_file").to_string())
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("File.new_file").to_string(),
+                                                    )
                                                     .icon(IconName::File)
-                                                    .disabled(is_left_remote)
                                                     .on_click(window.listener_for(
                                                         &new_file_view,
                                                         move |this, _, window, cx| {
@@ -5939,35 +5967,37 @@ impl SftpView {
                                                             );
                                                         },
                                                     )),
-                                            )
-                                            .item(
-                                                PopupMenuItem::new(
-                                                    t!("File.new_folder").to_string(),
                                                 )
-                                                .disabled(is_left_remote || !is_connected)
-                                                .icon(IconName::NewFolder)
-                                                .on_click(window.listener_for(
-                                                    &new_folder_view,
-                                                    move |this, _, window, cx| {
-                                                        this.show_new_folder_dialog(
-                                                            PanelSide::Local,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
-                                                )),
-                                            )
-                                            .item(
-                                                PopupMenuItem::new(t!("Common.delete").to_string())
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("File.new_folder").to_string(),
+                                                    )
+                                                    .disabled(!is_connected)
+                                                    .icon(IconName::NewFolder)
+                                                    .on_click(window.listener_for(
+                                                        &new_folder_view,
+                                                        move |this, _, window, cx| {
+                                                            this.show_new_folder_dialog(
+                                                                PanelSide::Local,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        t!("Common.delete").to_string(),
+                                                    )
                                                     .icon(IconName::Remove)
-                                                    .disabled(is_left_remote || !has_selection)
+                                                    .disabled(!has_selection)
                                                     .on_click(window.listener_for(
                                                         &delete_view,
                                                         move |this, _, window, cx| {
                                                             this.delete_local_selected(window, cx);
                                                         },
                                                     )),
-                                            )
+                                                )
                                         },
                                     ),
                             ),
@@ -6056,10 +6086,21 @@ impl SftpView {
         let selected_count = self.get_remote_selected_count(cx);
         let has_selection = selected_count > 0;
         let is_connected = self.connection_state == ConnectionState::Connected;
+        let left_is_remote = self.left_remote.is_some();
         let left_ready = self
             .left_remote
             .as_ref()
             .is_none_or(|endpoint| endpoint.state == LeftRemoteConnectionState::Connected);
+        let transfer_icon = if left_is_remote {
+            IconName::ArrowLeft
+        } else {
+            IconName::ArrowDown
+        };
+        let transfer_tooltip = if left_is_remote {
+            t!("Transfer.transfer_to_left").to_string()
+        } else {
+            t!("Common.download").to_string()
+        };
         let remote_path_input = self.remote_path_input.clone();
         let is_editing = self.remote_path_editing;
         let is_dragging = self.is_dragging_over_remote;
@@ -6180,9 +6221,9 @@ impl SftpView {
                                     })),
                             )
                             .child(
-                                IconButton::new("remote_download", IconName::ArrowDown)
+                                IconButton::new("remote_download", transfer_icon)
                                     .role(IconButtonRole::Toolbar)
-                                    .tooltip(t!("Common.download"))
+                                    .tooltip(transfer_tooltip)
                                     .disabled(!has_selection || !is_connected || !left_ready)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         if this.left_remote.is_some() {
