@@ -2224,6 +2224,20 @@ Settings:
         zh-CN: 设置数据库表和可编辑表格的行高（24-100像素）
         zh-HK: 設置資料庫表和可編輯表格的行高（24-100像素）
 
+    Agent:
+      group_title:
+        en: Agent
+        zh-CN: Agent
+        zh-HK: Agent
+      max_iterations:
+        en: Maximum Iterations
+        zh-CN: 最大迭代次数
+        zh-HK: 最大迭代次數
+      max_iterations_desc:
+        en: Maximum model and tool round trips in one built-in Agent turn (1-256). Changes apply from the next turn.
+        zh-CN: 内置 Agent 单轮中模型与工具调用的最大往返次数（1-256）。修改从下一轮开始生效。
+        zh-HK: 內建 Agent 單輪中模型與工具調用的最大往返次數（1-256）。修改從下一輪開始生效。
+
     ToolExposure:
       mcp_group_title:
         en: MCP Tool Exposure

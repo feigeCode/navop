@@ -20,9 +20,10 @@ use agent_runtime::tools::{
     ObservationData, Tool, ToolInvocation, ToolName, ToolObservation, ToolSpec,
 };
 use agent_runtime::{
-    HistoryItem, ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel,
-    Runtime, RuntimeError, RuntimeEvent, RuntimeServices, SkillContext, SkillRef, SkillSummary,
-    StepStatus, TaskKind, TaskOutcome, ToolExecutionMode, ToolRegistry, ToolRouter,
+    DEFAULT_AGENT_MAX_ITERATIONS, HistoryItem, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
+    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel, Runtime,
+    RuntimeError, RuntimeEvent, RuntimeServices, SkillContext, SkillRef, SkillSummary, StepStatus,
+    TaskKind, TaskOutcome, ToolExecutionMode, ToolRegistry, ToolRouter,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -399,6 +400,64 @@ async fn agent_loop_supports_more_than_sixteen_tool_round_trips() {
         TaskOutcome::Completed { answer: Some(answer) } if answer == "复杂任务完成。"
     ));
     assert_eq!(18, model.request_count());
+}
+
+#[test]
+fn runtime_services_defaults_and_clamps_agent_max_iterations() {
+    let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new(Vec::<ModelResponse>::new()));
+    let services = RuntimeServices::new(model, Arc::new(ToolRouter::new(ToolRegistry::new())));
+
+    assert_eq!(
+        DEFAULT_AGENT_MAX_ITERATIONS,
+        services.agent_max_iterations()
+    );
+
+    services.set_agent_max_iterations(0);
+    assert_eq!(1, services.agent_max_iterations());
+
+    services.set_agent_max_iterations(MIN_AGENT_MAX_ITERATIONS);
+    assert_eq!(MIN_AGENT_MAX_ITERATIONS, services.agent_max_iterations());
+
+    services.set_agent_max_iterations(MAX_AGENT_MAX_ITERATIONS);
+    assert_eq!(MAX_AGENT_MAX_ITERATIONS, services.agent_max_iterations());
+
+    services.set_agent_max_iterations(MAX_AGENT_MAX_ITERATIONS + 1);
+    assert_eq!(MAX_AGENT_MAX_ITERATIONS, services.agent_max_iterations());
+}
+
+#[tokio::test]
+async fn agent_loop_respects_configured_max_iterations() {
+    let responses = (0..3)
+        .map(|index| {
+            ModelResponse::tool_call(function_tool_call(
+                format!("call_{index}"),
+                "echo",
+                json!({"message": format!("step {index}")}).to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let model = Arc::new(MockModelClient::new(responses));
+    let runtime = Runtime::new(
+        RuntimeServices::new(
+            model.clone(),
+            Arc::new(ToolRouter::new(
+                ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+            )),
+        )
+        .with_agent_max_iterations(2),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "执行有限步骤".into(), TaskKind::Agent)
+        .await
+        .expect("agent loop should return a bounded outcome");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Failed { reason } if reason.contains('2')),
+        "达到用户配置的上限后应报告失败"
+    );
+    assert_eq!(2, model.request_count());
 }
 
 #[tokio::test]

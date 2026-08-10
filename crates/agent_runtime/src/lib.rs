@@ -39,12 +39,13 @@ pub use resource::{
 };
 pub use resource_scope::{AgentResourceScope, DefaultTarget, DefaultTargetReason, ResourceCatalog};
 pub use risk::RiskLevel;
-pub use runtime::{InputImage, TurnInput};
 pub use runtime::{
+    DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
     PendingToolCallSummary, Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver,
     RuntimeServices, Session, SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode,
     TurnContext, UserInput,
 };
+pub use runtime::{InputImage, TurnInput};
 pub use skill::{
     SkillCatalog, SkillContext, SkillImportError, SkillLoadError, SkillMetadata, SkillRef,
     SkillSummary, import_skill_dir,

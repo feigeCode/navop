@@ -36,18 +36,47 @@ use crate::tasks::{AgentTask, continue_after_tool_decision};
 use crate::tools::ToolRouter;
 use rust_i18n::t;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
+
+/// 内置 Agent 单轮模型 / 工具往返次数的默认值。
+pub const DEFAULT_AGENT_MAX_ITERATIONS: usize = 64;
+/// 内置 Agent 单轮模型 / 工具往返次数的最小可配置值。
+pub const MIN_AGENT_MAX_ITERATIONS: usize = 1;
+/// 内置 Agent 单轮模型 / 工具往返次数的最大可配置值。
+pub const MAX_AGENT_MAX_ITERATIONS: usize = 256;
 
 /// Runtime 依赖的共享服务。
 #[derive(Clone)]
 pub struct RuntimeServices {
     pub model: Arc<dyn ModelClient>,
     pub tools: Arc<ToolRouter>,
+    agent_max_iterations: Arc<AtomicUsize>,
 }
 
 impl RuntimeServices {
     pub fn new(model: Arc<dyn ModelClient>, tools: Arc<ToolRouter>) -> Self {
-        Self { model, tools }
+        Self {
+            model,
+            tools,
+            agent_max_iterations: Arc::new(AtomicUsize::new(DEFAULT_AGENT_MAX_ITERATIONS)),
+        }
+    }
+
+    pub fn with_agent_max_iterations(self, max_iterations: usize) -> Self {
+        self.set_agent_max_iterations(max_iterations);
+        self
+    }
+
+    pub fn agent_max_iterations(&self) -> usize {
+        self.agent_max_iterations.load(Ordering::Relaxed)
+    }
+
+    pub fn set_agent_max_iterations(&self, max_iterations: usize) {
+        self.agent_max_iterations.store(
+            max_iterations.clamp(MIN_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS),
+            Ordering::Relaxed,
+        );
     }
 }
 

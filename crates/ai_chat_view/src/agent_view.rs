@@ -1741,6 +1741,9 @@ impl AgentChatView {
         let input = UserInput::new(submission.text.clone()).with_images(input_images);
         let operation_generation = self.next_local_operation_generation(session_uid);
         self.set_session_running(session_uid, true, cx);
+        self.runtime
+            .services()
+            .set_agent_max_iterations(AppSettings::current(cx).ai_chat.max_iterations);
 
         let runtime = self.runtime.clone();
         let tool_mode = self.tool_execution_mode;

@@ -39,9 +39,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
-/// 单轮内模型 / 工具往返的最大迭代次数,防止失控。
-/// 复杂任务可能需要逐个检查多个资源，16 次会过早截断；保留有界保护并提高到 64 次。
-const MAX_ITERATIONS: usize = 64;
 const DEBUG_PREVIEW_CHARS: usize = 1200;
 
 /// codex 风格的统一 Agent 任务。
@@ -149,7 +146,8 @@ pub(crate) async fn continue_after_tool_decision(
 
 async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) -> TaskOutcome {
     let dispatch_ctx = dispatch_context(&ctx.session, &ctx.turn_id, &ctx.resources);
-    for iteration in 0..MAX_ITERATIONS {
+    let max_iterations = ctx.services.agent_max_iterations();
+    for iteration in 0..max_iterations {
         if cancellation.is_cancelled() {
             return TaskOutcome::Cancelled;
         }
@@ -381,7 +379,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
     TaskOutcome::Failed {
         reason: t!(
             "AgentRuntime.max_iterations_exceeded",
-            count = MAX_ITERATIONS
+            count = max_iterations
         )
         .to_string(),
     }

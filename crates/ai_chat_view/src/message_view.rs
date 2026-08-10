@@ -26,6 +26,18 @@ fn message_copy_id(message_id: &str) -> SharedString {
     SharedString::from(format!("copy-message-{message_id}"))
 }
 
+fn trim_leading_blank_lines(content: &str) -> &str {
+    let mut content_start = 0;
+    for line in content.split_inclusive('\n') {
+        let line_content = line.trim_end_matches(['\r', '\n']);
+        if !line_content.trim().is_empty() {
+            break;
+        }
+        content_start += line.len();
+    }
+    &content[content_start..]
+}
+
 fn message_copy_value<E: MessageExtension>(
     message: &ChatMessageUIGeneric<E>,
 ) -> Option<SharedString> {
@@ -33,7 +45,12 @@ fn message_copy_value<E: MessageExtension>(
         (&message.role, &message.variant),
         (ChatRole::User, MessageVariant::Text) | (ChatRole::Assistant, MessageVariant::Text)
     );
-    (copyable && !message.content.is_empty()).then(|| message.content.clone().into())
+    if !copyable {
+        return None;
+    }
+
+    let content = trim_leading_blank_lines(&message.content);
+    (!content.is_empty()).then(|| content.to_owned().into())
 }
 
 fn render_message_copy<E: MessageExtension>(
@@ -558,6 +575,33 @@ mod tests {
             Some(SharedString::from("**raw** <tag>\nnext")),
             message_copy_value(&message)
         );
+    }
+
+    #[test]
+    fn message_copy_removes_leading_blank_lines_without_losing_indentation() {
+        let message = ChatMessageUI::assistant("\r\n\n  \n    indented\nnext");
+
+        assert_eq!(
+            Some(SharedString::from("    indented\nnext")),
+            message_copy_value(&message)
+        );
+    }
+
+    #[test]
+    fn message_copy_preserves_markdown_code_block_after_leading_blank_lines() {
+        let message = ChatMessageUI::assistant("\n \r\n```rust\n    let value = 1;\n```\n");
+
+        assert_eq!(
+            Some(SharedString::from("```rust\n    let value = 1;\n```\n")),
+            message_copy_value(&message)
+        );
+    }
+
+    #[test]
+    fn message_copy_ignores_content_that_only_contains_blank_lines() {
+        let message = ChatMessageUI::assistant("\r\n\n  ");
+
+        assert_eq!(None, message_copy_value(&message));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub mod agent_settings;
 pub mod appearance;
 mod appearance_import;
 mod appearance_state;

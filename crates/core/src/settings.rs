@@ -1,6 +1,9 @@
 use crate::cloud_sync::{GlobalCloudUser, UserInfo};
 use crate::storage::get_config_dir;
 use crate::utils::auto_save_config::AutoSaveConfig;
+use agent_runtime::{
+    DEFAULT_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS, MIN_AGENT_MAX_ITERATIONS,
+};
 use gpui::http_client::Url;
 use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
@@ -458,10 +461,36 @@ pub enum AiChatToolExecutionMode {
     Manual,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiChatSettings {
     #[serde(default)]
     pub tool_execution_mode: AiChatToolExecutionMode,
+    #[serde(
+        default = "default_agent_max_iterations",
+        deserialize_with = "deserialize_agent_max_iterations"
+    )]
+    pub max_iterations: usize,
+}
+
+fn default_agent_max_iterations() -> usize {
+    DEFAULT_AGENT_MAX_ITERATIONS
+}
+
+fn deserialize_agent_max_iterations<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    Ok(value.clamp(MIN_AGENT_MAX_ITERATIONS, MAX_AGENT_MAX_ITERATIONS))
+}
+
+impl Default for AiChatSettings {
+    fn default() -> Self {
+        Self {
+            tool_execution_mode: AiChatToolExecutionMode::default(),
+            max_iterations: default_agent_max_iterations(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2058,6 +2087,47 @@ mod tests {
         assert_eq!(
             AiChatToolExecutionMode::ReadOnly,
             restored.ai_chat.tool_execution_mode
+        );
+    }
+
+    #[test]
+    fn ai_chat_max_iterations_defaults_for_legacy_settings() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({"locale": "zh-CN"}))
+            .expect("旧版设置应能反序列化");
+
+        assert_eq!(
+            agent_runtime::DEFAULT_AGENT_MAX_ITERATIONS,
+            settings.ai_chat.max_iterations
+        );
+    }
+
+    #[test]
+    fn ai_chat_max_iterations_round_trip_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.max_iterations = 128;
+
+        let json = serde_json::to_string(&settings).expect("应序列化 Agent 设置");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 Agent 设置");
+
+        assert_eq!(128, restored.ai_chat.max_iterations);
+    }
+
+    #[test]
+    fn ai_chat_max_iterations_are_clamped_when_deserialized() {
+        let below_minimum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"max_iterations": 0}))
+                .expect("应读取低于下限的 Agent 设置");
+        let above_maximum: AiChatSettings =
+            serde_json::from_value(serde_json::json!({"max_iterations": 999}))
+                .expect("应读取高于上限的 Agent 设置");
+
+        assert_eq!(
+            agent_runtime::MIN_AGENT_MAX_ITERATIONS,
+            below_minimum.max_iterations
+        );
+        assert_eq!(
+            agent_runtime::MAX_AGENT_MAX_ITERATIONS,
+            above_maximum.max_iterations
         );
     }
 

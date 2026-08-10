@@ -10,6 +10,7 @@ use crate::local_terminal_profiles::{
     setting_options as local_terminal_profile_options,
 };
 use crate::onetcli_app::{GlobalHomePage, GlobalOnetCliApp};
+use crate::settings::agent_settings::agent_setting_group;
 use crate::settings::appearance::render as render_appearance_settings;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
@@ -1047,6 +1048,7 @@ impl SettingsPanel {
                             ),
                         ]),
                     mcp_tool_exposure_setting_group(&default_settings.tool_exposure),
+                    agent_setting_group(&default_settings.ai_chat),
                     agent_tool_exposure_setting_group(&default_settings.tool_exposure),
                     mcp_setting_group(&default_settings.mcp),
                     SettingGroup::new()
