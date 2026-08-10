@@ -1863,6 +1863,39 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   连接中、已连接、重连中关闭 tab及应用直接退出各重复 20 次的人工验证仍 pending，
   因此 Task 7 整体继续保持未完成。
 
+#### Execution Notes (2026-08-10) — wrong-thread fail-closed 与 detached owner-thread cleanup
+
+- **Wrong-thread boundary:** commit `4e5bf3db` 将 `WindowsRdpHost::drop` 的
+  wrong-thread 路径改为 fail-closed：不 unregister callback、不 destroy native host、
+  不释放 callback context，也不在错误线程调用 COM/Win32 cleanup；该路径记录诊断后
+  保留完整 ownership，由进程回收资源。
+- **Detached cleanup ownership:** commit `a0fd5bb3` 让 view release 与
+  post-create 初始化失败路径在同步 `force_close` 无法确认 destroy 时，把完整
+  `WindowsNativeAdapter` ownership 移交给 GPUI foreground `cx.spawn` task。task 每
+  16ms 在 owner/UI thread 重试；`Destroyed` 或错误但 `native.is_destroyed()` 时完成，
+  `PendingCallbacks` 继续等待；2 秒 deadline 后 fail-closed，泄漏整个 adapter，而不是
+  drop 其中仍可能被 callback 引用的 bridge/control/host。显式 Canvas retry 仍只在
+  确认 `Destroyed` 后开放。
+- **Local automated verification:** macOS host 上
+  `cargo fmt --all -- --check`、`git diff --check`、默认
+  `remote_desktop_view` 135 tests、`windows-native-rdp` feature-on 145 tests 均通过；
+  `remote_desktop_view --all-targets --features windows-native-rdp --no-deps` 在仅豁免
+  仓库既有 `frame_sync.rs` `derivable_impls` 后以 `-D warnings` 通过。最后的
+  Windows-only warning 修复后，目标 contract
+  `windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback` 再次通过。
+- **Windows runner verification:** commit
+  `a0fd5bb316837b049c25c9d9ad44688330225ea2` 的手动 Windows workflow run
+  [`31392708100`](https://github.com/feigeCode/navop/actions/runs/31392708100)
+  成功。`Windows RDP probe (x86_64-pc-windows-msvc)` 与
+  `Windows RDP probe (i686-pc-windows-msvc)` 的 `Build ATL/MSVC probe` 均成功，
+  `Test (windows, x86_64-pc-windows-msvc)` 的 `Test Windows` 也成功。
+- **Remaining Task 7 scope:** 本次 runner 证明 x64/i686 MSVC/ATL probe 可编译链接，
+  且 Windows x86_64 自动化测试通过；它不证明真实 ActiveX/RDP session、真实
+  connect/disconnect、错误密码/拒绝连接/网络中断/服务器重启、COM apartment
+  shutdown 或应用退出 drain。app-exit host drain、owner-thread dispatcher 投递失败、
+  UI shutdown race，以及连接中/已连接/重连中关 tab和应用直接退出各重复 20 次的人工
+  验证仍 pending，因此 Task 5、Task 7 与整个计划均不得标记完成。
+
 ---
 
 ### Task 8: presentation/backend 选择、capability probe 与 fallback
