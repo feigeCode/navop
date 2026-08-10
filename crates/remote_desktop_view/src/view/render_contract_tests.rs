@@ -131,6 +131,34 @@ fn windows_native_close_waits_for_confirmation_and_keeps_a_release_fallback() {
 }
 
 #[test]
+fn windows_native_events_are_drained_on_the_gpui_owner_thread() {
+    let view = include_str!("../view.rs").replace("\r\n", "\n");
+    let native = include_str!("windows_native.rs").replace("\r\n", "\n");
+
+    let poll_task = function_body(
+        &view,
+        "let output_poll_task = cx.spawn",
+        "cx.on_release(move |this, cx|",
+    );
+    assert!(poll_task.contains("this.poll_windows_native_events()"));
+    assert!(poll_task.contains("native_event_window_handle.update"));
+    assert!(poll_task.contains("window.focus(&focus_handle, cx);"));
+
+    let poll = function_body(
+        &view,
+        "fn poll_windows_native_events",
+        "fn poll_windows_native_close",
+    );
+    assert!(poll.contains("native.drain_events(event_state)"));
+    assert!(poll.contains("event_state.take_focus_release_pending()"));
+    assert!(poll.contains("self.tab_active"));
+    assert!(poll.contains("self.focus_handle.clone()"));
+
+    assert!(native.contains("pub(super) fn drain_events("));
+    assert!(native.contains("state.close_confirmed()"));
+}
+
+#[test]
 fn presentation_initialization_precedes_and_gates_canvas_runtime_start() {
     let render = include_str!("render.rs").replace("\r\n", "\n");
     let output = include_str!("output.rs").replace("\r\n", "\n");
@@ -343,6 +371,10 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
     let native_activation = activate
         .find("self.activate_windows_native(false)")
         .expect("native activation");
+    let stale_focus_drain = activate
+        .find("self.poll_windows_native_events()")
+        .expect("stale native focus drain");
+    assert!(stale_focus_drain < active_assignment);
     assert!(active_assignment < native_activation);
     assert!(activate.contains("cx.defer_in(window"));
     assert!(activate.contains("if this.tab_active"));
@@ -354,7 +386,11 @@ fn windows_native_tab_lifecycle_defers_focus_only_while_active() {
     let native_deactivation = deactivate
         .find("self.deactivate_windows_native")
         .expect("native deactivation");
+    let released_focus_drain = deactivate
+        .find("self.poll_windows_native_events()")
+        .expect("released native focus drain");
     assert!(inactive_assignment < native_deactivation);
+    assert!(native_deactivation < released_focus_drain);
 
     assert!(attach.contains("if self.tab_active && self.activate_windows_native(false)"));
     assert!(attach.contains("cx.defer_in(window"));

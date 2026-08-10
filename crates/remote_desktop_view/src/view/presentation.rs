@@ -1362,6 +1362,9 @@ mod tests {
         );
         let resized_texture_id = resized.state.surface.as_ref().unwrap().texture().id;
         assert_ne!(second_texture_id, resized_texture_id);
+    }
+}
+
 use one_core::storage::RemoteDesktopBackendPreference;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

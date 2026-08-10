@@ -209,6 +209,8 @@ impl TabContent for RemoteDesktopView {
     }
 
     fn on_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        let _ = self.poll_windows_native_events();
         self.tab_active = true;
         if !self.activate_windows_native(false) {
             return;
@@ -230,6 +232,8 @@ impl TabContent for RemoteDesktopView {
         self.deactivate_windows_native(|| {
             window.focus(&focus_handle, cx);
         });
+        #[cfg(all(feature = "windows-native-rdp", target_os = "windows"))]
+        let _ = self.poll_windows_native_events();
     }
 
     fn try_close(

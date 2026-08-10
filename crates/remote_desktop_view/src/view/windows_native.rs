@@ -333,9 +333,15 @@ impl WindowsNativeAdapter {
         &self,
         state: &mut super::native_events::NativeRdpEventState,
     ) -> bool {
+        self.drain_events(state);
+        state.close_confirmed()
+    }
+
+    pub(super) fn drain_events(
+        &self,
+        state: &mut super::native_events::NativeRdpEventState,
+    ) -> Vec<super::native_events::NativeRdpUiEffect> {
         super::native_events::drain_native_events(&self.host, state)
-            .into_iter()
-            .any(|effect| effect == super::native_events::NativeRdpUiEffect::CloseConfirmed)
     }
 
     pub(crate) fn finish_destroy(&mut self) -> anyhow::Result<()> {

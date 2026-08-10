@@ -32,6 +32,8 @@ pub(super) struct NativeRdpEventState {
     last_logon_error: Option<WindowsRdpLogonError>,
     network_quality: Option<u32>,
     fullscreen: bool,
+    close_confirmed: bool,
+    focus_release_pending: bool,
 }
 
 impl NativeRdpEventState {
@@ -49,11 +51,21 @@ impl NativeRdpEventState {
             last_logon_error: None,
             network_quality: None,
             fullscreen: false,
+            close_confirmed: false,
+            focus_release_pending: false,
         }
     }
 
     pub(super) fn reset_for_generation(&mut self, generation: u64) {
         *self = Self::new(generation);
+    }
+
+    pub(super) const fn close_confirmed(&self) -> bool {
+        self.close_confirmed
+    }
+
+    pub(super) fn take_focus_release_pending(&mut self) -> bool {
+        std::mem::take(&mut self.focus_release_pending)
     }
 
     pub(super) fn apply(
@@ -113,9 +125,11 @@ impl NativeRdpEventState {
                 self.last_disconnect = Some(reason);
             }
             WindowsRdpEvent::CloseConfirmed { .. } => {
+                self.close_confirmed = true;
                 return Some(NativeRdpUiEffect::CloseConfirmed);
             }
             WindowsRdpEvent::FocusReleased { .. } => {
+                self.focus_release_pending = true;
                 return Some(NativeRdpUiEffect::FocusReleased);
             }
             WindowsRdpEvent::Unknown { .. } => {}
@@ -367,6 +381,8 @@ mod tests {
     fn close_and_focus_events_produce_explicit_owner_thread_effects() {
         let mut state = NativeRdpEventState::new(8);
 
+        assert!(!state.close_confirmed());
+        assert!(!state.take_focus_release_pending());
         assert_eq!(
             Some(NativeRdpUiEffect::CloseConfirmed),
             apply(
@@ -374,10 +390,13 @@ mod tests {
                 WindowsRdpEvent::CloseConfirmed { generation: 8 }
             )
         );
+        assert!(state.close_confirmed());
         assert_eq!(
             Some(NativeRdpUiEffect::FocusReleased),
             apply(&mut state, WindowsRdpEvent::FocusReleased { generation: 8 })
         );
+        assert!(state.take_focus_release_pending());
+        assert!(!state.take_focus_release_pending());
     }
 
     #[test]
@@ -414,7 +433,13 @@ mod tests {
                 .map(WindowsRdpDisconnectReason::category)
         );
         assert_eq!(vec![NativeRdpUiEffect::CloseConfirmed], effects);
+        assert!(state.close_confirmed());
         assert!(source.drain_events().is_empty());
+        assert!(drain_native_events(&source, &mut state).is_empty());
+        assert!(
+            state.close_confirmed(),
+            "a regular owner-thread drain must not hide close confirmation from the close poll"
+        );
     }
 
     #[test]

@@ -1507,7 +1507,7 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
 - [x] **Red:** secret redaction tests 覆盖 password、Gateway password、username 可配置脱敏和完整 endpoint。
 - [x] **Green:** 建立 connection point/event sink 并保存 advise cookie。
 - [x] **Green:** 映射 HRESULT、disconnect reason、extended reason、logon code，未知值保留 raw code。
-- [ ] **Green:** Rust callback 投递 UI queue，按 generation 过滤。
+- [x] **Green:** Rust callback 投递 UI queue，按 generation 过滤。
 - [x] **Green:** destroy 前 `Unadvise`。
 - [x] **Refactor:** 映射表从 UI 文案分离，错误本地化在上层完成。
 - [x] **Review:** 检查 callback reentrancy 和 COM ref cycle。
@@ -1656,6 +1656,42 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   Windows build verified。runner 不能替代真实 ActiveX RDP session、交互桌面以及
   错误密码、拒绝连接、网络中断、服务器重启的 Windows VM/真机手工验证。GPUI
   entity/UI queue 接线也仍未完成，因此对应 checklist 和 Task 5 整体保持未完成。
+
+#### Execution Notes (2026-08-10) — GPUI owner-thread native event pump 切片
+
+- **Owner-thread queue integration:** `RemoteDesktopView` 现有 33ms GPUI foreground
+  task 会从 host-owned `EventBridge` FIFO drain raw events，并在 `Entity::update`
+  owner thread 内执行 typed decode、reducer 更新和 `cx.notify()`。native callback
+  只负责复制 payload 并入队，不直接持有或访问 GPUI entity/window context。
+- **Generation boundary:** event source generation、`NativeRdpEventState` generation
+  与每个 decoded event generation 继续要求三者一致；新 native adapter attach
+  会用当前 generation 建立全新 reducer state，旧 generation event 不会改变连接状态、
+  close confirmation 或 focus handoff。
+- **Close/focus effects:** `CloseConfirmed` 现在保存为 generation-scoped sticky state，
+  因此常规 33ms pump 先消费 close event 后，16ms graceful-close poll 仍能观察确认并
+  进入 destroy。`FocusReleased` 保存为一次性 pending effect，只在当前 tab active 时
+  通过 GPUI window owner thread 把 focus 交回 view；inactive tab 不会夺取当前 tab focus。
+- **Tab transition hardening:** activation 在把 tab 标为 active 前先 drain 上一个
+  activation 周期遗留 effect；deactivation 在同步 focus-parent/hide 后再次 drain，
+  避免已排队的 focus release 跨 tab activation 重放。native child focus 仍由下一
+  GPUI UI turn 的 deferred handoff 完成，快速 deactivate 会让该 handoff no-op。
+- **Local verification:** TDD Red 先证明缺少 owner-thread pump 与 stale-focus drain
+  contract；Green 后 feature-enabled `remote_desktop_view` tests 145 passed，
+  `windows_rdp_host` crate tests 109 passed，host contract tests 20 passed。
+  `cargo fmt --all -- --check`、`git diff --check` 均通过。带
+  `-A clippy::derivable_impls` 的 scoped `remote_desktop_view --no-deps` Clippy
+  通过且只有被显式允许的既有 warning；严格 `-D warnings` 仍被与本切片无关的
+  `view/frame_sync.rs:44` `clippy::derivable_impls` 基线阻断。
+- **Previous Windows runner evidence:** HRESULT commit
+  `d179cb86405b1c2107822a6af9c345b23dc99dbb` 的 GitHub Actions run
+  `31364335538` 已成功完成：x86_64 与 i686 `Windows RDP probe` ATL/MSVC/type-library
+  compile/link 均成功，Windows x86_64 workspace `Test Windows` 也成功。该 run
+  只验证对应 commit 的 Windows build/native tests，不包含本 owner-thread pump commit；
+  后者在推送后仍须由新的 Windows run 核验。
+- **Acceptance boundary:** 上述自动化不建立真实 ActiveX RDP session，也不替代交互
+  桌面或 Windows VM/真机 manual acceptance。错误密码、服务端拒绝、网络中断、服务器
+  重启以及快速跨 RDP/终端/WebView tab 的人工验证继续 pending；因此 Task 5 的人工
+  Verify 与整体 runtime acceptance 仍不勾选。
 
 ---
 
