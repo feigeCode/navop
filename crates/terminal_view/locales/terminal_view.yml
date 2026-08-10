@@ -165,6 +165,10 @@ SSH:
     en: Enter username
     zh-CN: 请输入用户名
     zh-HK: 請輸入用戶名
+  save_username_desc:
+    en: Save username
+    zh-CN: 保存用户名
+    zh-HK: 儲存使用者名稱
   password:
     en: Password
     zh-CN: 密码
@@ -173,6 +177,18 @@ SSH:
     en: Enter password
     zh-CN: 请输入密码
     zh-HK: 請輸入密碼
+  save_password_desc:
+    en: Save password
+    zh-CN: 保存密码
+    zh-HK: 儲存密碼
+  save_password_enabled_hint:
+    en: The password is encrypted locally. If sync is enabled, only encrypted connection data is synchronized.
+    zh-CN: 密码会在本地加密保存；启用同步后，仅同步加密后的连接数据。
+    zh-HK: 密碼會在本機加密儲存；啟用同步後，只會同步加密後的連線資料。
+  save_password_disabled_hint:
+    en: The password will not be saved. Enter it on the first connection and every manual reconnect.
+    zh-CN: 密码不会保存；首次连接及每次手动重连时都需要重新输入。
+    zh-HK: 密碼不會儲存；首次連線及每次手動重新連線時都需要重新輸入。
   private_key:
     en: Private Key File
     zh-CN: 私钥文件
@@ -217,6 +233,14 @@ SSH:
     en: Authentication Method
     zh-CN: 认证方式
     zh-HK: 認證方式
+  keyboard_interactive:
+    en: Two-factor authentication
+    zh-CN: 双因素认证
+    zh-HK: 雙因素認證
+  keyboard_interactive_desc:
+    en: Allow Keyboard-Interactive prompts such as OTP, hardware tokens, and challenge-response.
+    zh-CN: 允许服务器通过 Keyboard-Interactive 请求 OTP、硬件令牌或质询响应。
+    zh-HK: 允許伺服器透過 Keyboard-Interactive 要求 OTP、硬件權杖或質詢回應。
   terminal_encoding:
     en: Terminal Encoding
     zh-CN: 终端字符集
@@ -1586,6 +1610,22 @@ SshSession:
     en: SSH Authentication Required
     zh-CN: 需要完成 SSH 身份验证
     zh-HK: 需要完成 SSH 身分驗證
+  credentials_required:
+    en: SSH Credentials Required
+    zh-CN: 需要 SSH 连接凭据
+    zh-HK: 需要 SSH 連線憑據
+  credentials_hint:
+    en: This connection does not save the following credentials. Enter them to continue.
+    zh-CN: 此连接未保存以下凭据，请输入后继续连接。
+    zh-HK: 此連線未儲存以下憑據，請輸入後繼續連線。
+  username:
+    en: Username
+    zh-CN: 用户名
+    zh-HK: 使用者名稱
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
   reconnected_new_shell:
     en: Reconnected. A new remote shell was opened below the preserved terminal output.
     zh-CN: 已重新连接并打开新的远端 Shell，之前的终端内容已保留。

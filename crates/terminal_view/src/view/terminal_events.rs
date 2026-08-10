@@ -36,6 +36,7 @@ impl TerminalView {
         match event {
             TerminalModelEvent::Wakeup => {
                 self.sync_recording_ticker(cx);
+                self.sync_ssh_credential_inputs(window, cx);
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.sync_zmodem_picker(cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
@@ -51,6 +52,11 @@ impl TerminalView {
                     sidebar.refresh_history_commands(cx);
                 });
                 self.refresh_history_prompt_matches(cx);
+            }
+            TerminalModelEvent::SshCredentialChanged => {
+                self.sync_ssh_credential_inputs(window, cx);
+                self.focus_terminal_after_connect_if_ready(window, cx);
+                cx.notify();
             }
             TerminalModelEvent::SshMfaChanged => {
                 self.sync_ssh_mfa_inputs(window, cx);
@@ -86,6 +92,79 @@ impl TerminalView {
                 });
             }
         }
+    }
+
+    pub(super) fn sync_ssh_credential_inputs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(request) = self.terminal.read(cx).ssh_credential_request() else {
+            self.ssh_credential_inputs = None;
+            return;
+        };
+
+        let inputs_match_request = self.ssh_credential_inputs.as_ref().is_some_and(|inputs| {
+            inputs.request.generation() == request.generation()
+                && inputs.request.username == request.username
+                && inputs.request.password == request.password
+        });
+
+        if !inputs_match_request {
+            let username = request.username.then(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx).placeholder(t!("SshSession.username").to_string())
+                })
+            });
+            let password = request.password.then(|| {
+                cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(t!("SshSession.password").to_string())
+                        .masked(true)
+                })
+            });
+            self.ssh_credential_inputs = Some(SshCredentialInputs {
+                request,
+                username,
+                password,
+            });
+        }
+
+        let first_input = self
+            .ssh_credential_inputs
+            .as_ref()
+            .and_then(|inputs| inputs.username.as_ref().or(inputs.password.as_ref()))
+            .cloned();
+        if let Some(input) = first_input {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        }
+    }
+
+    pub(super) fn submit_ssh_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(inputs) = self.ssh_credential_inputs.as_ref() else {
+            return;
+        };
+        let generation = inputs.request.generation();
+        let credentials = TerminalSshCredentials {
+            username: inputs
+                .username
+                .as_ref()
+                .map(|input| input.read(cx).text().to_string()),
+            password: inputs
+                .password
+                .as_ref()
+                .map(|input| input.read(cx).text().to_string()),
+        };
+
+        let submitted = self.terminal.update(cx, |terminal, cx| {
+            terminal.submit_ssh_credentials(generation, credentials, cx)
+        });
+        if submitted {
+            self.ssh_credential_inputs = None;
+            self.focus_terminal_after_connect = true;
+            self.focus_terminal_after_connect_if_ready(window, cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn sync_ssh_mfa_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -147,16 +226,17 @@ impl TerminalView {
             return;
         }
 
-        let (connection_state, has_mfa_request) = {
+        let (connection_state, has_credential_request, has_mfa_request) = {
             let terminal = self.terminal.read(cx);
             (
                 terminal.connection_state().clone(),
+                terminal.ssh_credential_request().is_some(),
                 terminal.ssh_mfa_request().is_some(),
             )
         };
 
         match connection_state {
-            ConnectionState::Connected if !has_mfa_request => {
+            ConnectionState::Connected if !has_credential_request && !has_mfa_request => {
                 self.focus_terminal_after_connect = false;
                 if self.reconnect_success_pending {
                     self.reconnect_success_pending = false;

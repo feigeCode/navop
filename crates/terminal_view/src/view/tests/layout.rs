@@ -32,19 +32,28 @@ fn disconnected_terminal_uses_a_non_blocking_status_banner() {
             &ConnectionState::Disconnected { error: None },
             false,
             false,
+            false,
         )
     );
     assert_eq!(
         Some(ConnectionStatusPresentation::Banner),
-        connection_status_presentation(&ConnectionState::Connecting, false, false)
+        connection_status_presentation(&ConnectionState::Connecting, false, false, false)
     );
 }
 
 #[test]
-fn ssh_mfa_keeps_the_blocking_connection_dialog() {
+fn ssh_credentials_and_mfa_keep_the_blocking_connection_dialog() {
     assert_eq!(
         Some(ConnectionStatusPresentation::Dialog),
-        connection_status_presentation(&ConnectionState::Connecting, false, true)
+        connection_status_presentation(&ConnectionState::Connecting, false, true, false)
+    );
+    assert_eq!(
+        Some(ConnectionStatusPresentation::Dialog),
+        connection_status_presentation(&ConnectionState::Connecting, false, false, true)
+    );
+    assert_eq!(
+        Some(ConnectionStatusPresentation::Dialog),
+        connection_status_presentation(&ConnectionState::Connecting, false, true, true)
     );
 }
 
@@ -52,11 +61,16 @@ fn ssh_mfa_keeps_the_blocking_connection_dialog() {
 fn host_key_confirmation_and_connected_state_hide_connection_status() {
     assert_eq!(
         None,
-        connection_status_presentation(&ConnectionState::Disconnected { error: None }, true, false,)
+        connection_status_presentation(
+            &ConnectionState::Disconnected { error: None },
+            true,
+            true,
+            true,
+        )
     );
     assert_eq!(
         None,
-        connection_status_presentation(&ConnectionState::Connected, false, false)
+        connection_status_presentation(&ConnectionState::Connected, false, true, true)
     );
 }
 

@@ -169,6 +169,9 @@ pub struct SshFormWindow {
     passphrase_input: Entity<InputState>,
 
     auth_method: AuthMethodSelection,
+    save_username: bool,
+    save_password: bool,
+    keyboard_interactive: bool,
     terminal_encoding_select: Entity<SelectState<Vec<TerminalEncodingSelectItem>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
@@ -613,6 +616,9 @@ impl SshFormWindow {
         let team_select = create_team_select(&config.teams, None, window, cx);
 
         let mut auth_method = AuthMethodSelection::Password;
+        let mut save_username = true;
+        let mut save_password = true;
+        let mut keyboard_interactive = true;
         let mut jump_auth_method = AuthMethodSelection::Password;
         let mut workspace_id: Option<i64> = None;
         let mut enable_jump_server = false;
@@ -630,6 +636,9 @@ impl SshFormWindow {
             sync_enabled = conn.sync_enabled;
 
             if let Ok(params) = conn.to_ssh_params() {
+                save_username = !params.prompts_for_username();
+                save_password = !params.prompts_for_password();
+                keyboard_interactive = params.keyboard_interactive_enabled();
                 detected_os_id = params.os_id.clone();
                 manual_icon = params.icon.clone();
                 name_input.update(cx, |s, cx| s.set_value(&conn.name, window, cx));
@@ -803,6 +812,9 @@ impl SshFormWindow {
             private_key_content_input,
             passphrase_input,
             auth_method,
+            save_username,
+            save_password,
+            keyboard_interactive,
             terminal_encoding_select,
             workspace_select,
             team_select,
@@ -873,7 +885,7 @@ impl SshFormWindow {
             .unwrap_or(22);
         let username = self.username_input.read(cx).text().to_string();
 
-        if host.is_empty() || username.is_empty() {
+        if host.is_empty() || (username.is_empty() && self.save_username) {
             return None;
         }
 
@@ -1022,6 +1034,11 @@ impl SshFormWindow {
             port,
             username,
             auth_method,
+            prompt_username: (!self.save_username).then_some(true),
+            prompt_password: (!self.save_password
+                && self.auth_method == AuthMethodSelection::Password)
+                .then_some(true),
+            keyboard_interactive: (!self.keyboard_interactive).then_some(false),
             terminal_encoding: self
                 .terminal_encoding_select
                 .read(cx)
@@ -1533,8 +1550,10 @@ impl SshFormWindow {
         };
 
         let name = self.name_input.read(cx).text().to_string();
-        let name = if name.is_empty() {
+        let name = if name.is_empty() && self.save_username {
             format!("{}@{}:{}", params.username, params.host, params.port)
+        } else if name.is_empty() {
+            format!("{}:{}", params.host, params.port)
         } else {
             name
         };
@@ -1746,10 +1765,34 @@ impl SshFormWindow {
             .child(self.render_form_row(&t!("SSH.icon"), self.render_icon_picker(cx)))
             .child(self.render_form_row(&t!("SSH.host"), self.render_form_input(&self.host_input)))
             .child(self.render_form_row(&t!("SSH.port"), self.render_form_input(&self.port_input)))
-            .child(self.render_form_row(
-                &t!("SSH.username"),
-                self.render_form_input(&self.username_input),
-            ))
+            .child(
+                self.render_form_row(
+                    &t!("SSH.username"),
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(self.render_form_input(&self.username_input))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    Checkbox::new("save-username")
+                                        .checked(self.save_username)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.save_username = !this.save_username;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("SSH.save_username_desc").to_string()),
+                                ),
+                        ),
+                ),
+            )
             .child(
                 self.render_form_row(
                     &t!("SSH.auth_method"),
@@ -1804,10 +1847,58 @@ impl SshFormWindow {
                 ),
             )
             .when(auth_method == AuthMethodSelection::Password, |this| {
-                this.child(self.render_form_row(
-                    &t!("SSH.password"),
-                    self.render_form_input(&self.password_input).mask_toggle(),
-                ))
+                this.child(
+                    self.render_form_row(
+                        &t!("SSH.password"),
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(self.render_form_input(&self.password_input).mask_toggle())
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_start()
+                                    .child(
+                                        div().flex_shrink_0().child(
+                                            Checkbox::new("save-password")
+                                                .checked(self.save_password)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_password = !this.save_password;
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .child(
+                                                div().text_sm().child(
+                                                    t!("SSH.save_password_desc").to_string(),
+                                                ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(if self.save_password {
+                                                        cx.theme().muted_foreground
+                                                    } else {
+                                                        cx.theme().warning
+                                                    })
+                                                    .child(
+                                                        if self.save_password {
+                                                            t!("SSH.save_password_enabled_hint")
+                                                        } else {
+                                                            t!("SSH.save_password_disabled_hint")
+                                                        }
+                                                        .to_string(),
+                                                    ),
+                                            ),
+                                    ),
+                            ),
+                    ),
+                )
             })
             .when(auth_method == AuthMethodSelection::PrivateKey, |this| {
                 this.child(self.render_form_row(
@@ -1850,6 +1941,33 @@ impl SshFormWindow {
                     ),
                 )
             })
+            .child(
+                self.render_form_row(
+                    &t!("SSH.keyboard_interactive"),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            div().flex_shrink_0().child(
+                                Checkbox::new("keyboard-interactive")
+                                    .checked(self.keyboard_interactive)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.keyboard_interactive = !this.keyboard_interactive;
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.keyboard_interactive_desc").to_string()),
+                        ),
+                ),
+            )
             .child(self.render_form_row(
                 &t!("SSH.terminal_encoding"),
                 Select::new(&self.terminal_encoding_select).w_full(),
@@ -2563,6 +2681,9 @@ mod tests {
             port: 22,
             username: "root".to_string(),
             auth_method: SshAuthMethod::Agent,
+            prompt_username: None,
+            prompt_password: None,
+            keyboard_interactive: None,
             terminal_encoding: Default::default(),
             connect_timeout: Some(30),
             keepalive_interval: Some(60),
@@ -2681,6 +2802,88 @@ mod tests {
             .read_with(cx, |form, cx| form.build_ssh_params(cx))
             .expect("预填 SSH 表单应能构建参数");
         assert_eq!(built.terminal_encoding, StoredTerminalEncoding::EucJp);
+    }
+
+    #[gpui::test]
+    fn ssh_form_loads_and_builds_credential_prompt_policy(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let mut params = sample_params();
+        params.auth_method = SshAuthMethod::Password {
+            password: "must-not-be-stored".to_string(),
+        };
+        params.prompt_username = Some(true);
+        params.prompt_password = Some(true);
+        params.keyboard_interactive = Some(false);
+        let initial_connection = StoredConnection::new_ssh("prompted".to_string(), params, None);
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: Some(initial_connection),
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            )
+        });
+
+        form.read_with(cx, |form, _| {
+            assert!(!form.save_username);
+            assert!(!form.save_password);
+            assert!(!form.keyboard_interactive);
+        });
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("不保存用户名时，空用户名应允许构建");
+
+        assert_eq!(Some(true), built.prompt_username);
+        assert_eq!(Some(true), built.prompt_password);
+        assert_eq!(Some(false), built.keyboard_interactive);
+        assert!(built.username.is_empty());
+        assert!(matches!(
+            built.auth_method,
+            SshAuthMethod::Password { ref password } if password.is_empty()
+        ));
+    }
+
+    #[gpui::test]
+    fn ssh_form_does_not_prompt_for_password_with_non_password_auth(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(AppSettings::default());
+            gpui_component::init(cx);
+        });
+        let (form, cx) = cx.add_window_view(|window, cx| {
+            let mut form = super::SshFormWindow::new(
+                super::SshFormWindowConfig {
+                    editing_connection: None,
+                    initial_connection: None,
+                    on_saved: None,
+                    workspaces: Vec::new(),
+                    teams: Vec::new(),
+                },
+                window,
+                cx,
+            );
+            form.host_input
+                .update(cx, |state, cx| state.set_value("agent.example", window, cx));
+            form.username_input
+                .update(cx, |state, cx| state.set_value("agent-user", window, cx));
+            form.auth_method = AuthMethodSelection::Agent;
+            form.save_password = false;
+            form
+        });
+
+        let built = form
+            .read_with(cx, |form, cx| form.build_ssh_params(cx))
+            .expect("Agent 认证表单应能构建");
+
+        assert_eq!(None, built.prompt_password);
+        assert!(matches!(built.auth_method, SshAuthMethod::Agent));
     }
 
     #[gpui::test]

@@ -40,7 +40,7 @@ pub(crate) fn connection_full_info_text_for_locale(
     connection: &StoredConnection,
     locale: &str,
 ) -> Option<String> {
-    let mut params = serde_json::from_str::<Value>(&connection.params).ok()?;
+    let mut params = serde_json::from_str::<Value>(&connection.params_for_storage()).ok()?;
     redact_embedded_private_keys(&mut params, locale);
     let params = serde_json::to_string_pretty(&params).ok()?;
     let separator = tr(locale, "Connection.Share.separator");

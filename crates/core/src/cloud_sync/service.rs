@@ -359,7 +359,7 @@ impl CloudSyncService {
             workspace_cloud_id,
             selected_databases: conn.selected_databases.clone(),
             remark: conn.remark.clone(),
-            params: serde_json::from_str(&conn.params)
+            params: serde_json::from_str(&conn.params_for_storage())
                 .unwrap_or(Value::Object(serde_json::Map::new())),
             owner_id: conn.owner_id.clone(),
         };

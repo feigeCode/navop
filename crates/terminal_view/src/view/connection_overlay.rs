@@ -72,7 +72,7 @@ impl TerminalView {
                     .rounded_lg()
                     .shadow_lg()
                     .child(self.render_connection_dialog_title(cx))
-                    .when_some(self.render_ssh_mfa_form(cx), |this, form| this.child(form)),
+                    .when_some(self.render_ssh_auth_form(cx), |this, form| this.child(form)),
             )
             .into_any_element()
     }
@@ -154,6 +154,11 @@ impl TerminalView {
 
     fn render_connection_dialog_title(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
+        let title = if self.terminal.read(cx).ssh_credential_request().is_some() {
+            t!("SshSession.credentials_required")
+        } else {
+            t!("SshSession.authentication_required")
+        };
         h_flex()
             .gap_2()
             .child(
@@ -167,9 +172,73 @@ impl TerminalView {
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.popover_foreground)
-                    .child(t!("SshSession.authentication_required")),
+                    .child(title),
             )
             .into_any_element()
+    }
+
+    fn render_ssh_auth_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.render_ssh_credential_form(cx)
+            .or_else(|| self.render_ssh_mfa_form(cx))
+    }
+
+    fn render_ssh_credential_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let request = self.terminal.read(cx).ssh_credential_request()?;
+        let inputs = self.ssh_credential_inputs.as_ref()?;
+        if inputs.request.generation() != request.generation() {
+            return None;
+        }
+
+        Some(
+            v_flex()
+                .gap_3()
+                .w_full()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(400.0))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("SshSession.credentials_hint")),
+                )
+                .when_some(inputs.username.as_ref(), |this, input| {
+                    this.child(
+                        v_flex()
+                            .w(px(400.0))
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SshSession.username")),
+                            )
+                            .child(Input::new(input)),
+                    )
+                })
+                .when_some(inputs.password.as_ref(), |this, input| {
+                    this.child(
+                        v_flex()
+                            .w(px(400.0))
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SshSession.password")),
+                            )
+                            .child(Input::new(input).mask_toggle()),
+                    )
+                })
+                .child(
+                    Button::new("submit-ssh-credentials")
+                        .label(t!("Common.ok"))
+                        .primary()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.submit_ssh_credentials(window, cx);
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_ssh_mfa_form(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

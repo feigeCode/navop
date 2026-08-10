@@ -45,6 +45,12 @@ pub(super) struct SshMfaInput {
     pub(super) input: Entity<InputState>,
 }
 
+pub(super) struct SshCredentialInputs {
+    pub(super) request: TerminalSshCredentialRequest,
+    pub(super) username: Option<Entity<InputState>>,
+    pub(super) password: Option<Entity<InputState>>,
+}
+
 #[derive(Clone)]
 pub(crate) enum TerminalDuplicateSource {
     Local(LocalConfig),
@@ -121,7 +127,18 @@ pub(super) fn terminal_tab_duplicate_supported(
 
 impl TerminalView {
     pub(super) fn accepts_live_terminal_input(&self, cx: &App) -> bool {
-        live_terminal_input_supported(self.terminal.read(cx).live_connection_kind())
+        let terminal = self.terminal.read(cx);
+        live_terminal_input_supported(terminal.live_connection_kind())
+            && terminal.ssh_credential_request().is_none()
+            && terminal.ssh_mfa_request().is_none()
+            && terminal.host_key_verification_request().is_none()
+    }
+
+    pub(super) fn has_blocking_auth_prompt(&self, cx: &App) -> bool {
+        let terminal = self.terminal.read(cx);
+        terminal.ssh_credential_request().is_some()
+            || terminal.ssh_mfa_request().is_some()
+            || terminal.host_key_verification_request().is_some()
     }
 
     pub(super) fn is_live_ssh_terminal(&self, cx: &App) -> bool {

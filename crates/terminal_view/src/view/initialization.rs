@@ -248,6 +248,7 @@ impl TerminalView {
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
+            ssh_credential_inputs: None,
             ssh_mfa_inputs: Vec::new(),
             zmodem_picker_request_id: None,
             focus_terminal_after_connect: false,
@@ -273,6 +274,8 @@ impl TerminalView {
             render_mode: TerminalRenderMode::Embedded,
         };
         this.apply_settings_snapshot(&initial_settings, window, cx);
+        this.sync_ssh_credential_inputs(window, cx);
+        this.sync_ssh_mfa_inputs(window, cx);
         this.register_broadcast_input(cx);
         this.start_performance_diagnostics(connection_id, connection_kind, cx);
         this

@@ -89,6 +89,8 @@ pub enum TerminalModelEvent {
     Wakeup,
     /// SSH 服务端主机指纹需要用户确认
     HostKeyVerificationRequired,
+    /// SSH 临时用户名/密码请求状态变化
+    SshCredentialChanged,
     /// SSH keyboard-interactive/MFA 请求状态变化
     SshMfaChanged,
     /// SSH ZMODEM 文件选择请求状态变化
@@ -242,9 +244,41 @@ pub struct SshConnectionUpdate {
     pub sync_path_with_terminal: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SshCredentialPromptPolicy {
+    username: bool,
+    password: bool,
+}
+
+impl SshCredentialPromptPolicy {
+    fn requires_credentials(self) -> bool {
+        self.username || self.password
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalSshCredentialRequest {
+    generation: u64,
+    pub username: bool,
+    pub password: bool,
+}
+
+impl TerminalSshCredentialRequest {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalSshCredentials {
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
 struct ResolvedSshConnection {
     config: SshTerminalConfig,
-    responder: TerminalMfaResponder,
+    credential_prompt_policy: SshCredentialPromptPolicy,
+    keyboard_interactive_enabled: bool,
     init_commands: Option<String>,
     connection_id: Option<i64>,
     connection_name: String,
@@ -288,9 +322,9 @@ fn ssh_auth_from_storage(auth: SshAuthMethod) -> SshAuth {
     }
 }
 
-fn password_from_storage_auth(auth: &SshAuthMethod) -> Option<String> {
+fn password_from_ssh_auth(auth: &SshAuth) -> Option<String> {
     match auth {
-        SshAuthMethod::Password { password } => Some(password.clone()),
+        SshAuth::Password(password) => Some(password.clone()),
         _ => None,
     }
 }
@@ -334,7 +368,7 @@ impl TerminalMfaResponder {
     ) -> Self {
         Self {
             state: Arc::new(StdMutex::new(TerminalMfaState::default())),
-            event_tx: Some(event_tx),
+            event_tx: Some(event_tx.clone()),
             jump_password,
             target_password,
         }
@@ -485,14 +519,15 @@ fn is_ssh_password_prompt(prompt: &str) -> bool {
 
 fn resolve_ssh_connection(
     update: SshConnectionUpdate,
-    event_tx: UnboundedSender<TerminalEvent>,
+    _event_tx: UnboundedSender<TerminalEvent>,
 ) -> Result<ResolvedSshConnection> {
     let params = update.connection.to_ssh_params()?;
-    let target_password = password_from_storage_auth(&params.auth_method);
-    let jump_password = params
-        .jump_server
-        .as_ref()
-        .and_then(|jump| password_from_storage_auth(&jump.auth_method));
+    let credential_prompt_policy = SshCredentialPromptPolicy {
+        username: params.prompts_for_username(),
+        password: params.prompts_for_password()
+            && matches!(&params.auth_method, SshAuthMethod::Password { .. }),
+    };
+    let keyboard_interactive_enabled = params.keyboard_interactive_enabled();
     let terminal_encoding = params.terminal_encoding.into();
     let init_commands = build_ssh_init_commands(
         update.working_dir.as_deref(),
@@ -500,8 +535,7 @@ fn resolve_ssh_connection(
         params.init_script.as_deref(),
         update.sync_path_with_terminal,
     );
-    let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password);
-    let mut ssh_config = SshConnectConfig {
+    let ssh_config = SshConnectConfig {
         host: params.host,
         port: params.port,
         username: params.username,
@@ -530,7 +564,6 @@ fn resolve_ssh_connection(
         x11_forwarding: params.x11_forwarding.unwrap_or(false),
         allow_legacy_algorithms: params.allow_legacy_algorithms.unwrap_or(false),
     };
-    ssh_config.keyboard_interactive_responder = Some(Arc::new(responder.clone()));
     Ok(ResolvedSshConnection {
         config: SshTerminalConfig {
             ssh_config,
@@ -538,11 +571,79 @@ fn resolve_ssh_connection(
             terminal_encoding,
             disable_shell_integration: params.disable_shell_integration.unwrap_or(false),
         },
-        responder,
+        credential_prompt_policy,
+        keyboard_interactive_enabled,
         init_commands,
         connection_id: update.connection.id,
         connection_name: update.connection.name,
     })
+}
+
+fn ssh_config_with_runtime_credentials(
+    base_config: &SshTerminalConfig,
+    credentials: &TerminalSshCredentials,
+    event_tx: UnboundedSender<TerminalEvent>,
+    keyboard_interactive_enabled: bool,
+) -> Result<(SshTerminalConfig, TerminalMfaResponder)> {
+    let mut config = base_config.clone();
+
+    if let Some(username) = credentials.username.as_deref() {
+        let username = username.trim();
+        if username.is_empty() {
+            return Err(anyhow!("SSH username is empty"));
+        }
+        config.ssh_config.username = username.to_string();
+    }
+
+    if let Some(password) = credentials.password.as_deref() {
+        if password.is_empty() {
+            return Err(anyhow!("SSH password is empty"));
+        }
+        match &mut config.ssh_config.auth {
+            SshAuth::Password(configured_password) => {
+                *configured_password = password.to_string();
+            }
+            _ => {
+                return Err(anyhow!(
+                    "runtime SSH password is only valid for password authentication"
+                ));
+            }
+        }
+    }
+
+    let jump_password = config
+        .ssh_config
+        .jump_server
+        .as_ref()
+        .and_then(|jump| password_from_ssh_auth(&jump.auth));
+    let target_password = password_from_ssh_auth(&config.ssh_config.auth);
+    let responder = TerminalMfaResponder::new(event_tx, jump_password, target_password);
+    config.ssh_config.keyboard_interactive_responder = keyboard_interactive_enabled
+        .then(|| Arc::new(responder.clone()) as Arc<dyn KeyboardInteractiveResponder>);
+
+    Ok((config, responder))
+}
+
+fn ssh_config_with_confirmed_host_key(
+    runtime_config: &SshTerminalConfig,
+    request: &HostKeyVerificationRequest,
+    persist: bool,
+) -> SshTerminalConfig {
+    let mut config = runtime_config.clone();
+    let verifier = config.ssh_config.host_key_verifier.clone();
+    config.ssh_config.host_key_verifier = match &request.reason {
+        HostKeyVerificationReason::Unknown => verifier.with_confirmed_key(
+            request.identity.clone(),
+            request.presented.clone(),
+            persist,
+        ),
+        HostKeyVerificationReason::Changed { .. } => verifier.with_confirmed_changed_key(
+            request.identity.clone(),
+            request.presented.clone(),
+            persist,
+        ),
+    };
+    config
 }
 
 const DEFAULT_COLS: usize = 80;
@@ -972,10 +1073,18 @@ pub struct Terminal {
     pixel_width: u16,
     pixel_height: u16,
 
-    /// SSH 配置（用于重连）
+    /// 当前 SSH 运行时配置；临时凭据仅存在于内存中，不会写回 StoredConnection。
     ssh_config: Option<SshTerminalConfig>,
+    /// 可安全用于重连的 SSH 模板配置，不包含要求每次输入的用户名或密码。
+    ssh_base_config: Option<SshTerminalConfig>,
     /// SSH 会话管理器（同一 SSH tab 共享底层连接）
     ssh_session_manager: Option<Arc<SshSessionManager>>,
+    /// 当前连接的临时凭据策略。
+    ssh_credential_prompt_policy: SshCredentialPromptPolicy,
+    /// 等待用户输入的临时 SSH 用户名/密码。
+    ssh_credential_request: Option<TerminalSshCredentialRequest>,
+    /// 是否允许 keyboard-interactive（OTP/2FA）认证。
+    ssh_keyboard_interactive_enabled: bool,
     /// SSH keyboard-interactive/MFA 输入响应器
     ssh_mfa_responder: Option<TerminalMfaResponder>,
     /// SSH ZMODEM 文件选择请求协调器
@@ -1349,13 +1458,17 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
-            event_tx: Some(event_tx),
+            event_tx: Some(event_tx.clone()),
             event_proxy: None,
             connection_id: None,
             connection_name: None,
@@ -1473,7 +1586,11 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -1548,11 +1665,10 @@ impl Terminal {
             event_tx.clone(),
         )
         .expect("StoredConnection should contain valid SSH params");
-        let config = resolved.config;
-        let ssh_session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
+        let base_config = resolved.config;
 
-        let cols = config.pty_config.width as usize;
-        let rows = config.pty_config.height as usize;
+        let cols = base_config.pty_config.width as usize;
+        let rows = base_config.pty_config.height as usize;
 
         let scrollback_lines = AppSettings::current(cx).terminal_scrollback_lines;
         let (term, event_proxy, _colors, performance_metrics) =
@@ -1560,35 +1676,15 @@ impl Terminal {
         let wakeup_pending = event_proxy.wakeup_pending_handle();
         let recording_runtime =
             Self::create_recording_runtime(event_tx.clone(), wakeup_pending.clone());
-        let recording_tap = recording_runtime.as_ref().ok().map(RecordingRuntime::tap);
-        let (disconnect_tx, disconnect_rx) = oneshot::channel::<Option<String>>();
         let connection_generation = 1;
         let zmodem_responder = ZmodemResponder::new(event_tx.clone());
 
-        Self::spawn_ssh_disconnect_handler(disconnect_rx, connection_generation, cx);
         Self::spawn_event_loop(event_rx, wakeup_pending.clone(), cx);
-        Self::spawn_ssh_connect(
-            SshConnectTask {
-                session_manager: ssh_session_manager.clone(),
-                config: config.clone(),
-                term: term.clone(),
-                event_proxy: event_proxy.clone(),
-                event_tx: event_tx.clone(),
-                zmodem_responder: zmodem_responder.clone(),
-                connection_id: resolved.connection_id,
-                on_disconnect: Some(disconnect_tx),
-                init_commands: resolved.init_commands.clone(),
-                recording_tap,
-                generation: connection_generation,
-            },
-            cx,
-        );
-        Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
         let history_repository = Self::history_repository(cx);
         let history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
         let recording_session_id = Self::new_recording_session_id();
 
-        Self {
+        let mut terminal = Self {
             term,
             session_mode: TerminalSessionMode::Live,
             performance_metrics,
@@ -1604,14 +1700,18 @@ impl Terminal {
             rows,
             pixel_width: 0,
             pixel_height: 0,
-            ssh_config: Some(config),
-            ssh_session_manager: Some(ssh_session_manager),
-            ssh_mfa_responder: Some(resolved.responder),
+            ssh_config: Some(base_config.clone()),
+            ssh_base_config: Some(base_config.clone()),
+            ssh_session_manager: None,
+            ssh_credential_prompt_policy: resolved.credential_prompt_policy,
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: resolved.keyboard_interactive_enabled,
+            ssh_mfa_responder: None,
             zmodem_responder: Some(zmodem_responder),
             pending_host_key_verification: None,
             serial_params: None,
             wakeup_pending,
-            event_tx: Some(event_tx),
+            event_tx: Some(event_tx.clone()),
             event_proxy: Some(event_proxy),
             connection_id: resolved.connection_id,
             connection_name: Some(resolved.connection_name),
@@ -1624,7 +1724,34 @@ impl Terminal {
             connection_generation,
             connection_kind: TerminalConnectionKind::Ssh,
             scrollback_lines,
+        };
+
+        if terminal.ssh_credential_prompt_policy.requires_credentials() {
+            terminal.ssh_credential_request = Some(TerminalSshCredentialRequest {
+                generation: connection_generation,
+                username: terminal.ssh_credential_prompt_policy.username,
+                password: terminal.ssh_credential_prompt_policy.password,
+            });
+        } else {
+            let (runtime_config, responder) = ssh_config_with_runtime_credentials(
+                &base_config,
+                &TerminalSshCredentials::default(),
+                event_tx,
+                resolved.keyboard_interactive_enabled,
+            )
+            .expect("stored SSH config should produce a runtime config");
+            assert!(
+                terminal.start_ssh_connection_attempt(
+                    runtime_config,
+                    responder,
+                    connection_generation,
+                    cx,
+                ),
+                "SSH terminal runtime should be available during construction"
+            );
         }
+
+        terminal
     }
 
     /// 创建串口终端
@@ -1679,7 +1806,11 @@ impl Terminal {
             pixel_width: 0,
             pixel_height: 0,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -1757,7 +1888,11 @@ impl Terminal {
                 pixel_width: 0,
                 pixel_height: 0,
                 ssh_config: None,
+                ssh_base_config: None,
                 ssh_session_manager: None,
+                ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+                ssh_credential_request: None,
+                ssh_keyboard_interactive_enabled: false,
                 ssh_mfa_responder: None,
                 zmodem_responder: None,
                 pending_host_key_verification: None,
@@ -2061,6 +2196,67 @@ impl Terminal {
             });
         })
         .detach();
+    }
+
+    fn queue_ssh_credential_request(&mut self, generation: u64, cx: &mut Context<Self>) {
+        self.ssh_credential_request = Some(TerminalSshCredentialRequest {
+            generation,
+            username: self.ssh_credential_prompt_policy.username,
+            password: self.ssh_credential_prompt_policy.password,
+        });
+        cx.emit(TerminalModelEvent::SshCredentialChanged);
+        cx.emit(TerminalModelEvent::Wakeup);
+    }
+
+    fn start_ssh_connection_attempt(
+        &mut self,
+        config: SshTerminalConfig,
+        responder: TerminalMfaResponder,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(event_tx) = self.event_tx.clone() else {
+            return false;
+        };
+        let Some(event_proxy) = self.event_proxy.clone() else {
+            return false;
+        };
+        let Some(zmodem_responder) = self.zmodem_responder.clone() else {
+            return false;
+        };
+
+        let session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
+        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<Option<String>>();
+        Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
+
+        self.ssh_config = Some(config.clone());
+        self.ssh_session_manager = Some(session_manager.clone());
+        self.ssh_mfa_responder = Some(responder);
+        let credential_request_cleared = self.ssh_credential_request.take().is_some();
+
+        Self::spawn_ssh_connect(
+            SshConnectTask {
+                session_manager: session_manager.clone(),
+                config,
+                term: self.term.clone(),
+                event_proxy,
+                event_tx,
+                zmodem_responder,
+                connection_id: self.connection_id,
+                on_disconnect: Some(disconnect_tx),
+                init_commands: self.init_commands.clone(),
+                recording_tap: self.recording_tap(),
+                generation,
+            },
+            cx,
+        );
+        Self::spawn_ssh_history_loader(session_manager, cx);
+
+        if credential_request_cleared {
+            cx.emit(TerminalModelEvent::SshCredentialChanged);
+        }
+        cx.emit(TerminalModelEvent::Wakeup);
+        true
     }
 
     fn handle_ssh_result(
@@ -2480,22 +2676,102 @@ impl Terminal {
             .clone()
             .ok_or_else(|| anyhow!("SSH terminal event channel is unavailable"))?;
         let resolved = resolve_ssh_connection(update, event_tx)?;
-        let session_manager = self
-            .ssh_session_manager
-            .as_ref()
-            .ok_or_else(|| anyhow!("SSH session manager is unavailable"))?;
 
         if let Some(responder) = &self.ssh_mfa_responder {
             responder.cancel();
         }
-        session_manager.replace_config(resolved.config.ssh_config.clone());
-        self.ssh_config = Some(resolved.config);
-        self.ssh_mfa_responder = Some(resolved.responder);
+        self.ssh_credential_request = None;
+        self.ssh_credential_prompt_policy = resolved.credential_prompt_policy;
+        self.ssh_keyboard_interactive_enabled = resolved.keyboard_interactive_enabled;
+        self.ssh_base_config = Some(resolved.config.clone());
+
+        if resolved.credential_prompt_policy.requires_credentials() {
+            self.ssh_config = Some(resolved.config);
+            self.ssh_mfa_responder = None;
+        } else {
+            let event_tx = self
+                .event_tx
+                .clone()
+                .ok_or_else(|| anyhow!("SSH terminal event channel is unavailable"))?;
+            let (runtime_config, responder) = ssh_config_with_runtime_credentials(
+                &resolved.config,
+                &TerminalSshCredentials::default(),
+                event_tx,
+                resolved.keyboard_interactive_enabled,
+            )?;
+            if let Some(session_manager) = &self.ssh_session_manager {
+                session_manager.replace_config(runtime_config.ssh_config.clone());
+            }
+            self.ssh_config = Some(runtime_config);
+            self.ssh_mfa_responder = Some(responder);
+        }
         self.connection_id = resolved.connection_id;
         self.connection_name = Some(resolved.connection_name);
         self.init_commands = resolved.init_commands;
         self.history_scope = resolved.connection_id.map(TerminalHistoryScope::ssh);
         Ok(())
+    }
+
+    pub fn ssh_credential_request(&self) -> Option<TerminalSshCredentialRequest> {
+        self.ssh_credential_request.clone()
+    }
+
+    pub fn submit_ssh_credentials(
+        &mut self,
+        generation: u64,
+        credentials: TerminalSshCredentials,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(request) = self.ssh_credential_request.clone() else {
+            return false;
+        };
+        if generation != request.generation
+            || !self.is_current_connection_generation(request.generation)
+        {
+            return false;
+        }
+
+        let username = if request.username {
+            let Some(username) = credentials.username.as_deref().map(str::trim) else {
+                return false;
+            };
+            if username.is_empty() {
+                return false;
+            }
+            Some(username.to_string())
+        } else {
+            None
+        };
+        let password = if request.password {
+            let Some(password) = credentials.password else {
+                return false;
+            };
+            if password.is_empty() {
+                return false;
+            }
+            Some(password)
+        } else {
+            None
+        };
+
+        let Some(base_config) = self.ssh_base_config.clone() else {
+            return false;
+        };
+        let Some(event_tx) = self.event_tx.clone() else {
+            return false;
+        };
+        let Ok((runtime_config, responder)) = ssh_config_with_runtime_credentials(
+            &base_config,
+            &TerminalSshCredentials { username, password },
+            event_tx,
+            self.ssh_keyboard_interactive_enabled,
+        ) else {
+            return false;
+        };
+
+        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_active(false, cx);
+        self.start_ssh_connection_attempt(runtime_config, responder, generation, cx)
     }
 
     pub fn ssh_mfa_request(&self) -> Option<TerminalMfaRequest> {
@@ -2929,14 +3205,8 @@ impl Terminal {
         if self.is_read_only() {
             return false;
         }
-        if let Some(config) = self.ssh_config.clone() {
-            let Some(session_manager) = self.ssh_session_manager.clone() else {
-                return false;
-            };
+        if let Some(base_config) = self.ssh_base_config.clone() {
             let Some(event_tx) = self.event_tx.clone() else {
-                return false;
-            };
-            let Some(event_proxy) = self.event_proxy.clone() else {
                 return false;
             };
 
@@ -2956,41 +3226,32 @@ impl Terminal {
                 return false;
             };
             zmodem_responder.cancel();
-            let term = self.term.clone();
-            let connection_id = self.connection_id;
-            let init_commands = self.init_commands.clone();
-            let recording_tap = self.recording_tap();
-            let entity = cx.entity().downgrade();
-            cx.spawn(async move |_, cx| {
-                let _ = session_manager.disconnect().await;
-                let _ = entity.update(cx, |terminal, cx| {
-                    if !terminal.is_current_connection_generation(generation) {
-                        return;
-                    }
+            self.ssh_mfa_responder = None;
+            self.ssh_credential_request = None;
+            self.ssh_config = Some(base_config.clone());
 
-                    let (disconnect_tx, disconnect_rx) =
-                        tokio::sync::oneshot::channel::<Option<String>>();
-                    Self::spawn_ssh_disconnect_handler(disconnect_rx, generation, cx);
-                    Self::spawn_ssh_connect(
-                        SshConnectTask {
-                            session_manager: session_manager.clone(),
-                            config: config.clone(),
-                            term: term.clone(),
-                            event_proxy: event_proxy.clone(),
-                            event_tx: event_tx.clone(),
-                            zmodem_responder: zmodem_responder.clone(),
-                            connection_id,
-                            on_disconnect: Some(disconnect_tx),
-                            init_commands: init_commands.clone(),
-                            recording_tap: recording_tap.clone(),
-                            generation,
-                        },
-                        cx,
-                    );
-                    Self::spawn_ssh_history_loader(session_manager.clone(), cx);
-                });
-            })
-            .detach();
+            if let Some(session_manager) = self.ssh_session_manager.take() {
+                cx.spawn(async move |_, _| {
+                    let _ = session_manager.disconnect().await;
+                })
+                .detach();
+            }
+
+            if self.ssh_credential_prompt_policy.requires_credentials() {
+                self.queue_ssh_credential_request(generation, cx);
+            } else {
+                let Ok((runtime_config, responder)) = ssh_config_with_runtime_credentials(
+                    &base_config,
+                    &TerminalSshCredentials::default(),
+                    event_tx,
+                    self.ssh_keyboard_interactive_enabled,
+                ) else {
+                    return false;
+                };
+                if !self.start_ssh_connection_attempt(runtime_config, responder, generation, cx) {
+                    return false;
+                }
+            }
         } else if let Some(params) = self.serial_params.clone() {
             let Some(event_proxy) = self.event_proxy.clone() else {
                 return false;
@@ -3055,7 +3316,7 @@ impl Terminal {
             return;
         }
 
-        let Some(config) = self.ssh_config.as_mut() else {
+        let Some(runtime_config) = self.ssh_config.clone() else {
             self.connection_state = ConnectionState::Disconnected {
                 error: Some(rejection_message),
             };
@@ -3064,18 +3325,58 @@ impl Terminal {
         };
 
         let persist = decision == HostKeyVerificationDecision::AcceptAndSave;
-        let verifier = config.ssh_config.host_key_verifier.clone();
-        config.ssh_config.host_key_verifier = match request.reason {
-            HostKeyVerificationReason::Unknown => {
-                verifier.with_confirmed_key(request.identity, request.presented, persist)
-            }
-            HostKeyVerificationReason::Changed { .. } => {
-                verifier.with_confirmed_changed_key(request.identity, request.presented, persist)
-            }
+        let retry_config = ssh_config_with_confirmed_host_key(&runtime_config, &request, persist);
+        let Some(event_tx) = self.event_tx.clone() else {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
         };
-        self.ssh_session_manager =
-            Some(Arc::new(SshSessionManager::new(config.ssh_config.clone())));
-        self.reconnect(cx);
+        let Ok((retry_config, responder)) = ssh_config_with_runtime_credentials(
+            &retry_config,
+            &TerminalSshCredentials::default(),
+            event_tx,
+            self.ssh_keyboard_interactive_enabled,
+        ) else {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+            return;
+        };
+
+        self.connection_state = ConnectionState::Connecting;
+        self.set_connection_active(false, cx);
+        if let Some(backend) = self.backend.take() {
+            backend.shutdown();
+        }
+        self.prepare_surface_for_reconnect();
+
+        let generation = self.next_connection_generation();
+        self.record_connection_generation_marker(generation);
+        if let Some(responder) = &self.ssh_mfa_responder {
+            responder.cancel();
+        }
+        if let Some(zmodem_responder) = &self.zmodem_responder {
+            zmodem_responder.cancel();
+        }
+        self.ssh_mfa_responder = None;
+        self.ssh_credential_request = None;
+
+        if let Some(session_manager) = self.ssh_session_manager.take() {
+            cx.spawn(async move |_, _| {
+                let _ = session_manager.disconnect().await;
+            })
+            .detach();
+        }
+
+        if !self.start_ssh_connection_attempt(retry_config, responder, generation, cx) {
+            self.connection_state = ConnectionState::Disconnected {
+                error: Some(rejection_message),
+            };
+            cx.emit(TerminalModelEvent::Wakeup);
+        }
     }
 
     /// 更新 SSH 终端的路径同步设置。
@@ -3311,16 +3612,18 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::with_local_terminal_default_env;
     use super::{
-        CommandRecordGate, ConnectionState, HostKeyVerificationReason, SshConnectionUpdate,
-        Terminal, TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest,
-        TerminalMfaResponder, TerminalScrollProxy, TerminalSessionMode, build_cd_command,
+        CommandRecordGate, ConnectionState, HostKeyVerificationReason, HostKeyVerificationRequest,
+        SshConnectionUpdate, SshCredentialPromptPolicy, Terminal, TerminalConnectionKind,
+        TerminalMfaPrompt, TerminalMfaRequest, TerminalMfaResponder, TerminalScrollProxy,
+        TerminalSessionMode, TerminalSshCredentials, build_cd_command,
         build_ssh_base_init_commands, build_ssh_init_commands, clear_screen_remote_redraw_bytes,
         compose_ssh_init_commands, flush_pending_terminal_events, format_connection_error,
         host_key_verification_request, is_reconnect_generation,
         keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, receive_terminal_event_for_gpui, recent_text_from_term,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, resolve_ssh_connection,
-        send_coalesced_wakeup, shell_escape_arg,
+        send_coalesced_wakeup, shell_escape_arg, ssh_config_with_confirmed_host_key,
+        ssh_config_with_runtime_credentials,
     };
     use crate::history::{
         HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
@@ -3442,7 +3745,11 @@ mod tests {
             pixel_width: 640,
             pixel_height: 480,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -4198,6 +4505,9 @@ mod tests {
                 auth_method: SshAuthMethod::Password {
                     password: "latest-password".to_string(),
                 },
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
                 terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
@@ -4242,6 +4552,203 @@ mod tests {
                 .as_deref()
                 .is_some_and(|commands| commands.contains("/srv/current"))
         );
+    }
+
+    #[test]
+    fn terminal_ssh_credentials_are_injected_without_mutating_base() {
+        let connection = StoredConnection::new_ssh(
+            "Prompted SSH".to_string(),
+            SshParams {
+                host: "prompted.example".to_string(),
+                port: 22,
+                username: "stored-user".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "stored-password".to_string(),
+                },
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+            },
+            None,
+        );
+        let (resolve_event_tx, _resolve_event_rx) = unbounded_channel();
+        let base = resolve_ssh_connection(
+            SshConnectionUpdate {
+                connection,
+                working_dir: None,
+                sync_path_with_terminal: false,
+            },
+            resolve_event_tx,
+        )
+        .expect("SSH 配置应可解析")
+        .config;
+        let (event_tx, _event_rx) = unbounded_channel();
+
+        let (runtime, _responder) = ssh_config_with_runtime_credentials(
+            &base,
+            &TerminalSshCredentials {
+                username: Some("runtime-user".to_string()),
+                password: Some("runtime-password".to_string()),
+            },
+            event_tx,
+            true,
+        )
+        .expect("临时凭据应可注入运行时配置");
+
+        assert_eq!("runtime-user", runtime.ssh_config.username);
+        assert!(matches!(
+            runtime.ssh_config.auth,
+            SshAuth::Password(ref password) if password == "runtime-password"
+        ));
+        assert!(runtime.ssh_config.keyboard_interactive_responder.is_some());
+        assert_eq!("stored-user", base.ssh_config.username);
+        assert!(matches!(
+            base.ssh_config.auth,
+            SshAuth::Password(ref password) if password == "stored-password"
+        ));
+        assert!(base.ssh_config.keyboard_interactive_responder.is_none());
+    }
+
+    #[test]
+    fn terminal_ssh_credentials_disable_keyboard_interactive_responder() {
+        let connection = StoredConnection::new_ssh(
+            "No keyboard-interactive".to_string(),
+            SshParams {
+                host: "no-ki.example".to_string(),
+                port: 22,
+                username: "user".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "password".to_string(),
+                },
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: Some(false),
+                terminal_encoding: Default::default(),
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+            },
+            None,
+        );
+        let (resolve_event_tx, _resolve_event_rx) = unbounded_channel();
+        let base = resolve_ssh_connection(
+            SshConnectionUpdate {
+                connection,
+                working_dir: None,
+                sync_path_with_terminal: false,
+            },
+            resolve_event_tx,
+        )
+        .expect("SSH 配置应可解析")
+        .config;
+        let (event_tx, _event_rx) = unbounded_channel();
+
+        let (runtime, _responder) = ssh_config_with_runtime_credentials(
+            &base,
+            &TerminalSshCredentials::default(),
+            event_tx,
+            false,
+        )
+        .expect("关闭 keyboard-interactive 时仍应生成 SSH 配置");
+
+        assert!(runtime.ssh_config.keyboard_interactive_responder.is_none());
+    }
+
+    #[test]
+    fn host_key_retry_preserves_runtime_credentials_without_mutating_base() {
+        let connection = StoredConnection::new_ssh(
+            "Host-key retry".to_string(),
+            SshParams {
+                host: "host-key.example".to_string(),
+                port: 22,
+                username: "stored-user".to_string(),
+                auth_method: SshAuthMethod::Password {
+                    password: "stored-password".to_string(),
+                },
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
+                terminal_encoding: Default::default(),
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                x11_forwarding: None,
+                allow_legacy_algorithms: None,
+                jump_server: None,
+                proxy: None,
+                os_id: None,
+                icon: None,
+            },
+            None,
+        );
+        let (resolve_event_tx, _resolve_event_rx) = unbounded_channel();
+        let base = resolve_ssh_connection(
+            SshConnectionUpdate {
+                connection,
+                working_dir: None,
+                sync_path_with_terminal: false,
+            },
+            resolve_event_tx,
+        )
+        .expect("SSH 配置应可解析")
+        .config;
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (runtime, _responder) = ssh_config_with_runtime_credentials(
+            &base,
+            &TerminalSshCredentials {
+                username: Some("runtime-user".to_string()),
+                password: Some("runtime-password".to_string()),
+            },
+            event_tx,
+            true,
+        )
+        .expect("临时凭据应可注入运行时配置");
+        let request = HostKeyVerificationRequest {
+            identity: HostKeyIdentity::new("host-key.example", 22, HostKeyRoute::Direct),
+            presented: HostKeyDetails {
+                algorithm: "ssh-ed25519".to_string(),
+                fingerprint: "SHA256:test".to_string(),
+            },
+            reason: HostKeyVerificationReason::Unknown,
+        };
+
+        let retry = ssh_config_with_confirmed_host_key(&runtime, &request, false);
+
+        assert_eq!("runtime-user", retry.ssh_config.username);
+        assert!(matches!(
+            retry.ssh_config.auth,
+            SshAuth::Password(ref password) if password == "runtime-password"
+        ));
+        assert_eq!("stored-user", base.ssh_config.username);
+        assert!(matches!(
+            base.ssh_config.auth,
+            SshAuth::Password(ref password) if password == "stored-password"
+        ));
     }
 
     #[test]
@@ -5023,7 +5530,11 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,
@@ -5197,7 +5708,11 @@ mod tests {
             pixel_width: 0,
             pixel_height: 0,
             ssh_config: None,
+            ssh_base_config: None,
             ssh_session_manager: None,
+            ssh_credential_prompt_policy: SshCredentialPromptPolicy::default(),
+            ssh_credential_request: None,
+            ssh_keyboard_interactive_enabled: false,
             ssh_mfa_responder: None,
             zmodem_responder: None,
             pending_host_key_verification: None,

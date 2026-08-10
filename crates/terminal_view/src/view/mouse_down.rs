@@ -8,7 +8,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         let accepts_live_input = self.accepts_live_terminal_input(cx);
-        if self.terminal.read(cx).ssh_mfa_request().is_none() {
+        if !self.has_blocking_auth_prompt(cx) {
             window.focus(&self.focus_handle, cx);
         }
         if should_start_block_selection(event.button, event.modifiers) {
@@ -176,7 +176,7 @@ impl TerminalView {
             return;
         }
         cx.stop_propagation();
-        if self.terminal.read(cx).ssh_mfa_request().is_none() {
+        if !self.has_blocking_auth_prompt(cx) {
             window.focus(&self.focus_handle, cx);
         }
         self.dismiss_history_prompt();
