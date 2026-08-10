@@ -1,6 +1,55 @@
 use super::*;
 
 impl HomePage {
+    pub(crate) fn set_workspace_sidebar_collapsed(
+        &mut self,
+        workspace_id: i64,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result = storage
+            .get::<WorkspaceRepository>()
+            .ok_or_else(|| anyhow::anyhow!("WorkspaceRepository not found"))
+            .and_then(|repo| repo.update_sidebar_collapsed(workspace_id, collapsed));
+
+        match result {
+            Ok(()) => {
+                if let Some(workspace) = self
+                    .workspaces
+                    .iter_mut()
+                    .find(|workspace| workspace.id == Some(workspace_id))
+                {
+                    workspace.sidebar_collapsed = collapsed;
+                    cx.notify();
+                }
+            }
+            Err(error) => tracing::error!("更新工作区侧栏折叠状态失败: {error}"),
+        }
+    }
+
+    pub(crate) fn set_all_workspaces_sidebar_collapsed(
+        &mut self,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result = storage
+            .get::<WorkspaceRepository>()
+            .ok_or_else(|| anyhow::anyhow!("WorkspaceRepository not found"))
+            .and_then(|repo| repo.set_all_sidebar_collapsed(collapsed));
+
+        match result {
+            Ok(()) => {
+                self.workspaces
+                    .iter_mut()
+                    .for_each(|workspace| workspace.sidebar_collapsed = collapsed);
+                cx.notify();
+            }
+            Err(error) => tracing::error!("批量更新工作区侧栏折叠状态失败: {error}"),
+        }
+    }
+
     pub(crate) fn handle_save_workspace(
         &mut self,
         workspace_id: Option<i64>,

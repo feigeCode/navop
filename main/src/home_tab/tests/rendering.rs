@@ -219,7 +219,6 @@ fn persistent_sidebar_supports_connection_group_drag_and_drop() {
         rows.contains("home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);")
     );
     assert!(rows.contains("Some(id)"));
-    assert!(rows.contains("None"));
     assert!(grouping.contains("repo.update_workspace("));
     assert!(grouping.contains("ConnectionDataEvent::ConnectionUpdated"));
 }

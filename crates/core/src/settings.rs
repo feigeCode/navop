@@ -721,6 +721,12 @@ fn format_legacy_custom_command(program: &str, arguments: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionSidebarTreeState {
+    #[serde(default)]
+    pub hide_empty_workspaces: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -826,6 +832,8 @@ pub struct AppSettings {
     pub home_page_style: HomePageStyle,
     #[serde(default = "default_true")]
     pub connection_sidebar_expanded: bool,
+    #[serde(default)]
+    pub connection_sidebar_tree_state: ConnectionSidebarTreeState,
     /// 是否启用SQL查询的自动保存功能
     #[serde(default = "default_true")]
     pub enable_sql_auto_save: bool,
@@ -1152,6 +1160,7 @@ impl Default for AppSettings {
             home_connection_layout: HomeConnectionLayout::default(),
             home_page_style: HomePageStyle::default(),
             connection_sidebar_expanded: true,
+            connection_sidebar_tree_state: ConnectionSidebarTreeState::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
             system_hotkey_macos: default_system_hotkey_macos(),
@@ -1702,6 +1711,26 @@ mod tests {
         assert_eq!(HomeConnectionLayout::List, settings.home_connection_layout);
         assert_eq!(HomePageStyle::Legacy, settings.home_page_style);
         assert!(!settings.connection_sidebar_expanded);
+        assert!(!settings.connection_sidebar_tree_state.hide_empty_workspaces);
+    }
+
+    #[test]
+    fn app_settings_defaults_to_showing_empty_workspaces() {
+        let settings = AppSettings::default();
+
+        assert!(!settings.connection_sidebar_tree_state.hide_empty_workspaces);
+    }
+
+    #[test]
+    fn app_settings_deserializes_connection_sidebar_tree_state() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "connection_sidebar_tree_state": {
+                "hide_empty_workspaces": true
+            }
+        }))
+        .expect("connection sidebar tree state should deserialize");
+
+        assert!(settings.connection_sidebar_tree_state.hide_empty_workspaces);
     }
 
     #[test]

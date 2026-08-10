@@ -99,6 +99,7 @@ struct WorkspaceRow {
     cloud_id: Option<String>,
     last_synced_at: Option<i64>,
     sort_order: Option<i32>,
+    sidebar_collapsed: bool,
 }
 
 impl FromSqliteRow for WorkspaceRow {
@@ -114,6 +115,7 @@ impl FromSqliteRow for WorkspaceRow {
             cloud_id: row.get("cloud_id")?,
             last_synced_at: row.get("last_synced_at").unwrap_or(None),
             sort_order: row.get("sort_order").unwrap_or(Some(0)),
+            sidebar_collapsed: row.get("sidebar_collapsed").unwrap_or(false),
         })
     }
 }
@@ -131,6 +133,7 @@ impl From<WorkspaceRow> for Workspace {
             cloud_id: row.cloud_id,
             last_synced_at: row.last_synced_at,
             sort_order: row.sort_order,
+            sidebar_collapsed: row.sidebar_collapsed,
         }
     }
 }
@@ -614,6 +617,26 @@ impl WorkspaceRepository {
         })
     }
 
+    pub fn update_sidebar_collapsed(&self, workspace_id: i64, collapsed: bool) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE workspaces SET sidebar_collapsed = ?1 WHERE id = ?2",
+                params![collapsed, workspace_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_all_sidebar_collapsed(&self, collapsed: bool) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE workspaces SET sidebar_collapsed = ?1",
+                params![collapsed],
+            )?;
+            Ok(())
+        })
+    }
+
     fn next_sort_order(&self) -> Result<i32> {
         self.conn.with_connection(|conn| {
             let max_order: Option<i32> =
@@ -640,12 +663,13 @@ impl Repository for WorkspaceRepository {
         let cloud_id = item.cloud_id.clone();
         let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order.unwrap_or(self.next_sort_order()?);
+        let sidebar_collapsed = item.sidebar_collapsed;
         let ts = now();
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO workspaces (name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, ts, ts],
+                "INSERT INTO workspaces (name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, sidebar_collapsed, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, sidebar_collapsed, ts, ts],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
@@ -669,12 +693,13 @@ impl Repository for WorkspaceRepository {
         let cloud_id = item.cloud_id.clone();
         let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order;
+        let sidebar_collapsed = item.sidebar_collapsed;
         let ts = now();
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, parent_id = ?4, cloud_id = ?5, last_synced_at = ?6, sort_order = COALESCE(?7, sort_order), updated_at = ?8 WHERE id = ?9",
-                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, ts, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, parent_id = ?4, cloud_id = ?5, last_synced_at = ?6, sort_order = COALESCE(?7, sort_order), sidebar_collapsed = ?8, updated_at = ?9 WHERE id = ?10",
+                params![name, color, icon, parent_id, cloud_id, last_synced_at, sort_order, sidebar_collapsed, ts, id],
             )?;
             Ok(())
         })
@@ -699,7 +724,7 @@ impl Repository for WorkspaceRepository {
 
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order, sidebar_collapsed FROM workspaces WHERE id = ?1")?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
                 Ok(Some(WorkspaceRow::from_row(row)?.into()))
@@ -711,7 +736,7 @@ impl Repository for WorkspaceRepository {
 
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, parent_id, created_at, updated_at, cloud_id, last_synced_at, sort_order, sidebar_collapsed FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
             let rows = stmt.query_map([], |row| WorkspaceRow::from_row(row))?;
             let mut results = Vec::new();
             for row in rows {
@@ -881,6 +906,9 @@ mod tests {
                 port: 22,
                 username: "deploy".to_string(),
                 auth_method: SshAuthMethod::Agent,
+                prompt_username: None,
+                prompt_password: None,
+                keyboard_interactive: None,
                 terminal_encoding: Default::default(),
                 connect_timeout: None,
                 keepalive_interval: None,
@@ -906,9 +934,6 @@ mod tests {
     #[test]
     fn workspace_list_uses_manual_sort_order() {
         let (conn, _) = test_repository();
-                prompt_username: None,
-                prompt_password: None,
-                keyboard_interactive: None,
         let repo = WorkspaceRepository::new(conn);
         let mut first = workspace("first");
         let mut second = workspace("second");
@@ -995,6 +1020,53 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(vec![Some(second_id), Some(first_id)], listed_ids);
+    }
+
+    #[test]
+    fn workspace_repository_persists_sidebar_collapsed_without_touching_updated_at() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut item = workspace("collapsed");
+        let id = repo.insert(&mut item).unwrap();
+        let initial_updated_at = item.updated_at;
+
+        repo.update_sidebar_collapsed(id, true).unwrap();
+
+        let stored = repo.get(id).unwrap().unwrap();
+        assert!(stored.sidebar_collapsed);
+        assert_eq!(initial_updated_at, stored.updated_at);
+    }
+
+    #[test]
+    fn workspace_cloud_update_preserves_local_sidebar_collapsed_state() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut item = workspace("local");
+        let id = repo.insert(&mut item).unwrap();
+        repo.update_sidebar_collapsed(id, true).unwrap();
+
+        let mut cloud_item = repo.get(id).unwrap().unwrap();
+        cloud_item.name = "cloud".to_string();
+        cloud_item.sidebar_collapsed = false;
+        repo.update_from_cloud(&cloud_item).unwrap();
+
+        let stored = repo.get(id).unwrap().unwrap();
+        assert_eq!("cloud", stored.name);
+        assert!(stored.sidebar_collapsed);
+    }
+
+    #[test]
+    fn workspace_sidebar_collapsed_is_excluded_from_serialized_sync_data() {
+        let mut item = workspace("local");
+        item.sidebar_collapsed = true;
+
+        let serialized = serde_json::to_value(&item).unwrap();
+
+        assert!(
+            serialized
+                .as_object()
+                .is_some_and(|fields| !fields.contains_key("sidebar_collapsed"))
+        );
     }
 
     #[test]
@@ -1234,6 +1306,9 @@ mod tests {
             auth_method: SshAuthMethod::Password {
                 password: "plaintext-secret".to_string(),
             },
+            prompt_username: None,
+            prompt_password: None,
+            keyboard_interactive: None,
             terminal_encoding: Default::default(),
             connect_timeout: None,
             keepalive_interval: None,
@@ -1306,9 +1381,6 @@ mod tests {
             .to_string();
         assert!(!error.contains(invalid_encrypted_value));
         assert!(!error.contains("sensitive-unreadable.example.com"));
-            prompt_username: None,
-            prompt_password: None,
-            keyboard_interactive: None,
         assert!(!error.contains("\"params\""));
     }
 

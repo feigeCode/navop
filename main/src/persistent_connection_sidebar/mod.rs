@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AppContext, Context, Entity, EventEmitter, Hsla, IntoElement, ParentElement, Pixels, Render,
@@ -26,6 +24,7 @@ mod resize;
 mod resize_contract_tests;
 mod row_parts;
 mod rows;
+mod state;
 mod tree;
 mod tree_model;
 mod workspace_context_menu;
@@ -100,8 +99,7 @@ fn shade(color: Hsla, dark_mode: bool) -> Hsla {
 pub(crate) struct PersistentConnectionSidebar {
     pub(super) home_page: Entity<HomePage>,
     pub(super) tree_expanded: bool,
-    pub(super) collapsed_workspaces: HashSet<i64>,
-    pub(super) unassigned_collapsed: bool,
+    pub(super) hide_empty_workspaces: bool,
     pub(super) search_input: Entity<InputState>,
     tree_width: Pixels,
     terminal_colors: Option<TerminalColors>,
@@ -133,11 +131,11 @@ impl PersistentConnectionSidebar {
             }
         })
         .detach();
+        let tree_state = one_core::settings::AppSettings::current(cx).connection_sidebar_tree_state;
         Self {
             home_page,
             tree_expanded,
-            collapsed_workspaces: HashSet::new(),
-            unassigned_collapsed: false,
+            hide_empty_workspaces: tree_state.hide_empty_workspaces,
             search_input,
             tree_width: cx.theme().geometry.layout.context_sidebar_default,
             terminal_colors: None,

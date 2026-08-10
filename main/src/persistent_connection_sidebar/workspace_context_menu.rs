@@ -41,10 +41,7 @@ impl PersistentConnectionSidebar {
                 PopupMenuItem::new(expansion_label(expanded))
                     .icon(expansion_icon(expanded))
                     .on_click(window.listener_for(&toggle_view, move |this, _, _, cx| {
-                        if !this.collapsed_workspaces.remove(&workspace_id) {
-                            this.collapsed_workspaces.insert(workspace_id);
-                        }
-                        cx.notify();
+                        this.toggle_workspace_collapsed(workspace_id, cx);
                     })),
             )
             .item(
@@ -72,48 +69,6 @@ impl PersistentConnectionSidebar {
                             home.delete_workspace(workspace_id, window, cx);
                         });
                     }),
-            )
-            .separator()
-            .item(refresh_item(home))
-    }
-
-    pub(super) fn build_unassigned_context_menu(
-        menu: PopupMenu,
-        view: &Entity<Self>,
-        expanded: bool,
-        window: &mut Window,
-        cx: &mut gpui::Context<PopupMenu>,
-    ) -> PopupMenu {
-        let home = view.read(cx).home_page.clone();
-        let sort_order = home.read(cx).workspaces.len() as i32;
-        let toggle_view = view.clone();
-        let new_home = home.clone();
-        let group_home = home.clone();
-
-        menu.item(new_connection_item(new_home))
-            .item(
-                PopupMenuItem::new(t!("Workspace.new").to_string())
-                    .icon(IconName::FolderOpen)
-                    .on_click(move |_, window, cx| {
-                        show_workspace_dialog(
-                            group_home.clone(),
-                            WorkspaceDialogConfig {
-                                initial_sort_order: Some(sort_order),
-                                ..Default::default()
-                            },
-                            window,
-                            cx,
-                        );
-                    }),
-            )
-            .separator()
-            .item(
-                PopupMenuItem::new(expansion_label(expanded))
-                    .icon(expansion_icon(expanded))
-                    .on_click(window.listener_for(&toggle_view, |this, _, _, cx| {
-                        this.unassigned_collapsed = !this.unassigned_collapsed;
-                        cx.notify();
-                    })),
             )
             .separator()
             .item(refresh_item(home))

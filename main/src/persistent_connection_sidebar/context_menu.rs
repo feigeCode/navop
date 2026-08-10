@@ -202,7 +202,7 @@ mod tests {
         let rows = include_str!("rows.rs");
         let module = include_str!("mod.rs");
 
-        assert_eq!(3, rows.matches(".context_menu(").count());
+        assert_eq!(2, rows.matches(".context_menu(").count());
         assert!(module.contains("mod connection_context_menu;"));
         assert!(module.contains("mod workspace_context_menu;"));
     }

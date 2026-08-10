@@ -1,0 +1,2 @@
+ALTER TABLE workspaces
+ADD COLUMN sidebar_collapsed INTEGER NOT NULL DEFAULT 0;

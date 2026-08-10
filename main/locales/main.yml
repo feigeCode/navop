@@ -1542,6 +1542,10 @@ Connection:
     en: Collapse All
     zh-CN: 全部折叠
     zh-HK: 全部摺疊
+  hide_empty_workspaces:
+    en: Hide Empty Workspaces
+    zh-CN: 隐藏空工作区
+    zh-HK: 隱藏空工作區
   search_placeholder:
     en: Search connections or workspaces
     zh-CN: 搜索连接或工作区

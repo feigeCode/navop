@@ -7,7 +7,6 @@ use gpui_component::{
     ActiveTheme, FunctionalIcon, IconName, IconSize, InteractiveElementExt, ObjectIcon, Sizable,
     h_flex, menu::ContextMenuExt,
 };
-use rust_i18n::t;
 
 use super::drag::DragConnection;
 use super::row_parts::{
@@ -36,10 +35,6 @@ impl PersistentConnectionSidebar {
                 depth,
                 workspace_id,
             } => self.render_connection_row(id, name, depth, workspace_id, palette, cx),
-            ConnectionTreeRow::Unassigned {
-                connection_count,
-                expanded,
-            } => self.render_unassigned_row(connection_count, expanded, palette, cx),
         }
     }
 
@@ -84,7 +79,7 @@ impl PersistentConnectionSidebar {
                 this.bg(palette.hover).border_color(palette.accent)
             })
             .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
-                this.collapsed_workspaces.remove(&id);
+                this.set_workspace_collapsed(id, false, cx);
                 this.home_page.update(cx, |home, cx| {
                     home.move_connection_to_workspace(drag.connection_id, Some(id), cx);
                 });
@@ -92,10 +87,7 @@ impl PersistentConnectionSidebar {
             }))
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
-                    if !this.collapsed_workspaces.remove(&id) {
-                        this.collapsed_workspaces.insert(id);
-                    }
-                    cx.notify();
+                    this.toggle_workspace_collapsed(id, cx);
                 });
             })
             .when_some(rename_config, |this, config| {
@@ -204,6 +196,11 @@ impl PersistentConnectionSidebar {
         };
         let view_for_menu = cx.entity();
         let tree = cx.theme().geometry.tree;
+        let visual_depth = if workspace_id.is_some() {
+            depth + 1
+        } else {
+            depth
+        };
         h_flex()
             .id(SharedString::from(format!("persistent-connection-{id}")))
             .w_full()
@@ -214,7 +211,7 @@ impl PersistentConnectionSidebar {
             } else {
                 gpui::transparent_black()
             })
-            .pl(tree.base_padding + tree.indent * (depth + 1))
+            .pl(tree.base_padding + tree.indent * visual_depth)
             .pr_2()
             .gap_2()
             .items_center()
@@ -229,9 +226,7 @@ impl PersistentConnectionSidebar {
             })
             .on_drop(cx.listener(move |this, drag: &DragConnection, _, cx| {
                 if let Some(workspace_id) = workspace_id {
-                    this.collapsed_workspaces.remove(&workspace_id);
-                } else {
-                    this.unassigned_collapsed = false;
+                    this.set_workspace_collapsed(workspace_id, false, cx);
                 }
                 this.home_page.update(cx, |home, cx| {
                     home.move_connection_to_workspace(drag.connection_id, workspace_id, cx);
@@ -263,54 +258,6 @@ impl PersistentConnectionSidebar {
             .child(icon)
             .child(tree_label(name))
             .when_some(team_indicator, |row, indicator| row.child(indicator))
-            .into_any_element()
-    }
-
-    fn render_unassigned_row(
-        &self,
-        count: usize,
-        expanded: bool,
-        palette: SidebarPalette,
-        cx: &gpui::Context<Self>,
-    ) -> AnyElement {
-        let view = cx.entity();
-        let view_for_menu = view.clone();
-        let tree = cx.theme().geometry.tree;
-        h_flex()
-            .id("persistent-unassigned")
-            .w_full()
-            .h(tree.row_height)
-            .border_l_2()
-            .border_color(gpui::transparent_black())
-            .px(tree.base_padding)
-            .gap_1()
-            .items_center()
-            .cursor_pointer()
-            .text_color(palette.foreground)
-            .hover(move |this| this.bg(palette.hover))
-            .drag_over::<DragConnection>(move |this, _, _, _| {
-                this.bg(palette.hover).border_color(palette.accent)
-            })
-            .on_drop(cx.listener(|this, drag: &DragConnection, _, cx| {
-                this.unassigned_collapsed = false;
-                this.home_page.update(cx, |home, cx| {
-                    home.move_connection_to_workspace(drag.connection_id, None, cx);
-                });
-                cx.notify();
-            }))
-            .on_click(move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.unassigned_collapsed = !this.unassigned_collapsed;
-                    cx.notify();
-                })
-            })
-            .context_menu(move |menu, window, cx| {
-                Self::build_unassigned_context_menu(menu, &view_for_menu, expanded, window, cx)
-            })
-            .child(tree_chevron(count > 0, expanded, cx))
-            .child(ObjectIcon::new(IconName::FolderOpen).with_size(IconSize::Default))
-            .child(tree_label(t!("Home.unassigned_workspace").to_string()))
-            .child(tree_count(count, palette))
             .into_any_element()
     }
 }

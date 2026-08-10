@@ -1085,6 +1085,9 @@ pub struct Workspace {
     /// 手动排序位序，用于跨设备同步工作区列表顺序。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order: Option<i32>,
+    /// 本地侧栏中的折叠状态，不参与云同步。
+    #[serde(skip)]
+    pub sidebar_collapsed: bool,
 }
 
 impl Entity for Workspace {
@@ -1116,6 +1119,7 @@ impl Workspace {
             cloud_id: None,
             last_synced_at: None,
             sort_order: None,
+            sidebar_collapsed: false,
         }
     }
 }

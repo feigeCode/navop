@@ -30,17 +30,12 @@ pub(crate) enum ConnectionTreeRow {
         depth: usize,
         workspace_id: Option<i64>,
     },
-    Unassigned {
-        connection_count: usize,
-        expanded: bool,
-    },
 }
 
 pub(crate) fn build_connection_tree_rows(
     workspaces: &[WorkspaceNodeInput],
     connections: &[ConnectionNodeInput],
     collapsed_workspaces: &HashSet<i64>,
-    unassigned_collapsed: bool,
 ) -> Vec<ConnectionTreeRow> {
     let workspace_by_id: HashMap<_, _> = workspaces.iter().map(|item| (item.id, item)).collect();
     let mut children: HashMap<Option<i64>, Vec<i64>> = HashMap::new();
@@ -68,7 +63,7 @@ pub(crate) fn build_connection_tree_rows(
             builder.append_workspace(workspace.id, 0);
         }
     }
-    append_unassigned_rows(connections, unassigned_collapsed, &mut builder.rows);
+    append_unassigned_connections(connections, &mut builder.rows);
     builder.rows
 }
 
@@ -111,6 +106,31 @@ pub(crate) fn filter_connection_tree_inputs(
             pending.push(*parent_id);
         }
     }
+    workspaces.retain(|workspace| visible_workspace_ids.contains(&workspace.id));
+}
+
+pub(crate) fn hide_empty_workspace_inputs(
+    workspaces: &mut Vec<WorkspaceNodeInput>,
+    connections: &[ConnectionNodeInput],
+) {
+    let workspace_parent = workspaces
+        .iter()
+        .map(|workspace| (workspace.id, workspace.parent_id))
+        .collect::<HashMap<_, _>>();
+    let mut visible_workspace_ids = connections
+        .iter()
+        .filter_map(|connection| connection.workspace_id)
+        .collect::<HashSet<_>>();
+    let mut pending = visible_workspace_ids.iter().copied().collect::<Vec<_>>();
+
+    while let Some(workspace_id) = pending.pop() {
+        if let Some(Some(parent_id)) = workspace_parent.get(&workspace_id)
+            && visible_workspace_ids.insert(*parent_id)
+        {
+            pending.push(*parent_id);
+        }
+    }
+
     workspaces.retain(|workspace| visible_workspace_ids.contains(&workspace.id));
 }
 
@@ -179,31 +199,21 @@ impl TreeBuilder<'_> {
     }
 }
 
-fn append_unassigned_rows(
+fn append_unassigned_connections(
     connections: &[ConnectionNodeInput],
-    collapsed: bool,
     rows: &mut Vec<ConnectionTreeRow>,
 ) {
-    let unassigned: Vec<_> = connections
-        .iter()
-        .filter(|connection| connection.workspace_id.is_none())
-        .collect();
-    rows.push(ConnectionTreeRow::Unassigned {
-        connection_count: unassigned.len(),
-        expanded: !collapsed,
-    });
-    if !collapsed {
-        rows.extend(
-            unassigned
-                .into_iter()
-                .map(|connection| ConnectionTreeRow::Connection {
-                    id: connection.id,
-                    name: connection.name.clone(),
-                    depth: 1,
-                    workspace_id: None,
-                }),
-        );
-    }
+    rows.extend(
+        connections
+            .iter()
+            .filter(|connection| connection.workspace_id.is_none())
+            .map(|connection| ConnectionTreeRow::Connection {
+                id: connection.id,
+                name: connection.name.clone(),
+                depth: 0,
+                workspace_id: None,
+            }),
+    );
 }
 
 #[cfg(test)]
@@ -235,7 +245,6 @@ mod tests {
                 connection(20, Some(2), "Child connection"),
             ],
             &HashSet::new(),
-            false,
         );
 
         assert_eq!(
@@ -244,7 +253,6 @@ mod tests {
                 ("workspace", 1),
                 ("connection", 2),
                 ("connection", 1),
-                ("unassigned", 0),
             ],
             row_shape(&rows)
         );
@@ -256,28 +264,46 @@ mod tests {
             &[workspace(1, None, "Root"), workspace(2, Some(1), "Child")],
             &[connection(10, Some(1), "Connection")],
             &HashSet::from([1]),
-            false,
         );
 
-        assert_eq!(vec![("workspace", 0), ("unassigned", 0)], row_shape(&rows));
+        assert_eq!(vec![("workspace", 0)], row_shape(&rows));
     }
 
     #[test]
-    fn unassigned_drop_target_remains_visible_when_empty() {
+    fn unassigned_connections_render_as_root_rows_without_a_group() {
+        let rows = build_connection_tree_rows(
+            &[workspace(1, None, "Root")],
+            &[
+                connection(10, Some(1), "Workspace connection"),
+                connection(20, None, "Loose connection"),
+            ],
+            &HashSet::new(),
+        );
+
+        assert_eq!(
+            vec![("workspace", 0), ("connection", 1), ("connection", 0),],
+            row_shape(&rows)
+        );
+        assert!(matches!(
+            rows.last(),
+            Some(ConnectionTreeRow::Connection {
+                id: 20,
+                depth: 0,
+                workspace_id: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn no_unassigned_connections_adds_no_extra_root_row() {
         let rows = build_connection_tree_rows(
             &[workspace(1, None, "Root")],
             &[connection(10, Some(1), "Connection")],
             &HashSet::new(),
-            false,
         );
 
-        assert!(matches!(
-            rows.last(),
-            Some(ConnectionTreeRow::Unassigned {
-                connection_count: 0,
-                ..
-            })
-        ));
+        assert_eq!(vec![("workspace", 0), ("connection", 1)], row_shape(&rows));
     }
 
     #[test]
@@ -290,7 +316,6 @@ mod tests {
                 connection(30, None, "Unassigned connection"),
             ],
             &HashSet::new(),
-            false,
         );
 
         let drop_targets = rows
@@ -316,17 +341,11 @@ mod tests {
             ],
             &[],
             &HashSet::new(),
-            false,
         );
 
-        assert_eq!(4, rows.len());
+        assert_eq!(3, rows.len());
         assert_eq!(
-            vec![
-                ("workspace", 0),
-                ("workspace", 0),
-                ("workspace", 1),
-                ("unassigned", 0),
-            ],
+            vec![("workspace", 0), ("workspace", 0), ("workspace", 1),],
             row_shape(&rows)
         );
     }
@@ -404,12 +423,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hide_empty_workspace_removes_empty_subtrees() {
+        let mut workspaces = vec![
+            workspace(1, None, "Empty root"),
+            workspace(2, Some(1), "Empty child"),
+        ];
+
+        hide_empty_workspace_inputs(&mut workspaces, &[]);
+
+        assert!(workspaces.is_empty());
+    }
+
+    #[test]
+    fn hide_empty_workspace_keeps_ancestors_of_connected_descendants() {
+        let mut workspaces = vec![
+            workspace(1, None, "Root"),
+            workspace(2, Some(1), "Child"),
+            workspace(3, Some(2), "Grandchild"),
+        ];
+        let connections = vec![connection(10, Some(3), "Connection")];
+
+        hide_empty_workspace_inputs(&mut workspaces, &connections);
+
+        assert_eq!(
+            vec![1, 2, 3],
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn hide_empty_workspace_removes_empty_sibling_branches() {
+        let mut workspaces = vec![
+            workspace(1, None, "Root"),
+            workspace(2, Some(1), "Connected"),
+            workspace(3, Some(1), "Empty"),
+        ];
+        let connections = vec![connection(10, Some(2), "Connection")];
+
+        hide_empty_workspace_inputs(&mut workspaces, &connections);
+
+        assert_eq!(
+            vec![1, 2],
+            workspaces
+                .iter()
+                .map(|workspace| workspace.id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn hide_empty_workspace_removes_workspace_matched_only_by_name() {
+        let mut workspaces = vec![workspace(1, None, "Empty production")];
+        let mut connections = Vec::new();
+
+        filter_connection_tree_inputs(&mut workspaces, &mut connections, "production", |_| false);
+        hide_empty_workspace_inputs(&mut workspaces, &connections);
+
+        assert!(workspaces.is_empty());
+    }
+
     fn row_shape(rows: &[ConnectionTreeRow]) -> Vec<(&'static str, usize)> {
         rows.iter()
             .map(|row| match row {
                 ConnectionTreeRow::Workspace { depth, .. } => ("workspace", *depth),
                 ConnectionTreeRow::Connection { depth, .. } => ("connection", *depth),
-                ConnectionTreeRow::Unassigned { .. } => ("unassigned", 0),
             })
             .collect()
     }

@@ -488,6 +488,7 @@ impl CloudSyncService {
             cloud_id: Some(cloud_data.id.clone()),
             last_synced_at: Some(cloud_data.updated_at / 1000),
             sort_order: plain_data.sort_order,
+            sidebar_collapsed: false,
         })
     }
 

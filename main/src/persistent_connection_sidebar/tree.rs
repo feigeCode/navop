@@ -4,7 +4,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{AnyElement, IntoElement, ListSizingBehavior, ParentElement, Styled, div, uniform_list};
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, IconSize, Sizable, StyledExt,
-    button::{IconButton, IconButtonRole},
+    button::{IconButton, IconButtonRole, Toggle},
     h_flex,
     input::{Input, LocalInputStyle},
     v_flex,
@@ -13,7 +13,7 @@ use rust_i18n::t;
 
 use super::tree_model::{
     ConnectionNodeInput, ConnectionTreeRow, WorkspaceNodeInput, build_connection_tree_rows,
-    filter_connection_tree_inputs,
+    filter_connection_tree_inputs, hide_empty_workspace_inputs,
 };
 use super::{PersistentConnectionSidebar, SidebarPalette};
 use crate::home::home_workspace_filter::{WorkspaceDialogConfig, show_workspace_dialog};
@@ -69,6 +69,12 @@ impl PersistentConnectionSidebar {
     fn tree_rows(&self, cx: &gpui::App) -> Vec<ConnectionTreeRow> {
         let home = self.home_page.read(cx);
         let query = self.search_input.read(cx).value().trim().to_lowercase();
+        let collapsed_workspaces = home
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.sidebar_collapsed)
+            .filter_map(|workspace| workspace.id)
+            .collect::<std::collections::HashSet<_>>();
         let mut workspaces = home
             .workspaces
             .iter()
@@ -100,6 +106,9 @@ impl PersistentConnectionSidebar {
         filter_connection_tree_inputs(&mut workspaces, &mut connections, &query, |connection| {
             matching_connection_ids.contains(&connection.id)
         });
+        if self.hide_empty_workspaces {
+            hide_empty_workspace_inputs(&mut workspaces, &connections);
+        }
         let searching = !query.is_empty();
         let expanded_workspaces = std::collections::HashSet::new();
         build_connection_tree_rows(
@@ -108,12 +117,7 @@ impl PersistentConnectionSidebar {
             if searching {
                 &expanded_workspaces
             } else {
-                &self.collapsed_workspaces
-            },
-            if searching {
-                false
-            } else {
-                self.unassigned_collapsed
+                &collapsed_workspaces
             },
         )
     }
@@ -165,7 +169,8 @@ impl PersistentConnectionSidebar {
                 .filter(|connection| home.match_connection_type(connection))
                 .count()
         };
-        let view = cx.entity();
+        let view_for_collapse = cx.entity();
+        let view_for_hide_empty = cx.entity();
         let layout = cx.theme().geometry.layout;
         h_flex()
             .w_full()
@@ -222,7 +227,21 @@ impl PersistentConnectionSidebar {
                             .text_color(palette.foreground)
                             .tooltip(t!("Connection.collapse_all"))
                             .on_click(move |_, _, cx| {
-                                view.update(cx, |this, cx| this.collapse_all_groups(cx));
+                                view_for_collapse
+                                    .update(cx, |this, cx| this.collapse_all_groups(cx));
+                            }),
+                    )
+                    .child(
+                        Toggle::new("persistent-hide-empty-workspaces")
+                            .icon(IconName::EyeOff)
+                            .checked(self.hide_empty_workspaces)
+                            .xsmall()
+                            .text_color(palette.foreground)
+                            .tooltip(t!("Connection.hide_empty_workspaces"))
+                            .on_click(move |checked, _, cx| {
+                                view_for_hide_empty.update(cx, |this, cx| {
+                                    this.set_hide_empty_workspaces(*checked, cx);
+                                });
                             }),
                     )
                     .child(
@@ -255,18 +274,6 @@ impl PersistentConnectionSidebar {
                     ),
             )
             .into_any_element()
-    }
-
-    fn collapse_all_groups(&mut self, cx: &mut gpui::Context<Self>) {
-        self.collapsed_workspaces = self
-            .home_page
-            .read(cx)
-            .workspaces
-            .iter()
-            .filter_map(|workspace| workspace.id)
-            .collect();
-        self.unassigned_collapsed = true;
-        cx.notify();
     }
 }
 

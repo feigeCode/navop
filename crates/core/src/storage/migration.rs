@@ -74,6 +74,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260727000001",
         include_str!("../../migrations/20260727000001_connection_credential_revision.sql"),
     ),
+    (
+        "20260810000001",
+        include_str!("../../migrations/20260810000001_workspace_sidebar_collapsed.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -125,6 +129,25 @@ mod tests {
     use super::{MIGRATIONS, run_migrations};
     use rusqlite::{Connection, params};
 
+    fn mark_all_migrations_except(conn: &Connection, target_version: &str) {
+        let mut found_target = false;
+        for (version, _) in MIGRATIONS {
+            if *version == target_version {
+                found_target = true;
+                continue;
+            }
+            conn.execute(
+                "INSERT INTO _migrations (version, applied_at) VALUES (?1, ?2)",
+                params![version, 1i64],
+            )
+            .expect("mark unrelated migration as applied");
+        }
+        assert!(
+            found_target,
+            "migration {target_version} must be registered"
+        );
+    }
+
     #[test]
     fn credential_revision_migration_backfills_existing_connections() {
         let conn = Connection::open_in_memory().expect("open in-memory database");
@@ -141,13 +164,7 @@ mod tests {
         )
         .expect("create pre-migration schema");
 
-        for (version, _) in &MIGRATIONS[..MIGRATIONS.len() - 1] {
-            conn.execute(
-                "INSERT INTO _migrations (version, applied_at) VALUES (?1, ?2)",
-                params![version, 1i64],
-            )
-            .expect("mark preceding migration as applied");
-        }
+        mark_all_migrations_except(&conn, "20260727000001");
 
         run_migrations(&conn).expect("run credential revision migration");
 
@@ -167,5 +184,36 @@ mod tests {
             .is_err(),
             "the positive revision invariant must be enforced by SQLite"
         );
+    }
+
+    #[test]
+    fn workspace_sidebar_collapsed_migration_defaults_existing_rows_to_expanded() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        conn.execute_batch(
+            "CREATE TABLE _migrations (
+                version TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            );
+            CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            );
+            INSERT INTO workspaces (name) VALUES ('existing');",
+        )
+        .expect("create pre-migration schema");
+
+        mark_all_migrations_except(&conn, "20260810000001");
+        run_migrations(&conn).expect("run workspace sidebar collapsed migration");
+
+        let collapsed: i64 = conn
+            .query_row(
+                "SELECT sidebar_collapsed FROM workspaces WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read workspace sidebar collapsed state");
+        assert_eq!(0, collapsed);
+
+        run_migrations(&conn).expect("rerun migrations");
     }
 }
