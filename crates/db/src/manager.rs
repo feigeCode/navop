@@ -881,6 +881,154 @@ pub struct GlobalDbState {
     connections: Arc<DashMap<String, DbConnectionConfig>>,
 }
 
+struct StreamingExecutionRequest {
+    state: GlobalDbState,
+    config: DbConnectionConfig,
+    source: Option<SqlSource>,
+    schema: Option<String>,
+    opts: ExecOptions,
+    tx: mpsc::Sender<StreamingProgress>,
+    cache: Option<GlobalNodeCache>,
+    cache_invalidation: StreamingCacheInvalidation,
+}
+
+enum StreamingCacheInvalidation {
+    Script(String),
+    Connection,
+}
+
+impl StreamingExecutionRequest {
+    async fn run(mut self) -> Option<(String, String, Option<String>)> {
+        let total_size = self
+            .source
+            .as_ref()
+            .and_then(SqlSource::file_size)
+            .unwrap_or(0);
+        let plugin = match self.state.get_plugin(&self.config.database_type) {
+            Ok(plugin) => plugin,
+            Err(error) => {
+                send_streaming_error(
+                    &self.tx,
+                    format!("Failed to get database plugin: {error}"),
+                    total_size,
+                )
+                .await;
+                return None;
+            }
+        };
+        let session_id = match self
+            .state
+            .connection_manager
+            .create_session(self.config.clone(), &self.state.db_manager)
+            .await
+        {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                send_streaming_error(
+                    &self.tx,
+                    format!("Failed to create session: {error}"),
+                    total_size,
+                )
+                .await;
+                return None;
+            }
+        };
+
+        let exec_result = self.execute_on_session(&session_id, plugin.as_ref()).await;
+        let _ = self
+            .state
+            .connection_manager
+            .close_session(&session_id)
+            .await;
+
+        if let Err(error) = exec_result {
+            error!("Streaming execution error: {error}");
+            send_streaming_error(&self.tx, error.to_string(), total_size).await;
+        }
+
+        // Earlier statements may have applied DDL before a later streaming error.
+        // Invalidate conservatively even when execution reports an error.
+        self.invalidate_schema_cache().await
+    }
+
+    async fn execute_on_session(
+        &mut self,
+        session_id: &str,
+        plugin: &dyn DatabasePlugin,
+    ) -> anyhow::Result<()> {
+        let mut guard = self
+            .state
+            .connection_manager
+            .get_session_connection(session_id)
+            .await?;
+        let conn = guard
+            .connection()
+            .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+
+        if let Some(schema) = &self.schema {
+            conn.switch_schema(schema)
+                .await
+                .map_err(|error| anyhow::anyhow!("Failed to switch schema: {error}"))?;
+        }
+
+        let source = self
+            .source
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Streaming source already consumed"))?;
+        conn.execute_streaming(plugin, source, self.opts.clone(), self.tx.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
+    async fn invalidate_schema_cache(&self) -> Option<(String, String, Option<String>)> {
+        let cache = self.cache.as_ref()?;
+        let current_database = self.config.database.as_deref().unwrap_or_default();
+        let cache_ctx = CacheContext::from_config(&self.config);
+
+        match &self.cache_invalidation {
+            StreamingCacheInvalidation::Script(script) => {
+                cache
+                    .process_sql_for_invalidation(
+                        &self.config.id,
+                        script,
+                        current_database,
+                        self.schema.as_deref(),
+                        Some(&cache_ctx),
+                    )
+                    .await
+            }
+            StreamingCacheInvalidation::Connection => {
+                // SQL files are parsed incrementally, so avoid loading the full file
+                // solely for DDL detection and invalidate the connection conservatively.
+                cache.invalidate_connection_metadata(&self.config.id).await;
+                cache.clear_connection_cache(&cache_ctx).await;
+                Some((
+                    self.config.id.clone(),
+                    current_database.to_string(),
+                    self.schema.clone(),
+                ))
+            }
+        }
+    }
+}
+
+async fn send_streaming_error(
+    tx: &mpsc::Sender<StreamingProgress>,
+    message: String,
+    total_size: u64,
+) {
+    let progress = StreamingProgress::with_file_progress(
+        0,
+        SqlResult::Error(SqlErrorInfo {
+            sql: String::new(),
+            message,
+        }),
+        0,
+        total_size,
+    );
+    let _ = tx.send(progress).await;
+}
+
 impl GlobalDbState {
     pub fn new() -> Self {
         Self::with_config_resolver(ConnectionConfigResolver::default())
@@ -1542,8 +1690,6 @@ impl GlobalDbState {
             .get_config(&connection_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
 
-        let schema_to_switch = schema;
-
         if config.database_type != DatabaseType::Oracle {
             if let Some(db) = database {
                 config.database = Some(db);
@@ -1555,88 +1701,37 @@ impl GlobalDbState {
             opts.streaming = true;
         }
 
-        let clone_self = self.clone();
-        Tokio::spawn(cx, async move {
-            let total_size = source.file_size().unwrap_or(0);
-            let plugin = match clone_self.get_plugin(&config.database_type) {
-                Ok(c) => c,
-                Err(e) => {
-                    let progress = StreamingProgress::with_file_progress(
-                        0,
-                        SqlResult::Error(SqlErrorInfo {
-                            sql: String::new(),
-                            message: format!("Failed to get database plugin: {}", e),
-                        }),
-                        0,
-                        total_size,
-                    );
-                    let _ = tx.send(progress).await;
-                    return;
+        let cache_invalidation = match &source {
+            SqlSource::Script(script) => StreamingCacheInvalidation::Script(script.clone()),
+            SqlSource::File(_) => StreamingCacheInvalidation::Connection,
+        };
+        let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
+        let notifier = cx.update(|cx| cx.try_global::<GlobalConnectionNotifier>().cloned());
+        let request = StreamingExecutionRequest {
+            state: self.clone(),
+            config,
+            source: Some(source),
+            schema,
+            opts,
+            tx,
+            cache,
+            cache_invalidation,
+        };
+        let execution_task = Tokio::spawn(cx, request.run());
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            if let Ok(Some((connection_id, database, schema))) = execution_task.await {
+                if let Some(notifier) = notifier {
+                    cx.update(|cx| {
+                        notifier.0.update(cx, |_, cx| {
+                            cx.emit(ConnectionDataEvent::SchemaChanged {
+                                connection_id,
+                                database,
+                                schema,
+                            });
+                        });
+                    });
                 }
-            };
-
-            let session_result = clone_self
-                .connection_manager
-                .create_session(config.clone(), &clone_self.db_manager)
-                .await;
-
-            let session_id = match session_result {
-                Ok(id) => id,
-                Err(e) => {
-                    let progress = StreamingProgress::with_file_progress(
-                        0,
-                        SqlResult::Error(SqlErrorInfo {
-                            sql: String::new(),
-                            message: format!("Failed to create session: {}", e),
-                        }),
-                        0,
-                        total_size,
-                    );
-                    let _ = tx.send(progress).await;
-                    return;
-                }
-            };
-
-            let error_tx = tx.clone();
-            let exec_result = async {
-                let mut guard = clone_self
-                    .connection_manager
-                    .get_session_connection(&session_id)
-                    .await?;
-                let conn = guard
-                    .connection()
-                    .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-
-                if let Some(schema) = &schema_to_switch {
-                    conn.switch_schema(schema)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("Failed to switch schema: {}", e))?;
-                }
-
-                conn.execute_streaming(plugin.as_ref(), source, opts, tx)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-
-            let _ = clone_self
-                .connection_manager
-                .close_session(&session_id)
-                .await;
-
-            if let Err(e) = exec_result {
-                error!("Streaming execution error: {}", e);
-                let progress = StreamingProgress::with_file_progress(
-                    0,
-                    SqlResult::Error(SqlErrorInfo {
-                        sql: String::new(),
-                        message: e.to_string(),
-                    }),
-                    0,
-                    total_size,
-                );
-                let _ = error_tx.send(progress).await;
             }
         })
         .detach();
@@ -2943,6 +3038,7 @@ mod tests {
     use crate::types::*;
     use crate::{DatabaseOperationRequest, ExportProgressSender, ImportProgressSender};
     use async_trait::async_trait;
+    use gpui::TestAppContext;
     use one_core::storage::DatabaseType;
     use sqlparser::dialect::{Dialect, GenericDialect};
     use std::path::PathBuf;
@@ -3408,10 +3504,24 @@ mod tests {
         async fn execute_streaming(
             &self,
             _plugin: &dyn DatabasePlugin,
-            _source: SqlSource,
+            source: SqlSource,
             _options: ExecOptions,
-            _sender: mpsc::Sender<StreamingProgress>,
+            sender: mpsc::Sender<StreamingProgress>,
         ) -> Result<(), DbError> {
+            let SqlSource::Script(sql) = source else {
+                return Ok(());
+            };
+            let progress = StreamingProgress::new(
+                1,
+                1,
+                SqlResult::Exec(ExecResult {
+                    sql,
+                    rows_affected: 0,
+                    elapsed_ms: 0,
+                    message: None,
+                }),
+            );
+            let _ = sender.send(progress).await;
             Ok(())
         }
     }
@@ -3432,6 +3542,98 @@ mod tests {
             proxy: None,
             extra_params: Default::default(),
         }
+    }
+
+    struct StreamingCacheTestContext {
+        state: GlobalDbState,
+        cache: GlobalNodeCache,
+        config: DbConnectionConfig,
+    }
+
+    fn setup_streaming_cache_test(
+        cx: &mut TestAppContext,
+        connection_id: &str,
+    ) -> StreamingCacheTestContext {
+        let cache = GlobalNodeCache::with_config(crate::metadata_cache::MetadataCacheConfig {
+            enable_file_cache: false,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut state = GlobalDbState::new();
+        let config = test_config(connection_id);
+        state.register_connection(config.clone());
+
+        let runtime = cx.update(|cx| {
+            one_core::gpui_tokio::init(cx);
+            cx.set_global(cache.clone());
+            cx.set_global(state.clone());
+            Tokio::handle(cx)
+        });
+
+        let session_state = state.clone();
+        let session_config = config.clone();
+        runtime.block_on(async move {
+            let session = ConnectionSession::new(
+                Box::new(MockConnection::new(session_config.clone(), true)),
+                format!("{}:session:1", session_config.id),
+                false,
+            );
+            session_state
+                .connection_manager
+                .sessions
+                .write()
+                .await
+                .entry(session_config.id.clone())
+                .or_default()
+                .push(session);
+        });
+
+        let cache_for_setup = cache.clone();
+        let connection_id = connection_id.to_string();
+        runtime.block_on(async move {
+            cache_for_setup
+                .cache_tables(&connection_id, "postgres", Some("public"), Vec::new())
+                .await;
+        });
+
+        StreamingCacheTestContext {
+            state,
+            cache,
+            config,
+        }
+    }
+
+    async fn run_streaming_source(
+        cx: &mut TestAppContext,
+        test: &StreamingCacheTestContext,
+        source: SqlSource,
+    ) -> bool {
+        let state = test.state.clone();
+        let connection_id = test.config.id.clone();
+        let mut progress = cx
+            .spawn(move |mut cx| async move {
+                state
+                    .execute_streaming(
+                        &mut cx,
+                        connection_id,
+                        source,
+                        Some("postgres".to_string()),
+                        Some("public".to_string()),
+                        None,
+                    )
+                    .unwrap()
+            })
+            .await;
+        let runtime = cx.update(|cx| Tokio::handle(cx));
+        let cache = test.cache.clone();
+        let connection_id = test.config.id.clone();
+        runtime.block_on(async move {
+            while progress.recv().await.is_some() {}
+            cache
+                .get_tables(&connection_id, "postgres", Some("public"))
+                .await
+                .is_some()
+        })
     }
 
     #[test]
@@ -3602,6 +3804,50 @@ mod tests {
         assert_eq!("test", summaries[0].name);
         assert_eq!(DatabaseType::PostgreSQL, summaries[0].database_type);
         assert_eq!(Some("postgres".to_string()), summaries[0].database);
+    }
+
+    #[gpui::test]
+    async fn streaming_ddl_invalidates_cached_schema_metadata(cx: &mut TestAppContext) {
+        let test = setup_streaming_cache_test(cx, "streaming-ddl-cache-test");
+        let tables_cached = run_streaming_source(
+            cx,
+            &test,
+            SqlSource::Script("CREATE TABLE widgets (id INT)".to_string()),
+        )
+        .await;
+
+        assert!(
+            !tables_cached,
+            "schema metadata must already be invalidated when streaming progress closes"
+        );
+    }
+
+    #[gpui::test]
+    async fn streaming_query_keeps_schema_metadata_cache(cx: &mut TestAppContext) {
+        let test = setup_streaming_cache_test(cx, "streaming-query-cache-test");
+        let tables_cached =
+            run_streaming_source(cx, &test, SqlSource::Script("SELECT 1".to_string())).await;
+
+        assert!(
+            tables_cached,
+            "non-DDL streaming queries must not invalidate schema metadata"
+        );
+    }
+
+    #[gpui::test]
+    async fn streaming_file_conservatively_invalidates_connection_cache(cx: &mut TestAppContext) {
+        let test = setup_streaming_cache_test(cx, "streaming-file-cache-test");
+        let tables_cached = run_streaming_source(
+            cx,
+            &test,
+            SqlSource::File(PathBuf::from("streaming-cache-test.sql")),
+        )
+        .await;
+
+        assert!(
+            !tables_cached,
+            "SQL files may contain DDL, so connection metadata must be invalidated"
+        );
     }
 
     #[tokio::test]

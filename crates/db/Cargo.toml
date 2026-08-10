@@ -48,5 +48,6 @@ extension-host.workspace = true
 extension-protocol.workspace = true
 rust-i18n.workspace = true
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 tempfile = "3"
