@@ -151,6 +151,14 @@ RemoteFileEditor:
       en: Remote file reloaded
       zh-CN: 已重新加载远程文件
       zh-HK: 已重新載入遠端檔案
+    external_session_replaced:
+      en: Auto-upload stopped for the older editor session of this remote file
+      zh-CN: 已停止此远程文件较早编辑会话的自动上传
+      zh-HK: 已停止此遠端檔案較早編輯工作階段的自動上傳
+    external_session_evicted:
+      en: The oldest external editor auto-upload session was stopped to limit resource usage
+      zh-CN: 为限制资源占用，已停止最早的外部编辑器自动上传会话
+      zh-HK: 為限制資源佔用，已停止最早的外部編輯器自動上傳工作階段
   body:
     loading:
       en: Loading remote file...

@@ -16,7 +16,8 @@ use sftp::{RusshSftpClient, SftpClient};
 use tokio::sync::Mutex;
 
 use crate::external_edit_controller::{
-    ExternalEditController, ExternalEditControllerConfig, ExternalEditWatchLoop, local_content_hash,
+    ExternalEditController, ExternalEditControllerConfig, ExternalEditSessionKey,
+    ExternalEditWatchLoop, local_content_hash,
 };
 use crate::external_editor_confirmation::confirm_external_program;
 use crate::external_session::snapshot_from_metadata;
@@ -73,9 +74,36 @@ pub fn external_editors_for_file(
 }
 
 struct PreparedExternalEdit {
+    cleanup: SessionDirCleanup,
     local_path: PathBuf,
     snapshot: RemoteFileSnapshot,
     local_hash: u64,
+}
+
+struct SessionDirCleanup {
+    session_dir: PathBuf,
+    armed: bool,
+}
+
+impl SessionDirCleanup {
+    fn new(session_dir: PathBuf) -> Self {
+        Self {
+            session_dir,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for SessionDirCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            cleanup_session_dir(&self.session_dir);
+        }
+    }
 }
 
 pub fn open_remote_file_external_editor<T: 'static>(
@@ -160,7 +188,7 @@ impl ExternalEditLaunch {
 
     fn launch(
         self,
-        prepared: PreparedExternalEdit,
+        mut prepared: PreparedExternalEdit,
         window: &mut Window,
         cx: &mut gpui::App,
     ) -> Result<()> {
@@ -172,12 +200,21 @@ impl ExternalEditLaunch {
                 name: file_name(&self.remote_path),
             },
         );
+        let watch = if self.auto_upload {
+            let (sender, receiver) = mpsc::unbounded();
+            Some((
+                receiver,
+                watch_local_file(prepared.local_path.clone(), sender)?,
+            ))
+        } else {
+            None
+        };
         launch_external_editor(&self.program, &args, self.launch_mode)?;
-        if !self.auto_upload {
+        prepared.cleanup.disarm();
+        let Some((receiver, watcher)) = watch else {
             return Ok(());
-        }
-        let (sender, receiver) = mpsc::unbounded();
-        let watcher = watch_local_file(prepared.local_path.clone(), sender)?;
+        };
+        let session_key = ExternalEditSessionKey::new(&self.client, self.remote_path.clone());
         let config = ExternalEditControllerConfig {
             client: self.client,
             remote_path: self.remote_path,
@@ -188,7 +225,7 @@ impl ExternalEditLaunch {
             on_remote_changed: self.on_remote_changed,
         };
         let controller = cx.new(|_| ExternalEditController::new(config, watcher));
-        ExternalEditWatchLoop::new(controller, receiver).run(window, cx);
+        ExternalEditWatchLoop::new(controller, receiver).run(session_key, window, cx);
         Ok(())
     }
 }
@@ -203,6 +240,14 @@ fn prepare_external_edit<T>(
         &next_session_id(),
         &remote_path,
     );
+    let session_dir = local_path
+        .parent()
+        .expect("external edit temp file must have a session directory")
+        .to_path_buf();
+    let cache_root = session_dir
+        .parent()
+        .expect("external edit session directory must have a cache root")
+        .to_path_buf();
     Tokio::spawn_result(cx, async move {
         let (metadata, bytes) = {
             let mut client = client.lock().await;
@@ -215,12 +260,13 @@ fn prepare_external_edit<T>(
                 .await?;
             (metadata, bytes)
         };
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        tokio::fs::create_dir_all(cache_root).await?;
+        tokio::fs::create_dir(&session_dir).await?;
+        let cleanup = SessionDirCleanup::new(session_dir);
         let local_hash = local_content_hash(&bytes);
         tokio::fs::write(&local_path, bytes).await?;
         Ok(PreparedExternalEdit {
+            cleanup,
             local_path,
             snapshot: snapshot_from_metadata(&metadata),
             local_hash,
@@ -254,6 +300,18 @@ fn notify_error(cx: &mut gpui::AsyncWindowContext, message: String) {
     });
 }
 
+fn cleanup_session_dir(session_dir: &std::path::Path) {
+    if let Err(error) = std::fs::remove_dir_all(session_dir)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            ?error,
+            path = %session_dir.display(),
+            "failed to clean external editor temp session"
+        );
+    }
+}
+
 fn next_session_id() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -269,4 +327,45 @@ fn file_name(remote_path: &str) -> String {
         .find(|value| !value.is_empty())
         .unwrap_or("remote-file")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionDirCleanup, next_session_id};
+
+    #[test]
+    fn session_cleanup_removes_only_its_owned_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "navop-remote-file-editor-cleanup-test-{}",
+            next_session_id()
+        ));
+        let session_dir = root.join("session");
+        let sibling_dir = root.join("sibling");
+        std::fs::create_dir_all(&session_dir).expect("create owned session directory");
+        std::fs::create_dir_all(&sibling_dir).expect("create sibling directory");
+        std::fs::write(session_dir.join("file.txt"), b"temporary").expect("write session file");
+
+        drop(SessionDirCleanup::new(session_dir.clone()));
+
+        assert!(!session_dir.exists());
+        assert!(sibling_dir.exists());
+        std::fs::remove_dir_all(root).expect("clean test root");
+    }
+
+    #[test]
+    fn disarmed_session_cleanup_preserves_launched_editor_file() {
+        let root = std::env::temp_dir().join(format!(
+            "navop-remote-file-editor-disarm-test-{}",
+            next_session_id()
+        ));
+        let session_dir = root.join("session");
+        std::fs::create_dir_all(&session_dir).expect("create owned session directory");
+        let mut cleanup = SessionDirCleanup::new(session_dir.clone());
+
+        cleanup.disarm();
+        drop(cleanup);
+
+        assert!(session_dir.exists());
+        std::fs::remove_dir_all(root).expect("clean test root");
+    }
 }

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -5,7 +6,7 @@ use std::{collections::hash_map::DefaultHasher, hash::Hasher as _};
 
 use anyhow::{Result, anyhow};
 use futures::{StreamExt as _, channel::mpsc};
-use gpui::{Context, Entity, PromptLevel, Window};
+use gpui::{App, Context, Entity, PromptLevel, Task, WeakEntity, Window};
 use gpui_component::{WindowExt as _, notification::Notification};
 use notify::RecommendedWatcher;
 use one_core::gpui_tokio::Tokio;
@@ -23,6 +24,7 @@ use crate::{
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const RELOAD_SUPPRESSION: Duration = Duration::from_secs(2);
+const MAX_ACTIVE_EXTERNAL_EDIT_SESSIONS: usize = 32;
 
 enum SyncCheck {
     Unchanged,
@@ -99,7 +101,7 @@ impl ExternalEditController {
         }
         self.syncing = true;
         let task = self.build_sync_check(cx);
-        let entity = cx.entity().clone();
+        let entity = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| match task.await {
                 Ok(check) => {
@@ -190,7 +192,7 @@ impl ExternalEditController {
             &[overwrite.as_str(), reload.as_str(), cancel.as_str()],
             cx,
         );
-        let entity = cx.entity().clone();
+        let entity = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| {
                 let selection = answer.await.ok();
@@ -267,7 +269,7 @@ impl ExternalEditController {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let entity = cx.entity().clone();
+        let entity = cx.entity().downgrade();
         window
             .spawn(cx, async move |cx| match completion.task.await {
                 Ok((snapshot, local_hash)) => {
@@ -297,6 +299,90 @@ impl ExternalEditController {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ExternalEditSessionKey {
+    client_id: usize,
+    remote_path: String,
+}
+
+impl ExternalEditSessionKey {
+    pub(crate) fn new(
+        client: &Arc<Mutex<RusshSftpClient>>,
+        remote_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            client_id: Arc::as_ptr(client) as usize,
+            remote_path: remote_path.into(),
+        }
+    }
+}
+
+struct BoundedSessionRegistry<K, V> {
+    capacity: usize,
+    entries: VecDeque<(K, V)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionEvictionReason {
+    Replaced,
+    Capacity,
+}
+
+impl<K: Eq, V> BoundedSessionRegistry<K, V> {
+    fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "session registry capacity must be positive");
+        Self {
+            capacity,
+            entries: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    fn insert(&mut self, key: K, value: V) -> Option<(SessionEvictionReason, V)> {
+        let removed = self
+            .entries
+            .iter()
+            .position(|(existing_key, _)| existing_key == &key)
+            .and_then(|index| {
+                self.entries
+                    .remove(index)
+                    .map(|(_, value)| (SessionEvictionReason::Replaced, value))
+            })
+            .or_else(|| {
+                (self.entries.len() >= self.capacity)
+                    .then(|| {
+                        self.entries
+                            .pop_front()
+                            .map(|(_, value)| (SessionEvictionReason::Capacity, value))
+                    })
+                    .flatten()
+            });
+        self.entries.push_back((key, value));
+        removed
+    }
+}
+
+struct ActiveExternalEditSession {
+    // GPUI tasks cancel when dropped. Keep them before the controller so the
+    // watch loops stop before the watcher and its sender are released.
+    _polling_task: Task<()>,
+    _event_task: Task<()>,
+    _controller: Entity<ExternalEditController>,
+}
+
+struct ExternalEditSessionRegistry {
+    sessions: BoundedSessionRegistry<ExternalEditSessionKey, ActiveExternalEditSession>,
+}
+
+impl Default for ExternalEditSessionRegistry {
+    fn default() -> Self {
+        Self {
+            sessions: BoundedSessionRegistry::new(MAX_ACTIVE_EXTERNAL_EDIT_SESSIONS),
+        }
+    }
+}
+
+impl gpui::Global for ExternalEditSessionRegistry {}
+
 pub(crate) struct ExternalEditWatchLoop {
     controller: Entity<ExternalEditController>,
     receiver: mpsc::UnboundedReceiver<()>,
@@ -313,30 +399,62 @@ impl ExternalEditWatchLoop {
         }
     }
 
-    pub(crate) fn run(mut self, window: &mut Window, cx: &mut gpui::App) {
-        let polling_controller = self.controller.clone();
-        window
-            .spawn(cx, async move |cx| {
-                loop {
-                    Timer::after(POLL_INTERVAL).await;
-                    Timer::after(SAVE_DEBOUNCE).await;
-                    let _ = polling_controller.update_in(cx, |this, window, cx| {
+    pub(crate) fn run(self, key: ExternalEditSessionKey, window: &mut Window, cx: &mut App) {
+        let Self {
+            controller,
+            mut receiver,
+        } = self;
+        let polling_controller = controller.downgrade();
+        let polling_task = window.spawn(cx, async move |cx| {
+            loop {
+                Timer::after(POLL_INTERVAL).await;
+                Timer::after(SAVE_DEBOUNCE).await;
+                if polling_controller
+                    .update_in(cx, |this, window, cx| {
                         this.request_sync(window, cx);
-                    });
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })
-            .detach();
-        window
-            .spawn(cx, async move |cx| {
-                while self.receiver.next().await.is_some() {
-                    Timer::after(SAVE_DEBOUNCE).await;
-                    while self.receiver.try_recv().is_ok() {}
-                    let _ = self.controller.update_in(cx, |this, window, cx| {
+            }
+        });
+        let event_controller = controller.downgrade();
+        let event_task = window.spawn(cx, async move |cx| {
+            while receiver.next().await.is_some() {
+                Timer::after(SAVE_DEBOUNCE).await;
+                while receiver.try_recv().is_ok() {}
+                if event_controller
+                    .update_in(cx, |this, window, cx| {
                         this.request_sync(window, cx);
-                    });
+                    })
+                    .is_err()
+                {
+                    break;
                 }
-            })
-            .detach();
+            }
+        });
+        let session = ActiveExternalEditSession {
+            _polling_task: polling_task,
+            _event_task: event_task,
+            _controller: controller,
+        };
+        let evicted = cx
+            .default_global::<ExternalEditSessionRegistry>()
+            .sessions
+            .insert(key, session);
+        if let Some((reason, session)) = evicted {
+            drop(session);
+            let message = match reason {
+                SessionEvictionReason::Replaced => {
+                    t!("RemoteFileEditor.notification.external_session_replaced")
+                }
+                SessionEvictionReason::Capacity => {
+                    t!("RemoteFileEditor.notification.external_session_evicted")
+                }
+            };
+            window.push_notification(Notification::warning(message), cx);
+        }
     }
 }
 
@@ -347,7 +465,7 @@ pub(crate) fn local_content_hash(bytes: &[u8]) -> u64 {
 }
 
 fn finish_with_error(
-    entity: &Entity<ExternalEditController>,
+    entity: &WeakEntity<ExternalEditController>,
     message: String,
     cx: &mut gpui::AsyncWindowContext,
 ) {
@@ -359,11 +477,60 @@ fn finish_with_error(
 
 #[cfg(test)]
 mod tests {
-    use super::local_content_hash;
+    use super::{BoundedSessionRegistry, SessionEvictionReason, local_content_hash};
 
     #[test]
     fn local_content_hash_changes_with_file_content() {
         assert_eq!(local_content_hash(b"same"), local_content_hash(b"same"));
         assert_ne!(local_content_hash(b"before"), local_content_hash(b"after"));
+    }
+
+    #[test]
+    fn bounded_session_registry_replaces_existing_key_without_growing() {
+        let mut registry = BoundedSessionRegistry::new(2);
+
+        assert_eq!(None, registry.insert("same", 1));
+        assert_eq!(
+            Some((SessionEvictionReason::Replaced, 1)),
+            registry.insert("same", 2)
+        );
+        assert_eq!(1, registry.entries.len());
+        assert_eq!(Some(&("same", 2)), registry.entries.front());
+    }
+
+    #[test]
+    fn bounded_session_registry_evicts_oldest_key() {
+        let mut registry = BoundedSessionRegistry::new(2);
+
+        assert_eq!(None, registry.insert("first", 1));
+        assert_eq!(None, registry.insert("second", 2));
+        assert_eq!(
+            Some((SessionEvictionReason::Capacity, 1)),
+            registry.insert("third", 3)
+        );
+        assert_eq!(
+            vec![("second", 2), ("third", 3)],
+            registry.entries.into_iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn replacing_key_refreshes_its_eviction_order() {
+        let mut registry = BoundedSessionRegistry::new(2);
+
+        registry.insert("first", 1);
+        registry.insert("second", 2);
+        assert_eq!(
+            Some((SessionEvictionReason::Replaced, 1)),
+            registry.insert("first", 3)
+        );
+        assert_eq!(
+            Some((SessionEvictionReason::Capacity, 2)),
+            registry.insert("third", 4)
+        );
+        assert_eq!(
+            vec![("first", 3), ("third", 4)],
+            registry.entries.into_iter().collect::<Vec<_>>()
+        );
     }
 }
