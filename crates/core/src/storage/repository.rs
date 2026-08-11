@@ -979,6 +979,47 @@ mod tests {
     }
 
     #[test]
+    fn workspace_names_are_unique_within_each_parent() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut first_parent = workspace("first parent");
+        let first_parent_id = repo.insert(&mut first_parent).unwrap();
+        let mut second_parent = workspace("second parent");
+        let second_parent_id = repo.insert(&mut second_parent).unwrap();
+
+        let mut first_child = workspace("servers");
+        first_child.parent_id = Some(first_parent_id);
+        repo.insert(&mut first_child).unwrap();
+
+        let mut second_child = workspace("servers");
+        second_child.parent_id = Some(second_parent_id);
+        repo.insert(&mut second_child).unwrap();
+
+        let mut root = workspace("servers");
+        repo.insert(&mut root).unwrap();
+
+        let mut duplicate_sibling = workspace("servers");
+        duplicate_sibling.parent_id = Some(first_parent_id);
+        assert!(repo.insert(&mut duplicate_sibling).is_err());
+
+        let mut duplicate_root = workspace("servers");
+        assert!(repo.insert(&mut duplicate_root).is_err());
+
+        second_child.parent_id = Some(first_parent_id);
+        assert!(repo.update(&second_child).is_err());
+        assert_eq!(
+            Some(second_parent_id),
+            repo.get(second_child.id.unwrap())
+                .unwrap()
+                .unwrap()
+                .parent_id
+        );
+
+        repo.update(&first_child)
+            .expect("updating a workspace without changing its scoped name");
+    }
+
+    #[test]
     fn workspace_cloud_update_does_not_flatten_local_hierarchy() {
         let (conn, _) = test_repository();
         let repo = WorkspaceRepository::new(conn);
