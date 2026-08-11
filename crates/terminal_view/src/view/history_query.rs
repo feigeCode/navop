@@ -1,6 +1,29 @@
 use super::*;
 
 impl TerminalView {
+    fn sync_cd_completion_session(&mut self, session_manager: &Arc<SshSessionManager>) {
+        let session_matches = self
+            .cd_completion_session_manager
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|cached| Arc::ptr_eq(&cached, session_manager));
+        if session_matches {
+            return;
+        }
+
+        self.cd_completion_session_manager = Some(Arc::downgrade(session_manager));
+        self.cd_completion_client = None;
+        self.cd_completion_cache.clear();
+        self.cd_completion_loading_parent = None;
+    }
+
+    fn clear_cd_completion_session(&mut self) {
+        self.cd_completion_session_manager = None;
+        self.cd_completion_client = None;
+        self.cd_completion_cache.clear();
+        self.cd_completion_loading_parent = None;
+    }
+
     pub(super) fn history_prompt_enabled(&self, cx: &App) -> bool {
         let terminal = self.terminal.read(cx);
         let Some(connection_kind) = terminal.live_connection_kind() else {
@@ -76,6 +99,21 @@ impl TerminalView {
         if !self.is_live_ssh_terminal(cx) {
             return;
         }
+
+        let (is_connected, session_manager) = {
+            let terminal = self.terminal.read(cx);
+            (
+                matches!(terminal.connection_state(), ConnectionState::Connected),
+                terminal.ssh_session_manager().cloned(),
+            )
+        };
+        let Some(session_manager) = session_manager.filter(|_| is_connected) else {
+            self.clear_cd_completion_session();
+            self.history_prompt.set_matches(Vec::new());
+            return;
+        };
+        self.sync_cd_completion_session(&session_manager);
+
         if let Some(directory_names) = self.cd_completion_cache.get(&query.parent_dir) {
             let matches = build_cd_completion_suggestions(&query, directory_names);
             self.history_prompt.set_matches(matches);
@@ -90,11 +128,6 @@ impl TerminalView {
             return;
         }
 
-        let Some(session_manager) = self.terminal.read(cx).ssh_session_manager().cloned() else {
-            self.history_prompt.set_matches(Vec::new());
-            return;
-        };
-
         if self.cd_completion_loading_parent.as_deref() == Some(query.parent_dir.as_str()) {
             return;
         }
@@ -102,6 +135,7 @@ impl TerminalView {
         self.history_prompt.set_matches(Vec::new());
         self.cd_completion_loading_parent = Some(query.parent_dir.clone());
         let existing_client = self.cd_completion_client.clone();
+        let request_session_manager = session_manager.clone();
         let parent_dir = query.parent_dir.clone();
         let request_parent_dir = parent_dir.clone();
         let task = Tokio::spawn(cx, async move {
@@ -124,17 +158,41 @@ impl TerminalView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.cd_completion_loading_parent = None;
+                let request_is_current = {
+                    let terminal = this.terminal.read(cx);
+                    matches!(terminal.connection_state(), ConnectionState::Connected)
+                        && terminal
+                            .ssh_session_manager()
+                            .is_some_and(|current| Arc::ptr_eq(current, &request_session_manager))
+                };
+                if !request_is_current {
+                    return;
+                }
+                if this.cd_completion_loading_parent.as_deref() == Some(parent_dir.as_str()) {
+                    this.cd_completion_loading_parent = None;
+                }
+
                 match result {
                     Ok(Ok((client, entries))) => {
                         this.cd_completion_client = Some(client);
-                        let directory_names = entries
-                            .into_iter()
-                            .filter(|entry| entry.is_dir && entry.name != "." && entry.name != "..")
-                            .map(|entry| entry.name)
-                            .collect::<Vec<_>>();
-                        this.cd_completion_cache
-                            .insert(parent_dir.clone(), directory_names);
+                        if !this
+                            .cd_completion_cache
+                            .insert(
+                                parent_dir.clone(),
+                                entries
+                                    .into_iter()
+                                    .filter(|entry| {
+                                        entry.is_dir && entry.name != "." && entry.name != ".."
+                                    })
+                                    .map(|entry| entry.name),
+                            )
+                        {
+                            tracing::warn!(
+                                target: "terminal.history_prompt",
+                                parent_dir_bytes = parent_dir.len(),
+                                "cd completion result was not cached because the parent path is too large"
+                            );
+                        }
 
                         if let Some(current_query) = this.current_cd_completion_query(cx) {
                             if current_query.parent_dir == parent_dir {

@@ -1,8 +1,118 @@
+use std::collections::VecDeque;
+
+const MAX_CD_COMPLETION_CACHE_ENTRIES: usize = 32;
+const MAX_CD_COMPLETION_NAMES_PER_DIRECTORY: usize = 512;
+const MAX_CD_COMPLETION_NAME_BYTES_PER_DIRECTORY: usize = 64 * 1024;
+const MAX_CD_COMPLETION_PARENT_DIR_BYTES: usize = 4 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdCompletionQuery {
     pub parent_dir: String,
     pub typed_prefix: String,
     pub needle: String,
+}
+
+#[derive(Debug)]
+pub struct CdCompletionCache {
+    entries: VecDeque<(String, Vec<String>)>,
+    max_entries: usize,
+    max_names_per_directory: usize,
+    max_name_bytes_per_directory: usize,
+    max_parent_dir_bytes: usize,
+}
+
+impl Default for CdCompletionCache {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            max_entries: MAX_CD_COMPLETION_CACHE_ENTRIES,
+            max_names_per_directory: MAX_CD_COMPLETION_NAMES_PER_DIRECTORY,
+            max_name_bytes_per_directory: MAX_CD_COMPLETION_NAME_BYTES_PER_DIRECTORY,
+            max_parent_dir_bytes: MAX_CD_COMPLETION_PARENT_DIR_BYTES,
+        }
+    }
+}
+
+impl CdCompletionCache {
+    pub fn get(&mut self, parent_dir: &str) -> Option<&[String]> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(cached_parent, _)| cached_parent == parent_dir)?;
+        let entry = self
+            .entries
+            .remove(position)
+            .expect("cache position must remain valid");
+        self.entries.push_back(entry);
+        self.entries.back().map(|(_, names)| names.as_slice())
+    }
+
+    pub fn insert(
+        &mut self,
+        parent_dir: String,
+        directory_names: impl IntoIterator<Item = String>,
+    ) -> bool {
+        if self.max_entries == 0 || parent_dir.len() > self.max_parent_dir_bytes {
+            self.remove(&parent_dir);
+            return false;
+        }
+
+        let directory_names = directory_names.into_iter();
+        let initial_capacity = directory_names
+            .size_hint()
+            .1
+            .unwrap_or_default()
+            .min(self.max_names_per_directory);
+        let mut retained_names = Vec::with_capacity(initial_capacity);
+        let mut retained_bytes = 0usize;
+        for name in directory_names.take(self.max_names_per_directory) {
+            let Some(next_bytes) = retained_bytes.checked_add(name.len()) else {
+                break;
+            };
+            if next_bytes > self.max_name_bytes_per_directory {
+                break;
+            }
+            retained_bytes = next_bytes;
+            retained_names.push(name);
+        }
+
+        self.remove(&parent_dir);
+        while self.entries.len() >= self.max_entries {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((parent_dir, retained_names));
+        true
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn remove(&mut self, parent_dir: &str) {
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|(cached_parent, _)| cached_parent == parent_dir)
+        {
+            self.entries.remove(position);
+        }
+    }
+
+    #[cfg(test)]
+    fn with_limits(
+        max_entries: usize,
+        max_names_per_directory: usize,
+        max_name_bytes_per_directory: usize,
+        max_parent_dir_bytes: usize,
+    ) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            max_entries,
+            max_names_per_directory,
+            max_name_bytes_per_directory,
+            max_parent_dir_bytes,
+        }
+    }
 }
 
 pub fn parse_cd_completion_query(
@@ -154,7 +264,70 @@ fn has_unterminated_shell_quote(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query};
+    use std::cell::Cell;
+
+    use super::{
+        CdCompletionCache, CdCompletionQuery, build_cd_completion_suggestions,
+        parse_cd_completion_query,
+    };
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn cd_completion_cache_evicts_the_least_recently_used_directory() {
+        let mut cache = CdCompletionCache::with_limits(2, 10, 1024, 1024);
+        assert!(cache.insert("/a".to_string(), names(&["alpha"])));
+        assert!(cache.insert("/b".to_string(), names(&["beta"])));
+
+        assert_eq!(cache.get("/a"), Some(names(&["alpha"]).as_slice()));
+        assert!(cache.insert("/c".to_string(), names(&["charlie"])));
+
+        assert!(cache.get("/b").is_none());
+        assert_eq!(cache.get("/a"), Some(names(&["alpha"]).as_slice()));
+        assert_eq!(cache.get("/c"), Some(names(&["charlie"]).as_slice()));
+    }
+
+    #[test]
+    fn cd_completion_cache_bounds_names_and_utf8_bytes_per_directory() {
+        let mut cache = CdCompletionCache::with_limits(2, 3, 7, 1024);
+        assert!(cache.insert("/srv".to_string(), names(&["a", "资料", "bb", "ccc"])));
+
+        assert_eq!(cache.get("/srv"), Some(names(&["a", "资料"]).as_slice()));
+    }
+
+    #[test]
+    fn cd_completion_cache_stops_consuming_names_at_the_configured_limit() {
+        let mut cache = CdCompletionCache::with_limits(2, 3, 1024, 1024);
+        let consumed = Cell::new(0);
+        let directory_names = (0..100).map(|index| {
+            consumed.set(consumed.get() + 1);
+            format!("directory-{index}")
+        });
+
+        assert!(cache.insert("/srv".to_string(), directory_names));
+
+        assert_eq!(consumed.get(), 3);
+        assert_eq!(
+            cache.get("/srv"),
+            Some(names(&["directory-0", "directory-1", "directory-2"]).as_slice())
+        );
+    }
+
+    #[test]
+    fn cd_completion_cache_refreshes_replaced_entries_and_rejects_oversized_keys() {
+        let mut cache = CdCompletionCache::with_limits(2, 10, 1024, 4);
+        assert!(cache.insert("/a".to_string(), names(&["old"])));
+        assert!(cache.insert("/b".to_string(), names(&["beta"])));
+        assert!(cache.insert("/a".to_string(), names(&["new"])));
+        assert!(cache.insert("/c".to_string(), names(&["charlie"])));
+
+        assert!(cache.get("/b").is_none());
+        assert_eq!(cache.get("/a"), Some(names(&["new"]).as_slice()));
+        assert!(!cache.insert("/toolong".to_string(), names(&["ignored"])));
+        assert!(cache.get("/toolong").is_none());
+    }
 
     #[test]
     fn cd_completion_parses_empty_child_directory_query_from_current_working_dir() {

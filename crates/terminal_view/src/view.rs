@@ -28,7 +28,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{
-    Arc, Mutex as StdMutex,
+    Arc, Mutex as StdMutex, Weak,
     atomic::{AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -50,7 +50,8 @@ use crate::addon::{
 use crate::broadcast_input::BroadcastClientId;
 use crate::broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry};
 use crate::cd_completion::{
-    CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
+    CdCompletionCache, CdCompletionQuery, build_cd_completion_suggestions,
+    parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::host_key_dialog::{host_key_dialog_presentation, render_host_key_details_card};
@@ -105,6 +106,7 @@ use paste_safety::{has_trailing_line_continuation, has_unterminated_shell_quote}
 use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
+use ssh::SshSessionManager;
 use std::ops::Deref;
 use terminal::GpuiEventProxy;
 use terminal::LocalConfig;
@@ -271,8 +273,10 @@ pub struct TerminalView {
     recording_playback_ticker: Option<Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 缓存所属的 SSH session；使用 Weak 避免延长旧连接生命周期。
+    cd_completion_session_manager: Option<Weak<SshSessionManager>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求
-    cd_completion_cache: HashMap<String, Vec<String>>,
+    cd_completion_cache: CdCompletionCache,
     /// 当前正在加载目录候选的父目录
     cd_completion_loading_parent: Option<String>,
     ssh_credential_inputs: Option<SshCredentialInputs>,
