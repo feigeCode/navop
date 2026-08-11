@@ -613,7 +613,11 @@ impl RemoteDesktopView {
             Err(presentation::RemoteDesktopPresentationCreateError::NativeCreate(
                 WindowsNativePresentationCreateError::Adapter(error),
             )) => {
-                tracing::warn!(?error, "failed to create the Windows native RDP host");
+                tracing::warn!(
+                    error = %error,
+                    ?error,
+                    "failed to create the Windows native RDP host"
+                );
                 self.fail_presentation_initialization(
                     presentation::RemoteDesktopPresentation::NativeWindows,
                     true,

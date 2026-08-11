@@ -16,6 +16,28 @@ pub(crate) const RESULT_UNAVAILABLE: NativeResult = 5;
 pub(crate) const RESULT_WRONG_THREAD: NativeResult = 6;
 pub(crate) const RESULT_CALLBACK_IN_FLIGHT: NativeResult = 7;
 pub(crate) const RESULT_INVALID_STATE: NativeResult = 8;
+pub(crate) const LAST_ERROR_LEGACY_SIZE: u32 = 24;
+
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_NONE: u32 = 0;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_OLE_INITIALIZE: u32 = 1;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_ATL_AX_WIN_INIT: u32 = 2;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_CREATE_WINDOW: u32 = 3;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_CREATE_CONTROL: u32 = 4;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_QUERY_CLIENT: u32 = 5;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_QUERY_NON_SCRIPTABLE: u32 = 6;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_SET_PARENT: u32 = 7;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_EVENT_SUBSCRIPTION: u32 = 8;
+#[allow(dead_code)]
+pub(crate) const CREATE_STAGE_EXCEPTION: u32 = 9;
 
 pub(crate) const CONNECTION_STATE_DISCONNECTED: u32 = 0;
 pub(crate) const CONNECTION_STATE_CONNECTED: u32 = 1;
@@ -97,6 +119,9 @@ pub(crate) struct NavopRdpLastError {
     pub(crate) hresult: i32,
     pub(crate) has_hresult: u32,
     pub(crate) reserved: u32,
+    pub(crate) stage: u32,
+    pub(crate) win32_code: u32,
+    pub(crate) has_win32_code: u32,
 }
 
 impl NavopRdpLastError {
@@ -108,13 +133,17 @@ impl NavopRdpLastError {
             hresult: 0,
             has_hresult: 0,
             reserved: 0,
+            stage: CREATE_STAGE_NONE,
+            win32_code: 0,
+            has_win32_code: 0,
         }
     }
 
     pub(crate) fn has_current_layout(&self) -> bool {
-        self.struct_size == size_of::<Self>() as u32
+        self.struct_size >= size_of::<Self>() as u32
             && self.abi_version == ABI_VERSION
             && self.has_hresult <= 1
+            && self.has_win32_code <= 1
             && self.reserved == 0
     }
 }
@@ -286,7 +315,7 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpProbeResult, available) == 8);
     assert!(std::mem::offset_of!(NavopRdpProbeResult, reserved) == 12);
 
-    assert!(size_of::<NavopRdpLastError>() == 24);
+    assert!(size_of::<NavopRdpLastError>() == 36);
     assert!(align_of::<NavopRdpLastError>() == 4);
     assert!(std::mem::offset_of!(NavopRdpLastError, struct_size) == 0);
     assert!(std::mem::offset_of!(NavopRdpLastError, abi_version) == 4);
@@ -294,6 +323,9 @@ const _: () = {
     assert!(std::mem::offset_of!(NavopRdpLastError, hresult) == 12);
     assert!(std::mem::offset_of!(NavopRdpLastError, has_hresult) == 16);
     assert!(std::mem::offset_of!(NavopRdpLastError, reserved) == 20);
+    assert!(std::mem::offset_of!(NavopRdpLastError, stage) == 24);
+    assert!(std::mem::offset_of!(NavopRdpLastError, win32_code) == 28);
+    assert!(std::mem::offset_of!(NavopRdpLastError, has_win32_code) == 32);
 
     assert!(size_of::<NavopRdpCreateOptions>() == 16);
     assert!(align_of::<NavopRdpCreateOptions>() == 4);
@@ -702,7 +734,7 @@ unsafe fn create_with_parent_v2(
         return RESULT_INVALID_ARGUMENT;
     }
     let error_size = unsafe { std::ptr::addr_of!((*out_error).struct_size).read() };
-    if error_size < size_of::<NavopRdpLastError>() as u32 {
+    if error_size < LAST_ERROR_LEGACY_SIZE {
         return RESULT_INVALID_ARGUMENT;
     }
     let error_abi = unsafe { std::ptr::addr_of!((*out_error).abi_version).read() };
@@ -716,6 +748,22 @@ unsafe fn create_with_parent_v2(
         (*out_error).hresult = 0;
         (*out_error).has_hresult = 0;
         (*out_error).reserved = 0;
+        if error_size
+            >= std::mem::offset_of!(NavopRdpLastError, stage) as u32 + size_of::<u32>() as u32
+        {
+            (*out_error).stage = CREATE_STAGE_NONE;
+        }
+        if error_size
+            >= std::mem::offset_of!(NavopRdpLastError, win32_code) as u32 + size_of::<u32>() as u32
+        {
+            (*out_error).win32_code = 0;
+        }
+        if error_size
+            >= std::mem::offset_of!(NavopRdpLastError, has_win32_code) as u32
+                + size_of::<u32>() as u32
+        {
+            (*out_error).has_win32_code = 0;
+        }
     }
     if out_host.is_null() {
         unsafe { (*out_error).result = RESULT_INVALID_ARGUMENT };
@@ -978,7 +1026,7 @@ mod tests {
         assert_eq!(align_of::<NavopRdpProbeOptions>(), 4);
         assert_eq!(size_of::<NavopRdpProbeResult>(), 16);
         assert_eq!(align_of::<NavopRdpProbeResult>(), 4);
-        assert_eq!(size_of::<NavopRdpLastError>(), 24);
+        assert_eq!(size_of::<NavopRdpLastError>(), 36);
         assert_eq!(align_of::<NavopRdpLastError>(), 4);
         assert_eq!(std::mem::offset_of!(NavopRdpLastError, struct_size), 0);
         assert_eq!(std::mem::offset_of!(NavopRdpLastError, abi_version), 4);
@@ -986,6 +1034,9 @@ mod tests {
         assert_eq!(std::mem::offset_of!(NavopRdpLastError, hresult), 12);
         assert_eq!(std::mem::offset_of!(NavopRdpLastError, has_hresult), 16);
         assert_eq!(std::mem::offset_of!(NavopRdpLastError, reserved), 20);
+        assert_eq!(std::mem::offset_of!(NavopRdpLastError, stage), 24);
+        assert_eq!(std::mem::offset_of!(NavopRdpLastError, win32_code), 28);
+        assert_eq!(std::mem::offset_of!(NavopRdpLastError, has_win32_code), 32);
         assert_eq!(size_of::<NavopRdpCreateOptions>(), 16);
         assert_eq!(align_of::<NavopRdpCreateOptions>(), 4);
         assert_eq!(size_of::<NavopRdpBounds>(), 16);

@@ -9,10 +9,10 @@ use crate::error::{WindowsRdpHostError, WindowsRdpHresult, check_native_result};
 use crate::event::{EventBridge, WindowsRdpRawEvent, native_event_callback};
 use crate::ffi::{
     CONNECTION_STATE_CONNECTED, CONNECTION_STATE_CONNECTING, CONNECTION_STATE_DISCONNECTED,
-    NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NativeResult, NavopRdpBounds,
-    NavopRdpCreateOptions, NavopRdpCreateWithParentOptions, NavopRdpEventCallbackOptions,
-    NavopRdpLastError, NavopRdpProbeOptions, NavopRdpProbeResult, REQUEST_CLOSE_CAN_PROCEED,
-    REQUEST_CLOSE_WAIT_FOR_EVENTS, RESULT_OK,
+    CREATE_STAGE_NONE, NATIVE_BINDINGS, NativeBindings, NativeRdpHost, NativeResult,
+    NavopRdpBounds, NavopRdpCreateOptions, NavopRdpCreateWithParentOptions,
+    NavopRdpEventCallbackOptions, NavopRdpLastError, NavopRdpProbeOptions, NavopRdpProbeResult,
+    REQUEST_CLOSE_CAN_PROCEED, REQUEST_CLOSE_WAIT_FOR_EVENTS, RESULT_OK,
 };
 use crate::lifecycle::WindowsRdpHostLifecycle;
 use crate::options::{WindowsRdpConnectionOptions, WindowsRdpHostOptions, WindowsRdpParentWindow};
@@ -425,6 +425,22 @@ fn check_native_diagnostic(
     }
     if !diagnostic.has_current_layout() || diagnostic.result != result {
         return check_native_result(result);
+    }
+    if diagnostic.stage != CREATE_STAGE_NONE || diagnostic.has_win32_code == 1 {
+        return Err(WindowsRdpHostError::NativeDiagnostic {
+            result,
+            stage: diagnostic.stage,
+            hresult: if diagnostic.has_hresult == 1 {
+                Some(WindowsRdpHresult::from_code(diagnostic.hresult))
+            } else {
+                None
+            },
+            win32_code: if diagnostic.has_win32_code == 1 {
+                Some(diagnostic.win32_code)
+            } else {
+                None
+            },
+        });
     }
     if diagnostic.has_hresult == 1 {
         return Err(WindowsRdpHostError::NativeHresult {
@@ -1423,11 +1439,47 @@ mod tests {
     }
 
     #[test]
+    fn host_operation_native_diagnostic_is_preserved_without_changing_lifecycle() {
+        reset_fake_state();
+        set_fake_last_error_read_result(RESULT_OK);
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INVALID_STATE,
+            hresult: i32::MIN,
+            has_hresult: 1,
+            stage: crate::ffi::CREATE_STAGE_CREATE_WINDOW,
+            win32_code: 1407,
+            has_win32_code: 1,
+            ..NavopRdpLastError::current()
+        });
+        FAKE_NATIVE_STATE.with(|state| {
+            state
+                .borrow_mut()
+                .connect_results
+                .push_back(RESULT_INVALID_STATE);
+        });
+        let mut host =
+            WindowsRdpHost::create_with(WindowsRdpHostOptions::default(), bindings(fake_create))
+                .expect("fake create should succeed");
+
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::NativeDiagnostic {
+                result: RESULT_INVALID_STATE,
+                stage: crate::ffi::CREATE_STAGE_CREATE_WINDOW,
+                hresult: Some(WindowsRdpHresult::from_code(i32::MIN)),
+                win32_code: Some(1407),
+            })
+        );
+        assert_eq!(host.lifecycle(), WindowsRdpHostLifecycle::Open);
+    }
+
+    #[test]
     fn invalid_or_mismatched_diagnostics_fall_back_to_stable_result() {
         reset_fake_state();
         set_fake_last_error_read_result(RESULT_OK);
         FAKE_NATIVE_STATE.with(|state| {
             state.borrow_mut().connect_results.extend([
+                RESULT_INVALID_STATE,
                 RESULT_INVALID_STATE,
                 RESULT_INVALID_STATE,
                 RESULT_INVALID_STATE,
@@ -1464,6 +1516,17 @@ mod tests {
             result: RESULT_INVALID_STATE,
             hresult: 9,
             has_hresult: 0,
+            ..NavopRdpLastError::current()
+        });
+        assert_eq!(
+            host.connect(&connection_options()),
+            Err(WindowsRdpHostError::InvalidState)
+        );
+
+        set_fake_diagnostic(NavopRdpLastError {
+            result: RESULT_INVALID_STATE,
+            stage: crate::ffi::CREATE_STAGE_CREATE_WINDOW,
+            has_win32_code: 2,
             ..NavopRdpLastError::current()
         });
         assert_eq!(

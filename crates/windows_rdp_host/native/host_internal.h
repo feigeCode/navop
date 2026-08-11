@@ -77,9 +77,21 @@ struct NativeRdpHost {
     NavopRdpResult last_result;
     int32_t last_hresult;
     uint32_t has_last_hresult;
+    uint32_t last_stage;
+    uint32_t last_win32_code;
+    uint32_t has_last_win32_code;
 };
 
 void clear_last_error(NativeRdpHost* host) noexcept;
+
+NavopRdpResult record_last_diagnostic(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    int32_t hresult,
+    uint32_t has_hresult,
+    uint32_t win32_code,
+    uint32_t has_win32_code) noexcept;
 
 NavopRdpResult record_last_error(
     NativeRdpHost* host,
@@ -89,6 +101,23 @@ NavopRdpResult record_last_hresult(
     NativeRdpHost* host,
     NavopRdpResult result,
     int32_t hresult) noexcept;
+
+NavopRdpResult record_last_stage_error(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage) noexcept;
+
+NavopRdpResult record_last_stage_hresult(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    int32_t hresult) noexcept;
+
+NavopRdpResult record_last_stage_win32(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    uint32_t win32_code) noexcept;
 
 NavopRdpResult ensure_owner_thread(
     const NativeRdpHost* host) noexcept;

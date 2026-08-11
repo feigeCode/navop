@@ -160,5 +160,14 @@ fn map_probe_failure(error: windows_rdp_host::WindowsRdpHostError) -> WindowsNat
                 hresult: hresult.code(),
             }
         }
+        WindowsRdpHostError::NativeDiagnostic {
+            result,
+            hresult: Some(hresult),
+            ..
+        } => WindowsNativeRdpProbeFailure::NativeHresult {
+            result,
+            hresult: hresult.code(),
+        },
+        WindowsRdpHostError::NativeDiagnostic { .. } => WindowsNativeRdpProbeFailure::Internal,
     }
 }

@@ -338,13 +338,22 @@ pub enum WindowsRdpHostError {
         result: i32,
         hresult: WindowsRdpHresult,
     },
+    NativeDiagnostic {
+        result: i32,
+        stage: u32,
+        hresult: Option<WindowsRdpHresult>,
+        win32_code: Option<u32>,
+    },
 }
 
 impl WindowsRdpHostError {
-    /// Returns the stable native result code when this error carries an HRESULT.
+    /// Returns the stable native result code when this error carries native
+    /// diagnostic details.
     pub const fn native_result(self) -> Option<i32> {
         match self {
-            Self::NativeHresult { result, .. } => Some(result),
+            Self::NativeHresult { result, .. } | Self::NativeDiagnostic { result, .. } => {
+                Some(result)
+            }
             _ => None,
         }
     }
@@ -353,8 +362,42 @@ impl WindowsRdpHostError {
     pub const fn hresult(self) -> Option<WindowsRdpHresult> {
         match self {
             Self::NativeHresult { hresult, .. } => Some(hresult),
+            Self::NativeDiagnostic { hresult, .. } => hresult,
             _ => None,
         }
+    }
+
+    /// Returns the native host-creation stage when one was supplied.
+    pub const fn stage(self) -> Option<u32> {
+        match self {
+            Self::NativeDiagnostic { stage, .. } if stage != ffi::CREATE_STAGE_NONE => Some(stage),
+            _ => None,
+        }
+    }
+
+    /// Returns the raw Win32 error code when one was supplied by the native
+    /// host.
+    pub const fn win32_code(self) -> Option<u32> {
+        match self {
+            Self::NativeDiagnostic { win32_code, .. } => win32_code,
+            _ => None,
+        }
+    }
+}
+
+const fn native_create_stage_name(stage: u32) -> &'static str {
+    match stage {
+        ffi::CREATE_STAGE_NONE => "NONE",
+        ffi::CREATE_STAGE_OLE_INITIALIZE => "OLE_INITIALIZE",
+        ffi::CREATE_STAGE_ATL_AX_WIN_INIT => "ATL_AX_WIN_INIT",
+        ffi::CREATE_STAGE_CREATE_WINDOW => "CREATE_WINDOW",
+        ffi::CREATE_STAGE_CREATE_CONTROL => "CREATE_CONTROL",
+        ffi::CREATE_STAGE_QUERY_CLIENT => "QUERY_CLIENT",
+        ffi::CREATE_STAGE_QUERY_NON_SCRIPTABLE => "QUERY_NON_SCRIPTABLE",
+        ffi::CREATE_STAGE_SET_PARENT => "SET_PARENT",
+        ffi::CREATE_STAGE_EVENT_SUBSCRIPTION => "EVENT_SUBSCRIPTION",
+        ffi::CREATE_STAGE_EXCEPTION => "EXCEPTION",
+        _ => "UNKNOWN",
     }
 }
 
@@ -390,6 +433,29 @@ impl fmt::Display for WindowsRdpHostError {
                 "Windows RDP host result {result} with HRESULT {:#010X}",
                 hresult.code() as u32
             ),
+            Self::NativeDiagnostic {
+                result,
+                stage,
+                hresult,
+                win32_code,
+            } => {
+                write!(
+                    formatter,
+                    "Windows RDP host result {result} at native stage {stage} ({})",
+                    native_create_stage_name(*stage)
+                )?;
+                if let Some(hresult) = hresult {
+                    write!(formatter, " with HRESULT {:#010X}", hresult.code() as u32)?;
+                }
+                if let Some(win32_code) = win32_code {
+                    write!(
+                        formatter,
+                        " with Win32 code {:#010X} ({win32_code})",
+                        win32_code
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -468,6 +534,51 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Windows RDP host result 4 with HRESULT 0x80000000"
+        );
+    }
+
+    #[test]
+    fn native_diagnostic_preserves_stage_hresult_and_win32_code() {
+        let error = WindowsRdpHostError::NativeDiagnostic {
+            result: ffi::RESULT_INTERNAL_ERROR,
+            stage: ffi::CREATE_STAGE_CREATE_CONTROL,
+            hresult: Some(WindowsRdpHresult::from_code(i32::MIN)),
+            win32_code: Some(1407),
+        };
+
+        assert_eq!(error.native_result(), Some(ffi::RESULT_INTERNAL_ERROR));
+        assert_eq!(error.stage(), Some(ffi::CREATE_STAGE_CREATE_CONTROL));
+        assert_eq!(error.hresult().map(WindowsRdpHresult::code), Some(i32::MIN));
+        assert_eq!(error.win32_code(), Some(1407));
+        assert_eq!(
+            error.to_string(),
+            "Windows RDP host result 4 at native stage 4 (CREATE_CONTROL) with HRESULT 0x80000000 with Win32 code 0x0000057F (1407)"
+        );
+    }
+
+    #[test]
+    fn native_diagnostic_formats_partial_and_stage_less_details() {
+        let win32_only = WindowsRdpHostError::NativeDiagnostic {
+            result: ffi::RESULT_INTERNAL_ERROR,
+            stage: ffi::CREATE_STAGE_CREATE_WINDOW,
+            hresult: None,
+            win32_code: Some(1407),
+        };
+        assert_eq!(
+            win32_only.to_string(),
+            "Windows RDP host result 4 at native stage 3 (CREATE_WINDOW) with Win32 code 0x0000057F (1407)"
+        );
+
+        let stage_less = WindowsRdpHostError::NativeDiagnostic {
+            result: ffi::RESULT_INTERNAL_ERROR,
+            stage: ffi::CREATE_STAGE_NONE,
+            hresult: None,
+            win32_code: Some(5),
+        };
+        assert_eq!(stage_less.stage(), None);
+        assert_eq!(
+            stage_less.to_string(),
+            "Windows RDP host result 4 at native stage 0 (NONE) with Win32 code 0x00000005 (5)"
         );
     }
 

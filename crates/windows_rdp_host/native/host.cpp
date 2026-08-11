@@ -34,7 +34,7 @@ NavopRdpResult validate_last_error_output(
     }
     NavopRdpResult result = validate_struct_size(
         out_error->struct_size,
-        static_cast<uint32_t>(sizeof(NavopRdpLastError)));
+        NAVOP_RDP_LAST_ERROR_LEGACY_SIZE);
     if (result != NAVOP_RDP_RESULT_OK) {
         return result;
     }
@@ -45,7 +45,10 @@ void write_last_error(
     NavopRdpLastError* out_error,
     NavopRdpResult result,
     int32_t hresult,
-    uint32_t has_hresult) noexcept {
+    uint32_t has_hresult,
+    uint32_t stage = NAVOP_RDP_CREATE_STAGE_NONE,
+    uint32_t win32_code = UINT32_C(0),
+    uint32_t has_win32_code = UINT32_C(0)) noexcept {
     const uint32_t caller_size = out_error->struct_size;
     out_error->struct_size = caller_size;
     out_error->abi_version = NAVOP_RDP_ABI_VERSION;
@@ -53,6 +56,20 @@ void write_last_error(
     out_error->hresult = hresult;
     out_error->has_hresult = has_hresult;
     out_error->reserved = UINT32_C(0);
+    if (caller_size >=
+        offsetof(NavopRdpLastError, stage) + sizeof(out_error->stage)) {
+        out_error->stage = stage;
+    }
+    if (caller_size >=
+        offsetof(NavopRdpLastError, win32_code) +
+            sizeof(out_error->win32_code)) {
+        out_error->win32_code = win32_code;
+    }
+    if (caller_size >=
+        offsetof(NavopRdpLastError, has_win32_code) +
+            sizeof(out_error->has_win32_code)) {
+        out_error->has_win32_code = has_win32_code;
+    }
 }
 
 }  // namespace
@@ -69,29 +86,99 @@ void clear_last_error(NativeRdpHost* host) noexcept {
     host->last_result = NAVOP_RDP_RESULT_OK;
     host->last_hresult = 0;
     host->has_last_hresult = UINT32_C(0);
+    host->last_stage = NAVOP_RDP_CREATE_STAGE_NONE;
+    host->last_win32_code = UINT32_C(0);
+    host->has_last_win32_code = UINT32_C(0);
+}
+
+NavopRdpResult record_last_diagnostic(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    int32_t hresult,
+    uint32_t has_hresult,
+    uint32_t win32_code,
+    uint32_t has_win32_code) noexcept {
+    if (host != nullptr) {
+        host->last_result = result;
+        host->last_hresult = hresult;
+        host->has_last_hresult = has_hresult;
+        host->last_stage = stage;
+        host->last_win32_code = win32_code;
+        host->has_last_win32_code = has_win32_code;
+    }
+    return result;
 }
 
 NavopRdpResult record_last_error(
     NativeRdpHost* host,
     NavopRdpResult result) noexcept {
-    if (host != nullptr) {
-        host->last_result = result;
-        host->last_hresult = 0;
-        host->has_last_hresult = UINT32_C(0);
-    }
-    return result;
+    return record_last_diagnostic(
+        host,
+        result,
+        NAVOP_RDP_CREATE_STAGE_NONE,
+        0,
+        UINT32_C(0),
+        UINT32_C(0),
+        UINT32_C(0));
 }
 
 NavopRdpResult record_last_hresult(
     NativeRdpHost* host,
     NavopRdpResult result,
     int32_t hresult) noexcept {
-    if (host != nullptr) {
-        host->last_result = result;
-        host->last_hresult = hresult;
-        host->has_last_hresult = UINT32_C(1);
-    }
-    return result;
+    return record_last_diagnostic(
+        host,
+        result,
+        NAVOP_RDP_CREATE_STAGE_NONE,
+        hresult,
+        UINT32_C(1),
+        UINT32_C(0),
+        UINT32_C(0));
+}
+
+NavopRdpResult record_last_stage_error(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage) noexcept {
+    return record_last_diagnostic(
+        host,
+        result,
+        stage,
+        0,
+        UINT32_C(0),
+        UINT32_C(0),
+        UINT32_C(0));
+}
+
+NavopRdpResult record_last_stage_hresult(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    int32_t hresult) noexcept {
+    return record_last_diagnostic(
+        host,
+        result,
+        stage,
+        hresult,
+        UINT32_C(1),
+        UINT32_C(0),
+        UINT32_C(0));
+}
+
+NavopRdpResult record_last_stage_win32(
+    NativeRdpHost* host,
+    NavopRdpResult result,
+    uint32_t stage,
+    uint32_t win32_code) noexcept {
+    return record_last_diagnostic(
+        host,
+        result,
+        stage,
+        0,
+        UINT32_C(0),
+        win32_code,
+        win32_code == ERROR_SUCCESS ? UINT32_C(0) : UINT32_C(1));
 }
 
 extern "C" NavopRdpResult navop_rdp_probe(
@@ -175,6 +262,9 @@ extern "C" NavopRdpResult navop_rdp_create(
             nullptr,
             NAVOP_RDP_RESULT_OK,
             0,
+            UINT32_C(0),
+            NAVOP_RDP_CREATE_STAGE_NONE,
+            UINT32_C(0),
             UINT32_C(0)};
         if (host == nullptr) {
             return NAVOP_RDP_RESULT_ALLOCATION_FAILED;
@@ -195,6 +285,9 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent(
         NAVOP_RDP_ABI_VERSION,
         NAVOP_RDP_RESULT_OK,
         0,
+        UINT32_C(0),
+        UINT32_C(0),
+        NAVOP_RDP_CREATE_STAGE_NONE,
         UINT32_C(0),
         UINT32_C(0)};
     return navop_rdp_create_with_parent_v2(
@@ -296,6 +389,9 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent_v2(
             nullptr,
             NAVOP_RDP_RESULT_OK,
             0,
+            UINT32_C(0),
+            NAVOP_RDP_CREATE_STAGE_NONE,
+            UINT32_C(0),
             UINT32_C(0)};
         if (host == nullptr) {
             write_last_error(
@@ -315,7 +411,10 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent_v2(
                 out_error,
                 host->last_result,
                 host->last_hresult,
-                host->has_last_hresult);
+                host->has_last_hresult,
+                host->last_stage,
+                host->last_win32_code,
+                host->has_last_win32_code);
             delete host;
             return result;
         }
@@ -324,13 +423,14 @@ extern "C" NavopRdpResult navop_rdp_create_with_parent_v2(
         return NAVOP_RDP_RESULT_OK;
     } catch (...) {
         if (out_error != nullptr &&
-            out_error->struct_size >= sizeof(NavopRdpLastError) &&
+            out_error->struct_size >= NAVOP_RDP_LAST_ERROR_LEGACY_SIZE &&
             out_error->abi_version == NAVOP_RDP_ABI_VERSION) {
             write_last_error(
                 out_error,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
                 0,
-                UINT32_C(0));
+                UINT32_C(0),
+                NAVOP_RDP_CREATE_STAGE_EXCEPTION);
         }
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
     }
@@ -356,7 +456,10 @@ extern "C" NavopRdpResult navop_rdp_get_last_error(
             out_error,
             host->last_result,
             host->last_hresult,
-            host->has_last_hresult);
+            host->has_last_hresult,
+            host->last_stage,
+            host->last_win32_code,
+            host->has_last_win32_code);
         return NAVOP_RDP_RESULT_OK;
     } catch (...) {
         return NAVOP_RDP_RESULT_INTERNAL_ERROR;
@@ -556,16 +659,26 @@ extern "C" NavopRdpResult navop_rdp_destroy(NativeRdpHost** host) noexcept {
 extern "C" NavopRdpResult navop_rdp_test_set_last_error(
     NativeRdpHost* host,
     NavopRdpResult result,
+    uint32_t stage,
     uint32_t has_hresult,
-    int32_t hresult) noexcept {
-    if (host == nullptr || has_hresult > UINT32_C(1)) {
+    int32_t hresult,
+    uint32_t has_win32_code,
+    uint32_t win32_code) noexcept {
+    if (host == nullptr ||
+        has_hresult > UINT32_C(1) ||
+        has_win32_code > UINT32_C(1)) {
         return NAVOP_RDP_RESULT_INVALID_ARGUMENT;
     }
     const NavopRdpResult owner_result = ensure_owner_thread(host);
     if (owner_result != NAVOP_RDP_RESULT_OK) {
         return owner_result;
     }
-    return has_hresult == UINT32_C(1)
-        ? record_last_hresult(host, result, hresult)
-        : record_last_error(host, result);
+    return record_last_diagnostic(
+        host,
+        result,
+        stage,
+        hresult,
+        has_hresult,
+        win32_code,
+        has_win32_code);
 }

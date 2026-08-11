@@ -114,18 +114,25 @@ NavopRdpResult create_active_x_resources(
 
     const HRESULT ole_result = OleInitialize(nullptr);
     if (FAILED(ole_result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_OLE_INITIALIZE,
             static_cast<int32_t>(ole_result));
     }
     resources->state.ole_initialized = true;
 
+    SetLastError(ERROR_SUCCESS);
     if (!AtlAxWinInit()) {
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        return record_last_stage_win32(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_ATL_AX_WIN_INIT,
+            static_cast<uint32_t>(GetLastError()));
     }
     resources->state.atl_initialized = true;
 
+    SetLastError(ERROR_SUCCESS);
     resources->state.child_window = CreateWindowExW(
         0,
         L"AtlAxWin",
@@ -140,30 +147,42 @@ NavopRdpResult create_active_x_resources(
         GetModuleHandleW(nullptr),
         nullptr);
     if (resources->state.child_window == nullptr) {
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        return record_last_stage_win32(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW,
+            static_cast<uint32_t>(GetLastError()));
     }
 
     const HRESULT control_result = create_rdp_control(resources->state);
     if (FAILED(control_result) || resources->state.control == nullptr) {
         if (FAILED(control_result)) {
-            return record_last_hresult(
+            return record_last_stage_hresult(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL,
                 static_cast<int32_t>(control_result));
         }
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL);
     }
 
     const HRESULT query_result = resources->state.control->QueryInterface(
         IID_PPV_ARGS(&resources->state.client));
     if (FAILED(query_result) || resources->state.client == nullptr) {
         if (FAILED(query_result)) {
-            return record_last_hresult(
+            return record_last_stage_hresult(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_QUERY_CLIENT,
                 static_cast<int32_t>(query_result));
         }
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_QUERY_CLIENT);
     }
 
     CComPtr<IMsRdpClientNonScriptable2> non_scriptable;
@@ -172,21 +191,26 @@ NavopRdpResult create_active_x_resources(
             IID_PPV_ARGS(&non_scriptable));
     if (FAILED(non_scriptable_result) || non_scriptable == nullptr) {
         if (FAILED(non_scriptable_result)) {
-            return record_last_hresult(
+            return record_last_stage_hresult(
                 owner,
                 NAVOP_RDP_RESULT_INTERNAL_ERROR,
+                NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE,
                 static_cast<int32_t>(non_scriptable_result));
         }
-        return record_last_error(owner, NAVOP_RDP_RESULT_INTERNAL_ERROR);
+        return record_last_stage_error(
+            owner,
+            NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE);
     }
 
     const HRESULT ui_parent_result =
         non_scriptable->put_UIParentWindowHandle(
             reinterpret_cast<wireHWND>(parent));
     if (FAILED(ui_parent_result)) {
-        return record_last_hresult(
+        return record_last_stage_hresult(
             owner,
             NAVOP_RDP_RESULT_INTERNAL_ERROR,
+            NAVOP_RDP_CREATE_STAGE_SET_PARENT,
             static_cast<int32_t>(ui_parent_result));
     }
 
@@ -195,7 +219,14 @@ NavopRdpResult create_active_x_resources(
         resources->state.control,
         &resources->state.event_subscription);
     if (subscription_result != NAVOP_RDP_RESULT_OK) {
-        return subscription_result;
+        return record_last_diagnostic(
+            owner,
+            subscription_result,
+            NAVOP_RDP_CREATE_STAGE_EVENT_SUBSCRIPTION,
+            owner->last_hresult,
+            owner->has_last_hresult,
+            owner->last_win32_code,
+            owner->has_last_win32_code);
     }
 
     *out_resources = resources.release();

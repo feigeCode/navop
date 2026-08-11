@@ -20,6 +20,18 @@ typedef int32_t NavopRdpResult;
 #define NAVOP_RDP_RESULT_CALLBACK_IN_FLIGHT INT32_C(7)
 #define NAVOP_RDP_RESULT_INVALID_STATE INT32_C(8)
 #define NAVOP_RDP_MAX_HOST_UTF16_CODE_UNITS UINT32_C(255)
+#define NAVOP_RDP_LAST_ERROR_LEGACY_SIZE UINT32_C(24)
+
+#define NAVOP_RDP_CREATE_STAGE_NONE UINT32_C(0)
+#define NAVOP_RDP_CREATE_STAGE_OLE_INITIALIZE UINT32_C(1)
+#define NAVOP_RDP_CREATE_STAGE_ATL_AX_WIN_INIT UINT32_C(2)
+#define NAVOP_RDP_CREATE_STAGE_CREATE_WINDOW UINT32_C(3)
+#define NAVOP_RDP_CREATE_STAGE_CREATE_CONTROL UINT32_C(4)
+#define NAVOP_RDP_CREATE_STAGE_QUERY_CLIENT UINT32_C(5)
+#define NAVOP_RDP_CREATE_STAGE_QUERY_NON_SCRIPTABLE UINT32_C(6)
+#define NAVOP_RDP_CREATE_STAGE_SET_PARENT UINT32_C(7)
+#define NAVOP_RDP_CREATE_STAGE_EVENT_SUBSCRIPTION UINT32_C(8)
+#define NAVOP_RDP_CREATE_STAGE_EXCEPTION UINT32_C(9)
 
 /*
  * Versioned structs accept struct_size values greater than or equal to the
@@ -41,8 +53,14 @@ typedef struct NavopRdpProbeResult {
 
 /*
  * Synchronous native diagnostics preserve the stable NavopRdpResult together
- * with an optional raw signed HRESULT. No native text or connection secrets
- * cross this ABI. has_hresult is exactly 0 or 1 and reserved is always zero.
+ * with an optional raw signed HRESULT, a numeric creation stage, and an
+ * optional raw Win32 error code. No native text or connection secrets cross
+ * this ABI. has_hresult and has_win32_code are exactly 0 or 1, and reserved is
+ * always zero.
+ *
+ * The first NAVOP_RDP_LAST_ERROR_LEGACY_SIZE bytes are the stable legacy
+ * prefix. New implementations accept that prefix and write extension fields
+ * only when the caller-provided struct_size includes them.
  */
 typedef struct NavopRdpLastError {
     uint32_t struct_size;
@@ -51,6 +69,9 @@ typedef struct NavopRdpLastError {
     int32_t hresult;
     uint32_t has_hresult;
     uint32_t reserved;
+    uint32_t stage;
+    uint32_t win32_code;
+    uint32_t has_win32_code;
 } NavopRdpLastError;
 
 typedef struct NavopRdpCreateOptions {
@@ -236,7 +257,7 @@ static_assert(offsetof(NavopRdpProbeResult, struct_size) == 0);
 static_assert(offsetof(NavopRdpProbeResult, abi_version) == 4);
 static_assert(offsetof(NavopRdpProbeResult, available) == 8);
 static_assert(offsetof(NavopRdpProbeResult, reserved) == 12);
-static_assert(sizeof(NavopRdpLastError) == 24);
+static_assert(sizeof(NavopRdpLastError) == 36);
 static_assert(alignof(NavopRdpLastError) == 4);
 static_assert(offsetof(NavopRdpLastError, struct_size) == 0);
 static_assert(offsetof(NavopRdpLastError, abi_version) == 4);
@@ -244,6 +265,12 @@ static_assert(offsetof(NavopRdpLastError, result) == 8);
 static_assert(offsetof(NavopRdpLastError, hresult) == 12);
 static_assert(offsetof(NavopRdpLastError, has_hresult) == 16);
 static_assert(offsetof(NavopRdpLastError, reserved) == 20);
+static_assert(offsetof(NavopRdpLastError, stage) == 24);
+static_assert(offsetof(NavopRdpLastError, win32_code) == 28);
+static_assert(offsetof(NavopRdpLastError, has_win32_code) == 32);
+static_assert(
+    offsetof(NavopRdpLastError, stage) ==
+    NAVOP_RDP_LAST_ERROR_LEGACY_SIZE);
 static_assert(sizeof(NavopRdpCreateOptions) == 16);
 static_assert(alignof(NavopRdpCreateOptions) == 4);
 static_assert(offsetof(NavopRdpCreateOptions, struct_size) == 0);

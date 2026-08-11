@@ -605,6 +605,33 @@ fn create_time_hresult_classification_only_allows_known_unavailability() {
         None,
         classify_windows_native_create_error(WindowsRdpHostError::Internal)
     );
+    assert_eq!(
+        Some(WindowsNativeRdpUnavailableReason::ClassNotRegistered),
+        classify_windows_native_create_error(WindowsRdpHostError::NativeDiagnostic {
+            result: -4,
+            stage: 4,
+            hresult: Some(WindowsRdpHresult::from_code(REGDB_E_CLASSNOTREG)),
+            win32_code: None,
+        })
+    );
+    assert_eq!(
+        Some(WindowsNativeRdpUnavailableReason::RequiredInterfaceMissing),
+        classify_windows_native_create_error(WindowsRdpHostError::NativeDiagnostic {
+            result: -4,
+            stage: 5,
+            hresult: Some(WindowsRdpHresult::from_code(E_NOINTERFACE)),
+            win32_code: None,
+        })
+    );
+    assert_eq!(
+        None,
+        classify_windows_native_create_error(WindowsRdpHostError::NativeDiagnostic {
+            result: -4,
+            stage: 3,
+            hresult: None,
+            win32_code: Some(1407),
+        })
+    );
 }
 
 #[test]
