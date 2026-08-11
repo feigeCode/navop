@@ -2,6 +2,8 @@ use super::ApprovalEnvelope;
 use public_mcp::approval::{PublicMcpApprovalOutcome, PublicMcpApprovalRequest};
 use std::collections::VecDeque;
 
+pub(super) const MAX_QUEUED_APPROVALS: usize = 64;
+
 #[derive(Default)]
 pub(super) struct ApprovalQueueState {
     active: Option<ApprovalEnvelope>,
@@ -15,12 +17,16 @@ pub(super) struct ApprovalQueueSnapshot {
 }
 
 impl ApprovalQueueState {
-    pub fn enqueue(&mut self, envelope: ApprovalEnvelope) {
+    pub fn enqueue(&mut self, envelope: ApprovalEnvelope) -> Result<(), ApprovalEnvelope> {
         if self.active.is_none() {
             self.active = Some(envelope);
-            return;
+            return Ok(());
+        }
+        if self.pending.len() >= MAX_QUEUED_APPROVALS.saturating_sub(1) {
+            return Err(envelope);
         }
         self.pending.push_back(envelope);
+        Ok(())
     }
 
     pub fn begin_presentation(&mut self) -> Option<ApprovalQueueSnapshot> {
@@ -97,8 +103,8 @@ mod tests {
         let (first, mut first_rx) = envelope("first request");
         let (second, mut second_rx) = envelope("second request");
 
-        queue.enqueue(first);
-        queue.enqueue(second);
+        assert!(queue.enqueue(first).is_ok());
+        assert!(queue.enqueue(second).is_ok());
 
         let first_snapshot = queue
             .begin_presentation()
@@ -127,8 +133,8 @@ mod tests {
         let (first, mut first_rx) = envelope("first request");
         let (second, mut second_rx) = envelope("second request");
 
-        queue.enqueue(first);
-        queue.enqueue(second);
+        assert!(queue.enqueue(first).is_ok());
+        assert!(queue.enqueue(second).is_ok());
         queue.deny_all("no active window");
 
         assert_eq!(
@@ -146,5 +152,39 @@ mod tests {
                 .expect("second request should be denied")
         );
         assert!(queue.begin_presentation().is_none());
+    }
+
+    #[test]
+    fn approval_queue_rejects_requests_beyond_capacity() {
+        let mut queue = ApprovalQueueState::default();
+        let mut accepted_receivers = Vec::new();
+
+        for index in 0..MAX_QUEUED_APPROVALS {
+            let (envelope, receiver) = envelope(&format!("request {index}"));
+            assert!(queue.enqueue(envelope).is_ok());
+            accepted_receivers.push(receiver);
+        }
+
+        let (overflow, mut overflow_rx) = envelope("overflow request");
+        let overflow = queue
+            .enqueue(overflow)
+            .expect_err("queue should reject requests beyond its capacity");
+        overflow.deny("public MCP approval queue is full");
+
+        assert_eq!(
+            PublicMcpApprovalOutcome::Denied {
+                reason: Some("public MCP approval queue is full".to_string())
+            },
+            overflow_rx
+                .try_recv()
+                .expect("overflow request should be denied")
+        );
+        assert_eq!(MAX_QUEUED_APPROVALS - 1, queue.pending.len());
+        assert!(queue.active.is_some());
+        assert!(
+            accepted_receivers
+                .iter_mut()
+                .all(|receiver| receiver.try_recv().is_err())
+        );
     }
 }

@@ -1,13 +1,15 @@
-use super::ApprovalEnvelope;
+use super::{APPROVAL_QUEUE_FULL_REASON, ApprovalEnvelope};
 use public_mcp::approval::{
     PublicMcpApprovalFuture, PublicMcpApprovalOutcome, PublicMcpApprovalRequest, PublicMcpApprover,
 };
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
+const APPROVAL_CHANNEL_CAPACITY: usize = 64;
+
 #[derive(Clone)]
 pub(super) struct ChannelApprover {
-    sender: mpsc::UnboundedSender<ApprovalEnvelope>,
+    sender: mpsc::Sender<ApprovalEnvelope>,
     timeout: Duration,
 }
 
@@ -17,16 +19,22 @@ impl PublicMcpApprover for ChannelApprover {
         let timeout = self.timeout;
         Box::pin(async move {
             let (response_tx, response_rx) = oneshot::channel();
-            if sender
-                .send(ApprovalEnvelope {
-                    request,
-                    response_tx,
-                })
-                .is_err()
-            {
-                return PublicMcpApprovalOutcome::Denied {
-                    reason: Some("public MCP approval queue is not available".to_string()),
-                };
+            let envelope = ApprovalEnvelope {
+                request,
+                response_tx,
+            };
+            match sender.try_send(envelope) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    return PublicMcpApprovalOutcome::Denied {
+                        reason: Some(APPROVAL_QUEUE_FULL_REASON.to_string()),
+                    };
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return PublicMcpApprovalOutcome::Denied {
+                        reason: Some("public MCP approval queue is not available".to_string()),
+                    };
+                }
             }
 
             match tokio::time::timeout(timeout, response_rx).await {
@@ -44,13 +52,20 @@ impl PublicMcpApprover for ChannelApprover {
 
 pub(super) fn channel_approver(
     timeout: Duration,
-) -> (ChannelApprover, mpsc::UnboundedReceiver<ApprovalEnvelope>) {
-    let (sender, receiver) = mpsc::unbounded_channel();
+) -> (ChannelApprover, mpsc::Receiver<ApprovalEnvelope>) {
+    channel_approver_with_capacity(timeout, APPROVAL_CHANNEL_CAPACITY)
+}
+
+fn channel_approver_with_capacity(
+    timeout: Duration,
+    capacity: usize,
+) -> (ChannelApprover, mpsc::Receiver<ApprovalEnvelope>) {
+    let (sender, receiver) = mpsc::channel(capacity);
     (ChannelApprover { sender, timeout }, receiver)
 }
 
 #[cfg(test)]
-fn channel_approver_for_tests() -> (ChannelApprover, mpsc::UnboundedReceiver<ApprovalEnvelope>) {
+fn channel_approver_for_tests() -> (ChannelApprover, mpsc::Receiver<ApprovalEnvelope>) {
     channel_approver(Duration::from_secs(10))
 }
 
@@ -111,6 +126,26 @@ mod tests {
             },
             outcome
         );
+    }
+
+    #[tokio::test]
+    async fn channel_approver_denies_when_queue_is_full() {
+        let (approver, _receiver) = channel_approver_with_capacity(Duration::from_secs(10), 1);
+        let first_approval = tokio::spawn({
+            let approver = approver.clone();
+            async move { approver.request_approval(request()).await }
+        });
+        tokio::task::yield_now().await;
+
+        let outcome = approver.request_approval(request()).await;
+
+        assert_eq!(
+            PublicMcpApprovalOutcome::Denied {
+                reason: Some("public MCP approval queue is full".to_string())
+            },
+            outcome
+        );
+        first_approval.abort();
     }
 
     #[tokio::test]

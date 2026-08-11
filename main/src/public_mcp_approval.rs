@@ -20,6 +20,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+const APPROVAL_QUEUE_FULL_REASON: &str = "public MCP approval queue is full";
 
 pub struct GlobalPublicMcpApprovalQueue {
     manager: PublicMcpApprovalManager,
@@ -81,10 +82,14 @@ fn present_approval_request(
     envelope: ApprovalEnvelope,
     cx: &mut AsyncApp,
 ) {
-    queue
+    let enqueue_result = queue
         .lock()
         .expect("approval queue lock poisoned")
         .enqueue(envelope);
+    if let Err(envelope) = enqueue_result {
+        envelope.deny(APPROVAL_QUEUE_FULL_REASON);
+        return;
+    }
 
     let shown = cx.update(|cx| present_next_approval(queue.clone(), cx));
     if !shown {
