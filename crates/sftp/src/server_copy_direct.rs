@@ -3,6 +3,7 @@ use crate::remote_exec::{
     exec_remote_command_with_input_deadline,
 };
 use crate::server_copy::DirectCopyStrategy;
+use crate::server_copy_auth::{DirectCopyIdentity, configure_direct_copy_auth};
 use crate::server_copy_command::{
     DIRECT_COPY_HOST_KEY_ALIAS, DirectCopyPayloadLengths, build_direct_copy_wrapper,
     scp_item_is_safe, source_ssh_options_probe_command, target_ssh_command, validate_endpoint,
@@ -27,6 +28,7 @@ const DIRECT_COPY_AUTH_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct DirectCopyCapabilities {
     pub source_ssh: bool,
     pub source_auth_helpers: bool,
+    pub target_auth_helpers: bool,
     pub targets_absent: bool,
     pub source_rsync: bool,
     pub target_rsync: bool,
@@ -38,6 +40,7 @@ pub(crate) struct DirectCopyCapabilities {
 
 pub(crate) struct DirectCopyPlan {
     strategy: DirectCopyStrategy,
+    identity: DirectCopyIdentity,
 }
 
 impl DirectCopyPlan {
@@ -71,7 +74,10 @@ impl Drop for DirectCopyHostKey {
 pub(crate) fn choose_direct_copy_strategy(
     capabilities: &DirectCopyCapabilities,
 ) -> Option<DirectCopyStrategy> {
-    if !capabilities.source_ssh || !capabilities.source_auth_helpers || !capabilities.targets_absent
+    if !capabilities.source_ssh
+        || !capabilities.source_auth_helpers
+        || !capabilities.targets_absent
+        || !capabilities.target_auth_helpers
     {
         return None;
     }
@@ -92,6 +98,7 @@ pub(crate) fn requires_relay_for_directory_replace(items: &[ServerCopyItem]) -> 
 
 pub(crate) async fn prepare_direct_copy(
     source: &SshSessionManager,
+    source_config: &SshConnectConfig,
     target: &mut RusshSftpClient,
     target_config: &SshConnectConfig,
     items: &[ServerCopyItem],
@@ -132,7 +139,10 @@ pub(crate) async fn prepare_direct_copy(
     if cancelled.load(Ordering::Relaxed) {
         return Err(TransferCancelled.into());
     }
-    Ok(Some(DirectCopyPlan { strategy }))
+    Ok(Some(DirectCopyPlan {
+        strategy,
+        identity: DirectCopyIdentity::for_endpoints(source_config, target_config),
+    }))
 }
 
 pub(crate) async fn execute_direct_copy(
@@ -147,7 +157,17 @@ pub(crate) async fn execute_direct_copy(
     ensure_not_cancelled(&cancelled)?;
     let host_key = load_direct_copy_host_key(target, &cancelled)?;
     ensure_not_cancelled(&cancelled)?;
-    authenticate_direct_copy(source, target_config, &host_key, cancelled.clone()).await?;
+    let target_session = SshSessionManager::new(target_config.clone());
+    configure_direct_copy_auth(source, &target_session, &plan.identity, cancelled.clone()).await?;
+    ensure_not_cancelled(&cancelled)?;
+    authenticate_direct_copy(
+        source,
+        target_config,
+        &plan.identity,
+        &host_key,
+        cancelled.clone(),
+    )
+    .await?;
 
     if !targets_are_absent(target, items, cancelled.clone()).await? {
         bail!(
@@ -181,8 +201,15 @@ or local relay was started"
             ..TransferProgress::default()
         });
         reserve_target(target, item, item_index).await?;
-        let output =
-            execute_direct_command(source, command, &host_key, cancelled.clone(), None).await?;
+        let output = execute_direct_command(
+            source,
+            command,
+            &plan.identity,
+            &host_key,
+            cancelled.clone(),
+            None,
+        )
+        .await?;
         if output.exit_status != 0 {
             bail!(
                 "{} direct copy failed with status {}: {}. Local relay was not started because \
@@ -221,6 +248,7 @@ fn load_direct_copy_host_key(
 async fn authenticate_direct_copy(
     source: &SshSessionManager,
     target: &SshConnectConfig,
+    identity: &DirectCopyIdentity,
     host_key: &DirectCopyHostKey,
     cancelled: Arc<AtomicBool>,
 ) -> Result<()> {
@@ -228,6 +256,7 @@ async fn authenticate_direct_copy(
     let output = execute_direct_command(
         source,
         &command,
+        identity,
         host_key,
         cancelled.clone(),
         Some(Instant::now() + DIRECT_COPY_AUTH_TIMEOUT),
@@ -237,9 +266,10 @@ async fn authenticate_direct_copy(
         if error.is::<RemoteCommandTimeout>() {
             anyhow!(
                 "source server did not finish authenticating to the target within {} seconds: \
-{error}. Verify source-to-target network reachability and configure the source server with an SSH \
-key or SSH agent authorized by the target. Navop does not send target passwords or private keys \
-for direct transfer. Navop relay was not started",
+{error}. Navop already generated a dedicated SSH key on the source server and installed its public \
+key through the verified target connection. Verify source-to-target network reachability and the \
+target SSH service. The private key remains only on the source server, and Navop relay was not \
+started",
                 DIRECT_COPY_AUTH_TIMEOUT.as_secs()
             )
         } else {
@@ -250,11 +280,10 @@ for direct transfer. Navop relay was not started",
         return Ok(());
     }
     bail!(
-        "source server could not authenticate directly to the target (status {}): {}. Verify \
-source-to-target network reachability and configure the source server with an SSH key or SSH agent \
-authorized by the target. Navop does not send target passwords or private keys for direct \
-transfer. The target host key was pinned from Navop's verified target connection. Navop relay was \
-not started",
+        "Navop automatically configured a dedicated SSH key, but the source server still could not \
+authenticate directly to the target (status {}): {}. Verify source-to-target network reachability \
+and the target SSH service. The private key remains only on the source server, and the target host \
+key was pinned from Navop's verified target connection. Navop relay was not started",
         output.exit_status,
         command_error(&output.stderr, &output.stdout)
     )
@@ -263,11 +292,12 @@ not started",
 async fn execute_direct_command(
     source: &SshSessionManager,
     command: &str,
+    identity: &DirectCopyIdentity,
     host_key: &DirectCopyHostKey,
     cancelled: Arc<AtomicBool>,
     deadline: Option<Instant>,
 ) -> Result<crate::remote_exec::RemoteCommandOutput> {
-    let wrapper = build_direct_copy_wrapper(command, host_key.lengths())?;
+    let wrapper = build_direct_copy_wrapper(command, host_key.lengths(), identity.file_name())?;
     let mut payload = host_key.payload();
     let result = match deadline {
         Some(deadline) => {
@@ -345,7 +375,12 @@ async fn probe_capabilities(
         "command -v mktemp >/dev/null 2>&1 && \
 command -v chmod >/dev/null 2>&1 && \
 command -v dd >/dev/null 2>&1 && \
+command -v mkdir >/dev/null 2>&1 && \
+command -v mv >/dev/null 2>&1 && \
 command -v rm >/dev/null 2>&1 && \
+command -v rmdir >/dev/null 2>&1 && \
+command -v sleep >/dev/null 2>&1 && \
+command -v ssh-keygen >/dev/null 2>&1 && \
 command -v wc >/dev/null 2>&1",
         &cancelled,
     )
@@ -375,6 +410,22 @@ async fn probe_transfer_tools(
     source_ssh: bool,
     source_auth_helpers: bool,
 ) -> Result<DirectCopyCapabilities> {
+    let target_auth_helpers = probe(
+        target,
+        "command -v awk >/dev/null 2>&1 && \
+command -v cat >/dev/null 2>&1 && \
+command -v chmod >/dev/null 2>&1 && \
+command -v dd >/dev/null 2>&1 && \
+command -v mkdir >/dev/null 2>&1 && \
+command -v mktemp >/dev/null 2>&1 && \
+command -v mv >/dev/null 2>&1 && \
+command -v rm >/dev/null 2>&1 && \
+command -v rmdir >/dev/null 2>&1 && \
+command -v sleep >/dev/null 2>&1 && \
+command -v wc >/dev/null 2>&1",
+        &cancelled,
+    )
+    .await?;
     let rsync_probe = "command -v rsync >/dev/null 2>&1 && \
 rsync --protect-args --version >/dev/null 2>&1";
     let source_rsync = probe(source, rsync_probe, &cancelled).await?;
@@ -384,6 +435,7 @@ rsync --protect-args --version >/dev/null 2>&1";
     Ok(DirectCopyCapabilities {
         source_ssh,
         source_auth_helpers,
+        target_auth_helpers,
         targets_absent: true,
         source_rsync,
         target_rsync,

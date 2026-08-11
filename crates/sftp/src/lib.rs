@@ -5,6 +5,7 @@ mod remote_exec;
 mod remote_file_command;
 mod russh_impl;
 mod server_copy;
+mod server_copy_auth;
 mod server_copy_command;
 mod server_copy_direct;
 

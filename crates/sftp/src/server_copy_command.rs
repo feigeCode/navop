@@ -54,12 +54,15 @@ pub(crate) fn source_ssh_options_probe_command(port: u16) -> String {
 pub(crate) fn build_direct_copy_wrapper(
     command: &str,
     lengths: DirectCopyPayloadLengths,
+    identity_file_name: &str,
 ) -> Result<String> {
     validate_payload_lengths(lengths)?;
+    validate_identity_file_name(identity_file_name)?;
 
     let mut wrapper = String::from(
         "set -eu\n\
 umask 077\n\
+[ -n \"${HOME:-}\" ] || { echo 'Navop could not determine the source home directory' >&2; exit 72; }\n\
 navop_tmp=$(mktemp -d /tmp/navop-direct-copy.XXXXXX)\n\
 navop_cleanup() {\n\
   navop_status=$?\n\
@@ -69,6 +72,12 @@ navop_cleanup() {\n\
 }\n\
 trap navop_cleanup EXIT HUP INT TERM\n",
     );
+    wrapper.push_str(&format!(
+        "navop_identity=\"$HOME/.ssh/{identity_file_name}\"\n\
+[ -f \"$navop_identity\" ] && [ ! -L \"$navop_identity\" ] || {{ \
+echo 'Navop dedicated SSH key is unavailable on the source server' >&2; exit 73; }}\n\
+chmod 600 \"$navop_identity\"\n"
+    ));
     append_payload_file(
         &mut wrapper,
         "navop_known_hosts",
@@ -182,18 +191,19 @@ fn ssh_options(port_flag: &str, port: u16, path_style: AuthPathStyle) -> String 
     let host_key = match path_style {
         AuthPathStyle::ShellArguments => {
             "-o UserKnownHostsFile=\"$navop_known_hosts\" \
--o HostKeyAlias=navop-direct-copy-target"
+-o HostKeyAlias=navop-direct-copy-target -i \"$navop_identity\""
         }
         AuthPathStyle::RsyncRemoteShell => {
             "-o UserKnownHostsFile='$navop_known_hosts' \
--o HostKeyAlias=navop-direct-copy-target"
+-o HostKeyAlias=navop-direct-copy-target -i '$navop_identity'"
         }
         AuthPathStyle::Probe => {
             "-o UserKnownHostsFile=/tmp/navop-direct-copy-probe-known-hosts \
--o HostKeyAlias=navop-direct-copy-target"
+-o HostKeyAlias=navop-direct-copy-target \
+-i /tmp/navop-direct-copy-probe-identity"
         }
     };
-    let auth = "-o BatchMode=yes -o NumberOfPasswordPrompts=0 \
+    let auth = "-o BatchMode=yes -o NumberOfPasswordPrompts=0 -o IdentitiesOnly=yes \
 -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes \
 -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no";
     format!("{auth} {host_key} {common} {port_flag} {port}")
@@ -202,6 +212,17 @@ fn ssh_options(port_flag: &str, port: u16, path_style: AuthPathStyle) -> String 
 fn validate_payload_lengths(lengths: DirectCopyPayloadLengths) -> Result<()> {
     if lengths.known_hosts == 0 {
         bail!("direct copy requires a verified target host key");
+    }
+    Ok(())
+}
+
+fn validate_identity_file_name(file_name: &str) -> Result<()> {
+    if !file_name.starts_with("navop_direct_copy_")
+        || !file_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        bail!("invalid dedicated SSH key file name");
     }
     Ok(())
 }
@@ -263,7 +284,9 @@ fn shell_double_quote_with_internal_variable_expansion(value: &str) -> Result<St
     if value.chars().any(char::is_control) {
         bail!("value contains control characters");
     }
-    let without_allowed_variables = value.replace("$navop_known_hosts", "");
+    let without_allowed_variables = value
+        .replace("$navop_known_hosts", "")
+        .replace("$navop_identity", "");
     if without_allowed_variables.contains('$') {
         bail!("unexpected shell variable in rsync remote shell");
     }

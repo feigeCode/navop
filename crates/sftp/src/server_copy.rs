@@ -277,6 +277,7 @@ pub async fn copy_between_servers(request: ServerCopyRequest) -> Result<()> {
         let source_session = SshSessionManager::new(source_config.clone());
         if let Some(plan) = prepare_direct_copy(
             &source_session,
+            &source_config,
             &mut target,
             &target_config,
             &items,

@@ -8,10 +8,12 @@ edition.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "net"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }
 tracing = { workspace = true }
 rust-i18n = { workspace = true }
 russh = { workspace = true }
 russh-sftp = { workspace = true }
+sha2 = { workspace = true }
 ssh = { workspace = true }
 tokio-socks = { workspace = true }
 uuid = { workspace = true }

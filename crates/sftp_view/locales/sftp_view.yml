@@ -742,13 +742,13 @@ Transfer:
     zh-CN: "服务器间复制（%{count} 个项目）"
     zh-HK: "伺服器間複製（%{count} 個項目）"
   direct_copy_title:
-    en: Copy between servers
-    zh-CN: 服务器间复制
-    zh-HK: 伺服器間複製
+    en: Configure direct server transfer
+    zh-CN: 配置服务器间直接传输
+    zh-HK: 設定伺服器間直接傳輸
   direct_copy_intro:
-    en: "Choose how to copy %{count} item(s)."
-    zh-CN: "选择复制 %{count} 个项目的方式。"
-    zh-HK: "選擇複製 %{count} 個項目的方式。"
+    en: "Navop can automatically configure direct transfer for %{count} item(s)."
+    zh-CN: "Navop 可以自动配置直接传输，以复制 %{count} 个项目。"
+    zh-HK: "Navop 可以自動設定直接傳輸，以複製 %{count} 個項目。"
   direct_copy_route:
     en: "Transfer route:"
     zh-CN: "传输路径："
@@ -758,17 +758,17 @@ Transfer:
     zh-CN: "将复制 %{count} 个顶层项目。"
     zh-HK: "將複製 %{count} 個頂層項目。"
   direct_copy_server_auth_heading:
-    en: "Direct transfer (%{strategy})"
-    zh-CN: "直接传输（%{strategy}）"
-    zh-HK: "直接傳輸（%{strategy}）"
+    en: "Automatically configure direct transfer (%{strategy})"
+    zh-CN: "自动配置直接传输（%{strategy}）"
+    zh-HK: "自動設定直接傳輸（%{strategy}）"
   direct_copy_auth_boundary:
-    en: "The source server connects to the target using only an SSH identity or SSH agent already available on the source server. File data does not pass through this computer."
-    zh-CN: "源服务器仅使用自身已有的 SSH 身份文件或 SSH Agent 连接目标服务器，文件数据不经过本机。"
-    zh-HK: "來源伺服器僅使用自身已有的 SSH 身分檔案或 SSH Agent 連線目標伺服器，檔案資料不經過本機。"
+    en: "After you confirm, Navop will generate a dedicated passphrase-free SSH key on the source server and use the already verified target connection to add its public key to the target server's authorized_keys. The private key always remains on the source server. File data then transfers directly between the servers without passing through this computer."
+    zh-CN: "确认后，Navop 会在源服务器生成该服务器组合专用的无口令 SSH 密钥，并通过已经验证的目标连接将公钥写入目标服务器的 authorized_keys。私钥始终保留在源服务器。配置完成后，文件数据会直接从源服务器传输到目标服务器，不经过本机。"
+    zh-HK: "確認後，Navop 會在來源伺服器產生此伺服器組合專用、無密碼短語的 SSH 金鑰，並透過已驗證的目標連線將公鑰寫入目標伺服器的 authorized_keys。私鑰始終保留在來源伺服器。設定完成後，檔案資料會直接從來源伺服器傳輸到目標伺服器，不經過本機。"
   direct_copy_security:
-    en: "Navop does not send the target password, private key, passphrase, or certificate to the source server. The target host key is pinned to the key already verified by Navop."
-    zh-CN: "Navop 不会向源服务器发送目标服务器密码、私钥、私钥口令或证书；目标主机密钥使用 Navop 已验证的密钥进行校验。"
-    zh-HK: "Navop 不會向來源伺服器傳送目標伺服器密碼、私鑰、私鑰口令或憑證；目標主機金鑰使用 Navop 已驗證的金鑰進行校驗。"
+    en: "Navop never sends the target password, private key, passphrase, or certificate to the source server. The target host key remains pinned to the key already verified by Navop. The dedicated public-key trust can be reused for later direct transfers in the same direction."
+    zh-CN: "Navop 不会向源服务器发送目标服务器密码、私钥、私钥口令或证书。目标主机密钥继续使用 Navop 已验证的密钥进行校验。该专用公钥信任可用于后续相同方向的直接传输。"
+    zh-HK: "Navop 不會向來源伺服器傳送目標伺服器密碼、私鑰、私鑰口令或憑證。目標主機金鑰會繼續使用 Navop 已驗證的金鑰進行校驗。此專用公鑰信任可供之後相同方向的直接傳輸重用。"
   direct_copy_navop_relay_heading:
     en: Through Navop
     zh-CN: 通过 Navop
@@ -778,13 +778,13 @@ Transfer:
     zh-CN: "由 Navop 连接两台服务器，并通过本机中转文件数据；认证信息不会提供给另一台服务器。"
     zh-HK: "由 Navop 連線兩台伺服器，並透過本機中轉檔案資料；驗證資訊不會提供給另一台伺服器。"
   direct_copy_use_direct:
-    en: Direct transfer
-    zh-CN: 直接传输
-    zh-HK: 直接傳輸
+    en: Configure and transfer directly
+    zh-CN: 自动配置并直接传输
+    zh-HK: 自動設定並直接傳輸
   direct_copy_authenticating:
-    en: Verifying source-to-target connection
-    zh-CN: 正在验证源服务器到目标服务器的连接
-    zh-HK: 正在驗證來源伺服器到目標伺服器的連線
+    en: Automatically configuring and verifying the source-to-target connection
+    zh-CN: 正在自动配置并验证源服务器到目标服务器的连接
+    zh-HK: 正在自動設定並驗證來源伺服器到目標伺服器的連線
   relay_copy_starting:
     en: Starting transfer through Navop
     zh-CN: 正在启动 Navop 中转

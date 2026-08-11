@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 
 const KNOWN_HOSTS: &[u8] =
     b"navop-direct-copy-target ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey\n";
+const IDENTITY_FILE_NAME: &str = "navop_direct_copy_0123456789abcdef0123456789abcdef";
 
 fn known_hosts_lengths() -> DirectCopyPayloadLengths {
     DirectCopyPayloadLengths {
@@ -34,6 +35,7 @@ fn rsync_capabilities() -> DirectCopyCapabilities {
     DirectCopyCapabilities {
         source_ssh: true,
         source_auth_helpers: true,
+        target_auth_helpers: true,
         targets_absent: true,
         source_rsync: true,
         target_rsync: true,
@@ -69,6 +71,16 @@ fn direct_copy_uses_scp_when_rsync_is_unavailable() {
 fn direct_copy_relays_when_source_auth_helpers_are_missing() {
     let capabilities = DirectCopyCapabilities {
         source_auth_helpers: false,
+        ..rsync_capabilities()
+    };
+
+    assert_eq!(None, choose_direct_copy_strategy(&capabilities));
+}
+
+#[test]
+fn direct_copy_relays_when_target_auth_helpers_are_missing() {
+    let capabilities = DirectCopyCapabilities {
+        target_auth_helpers: false,
         ..rsync_capabilities()
     };
 
@@ -150,7 +162,9 @@ fn direct_commands_use_only_source_side_public_key_authentication() {
         assert!(!command.contains("navop_cert"));
         assert!(!command.contains("CertificateFile"));
         assert!(!command.contains("IdentityAgent=none"));
-        assert!(!command.contains("IdentitiesOnly=yes"));
+        assert!(command.contains("-o IdentitiesOnly=yes"));
+        assert!(command.contains("-i "));
+        assert!(command.contains("$navop_identity"));
         assert!(!command.contains("PasswordAuthentication=yes"));
 
         if strategy == DirectCopyStrategy::Scp {
@@ -178,11 +192,15 @@ fn rsync_command_uses_strict_batch_ssh_and_port() {
 
 #[test]
 fn wrapper_stages_only_the_verified_known_hosts_payload() {
-    let wrapper = build_direct_copy_wrapper("ssh target true", known_hosts_lengths())
-        .expect("direct copy wrapper");
+    let wrapper =
+        build_direct_copy_wrapper("ssh target true", known_hosts_lengths(), IDENTITY_FILE_NAME)
+            .expect("direct copy wrapper");
 
     assert_protected_wrapper(&wrapper);
     assert!(wrapper.contains("navop_known_hosts=\"$navop_tmp/known_hosts\""));
+    assert!(wrapper.contains(&format!(
+        "navop_identity=\"$HOME/.ssh/{IDENTITY_FILE_NAME}\""
+    )));
     assert!(wrapper.contains(&format!("count={}", KNOWN_HOSTS.len())));
     assert!(!wrapper.contains("SSH_ASKPASS"));
     assert!(!wrapper.contains("navop_secret"));
@@ -193,7 +211,14 @@ fn wrapper_stages_only_the_verified_known_hosts_payload() {
 
 #[test]
 fn wrapper_rejects_an_empty_host_key_payload() {
-    assert!(build_direct_copy_wrapper("true", DirectCopyPayloadLengths::default()).is_err());
+    assert!(
+        build_direct_copy_wrapper(
+            "true",
+            DirectCopyPayloadLengths::default(),
+            IDENTITY_FILE_NAME,
+        )
+        .is_err()
+    );
 }
 
 #[cfg(unix)]
@@ -208,9 +233,15 @@ fn scp_wrapper_passes_pinned_known_hosts_without_any_credentials() {
     )
     .expect("scp command")
     .remove(0);
-    let wrapper = build_direct_copy_wrapper(&command, known_hosts_lengths()).expect("scp wrapper");
+    let wrapper = build_direct_copy_wrapper(&command, known_hosts_lengths(), IDENTITY_FILE_NAME)
+        .expect("scp wrapper");
 
     let directory = tempfile::tempdir().expect("temporary directory");
+    let home = directory.path().join("home");
+    let ssh_dir = home.join(".ssh");
+    std::fs::create_dir_all(&ssh_dir).expect("create source .ssh");
+    std::fs::write(ssh_dir.join(IDENTITY_FILE_NAME), "test-private-key")
+        .expect("create source identity");
     let fake_scp = directory.path().join("scp");
     let captured_known_hosts = directory.path().join("known-hosts");
     let captured_environment = directory.path().join("environment");
@@ -249,6 +280,7 @@ printf '%s\n%s\n%s\n' "${SSH_ASKPASS-}" "${SSH_ASKPASS_REQUIRE-}" "${DISPLAY-}" 
     let mut child = Command::new("/bin/sh")
         .arg("-c")
         .arg(&wrapper)
+        .env("HOME", &home)
         .env(
             "PATH",
             format!(
@@ -318,6 +350,17 @@ printf '%s\n%s\n%s\n' "${SSH_ASKPASS-}" "${SSH_ASKPASS_REQUIRE-}" "${DISPLAY-}" 
             .iter()
             .any(|argument| argument == "PasswordAuthentication=no")
     );
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument == "IdentitiesOnly=yes")
+    );
+    let identity_path = ssh_dir.join(IDENTITY_FILE_NAME);
+    assert!(
+        arguments
+            .iter()
+            .any(|argument| argument == identity_path.to_string_lossy().as_ref())
+    );
 }
 
 #[test]
@@ -326,6 +369,7 @@ fn ssh_option_probe_parses_public_key_options_without_credentials() {
     assert!(command.starts_with("ssh -F /dev/null -G "));
     assert!(command.contains("-o BatchMode=yes"));
     assert!(command.contains("-o PreferredAuthentications=publickey"));
+    assert!(command.contains("-o IdentitiesOnly=yes"));
     assert!(command.contains("-o PubkeyAuthentication=yes"));
     assert!(command.contains("-o PasswordAuthentication=no"));
     assert!(command.contains("-o KbdInteractiveAuthentication=no"));
@@ -336,6 +380,7 @@ fn ssh_option_probe_parses_public_key_options_without_credentials() {
     assert!(!command.contains("$navop_"));
     assert!(!command.contains("SSH_ASKPASS"));
     assert!(!command.contains("IdentityAgent=none"));
+    assert!(command.contains("-i /tmp/navop-direct-copy-probe-identity"));
 }
 
 #[test]
@@ -501,6 +546,8 @@ fn assert_common_security_options(command: &str) {
     assert!(command.contains("-o StrictHostKeyChecking=yes"));
     assert!(command.contains("-o UserKnownHostsFile="));
     assert!(command.contains("-o HostKeyAlias=navop-direct-copy-target"));
+    assert!(command.contains("-o IdentitiesOnly=yes"));
+    assert!(command.contains("-i "));
     assert!(command.contains("-o ForwardAgent=no"));
     assert!(command.contains("-o RequestTTY=no"));
     assert!(command.contains("-o ClearAllForwardings=yes"));
