@@ -805,3 +805,62 @@ Transfer:
     en: scp
     zh-CN: scp
     zh-HK: scp
+
+# SSH 主机密钥确认
+HostKey:
+  title:
+    en: Verify SSH Host Key
+    zh-CN: 验证 SSH 主机指纹
+    zh-HK: 驗證 SSH 主機指紋
+  message:
+    en: This server is not yet trusted. Verify the fingerprint before continuing.
+    zh-CN: 尚未信任此服务器。继续前请核对主机指纹。
+    zh-HK: 尚未信任此伺服器。繼續前請核對主機指紋。
+  changed_title:
+    en: SSH Host Key Changed
+    zh-CN: SSH 主机指纹已变更
+    zh-HK: SSH 主機指紋已變更
+  changed_message:
+    en: The server presented a different host key. This can happen after reinstalling the server or rotating its keys, but it may also indicate a man-in-the-middle attack. Verify the new fingerprint through a trusted channel before continuing.
+    zh-CN: 服务器提供了与之前不同的主机指纹。这可能由系统重装或密钥轮换引起，也可能意味着遭到中间人攻击。继续前请通过可信渠道核对新指纹。
+    zh-HK: 伺服器提供了與之前不同的主機指紋。這可能由系統重裝或金鑰輪換引起，也可能表示遭到中間人攻擊。繼續前請透過可信渠道核對新指紋。
+  identity:
+    en: Server
+    zh-CN: 服务器
+    zh-HK: 伺服器
+  presented:
+    en: New Host Key
+    zh-CN: 新主机指纹
+    zh-HK: 新主機指紋
+  expected:
+    en: Previously Trusted Host Keys
+    zh-CN: 之前信任的主机指纹
+    zh-HK: 之前信任的主機指紋
+  algorithm:
+    en: Algorithm
+    zh-CN: 算法
+    zh-HK: 演算法
+  fingerprint:
+    en: SHA-256 Fingerprint
+    zh-CN: SHA-256 指纹
+    zh-HK: SHA-256 指紋
+  accept_save:
+    en: Accept and Save
+    zh-CN: 接受并保存
+    zh-HK: 接受並儲存
+  update_save:
+    en: Update and Save
+    zh-CN: 更新并保存
+    zh-HK: 更新並儲存
+  accept_once:
+    en: Accept Once
+    zh-CN: 仅本次接受
+    zh-HK: 僅本次接受
+  reject:
+    en: Reject
+    zh-CN: 拒绝
+    zh-HK: 拒絕
+  rejected:
+    en: SSH host key was rejected.
+    zh-CN: 已拒绝 SSH 主机指纹。
+    zh-HK: 已拒絕 SSH 主機指紋。

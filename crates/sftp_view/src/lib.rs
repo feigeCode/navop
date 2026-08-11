@@ -8,6 +8,7 @@ mod endpoint_switcher;
 mod file_clipboard;
 mod file_list_panel;
 mod file_list_preferences;
+mod host_key_prompt;
 mod left_remote;
 mod left_remote_state;
 mod ssh_config;
@@ -23,9 +24,9 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    Anchor, AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
-    Focusable, FontWeight, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, actions, div, prelude::*, px,
+    Anchor, AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter,
+    ExternalPaths, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement,
+    Render, SharedString, Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IconSize, Sizable, Size, WindowExt,
@@ -68,6 +69,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
+use host_key_prompt::{HostKeyPromptTarget, host_key_prompt_request};
 use left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
 
 actions!(
@@ -1048,12 +1050,15 @@ fn rename_conflicting_transfers(
 }
 
 pub struct SftpView {
+    window_handle: AnyWindowHandle,
     connection_state: ConnectionState,
     close_state: CloseState,
     sftp_config: SshConnectConfig,
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 当前主 SFTP 连接尝试的代次；迟到的异步结果不能覆盖更新的连接。
     connection_generation: ConnectionGeneration,
+    /// 左侧远程 SFTP 连接尝试的代次；即使切走后又选回同一连接，也不能应用旧结果。
+    left_connection_generation: ConnectionGeneration,
 
     /// 原始连接信息，用于打开 SSH 终端
     stored_connection: StoredConnection,
@@ -1271,11 +1276,13 @@ impl SftpView {
         ));
 
         let mut view = Self {
+            window_handle: window.window_handle(),
             connection_state: ConnectionState::Disconnected { error: None },
             close_state: CloseState::Open,
             sftp_config: config,
             sftp_client: None,
             connection_generation: ConnectionGeneration::default(),
+            left_connection_generation: ConnectionGeneration::default(),
             stored_connection: conn.clone(),
             local_current_path: local_current_path.clone(),
             remote_current_path: ".".to_string(),
@@ -1332,6 +1339,14 @@ impl SftpView {
         self.connection_generation.is_current(generation)
     }
 
+    fn next_left_connection_generation(&mut self) -> u64 {
+        self.left_connection_generation.advance()
+    }
+
+    fn is_current_left_connection_generation(&self, generation: u64) -> bool {
+        self.left_connection_generation.is_current(generation)
+    }
+
     fn connect(&mut self, cx: &mut Context<Self>) {
         if self.close_state.is_closing() {
             return;
@@ -1339,6 +1354,7 @@ impl SftpView {
         let generation = self.next_connection_generation();
         self.connection_state = ConnectionState::Connecting;
         let config = self.sftp_config.clone();
+        let window_handle = self.window_handle.clone();
 
         tracing::info!(
             "Connecting to SFTP server: {}@{}",
@@ -1391,6 +1407,46 @@ impl SftpView {
             Ok(Err(e)) => {
                 let error_msg = format!("{}", e);
                 tracing::error!("SFTP connection failed: {}", error_msg);
+                if let Some(request) = host_key_prompt_request(&e) {
+                    let should_prompt = this
+                        .update(cx, |this, cx| {
+                            if this.close_state.is_closing()
+                                || !this.is_current_connection_generation(generation)
+                            {
+                                return false;
+                            }
+                            this.set_connection_active(false, cx);
+                            true
+                        })
+                        .unwrap_or(false);
+                    if should_prompt {
+                        let prompt_result = cx.update_window(window_handle, |_, window, cx| {
+                            let _ = this.update(cx, |this, cx| {
+                                this.show_host_key_prompt(
+                                    HostKeyPromptTarget::Main { generation },
+                                    request,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                        if prompt_result.is_err() {
+                            let _ = this.update(cx, |this, cx| {
+                                if this.close_state.is_closing()
+                                    || !this.is_current_connection_generation(generation)
+                                {
+                                    return;
+                                }
+                                this.connection_state = ConnectionState::Disconnected {
+                                    error: Some(error_msg),
+                                };
+                                this.set_connection_active(false, cx);
+                                cx.notify();
+                            });
+                        }
+                    }
+                    return;
+                }
                 let _ = this.update(cx, |this, cx| {
                     if this.close_state.is_closing()
                         || !this.is_current_connection_generation(generation)

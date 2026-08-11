@@ -1,7 +1,8 @@
 use crate::endpoint::{LeftEndpointValue, load_connection};
+use crate::host_key_prompt::{HostKeyPromptTarget, host_key_prompt_request};
 use crate::left_remote_state::{LeftRemoteConnectionState, LeftRemoteEndpoint};
 use crate::{FileItem, SftpView, disconnect_sftp_client, format_permissions};
-use gpui::{AsyncApp, Context, WeakEntity, Window};
+use gpui::{AppContext, AsyncApp, Context, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::ActiveConnections;
@@ -75,15 +76,19 @@ impl SftpView {
         cx.notify();
     }
 
-    fn connect_left_remote(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn connect_left_remote(&mut self, cx: &mut Context<Self>) {
         if self.close_state.is_closing() {
             return;
         }
-        let Some(endpoint) = self.left_remote.as_ref() else {
+        let generation = self.next_left_connection_generation();
+        let Some(endpoint) = self.left_remote.as_mut() else {
             return;
         };
+        endpoint.state = LeftRemoteConnectionState::Connecting;
+        endpoint.loading = false;
         let config = endpoint.config.clone();
         let connection_id = endpoint.connection.id;
+        let window_handle = self.window_handle.clone();
         let task = Tokio::spawn(cx, async move {
             let mut client = RusshSftpClient::connect(config).await?;
             let path = client
@@ -98,7 +103,10 @@ impl SftpView {
                 Ok(Ok((client, path))) => {
                     let client = Arc::new(Mutex::new(client));
                     let installed = this.update(cx, |this, cx| {
-                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                        if this.close_state.is_closing()
+                            || this.left_remote_id() != connection_id
+                            || !this.is_current_left_connection_generation(generation)
+                        {
                             return false;
                         }
                         let endpoint = this.left_remote.as_mut().expect("checked above");
@@ -116,16 +124,64 @@ impl SftpView {
                     }
                 }
                 Ok(Err(error)) => {
+                    let error_message = error.to_string();
+                    if let Some(request) = host_key_prompt_request(&error) {
+                        let should_prompt = this
+                            .update(cx, |this, cx| {
+                                if this.close_state.is_closing()
+                                    || this.left_remote_id() != connection_id
+                                    || !this.is_current_left_connection_generation(generation)
+                                {
+                                    return false;
+                                }
+                                this.set_left_connection_active(false, cx);
+                                true
+                            })
+                            .unwrap_or(false);
+                        if should_prompt {
+                            let prompt_result = cx.update_window(window_handle, |_, window, cx| {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.show_host_key_prompt(
+                                        HostKeyPromptTarget::Left {
+                                            connection_id,
+                                            generation,
+                                        },
+                                        request,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            });
+                            if prompt_result.is_err() {
+                                let _ = this.update(cx, |this, cx| {
+                                    if this.close_state.is_closing()
+                                        || this.left_remote_id() != connection_id
+                                        || !this.is_current_left_connection_generation(generation)
+                                    {
+                                        return;
+                                    }
+                                    this.set_left_connection_error(error_message, cx);
+                                });
+                            }
+                        }
+                        return;
+                    }
                     let _ = this.update(cx, |this, cx| {
-                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                        if this.close_state.is_closing()
+                            || this.left_remote_id() != connection_id
+                            || !this.is_current_left_connection_generation(generation)
+                        {
                             return;
                         }
-                        this.set_left_connection_error(error.to_string(), cx);
+                        this.set_left_connection_error(error_message, cx);
                     });
                 }
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
-                        if this.close_state.is_closing() || this.left_remote_id() != connection_id {
+                        if this.close_state.is_closing()
+                            || this.left_remote_id() != connection_id
+                            || !this.is_current_left_connection_generation(generation)
+                        {
                             return;
                         }
                         this.set_left_connection_error(error.to_string(), cx);
@@ -288,7 +344,7 @@ impl SftpView {
         self.refresh_left_remote_dir(cx);
     }
 
-    fn set_left_connection_error(&mut self, error: String, cx: &mut Context<Self>) {
+    pub(crate) fn set_left_connection_error(&mut self, error: String, cx: &mut Context<Self>) {
         if let Some(endpoint) = self.left_remote.as_mut() {
             endpoint.state = LeftRemoteConnectionState::Disconnected(error);
             endpoint.loading = false;
@@ -312,6 +368,7 @@ impl SftpView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<Arc<Mutex<RusshSftpClient>>> {
+        self.left_connection_generation.advance();
         let mut endpoint = self.left_remote.take()?;
         self.set_left_connection_active_for(endpoint.connection.id, false, cx);
         endpoint.client.take()
