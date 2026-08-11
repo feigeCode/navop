@@ -2068,8 +2068,9 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   `remote_desktop_view` 原先没有像仓库其他 GPUI crate 一样在 dev-dependency 中启用该
   feature。现在增加
   `gpui = { workspace = true, features = ["test-support"] }`，并在 Windows-only test
-  module 中导入 `gpui::AppContext as _`。行为测试本身保留，不以删除或降级测试来绕过
-  Windows 编译证据。
+  module 中导入 `gpui::BorrowAppContext as _`，使 `TestAppContext` 上的
+  `update_global` 方法来自其实际定义 trait。行为测试本身保留，不以删除或降级测试来
+  绕过 Windows 编译证据。
 - **Local automated verification:** 修复后 macOS host 上
   `cargo fmt --all -- --check`、`git diff --check`、`remote_desktop_view` default
   140 passed、feature-on 150 passed，且
@@ -2115,6 +2116,17 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   MSVC/ATL/type-library compile/link 与自动化测试，不证明真实交互式 ActiveX/RDP
   session、child HWND/focus、COM apartment teardown、platform quit race 或四类各
   20 次人工关闭场景；Task 7 与整个计划继续保持未完成。
+- **First follow-up runner correction:** deterministic import HEAD
+  `f24a4b9b388849515b861d69f94c04a9efb6541c` 的 run
+  [`31455057780`](https://github.com/feigeCode/navop/actions/runs/31455057780)
+  中，i686 Native RDP probe 已成功，x64 graph 也已越过原先的
+  `mstscax.tlh` C1083 race，但随后在 Windows-only GPUI shutdown test 编译处失败：
+  `drain.rs` 的测试子模块仍导入 `AppContext`，而 `update_global` 实际由
+  `BorrowAppContext` 提供。修复仅把该测试作用域导入改为
+  `gpui::BorrowAppContext as _`；两路独立只读审计确认相邻 Windows/feature-on
+  代码没有第二处同类 trait/import 错配。macOS host 上 feature-on
+  `remote_desktop_view` 150 tests、format 与 diff checks 通过；真实 Windows
+  compile 仍由下一次 runner 核验。
 
 ---
 

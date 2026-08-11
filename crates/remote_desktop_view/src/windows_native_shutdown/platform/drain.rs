@@ -266,7 +266,7 @@ pub fn shutdown_windows_native_rdp(cx: &mut App) -> Task<WindowsNativeRdpShutdow
 
 #[cfg(test)]
 mod tests {
-    use gpui::AppContext as _;
+    use gpui::BorrowAppContext as _;
     use windows_rdp_host::{
         WindowsRdpShutdownCompletion, WindowsRdpShutdownLifecycle, WindowsRdpTerminalOutcome,
     };
