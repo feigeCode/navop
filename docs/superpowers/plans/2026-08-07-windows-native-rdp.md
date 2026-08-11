@@ -2243,8 +2243,18 @@ credential setter 和完整 Task 2 unsafe/lifecycle review 尚未完成。
   误用的失败修正记录，不是当前切片的成功证据。修复改为
   `advance_clock -> run_until_parked -> Task::is_ready ->
   futures::executor::block_on`，并把 `futures` 声明为该 crate 的直接 dev-dependency；
-  修复后仍需新的 x64 probe 真实编译运行。
-- **Remaining Task 7 scope and verification boundary:** 待补的 GitHub runner 证据最多
+  修复后的真实 Windows 编译运行证据见下一项。
+- **Successful Windows runner verification:** GitHub Actions run
+  `31461407370`（commit `14fb89000749f4e0fb9c5095f536d420c3cc4862`）整体
+  `success`。Windows RDP probe x64 成功（10m2s），在真实
+  `x86_64-pc-windows-msvc` + ATL 环境编译并运行 feature-on
+  `remote_desktop_view` tests，因而实际覆盖本切片新增的两个 Windows-only GPUI
+  regression；i686 probe 成功（2m47s），只证明 `i686-pc-windows-msvc` architecture /
+  ATL/MSVC build，不声称运行受 x64 约束的 regression。Windows x64 常规 tests 成功
+  （20m43s），Linux tests 成功（7m41s），macOS tests 成功（13m25s），Icon audit 成功
+  （1m32s），matrix preparation 成功（2s）。成功 run：
+  `https://github.com/feigeCode/navop/actions/runs/31461407370`。
+- **Remaining Task 7 scope and verification boundary:** 上述 GitHub runner 证据最多
   证明 x64/i686 MSVC/ATL build、x64 feature-on GPUI tests 与 Windows x64 常规自动化；
   不证明真实 ActiveX/RDP session、child `HWND` 视觉/焦点/Z-order、COM apartment
   teardown、全部 platform-driven quit race，或连接中/已连接/重连中关闭 tab与应用直接
