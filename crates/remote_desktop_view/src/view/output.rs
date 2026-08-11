@@ -24,6 +24,7 @@ impl RemoteDesktopView {
         );
         self.frame_sync.reset_session();
         let generation = self.frame_sync.snapshot().session_generation;
+        self.reset_presentation_pacing();
         self.capabilities = None;
         self.remote_size = None;
         self.cursor.reset_session();
@@ -94,10 +95,30 @@ impl RemoteDesktopView {
         self.pump_presentation_queue(cx);
     }
 
-    fn pump_presentation_queue(&mut self, _cx: &mut Context<Self>) {
+    fn pump_presentation_queue(&mut self, cx: &mut Context<Self>) {
         if self.presentation_in_flight {
             return;
         }
+        if self.presentation_queue.front_is_frame() {
+            let delay = self.presentation_pacer.next_frame_delay(Instant::now());
+            if !delay.is_zero() {
+                if self._presentation_pacing_task.is_none() {
+                    let timer_generation = self.presentation_pacer.begin_timer();
+                    self._presentation_pacing_task = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(delay).await;
+                        let _ = this.update(cx, |view, cx| {
+                            if !view.presentation_pacer.is_current_timer(timer_generation) {
+                                return;
+                            }
+                            view._presentation_pacing_task = None;
+                            view.pump_presentation_queue(cx);
+                        });
+                    }));
+                }
+                return;
+            }
+        }
+        self.cancel_presentation_pacing();
         let Some(command) = self.presentation_queue.pop_front() else {
             return;
         };
@@ -117,6 +138,7 @@ impl RemoteDesktopView {
         self.presentation_in_flight = false;
         let generation = self.frame_sync.snapshot().session_generation;
         let mut should_notify = false;
+        let mut frame_presented = false;
         match result {
             presentation::PresentationResult::Acknowledged
             | presentation::PresentationResult::Skipped => {}
@@ -156,6 +178,7 @@ impl RemoteDesktopView {
                                 if let Some(surface) = frame.surface {
                                     self.latest_frame = Some(surface);
                                     should_notify = true;
+                                    frame_presented = true;
                                 }
                             }
                             self.log_startup_frame(frame.width, frame.height, encoding);
@@ -167,6 +190,7 @@ impl RemoteDesktopView {
                                         self.remote_size = Some((frame.width, frame.height));
                                         self.latest_frame = Some(surface);
                                         should_notify = true;
+                                        frame_presented = true;
                                     }
                                 }
                                 frame_sync::DeltaDisposition::Applied => {}
@@ -183,6 +207,9 @@ impl RemoteDesktopView {
                     }
                 }
             }
+        }
+        if frame_presented {
+            self.presentation_pacer.mark_presented(Instant::now());
         }
         self.pump_presentation_queue(cx);
         if should_notify {
@@ -414,6 +441,7 @@ impl RemoteDesktopView {
         self.capabilities = None;
         self.frame_sync.reset_session();
         let generation = self.frame_sync.snapshot().session_generation;
+        self.reset_presentation_pacing();
         self.remote_size = None;
         self.cursor.reset_session();
         self.supersede_pending_presentation_frames();

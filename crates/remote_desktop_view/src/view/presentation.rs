@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::{Duration, Instant};
 
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
 
@@ -13,6 +14,7 @@ use super::surface::RemoteDesktopSurface;
 
 const MAX_MERGED_DELTA_RECTS: usize = 4096;
 const MAX_MERGED_DELTA_BYTES: usize = 8 * 1024 * 1024;
+const FRAME_PRESENTATION_INTERVAL: Duration = Duration::from_millis(16);
 
 pub(super) enum PresentationFrame {
     Rgba {
@@ -153,6 +155,13 @@ impl PresentationQueue {
         self.pending.clear();
     }
 
+    pub(super) fn front_is_frame(&self) -> bool {
+        matches!(
+            self.pending.front(),
+            Some(PresentationCommand::Frame { .. })
+        )
+    }
+
     pub(super) fn has_pending_frame(&self, generation: u64) -> bool {
         self.pending.iter().any(|command| {
             matches!(
@@ -173,6 +182,43 @@ impl PresentationQueue {
     fn retain_generation_commands(&mut self, generation: u64) {
         self.pending
             .retain(|command| command.generation() == generation);
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PresentationPacer {
+    last_presented_at: Option<Instant>,
+    timer_generation: u64,
+}
+
+impl PresentationPacer {
+    pub(super) fn reset(&mut self) {
+        self.last_presented_at = None;
+        self.invalidate_timer();
+    }
+
+    pub(super) fn mark_presented(&mut self, presented_at: Instant) {
+        self.last_presented_at = Some(presented_at);
+    }
+
+    pub(super) fn begin_timer(&mut self) -> u64 {
+        self.invalidate_timer();
+        self.timer_generation
+    }
+
+    pub(super) fn invalidate_timer(&mut self) {
+        self.timer_generation = self.timer_generation.wrapping_add(1);
+    }
+
+    pub(super) fn is_current_timer(&self, timer_generation: u64) -> bool {
+        self.timer_generation == timer_generation
+    }
+
+    pub(super) fn next_frame_delay(&self, now: Instant) -> Duration {
+        let Some(last_presented_at) = self.last_presented_at else {
+            return Duration::ZERO;
+        };
+        FRAME_PRESENTATION_INTERVAL.saturating_sub(now.saturating_duration_since(last_presented_at))
     }
 }
 
@@ -470,11 +516,12 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        MAX_MERGED_DELTA_BYTES, MAX_MERGED_DELTA_RECTS, PreparedFrame, PreparedFrameKind,
-        PresentationCommand, PresentationFrame, PresentationQueue, PresentationResult,
-        PresentationState,
+        FRAME_PRESENTATION_INTERVAL, MAX_MERGED_DELTA_BYTES, MAX_MERGED_DELTA_RECTS, PreparedFrame,
+        PreparedFrameKind, PresentationCommand, PresentationFrame, PresentationPacer,
+        PresentationQueue, PresentationResult, PresentationState,
     };
     use remote_desktop::RemoteDesktopFrameRect;
+    use std::time::{Duration, Instant};
 
     fn delta(generation: u64, value: u8) -> PresentationCommand {
         delta_with_ticket(generation, u64::from(value), value)
@@ -578,6 +625,75 @@ mod tests {
         assert!(queue.has_pending_frame(7));
         let _ = queue.pop_front();
         assert!(!queue.has_pending_frame(7));
+    }
+
+    #[test]
+    fn presentation_pacer_allows_the_first_frame_without_delay() {
+        let pacer = PresentationPacer::default();
+
+        assert_eq!(Duration::ZERO, pacer.next_frame_delay(Instant::now()));
+    }
+
+    #[test]
+    fn presentation_pacer_limits_visible_frames_to_the_target_interval() {
+        let presented_at = Instant::now();
+        let mut pacer = PresentationPacer::default();
+        pacer.mark_presented(presented_at);
+
+        assert_eq!(
+            FRAME_PRESENTATION_INTERVAL,
+            pacer.next_frame_delay(presented_at)
+        );
+        assert_eq!(
+            Duration::from_millis(7),
+            pacer.next_frame_delay(presented_at + Duration::from_millis(9))
+        );
+        assert_eq!(
+            Duration::ZERO,
+            pacer.next_frame_delay(presented_at + FRAME_PRESENTATION_INTERVAL)
+        );
+    }
+
+    #[test]
+    fn resetting_the_pacer_makes_the_next_session_frame_immediate() {
+        let now = Instant::now();
+        let mut pacer = PresentationPacer::default();
+        pacer.mark_presented(now);
+        pacer.reset();
+
+        assert_eq!(Duration::ZERO, pacer.next_frame_delay(now));
+    }
+
+    #[test]
+    fn invalidating_the_pacer_rejects_an_old_timer_callback() {
+        let mut pacer = PresentationPacer::default();
+        let old_timer_generation = pacer.begin_timer();
+
+        assert!(pacer.is_current_timer(old_timer_generation));
+
+        pacer.invalidate_timer();
+
+        assert!(!pacer.is_current_timer(old_timer_generation));
+    }
+
+    #[test]
+    fn starting_a_new_timer_rejects_the_previous_timer_callback() {
+        let mut pacer = PresentationPacer::default();
+        let previous_timer_generation = pacer.begin_timer();
+        let current_timer_generation = pacer.begin_timer();
+
+        assert!(!pacer.is_current_timer(previous_timer_generation));
+        assert!(pacer.is_current_timer(current_timer_generation));
+    }
+
+    #[test]
+    fn resetting_the_pacer_rejects_a_previous_session_timer_callback() {
+        let mut pacer = PresentationPacer::default();
+        let previous_session_timer_generation = pacer.begin_timer();
+
+        pacer.reset();
+
+        assert!(!pacer.is_current_timer(previous_session_timer_generation));
     }
 
     #[test]

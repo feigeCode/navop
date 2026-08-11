@@ -3,6 +3,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Instant;
 
 use gpui::{DevicePixels, DynamicTexture, DynamicTextureId, size};
 use remote_desktop::{RemoteDesktopFrameRect, RgbaFramebuffer};
@@ -231,6 +232,19 @@ impl RemoteDesktopSurface {
     ) -> anyhow::Result<()> {
         validate_backing_len(self.width, self.height, state.backing_bgra.len())?;
         let reusable_uploads = take_reusable_uploads(state);
+        let diagnostics = super::remote_desktop_diagnostics_enabled().then(|| {
+            let dirty_pixels = batch
+                .updates
+                .iter()
+                .map(|update| update.rect.pixels())
+                .sum::<u64>();
+            (
+                Instant::now(),
+                Arc::strong_count(&state.backing_bgra),
+                batch.updates.len(),
+                dirty_pixels,
+            )
+        });
         for prepared in batch.updates {
             let backing_bgra = Arc::make_mut(&mut state.backing_bgra);
             copy_rect_between_bgra_buffers(
@@ -258,6 +272,32 @@ impl RemoteDesktopSurface {
         }
         state.prepared_uploads =
             self.prepare_pending_uploads(&state, state.prepared_uploads.as_slice())?;
+        if let Some((apply_started_at, backing_reference_count, dirty_rects, dirty_pixels)) =
+            diagnostics
+        {
+            let framebuffer_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
+            tracing::info!(
+                surface_id = self.id,
+                surface_width = self.width,
+                surface_height = self.height,
+                dirty_rects,
+                dirty_pixels,
+                dirty_ratio_per_mille = dirty_pixels
+                    .saturating_mul(1000)
+                    .checked_div(framebuffer_pixels)
+                    .unwrap_or_default(),
+                backing_reference_count,
+                backing_cow = backing_reference_count > 1,
+                backing_copy_bytes = if backing_reference_count > 1 {
+                    state.backing_bgra.len()
+                } else {
+                    0
+                },
+                pending_uploads = state.prepared_uploads.len(),
+                apply_us = apply_started_at.elapsed().as_micros() as u64,
+                "remote desktop surface dirty batch prepared"
+            );
+        }
         Ok(())
     }
 

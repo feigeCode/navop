@@ -35,7 +35,12 @@ fn paint_remote_frame(
 
     let renderer_resource_generation = window.renderer_resource_generation();
     let uploads = frame.pending_texture_uploads(renderer_resource_generation);
+    let diagnostics_enabled = remote_desktop_diagnostics_enabled();
+    let upload_started_at = diagnostics_enabled.then(Instant::now);
     let mut uploaded_count = 0;
+    let mut uploaded_bytes = 0usize;
+    let mut uploaded_pixels = 0u64;
+    let mut largest_upload_pixels = 0u64;
     for upload in uploads.iter() {
         let update_bounds = Bounds::new(
             point(
@@ -52,7 +57,16 @@ fn paint_remote_frame(
             update_bounds,
             upload.bytes.as_slice(),
         ) {
-            Ok(()) => uploaded_count += 1,
+            Ok(()) => {
+                uploaded_count += 1;
+                if diagnostics_enabled {
+                    let pixels =
+                        u64::from(upload.rect.width).saturating_mul(u64::from(upload.rect.height));
+                    uploaded_bytes = uploaded_bytes.saturating_add(upload.bytes.len());
+                    uploaded_pixels = uploaded_pixels.saturating_add(pixels);
+                    largest_upload_pixels = largest_upload_pixels.max(pixels);
+                }
+            }
             Err(error) => {
                 tracing::warn!(?error, "failed to update remote desktop texture");
                 break;
@@ -61,6 +75,30 @@ fn paint_remote_frame(
     }
     if uploaded_count > 0 {
         frame.acknowledge_texture_uploads(&uploads[..uploaded_count]);
+    }
+    if let Some(upload_started_at) = upload_started_at
+        && uploaded_count > 0
+    {
+        let framebuffer_pixels = u64::from(frame.width()).saturating_mul(u64::from(frame.height()));
+        let ratio_per_mille = uploaded_pixels
+            .saturating_mul(1000)
+            .checked_div(framebuffer_pixels)
+            .unwrap_or_default();
+        let largest_ratio_per_mille = largest_upload_pixels
+            .saturating_mul(1000)
+            .checked_div(framebuffer_pixels)
+            .unwrap_or_default();
+        tracing::info!(
+            surface_width = frame.width(),
+            surface_height = frame.height(),
+            upload_count = uploaded_count,
+            upload_bytes = uploaded_bytes,
+            upload_pixels = uploaded_pixels,
+            upload_ratio_per_mille = ratio_per_mille,
+            largest_upload_ratio_per_mille = largest_ratio_per_mille,
+            upload_us = upload_started_at.elapsed().as_micros() as u64,
+            "remote desktop dynamic texture uploads"
+        );
     }
 
     if let Err(error) =
@@ -145,6 +183,7 @@ impl TabContent for RemoteDesktopView {
         self.presentation_tx.take();
         self.presentation_queue.clear();
         self.presentation_in_flight = false;
+        self.reset_presentation_pacing();
         self._initial_layout_task.take();
         self._output_ready_task.take();
         self._presentation_task.take();

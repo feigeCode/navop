@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{Arc, OnceLock, atomic::AtomicU64};
 use std::time::{Duration, Instant};
 
 use gpui::*;
@@ -40,6 +40,7 @@ const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
 const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const RDP_INITIAL_LAYOUT_DEBOUNCE: Duration = Duration::from_millis(150);
 const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
+const REMOTE_DESKTOP_DIAGNOSTICS_ENV: &str = "NAVOP_REMOTE_DESKTOP_DIAGNOSTICS";
 
 #[cfg(target_os = "macos")]
 const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
@@ -88,6 +89,7 @@ pub struct RemoteDesktopView {
     presentation_tx: Option<tokio::sync::mpsc::UnboundedSender<presentation::PresentationCommand>>,
     presentation_queue: presentation::PresentationQueue,
     presentation_in_flight: bool,
+    presentation_pacer: presentation::PresentationPacer,
     latest_presentation_frame_ticket: Arc<AtomicU64>,
     focus_handle: FocusHandle,
     latest_frame: Option<Arc<surface::RemoteDesktopSurface>>,
@@ -119,6 +121,7 @@ pub struct RemoteDesktopView {
     _initial_layout_task: Option<Task<()>>,
     _output_ready_task: Option<Task<()>>,
     _presentation_task: Option<Task<()>>,
+    _presentation_pacing_task: Option<Task<()>>,
 }
 
 impl RemoteDesktopView {
@@ -136,6 +139,7 @@ impl RemoteDesktopView {
             this.presentation_tx.take();
             this.presentation_queue.clear();
             this.presentation_in_flight = false;
+            this.reset_presentation_pacing();
             this._initial_layout_task.take();
             this._output_ready_task.take();
             this._presentation_task.take();
@@ -168,6 +172,7 @@ impl RemoteDesktopView {
             presentation_tx: None,
             presentation_queue: presentation::PresentationQueue::default(),
             presentation_in_flight: false,
+            presentation_pacer: presentation::PresentationPacer::default(),
             latest_presentation_frame_ticket: Arc::new(AtomicU64::new(0)),
             focus_handle,
             latest_frame: None,
@@ -199,8 +204,24 @@ impl RemoteDesktopView {
             _initial_layout_task: None,
             _output_ready_task: None,
             _presentation_task: None,
+            _presentation_pacing_task: None,
         }
     }
+
+    fn cancel_presentation_pacing(&mut self) {
+        self.presentation_pacer.invalidate_timer();
+        self._presentation_pacing_task.take();
+    }
+
+    fn reset_presentation_pacing(&mut self) {
+        self.presentation_pacer.reset();
+        self._presentation_pacing_task.take();
+    }
+}
+
+fn remote_desktop_diagnostics_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os(REMOTE_DESKTOP_DIAGNOSTICS_ENV).is_some())
 }
 
 fn close_runtime_once(
